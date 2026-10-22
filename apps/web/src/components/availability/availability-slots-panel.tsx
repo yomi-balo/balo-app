@@ -2,24 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertTriangle, CalendarDays, CalendarCheck } from 'lucide-react';
+import { CalendarDays, CalendarCheck } from 'lucide-react';
 import type { AvailabilitySlotDto, SlotDurationMinutes } from '@balo/shared/availability';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { AvailabilityMessage } from './availability-states';
+import { AvailabilitySoonerOffers } from './availability-sooner-offers';
 import {
   formatDayHeading,
-  formatSlotTime,
+  formatWeekdayLong,
   formatWeekdayShort,
   slotCrossesMidnight,
 } from './availability-day-keys';
-import {
-  confirmationDurations,
-  derivePills,
-  filterSlotsByDuration,
-  type DurationFilter,
-} from './availability-filters';
+import type { SoonerOffer } from './availability-filters';
 
 /**
  * The per-row reveal, budgeted rather than fixed: a flat stagger costs row-count × gap, so a
@@ -46,76 +42,46 @@ const rowVariants = {
   show: { opacity: 1, y: 0, transition: { duration: 0.2, ease: 'easeOut' as const } },
 };
 
-/** Pinned renders the same range `LocalDateTime` the rows use, so casing agrees within the
- *  flow; unpinned keeps `formatSlotTime` (uppercase AM/PM), byte-for-byte. */
-function selectedTimeDisplay(
-  iso: string,
-  fixedDurationMinutes: SlotDurationMinutes | undefined,
-  viewerTimezone: string
-): React.ReactNode {
-  if (fixedDurationMinutes === undefined) return formatSlotTime(iso, viewerTimezone);
+/** The slot's range at the chosen length, without the day or the " · N min" suffix (the length
+ *  control above already states it). */
+function SlotRange({
+  start,
+  length,
+  viewerTimezone,
+}: Readonly<{
+  start: string;
+  length: SlotDurationMinutes;
+  viewerTimezone: string;
+}>): React.JSX.Element {
   return (
     <LocalDateTime
-      iso={iso}
+      iso={start}
       variant="day-month-time-range"
-      durationMinutes={fixedDurationMinutes}
+      durationMinutes={length}
       timeZone={viewerTimezone}
       showDay={false}
+      showLength={false}
     />
   );
-}
-
-/** Extracted so the three states stay flat — a nested ternary trips SonarCloud. */
-function confirmButtonLabel(
-  chosenDuration: SlotDurationMinutes | null,
-  submitting: boolean
-): string {
-  if (submitting) return 'Confirming…';
-  if (chosenDuration) return `Confirm ${chosenDuration}-min consultation`;
-  return 'Select a duration above';
 }
 
 export interface AvailabilitySlotsPanelProps {
   dayKey: string | null;
   isToday: boolean;
-  /** This day's full (unfiltered), ascending slot list. */
-  slotsForDay: AvailabilitySlotDto[];
   viewerTimezone: string;
   mode: 'preview' | 'selectable';
-  durationFilter: DurationFilter;
-  /** True for the render right after a day-change auto-reset — drives the inline warning. */
-  filterAutoReset: boolean;
-  onFilterChange: (filter: DurationFilter) => void;
-  /**
-   * BAL-409 — the caller pinned `durationFilter` to a meeting's existing length; hide the
-   * manual toggle pills so there is nothing to conflict with the pin.
-   *
-   * ⚠ B6 — WHEN THIS IS SET, THE DAY-CHANGE AUTO-RESET SAFETY NET IS DELIBERATELY DISABLED,
-   * NOT JUST HIDDEN. The unpinned safety net falls back to `'any'` so the user is never
-   * stranded on a blank day — but for a PINNED reschedule, widening to `'any'` would silently
-   * list 15/30-min slots as selectable for a 60-min meeting, which is exactly the
-   * `window_not_available` 409 this prop exists to prevent. The caller (`ExpertAvailability
-   * Calendar`) never sets `filterAutoReset` while pinned, so this component never even needs
-   * to gate on it for the LIST — but the WARNING/"Show all →" control is gated here too
-   * (`!hideDurationFilter`), belt-and-braces, so a future caller that forgets that contract
-   * cannot regress the list into showing sub-length slots as selectable.
-   */
-  hideDurationFilter?: boolean;
-  /**
-   * B6 — the pinned length itself, threaded into the CONFIRM STEP. When set, the "How long do
-   * you need?" radio group (whose answer the server always discarded) is replaced with one
-   * non-interactive line, and `chosenDuration` is auto-set to this value the moment the confirm
-   * step is entered — never left for the user to (mis)answer a question with only one real
-   * answer.
-   */
-  fixedDurationMinutes?: SlotDurationMinutes;
+  /** The chosen (or pinned) length. */
+  length: SlotDurationMinutes;
+  /** This day's ascending slots that hold `length`. */
+  slotsAtLength: AvailabilitySlotDto[];
+  /** Earlier, shorter alternatives. Always `[]` while the length is pinned. */
+  offers: SoonerOffer[];
+  /** The next day with a time at `length`, for the empty-day "Go to" action. */
+  nextDayKey: string | null;
   selectedSlot: AvailabilitySlotDto | null;
   onSelectSlot: (slot: AvailabilitySlotDto) => void;
-  confirmStep: boolean;
-  onContinue: () => void;
-  onBack: () => void;
-  chosenDuration: SlotDurationMinutes | null;
-  onChooseDuration: (duration: SlotDurationMinutes) => void;
+  onTakeOffer: (offer: SoonerOffer) => void;
+  onGoToDay: (dayKey: string) => void;
   onConfirm: () => void;
   /** Standalone confirmation (no `onSlotSelect` supplied by the consumer). */
   confirmed: boolean;
@@ -125,79 +91,191 @@ export interface AvailabilitySlotsPanelProps {
   onDismissConfirmation: () => void;
 }
 
+function DayHeading({
+  dayKey,
+  isToday,
+  subline,
+  hasTimes,
+  headingRef,
+}: Readonly<{
+  dayKey: string;
+  isToday: boolean;
+  subline: string;
+  hasTimes: boolean;
+  headingRef: React.RefObject<HTMLDivElement | null>;
+}>): React.JSX.Element {
+  return (
+    // `tabIndex={-1}` makes this programmatically focusable without entering the tab order — it
+    // is where focus lands when a day is picked, so the next Tab continues from the day's list.
+    <div className="mb-4 focus-visible:outline-none" ref={headingRef} tabIndex={-1}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-foreground text-[15px] font-semibold tracking-tight">
+          {formatDayHeading(dayKey)}
+        </span>
+        {isToday && (
+          <span className="bg-primary/10 text-primary border-primary/20 rounded-md border px-2 py-0.5 text-[11px] font-semibold">
+            Today
+          </span>
+        )}
+      </div>
+      <p
+        aria-live="polite"
+        className={
+          hasTimes
+            ? 'text-muted-foreground mt-1 text-[13px]'
+            : 'text-foreground mt-1.5 text-sm font-medium'
+        }
+      >
+        {subline}
+      </p>
+    </div>
+  );
+}
+
+function SlotList({
+  dayKey,
+  length,
+  slots,
+  selectedSlot,
+  mode,
+  viewerTimezone,
+  onSelectSlot,
+}: Readonly<{
+  dayKey: string;
+  length: SlotDurationMinutes;
+  slots: AvailabilitySlotDto[];
+  selectedSlot: AvailabilitySlotDto | null;
+  mode: 'preview' | 'selectable';
+  viewerTimezone: string;
+  onSelectSlot: (slot: AvailabilitySlotDto) => void;
+}>): React.JSX.Element {
+  return (
+    <ScrollArea className="max-h-none md:max-h-[340px]">
+      {/*
+        ⚠ The `key` is load-bearing. `staggerChildren` propagates only when the PARENT
+        transitions between variants, and this `motion.ul` keeps its place in the tree across a
+        day or length change — only its children are replaced. Without a remount the parent
+        stays on `show`, never transitions again, and the new rows sit at `initial="hidden"`
+        forever.
+      */}
+      <motion.ul
+        key={`${dayKey}:${length}`}
+        variants={listVariantsFor(slots.length)}
+        initial="hidden"
+        animate="show"
+        className="flex flex-col gap-1.5"
+      >
+        {slots.map((slot) => {
+          const isSelected = selectedSlot?.start === slot.start;
+          const end = new Date(Date.parse(slot.start) + length * 60_000).toISOString();
+          // ⚠ D10 — a cross-midnight interval groups under its START day and must say so:
+          // `11:45 pm – 12:45 am` alone silently means "finishes tomorrow".
+          const crossesMidnight = slotCrossesMidnight({ start: slot.start, end }, viewerTimezone);
+          const content = (
+            <>
+              <span className="text-sm font-medium">
+                <SlotRange start={slot.start} length={length} viewerTimezone={viewerTimezone} />
+              </span>
+              {crossesMidnight && (
+                <span
+                  className={
+                    isSelected
+                      ? 'text-primary-foreground/80 text-xs'
+                      : 'text-muted-foreground text-xs'
+                  }
+                >
+                  → {formatWeekdayShort(end, viewerTimezone)}
+                </span>
+              )}
+            </>
+          );
+          return (
+            <motion.li key={slot.start} variants={rowVariants}>
+              {mode === 'selectable' ? (
+                <button
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onSelectSlot(slot)}
+                  className={`border-border flex min-h-11 w-full items-center justify-between rounded-lg border px-3.5 py-2 transition-colors ${
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-transparent'
+                      : 'hover:border-primary hover:bg-primary/5 bg-card'
+                  }`}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className="border-border bg-card flex min-h-11 w-full items-center justify-between rounded-lg border px-3.5 py-2">
+                  {content}
+                </div>
+              )}
+            </motion.li>
+          );
+        })}
+      </motion.ul>
+    </ScrollArea>
+  );
+}
+
 export function AvailabilitySlotsPanel({
   dayKey,
   isToday,
-  slotsForDay,
   viewerTimezone,
   mode,
-  durationFilter,
-  filterAutoReset,
-  onFilterChange,
-  hideDurationFilter = false,
-  fixedDurationMinutes,
+  length,
+  slotsAtLength,
+  offers,
+  nextDayKey,
   selectedSlot,
   onSelectSlot,
-  confirmStep,
-  onContinue,
-  onBack,
-  chosenDuration,
-  onChooseDuration,
+  onTakeOffer,
+  onGoToDay,
   onConfirm,
   confirmed,
   confirmedSummary,
   onDismissConfirmation,
 }: Readonly<AvailabilitySlotsPanelProps>): React.JSX.Element {
-  /**
-   * ⚠ FOCUS FOLLOWS THE STEP. This is a progressive-disclosure wizard: the element the user just
-   * activated ("Continue with 9:00 AM →", "← Back", a day cell) UNMOUNTS on the next render, so
-   * without this focus silently falls back to `<body>` and a keyboard or screen-reader user
-   * loses their place at every single transition — the opposite of what progressive disclosure
-   * is meant to buy. Nothing fires on first mount: `dayKey` is null until a day is chosen, so
-   * the component never steals focus from the page it was dropped into.
-   */
-  const backRef = useRef<HTMLButtonElement>(null);
+  // Focus follows the day: nothing fires on first mount (`dayKey` is null until a day is
+  // chosen), so the panel never steals focus from the page it was dropped into.
   const headingRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (dayKey === null || confirmed) return;
-    if (confirmStep) backRef.current?.focus();
-    else headingRef.current?.focus();
-  }, [confirmStep, dayKey, confirmed]);
+    headingRef.current?.focus();
+  }, [dayKey, confirmed]);
 
-  /**
-   * ⚠ THE CONFIRM BUTTON IS SINGLE-SHOT. `onConfirm` is documented as "emits, never books", so
-   * the natural parent wires it to a network call — and nothing here stopped a rapid double
-   * click (or a slow parent) from firing two booking/hold attempts with no feedback in between.
-   * Reset whenever the confirm step is left, so Back → Continue is usable again.
-   */
-  const [submitting, setSubmitting] = useState(false);
+  // After a sooner offer is taken the offer buttons unmount; focus the newly pressed time row
+  // (the day heading when no row is pressed, e.g. in preview), so it never drops to <body>.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pendingOfferFocusRef = useRef<string | null>(null);
+  const selectedStartForFocus = selectedSlot?.start;
   useEffect(() => {
-    if (!confirmStep) setSubmitting(false);
-  }, [confirmStep]);
-  const handleConfirmClick = useCallback((): void => {
+    const pending = pendingOfferFocusRef.current;
+    if (pending === null) return;
+    pendingOfferFocusRef.current = null;
+    const row = panelRef.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    (row ?? headingRef.current)?.focus();
+  }, [length, selectedStartForFocus, slotsAtLength]);
+  const handleTakeOffer = useCallback(
+    (offer: SoonerOffer): void => {
+      pendingOfferFocusRef.current = offer.start;
+      onTakeOffer(offer);
+    },
+    [onTakeOffer]
+  );
+
+  // ⚠ Continue is single-shot: `onConfirm` is documented as "emits, never books", so the natural
+  // parent wires it to a network call and a rapid double click must not fire two attempts. Reset
+  // when the selection or length changes.
+  const [submitting, setSubmitting] = useState(false);
+  const selectedStart = selectedSlot?.start;
+  useEffect(() => {
+    setSubmitting(false);
+  }, [selectedStart, length]);
+  const handleContinue = useCallback((): void => {
     if (submitting) return;
     setSubmitting(true);
     onConfirm();
   }, [submitting, onConfirm]);
-
-  /**
-   * ⚠ B6 — AUTO-SET, NEVER LEFT FOR THE USER TO (MIS)ANSWER. Before this fix, `chosenDuration`
-   * stayed `null` until the user picked from a radio group whose answer the server always
-   * discarded — the button read "Confirm 60-min consultation" for whatever the user clicked,
-   * while the very next screen said "Same length, same link — nothing else changes": a visible,
-   * self-contradicting lie. Setting it here, keyed off entering the confirm step, means the
-   * Confirm button is enabled immediately and the (now non-interactive) duration line always
-   * agrees with what will actually be booked.
-   */
-  useEffect(() => {
-    if (
-      confirmStep &&
-      fixedDurationMinutes !== undefined &&
-      chosenDuration !== fixedDurationMinutes
-    ) {
-      onChooseDuration(fixedDurationMinutes);
-    }
-  }, [confirmStep, fixedDurationMinutes, chosenDuration, onChooseDuration]);
 
   if (confirmed) {
     return (
@@ -218,291 +296,71 @@ export function AvailabilitySlotsPanel({
       <AvailabilityMessage
         icon={<CalendarDays className="h-5 w-5" aria-hidden="true" />}
         title="Select a date"
-        body="Tap a highlighted day to see available times."
+        body={`Days with a dot have ${length}-minute times.`}
       />
     );
   }
 
-  if (confirmStep && selectedSlot) {
-    const headDate = isToday ? 'Today' : formatDayHeading(dayKey);
-    return (
-      <div>
-        <button
-          ref={backRef}
-          type="button"
-          onClick={onBack}
-          className="text-primary mb-4 flex min-h-11 items-center gap-1.5 text-[13px] font-medium"
-        >
-          ← Back
-        </button>
-
-        <div className="border-primary/30 bg-primary/5 mb-5 rounded-lg border px-4 py-3">
-          <span className="text-primary text-base font-semibold">
-            {selectedTimeDisplay(selectedSlot.start, fixedDurationMinutes, viewerTimezone)}
-          </span>
-          <span className="text-muted-foreground ml-2 text-[13px]">{headDate}</span>
-        </div>
-
-        {fixedDurationMinutes === undefined ? (
-          <fieldset>
-            <legend className="text-muted-foreground mb-2.5 text-[11px] font-semibold tracking-wider uppercase">
-              How long do you need?
-            </legend>
-            <div className="mb-5 flex flex-col gap-1.5">
-              {confirmationDurations(selectedSlot.maxDuration).map((d) => {
-                const id = `availability-duration-${d}`;
-                const isChosen = chosenDuration === d;
-                const end = new Date(
-                  new Date(selectedSlot.start).getTime() + d * 60_000
-                ).toISOString();
-                return (
-                  <label
-                    key={d}
-                    htmlFor={id}
-                    className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-colors ${
-                      isChosen ? 'border-primary bg-primary/5' : 'border-border bg-card'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      id={id}
-                      name="availability-duration"
-                      className="text-primary h-4 w-4"
-                      checked={isChosen}
-                      onChange={() => onChooseDuration(d)}
-                      /*
-                       * ⚠ EXPLICIT, not redundant. The visible text lives two <span> levels inside
-                       * the <label>, which is deeper than `label-has-associated-control` will look
-                       * (SonarCloud S6853) — and a screen reader announcing a bare radio here would
-                       * say nothing useful. Leads with "{d} minutes" so it reads naturally and so
-                       * the existing getByLabelText(/N minutes/) queries still resolve.
-                       */
-                      aria-label={`${d} minutes, ${formatSlotTime(selectedSlot.start, viewerTimezone)} to ${formatSlotTime(end, viewerTimezone)}`}
-                    />
-                    <span className="flex flex-col">
-                      <span
-                        className={`text-sm ${isChosen ? 'text-primary font-semibold' : 'text-foreground font-medium'}`}
-                      >
-                        {d} minutes
-                      </span>
-                      <span className="text-muted-foreground text-xs">
-                        {formatSlotTime(selectedSlot.start, viewerTimezone)} –{' '}
-                        {formatSlotTime(end, viewerTimezone)}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
-        ) : (
-          // B6(a) — PINNED: ONE non-interactive line, never a radio group whose answer would be
-          // discarded server-side. `chosenDuration` is already auto-set to this value by the
-          // effect above, so the Confirm button below is enabled immediately.
-          <div className="border-border bg-card mb-5 rounded-lg border px-4 py-3">
-            <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">
-              Duration
-            </p>
-            <p className="text-foreground text-sm font-medium">
-              {fixedDurationMinutes} minutes — same as your current consultation
-            </p>
-          </div>
-        )}
-
-        <Button
-          type="button"
-          className="w-full"
-          disabled={!chosenDuration || submitting}
-          onClick={handleConfirmClick}
-        >
-          {confirmButtonLabel(chosenDuration, submitting)}
-        </Button>
-      </div>
-    );
-  }
-
-  const pills = derivePills(slotsForDay);
-  // Effective filter for the LIST: 'any' whenever the day-change auto-reset fired, even though
-  // `durationFilter` itself keeps the user's original choice (needed for the warning copy).
-  //
-  // ⚠ B6(c) — NEVER 'any' WHILE `hideDurationFilter` IS SET, REGARDLESS OF `filterAutoReset`.
-  // The caller (`ExpertAvailabilityCalendar`) is contracted never to set `filterAutoReset` while
-  // pinned — but this component owns the LIST, and defending the invariant only at the caller
-  // would let a future caller regress it silently. Widening to 'any' here would list 15/30-min
-  // slots as selectable for a pinned 60-min meeting: exactly the `window_not_available` 409 the
-  // pin exists to prevent. Pinned + a day with no long-enough slot means an EMPTY list for that
-  // day, consciously — never a wider, wrong one.
-  const effectiveFilter: DurationFilter =
-    filterAutoReset && !hideDurationFilter ? 'any' : durationFilter;
-  const showing = filterSlotsByDuration(slotsForDay, effectiveFilter);
-  const headDate = isToday ? 'Today' : formatDayHeading(dayKey);
-  // Positive form deliberately: the duration label is redundant once the list is already filtered
-  // to a minimum duration. (`unicorn/no-negated-condition` — a negated flag reads backwards.)
-  const showDurationLabel = effectiveFilter === 'any';
+  const hasTimes = slotsAtLength.length > 0;
+  const weekday = formatWeekdayLong(dayKey);
+  const timesWord = slotsAtLength.length === 1 ? 'time' : 'times';
+  const subline = hasTimes
+    ? `${slotsAtLength.length} ${timesWord} available`
+    : `No ${length}-minute times on ${weekday}.`;
 
   return (
-    <div>
-      {/* `tabIndex={-1}` makes this programmatically focusable without entering the tab order —
-          it is where focus lands when a day is picked, so the next Tab continues from the day's
-          slot list rather than restarting at the top of the page. */}
-      <div className="mb-4 focus-visible:outline-none" ref={headingRef} tabIndex={-1}>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-foreground text-[15px] font-semibold tracking-tight">
-            {headDate}
-          </span>
-          {isToday && (
-            <span className="bg-primary/10 text-primary border-primary/20 rounded-md border px-2 py-0.5 text-[11px] font-semibold">
-              Today
-            </span>
-          )}
-        </div>
-        <p className="text-muted-foreground mt-0.5 text-xs">
-          {showing.length} time{showing.length === 1 ? '' : 's'} available
-          {showDurationLabel ? '' : ` for ${effectiveFilter}+ min`}
-        </p>
-      </div>
+    <div ref={panelRef}>
+      <DayHeading
+        dayKey={dayKey}
+        isToday={isToday}
+        subline={subline}
+        hasTimes={hasTimes}
+        headingRef={headingRef}
+      />
 
-      <div className="mb-4">
-        {!hideDurationFilter && (
-          <>
-            <p className="text-muted-foreground mb-2 text-[11px] font-semibold tracking-wider uppercase">
-              Duration
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {pills.map((pill) => {
-                const isActive = effectiveFilter === pill;
-                return (
-                  <Button
-                    key={pill}
-                    type="button"
-                    size="sm"
-                    variant={isActive ? 'default' : 'outline'}
-                    aria-pressed={isActive}
-                    // ⚠ 44px minimum. These pills are the primary narrowing control on a 375px
-                    // viewport and they wrap to two lines by design; at the previous `h-7` (28px)
-                    // they were the only sub-target in the panel — the slot rows beside them
-                    // already use `min-h-11`.
-                    className="h-auto min-h-11 rounded-full px-4 text-xs"
-                    onClick={() => onFilterChange(pill)}
-                  >
-                    {pill === 'any' ? 'Any' : `${pill} min`}
-                  </Button>
-                );
-              })}
-            </div>
-          </>
-        )}
-        {/* B6(b) — GATED ON `!hideDurationFilter`, belt-and-braces alongside the pills above:
-            when the duration is PINNED, "Show all →" would be a visible control whose only job
-            is to discard the pin (see the prop's own docblock). */}
-        {!hideDurationFilter && filterAutoReset && (
-          <output className="text-warning-strong mt-2 flex items-center gap-1.5 text-xs">
-            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
-            {/* `durationFilter` is never `'any'` here: `filterAutoReset` is only set when
-                `shouldResetFilter` returned true, which requires a non-`'any'` filter. The old
-                ternary was an unreachable branch costing branch coverage for nothing. */}
-            No {durationFilter}-min slots that day.
-            <button
-              type="button"
-              onClick={() => onFilterChange('any')}
-              className="text-primary font-semibold"
-            >
-              Show all →
-            </button>
-          </output>
-        )}
-      </div>
+      {offers.length > 0 && (
+        <AvailabilitySoonerOffers
+          offers={offers}
+          viewerTimezone={viewerTimezone}
+          emptyDay={!hasTimes}
+          weekday={weekday}
+          onTakeOffer={handleTakeOffer}
+        />
+      )}
 
-      {/* Unbounded on mobile (the page scrolls anyway); capped on DESKTOP, where the two-column
-          layout is the thing that needs the list not to outgrow the calendar beside it. */}
-      <ScrollArea className="max-h-none md:max-h-[340px]">
-        {/*
-          ⚠ The `key` is load-bearing. `staggerChildren` propagates only when the PARENT
-          transitions between variants, and this `motion.ul` keeps its place in the tree across a
-          day or filter change — only its children are replaced. Without a remount the parent
-          stays on `show`, never transitions again, and the new rows sit at `initial="hidden"`
-          forever.
-        */}
-        <motion.ul
-          key={`${dayKey}:${effectiveFilter}`}
-          variants={listVariantsFor(showing.length)}
-          initial="hidden"
-          animate="show"
-          className="flex flex-col gap-1.5"
+      {hasTimes && (
+        <SlotList
+          dayKey={dayKey}
+          length={length}
+          slots={slotsAtLength}
+          selectedSlot={selectedSlot}
+          mode={mode}
+          viewerTimezone={viewerTimezone}
+          onSelectSlot={onSelectSlot}
+        />
+      )}
+
+      {!hasTimes && nextDayKey && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={() => onGoToDay(nextDayKey)}
         >
-          {showing.map((slot) => {
-            const isSelected = selectedSlot?.start === slot.start;
-            const secondaryClass = isSelected
-              ? 'text-primary-foreground/80 text-xs'
-              : 'text-muted-foreground text-xs';
-            // ⚠ D10 — cross-midnight intervals group under their START day, "labelled to show
-            // the crossing". `11:45 PM · up to 60m` otherwise silently means "finishes
-            // tomorrow". This row is the ONLY place `preview` mode can show it: preview has no
-            // duration step, where the explicit end time would eventually have revealed it.
-            const crossesMidnight = slotCrossesMidnight(slot, viewerTimezone);
-            const content = (
-              <>
-                <span className="text-sm font-medium">
-                  {/* A time is never shown without its length. UNPINNED keeps the bare start
-                      time — the "up to Nm" pill alongside it already carries the length.
-                      PINNED shows the actual range instead: `effectiveFilter` is never `'any'`
-                      while pinned, so `showDurationLabel` below stays silent and the bare start
-                      time would otherwise be the row's ONLY content. */}
-                  {fixedDurationMinutes === undefined ? (
-                    formatSlotTime(slot.start, viewerTimezone)
-                  ) : (
-                    <LocalDateTime
-                      iso={slot.start}
-                      variant="day-month-time-range"
-                      durationMinutes={fixedDurationMinutes}
-                      timeZone={viewerTimezone}
-                      showDay={false}
-                    />
-                  )}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  {crossesMidnight && (
-                    <span className={secondaryClass}>
-                      → {formatWeekdayShort(slot.end, viewerTimezone)}
-                    </span>
-                  )}
-                  {showDurationLabel && (
-                    <span className={secondaryClass}>up to {slot.maxDuration}m</span>
-                  )}
-                </span>
-              </>
-            );
-            return (
-              <motion.li key={slot.start} variants={rowVariants}>
-                {mode === 'selectable' ? (
-                  <button
-                    type="button"
-                    aria-pressed={isSelected}
-                    onClick={() => onSelectSlot(slot)}
-                    className={`border-border flex min-h-11 w-full items-center justify-between rounded-lg border px-3.5 py-2 transition-colors ${
-                      isSelected
-                        ? 'bg-primary text-primary-foreground border-transparent'
-                        : 'hover:border-primary hover:bg-primary/5 bg-card'
-                    }`}
-                  >
-                    {content}
-                  </button>
-                ) : (
-                  <div className="border-border bg-card flex min-h-11 w-full items-center justify-between rounded-lg border px-3.5 py-2">
-                    {content}
-                  </div>
-                )}
-              </motion.li>
-            );
-          })}
-        </motion.ul>
-      </ScrollArea>
+          Go to {formatDayHeading(nextDayKey)}
+        </Button>
+      )}
 
       {mode === 'selectable' && selectedSlot && (
-        <Button type="button" className="mt-3.5 w-full" onClick={onContinue}>
-          Continue with{' '}
-          {selectedTimeDisplay(selectedSlot.start, fixedDurationMinutes, viewerTimezone)} →
-        </Button>
+        // Sticky bottom bar on small screens so Continue is reachable from anywhere in a long
+        // list; inline from md up.
+        <div className="bg-card sticky bottom-0 -mx-6 border-t px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-6px_16px_rgba(16,24,40,0.06)] md:static md:mx-0 md:mt-3.5 md:border-0 md:p-0 md:shadow-none">
+          <Button type="button" className="w-full" disabled={submitting} onClick={handleContinue}>
+            Continue with{' '}
+            <SlotRange start={selectedSlot.start} length={length} viewerTimezone={viewerTimezone} />{' '}
+            →
+          </Button>
+        </div>
       )}
     </div>
   );

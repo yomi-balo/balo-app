@@ -5,7 +5,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
   {
     "slug": "booking-a-consultation",
     "title": "Booking a consultation",
-    "summary": "Pick a time with an expert, choose a length and confirm the call.",
+    "summary": "Choose how long you need, pick a time with an expert and confirm the call.",
     "audience": [
       "client"
     ],
@@ -33,12 +33,12 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, pick a slot from their open times. Times show in your device's timezone.</li>\n<li>Under <strong>How long do you need?</strong>, choose 15, 30, 45 or 60 minutes. The longest option is capped\nat the length of the slot you picked.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>.</li>\n</ol>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
+            "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>.</li>\n<li>On <strong>Choose a time</strong>, answer <strong>How long do you need?</strong> first: choose 15, 30, 45 or 60 minutes.\n60 minutes is preselected when the expert has room for it, otherwise the longest length that\nfits. You can change it at any point.</li>\n<li>Pick a day, then a time. Times show as ranges at that length, in your device's timezone. If an\nearlier slot only fits a shorter call, it's offered under <strong>Need it sooner?</strong>, and you can\nswitch to it in one click. Choose <strong>Continue with</strong> your time range when you've found the one you want.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>. Choose <strong>Change</strong> to\ngo back and pick a different length or time.</li>\n</ol>\n<p>You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.</p>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
             "id": "s1-b0"
           }
         ],
         "screenshot": {
-          "alt": "The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.",
+          "alt": "The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.",
           "lightSrc": "/help/booking-a-consultation/01-light.png",
           "darkSrc": "/help/booking-a-consultation/01-dark.png",
           "width": 600,

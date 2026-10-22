@@ -168,7 +168,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
     it('scope=existing_work still serves the real grid', async () => {
       const res = await inject(EXPERT_ID, '?scope=existing_work');
       expect(res.statusCode).toBe(200);
-      expect(res.headers['cache-control']).toBe('public, max-age=60');
+      expect(res.headers['cache-control']).toBe('private, max-age=60');
       const body = res.json() as { status: string; slots: unknown[] };
       expect(body.status).toBe('ok');
       expect(body.slots.length).toBeGreaterThan(0);
@@ -192,7 +192,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
   it('200 ok — right Cache-Control, days echoed back (validated query value)', async () => {
     const res = await inject(EXPERT_ID, '?days=10');
     expect(res.statusCode).toBe(200);
-    expect(res.headers['cache-control']).toBe('public, max-age=60');
+    expect(res.headers['cache-control']).toBe('private, max-age=60');
     const body = res.json() as { status: string; days: number; slots: unknown[] };
     expect(body.status).toBe('ok');
     expect(body.days).toBe(10);
@@ -274,7 +274,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
     });
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(200);
-    expect(res.headers['cache-control']).toBe('public, max-age=60');
+    expect(res.headers['cache-control']).toBe('private, max-age=60');
     const body = res.json() as { status: string; slots: unknown[] };
     expect(body.status).toBe('not_configured');
     expect(body.slots).toEqual([]);
@@ -289,7 +289,7 @@ describe('GET /experts/:expertProfileId/availability', () => {
     });
     const res = await inject(EXPERT_ID);
     expect(res.statusCode).toBe(200);
-    expect(res.headers['cache-control']).toBe('public, max-age=60');
+    expect(res.headers['cache-control']).toBe('private, max-age=60');
     const body = res.json() as { status: string; slots: unknown[] };
     expect(body.status).toBe('no_slots');
     expect(body.slots).toEqual([]);

@@ -13,9 +13,9 @@ export function AvailabilitySkeleton(): React.JSX.Element {
     // ⚠ `<output>`, NOT `role="status"` on a div (SonarCloud S6819 — escapes local lint, fails
     // the PR gate). `<output>` maps to role `status`, so screen-reader behaviour and any
     // `getByRole('status')` query are unchanged. Matches `calendar-connections-skeleton.tsx` in
-    // the same feature area, and the sibling stale-filter warning in `availability-slots-panel`.
+    // the same feature area, and the sibling `<output>` states in this feature area.
     <output
-      className="border-border bg-border grid grid-cols-1 gap-px overflow-hidden rounded-xl border md:grid-cols-[minmax(0,1fr)_300px]"
+      className="border-border bg-border grid grid-cols-1 gap-px overflow-hidden rounded-xl border md:grid-cols-[minmax(0,1fr)_340px]"
       aria-label="Loading availability"
     >
       <div className="bg-card p-6">

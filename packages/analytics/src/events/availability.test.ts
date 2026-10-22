@@ -10,11 +10,12 @@ describe('AVAILABILITY_EVENTS', () => {
   it('exposes exactly the availability CLIENT events (guards against accidental drift)', () => {
     expect(Object.keys(AVAILABILITY_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'CALENDAR_VIEWED',
-      'DURATION_FILTER_USED',
+      'DURATION_CHOSEN',
       'EMPTY_STATE_SHOWN',
       'OVERRIDE_CONFLICT_DETECTED',
       'OVERRIDE_CONFLICT_RESOLVED',
       'SLOT_SELECTED',
+      'SOONER_OFFER_SHOWN',
     ]);
   });
 
@@ -27,10 +28,11 @@ describe('AVAILABILITY_EVENTS', () => {
     );
   });
 
-  it('maps the four BAL-236 slot-picker events to their exact snake_case values', () => {
+  it('maps the five slot-picker events to their exact snake_case values', () => {
     expect(AVAILABILITY_EVENTS.CALENDAR_VIEWED).toBe('availability_calendar_viewed');
     expect(AVAILABILITY_EVENTS.SLOT_SELECTED).toBe('availability_slot_selected');
-    expect(AVAILABILITY_EVENTS.DURATION_FILTER_USED).toBe('availability_duration_filter_used');
+    expect(AVAILABILITY_EVENTS.DURATION_CHOSEN).toBe('availability_duration_chosen');
+    expect(AVAILABILITY_EVENTS.SOONER_OFFER_SHOWN).toBe('availability_sooner_offer_shown');
     expect(AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN).toBe('availability_empty_state_shown');
   });
 

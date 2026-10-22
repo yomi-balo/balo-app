@@ -10,7 +10,7 @@ import { isDescriptionEmpty } from '@/components/balo/rich-text/plain-text';
 import { TaxonomyMultiSelect } from '@/components/balo/taxonomy-multi-select';
 import { buildProductNameMap, type ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { EligibleCompany } from '@balo/shared/credit';
-import { formatSlotDateTime } from './format';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { CaseChoiceSection, hasCaseChoice } from './case-choice-section';
 import { CaseContextCard } from './case-context-card';
 import { CompanyPicker, CompanyPickerErrorBanner } from './company-picker';
@@ -224,7 +224,13 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
       <div className="border-border bg-muted/30 flex items-center justify-between rounded-xl border p-4">
         <div>
           <p className="text-foreground text-sm font-semibold">
-            {formatSlotDateTime(slot.startIso, viewerTimezone)}
+            <LocalDateTime
+              iso={slot.startIso}
+              variant="day-month-time-range"
+              durationMinutes={slot.durationMinutes}
+              timeZone={viewerTimezone}
+              showLength={false}
+            />
           </p>
           <p className="text-muted-foreground text-xs">
             {slot.durationMinutes}-minute consultation
@@ -236,7 +242,7 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
           disabled={fundingBusy}
           className="text-primary focus-visible:ring-ring rounded-md text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
         >
-          See other times
+          Change
         </button>
       </div>
 

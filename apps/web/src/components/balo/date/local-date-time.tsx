@@ -77,6 +77,9 @@ export type LocalDateTimeProps =
        *  heading (`availability-slots-panel.tsx`) — the ONE consumer of this variant that must
        *  not repeat it on every row. */
       showDay?: boolean;
+      /** Default `true`. `false` drops the trailing " · N min", for a surface that already states
+       *  the length elsewhere (the availability picker's length control). */
+      showLength?: boolean;
     });
 
 export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
@@ -87,9 +90,10 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
   // and re-fire the effect below on every re-render regardless of whether either value changed.
   const durationMinutes = isRange ? props.durationMinutes : undefined;
   const showDay = isRange ? (props.showDay ?? true) : true;
+  const showLength = isRange ? (props.showLength ?? true) : true;
 
   const [label, setLabel] = useState(() =>
-    formatFor(iso, timeZone ?? 'UTC', variant, durationMinutes, showDay)
+    formatFor(iso, timeZone ?? 'UTC', variant, durationMinutes, showDay, showLength)
   );
   const [zone, setZone] = useState(timeZone ?? 'UTC');
 
@@ -100,14 +104,14 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
     setLabel(
       durationMinutes === undefined
         ? labelFor(iso, resolved, variant, relativeDays, now ?? new Date())
-        : formatFor(iso, resolved, variant, durationMinutes, showDay)
+        : formatFor(iso, resolved, variant, durationMinutes, showDay, showLength)
     );
-  }, [iso, variant, timeZone, relativeDays, now, durationMinutes, showDay]);
+  }, [iso, variant, timeZone, relativeDays, now, durationMinutes, showDay, showLength]);
 
   /* ⚠ THE TOOLTIP STAYS ABSOLUTE even when the visible label reads "Today at 6:00 pm". The
      relative form is the convenience; the exact date is the thing a record must always be able
      to answer, and the `sr-only` zone below is announced against it for the same reason. */
-  const absolute = formatFor(iso, zone, variant, durationMinutes, showDay);
+  const absolute = formatFor(iso, zone, variant, durationMinutes, showDay, showLength);
 
   return (
     <time dateTime={iso} title={absolute + ' (' + zone + ')'}>
@@ -233,10 +237,12 @@ function formatRangeIn(
   iso: string,
   timeZone: string,
   durationMinutes: number,
-  showDay: boolean
+  showDay: boolean,
+  showLength: boolean
 ): string {
   const endIso = new Date(new Date(iso).getTime() + durationMinutes * 60_000).toISOString();
-  const range = `${formatTimeRange(iso, endIso, timeZone)} · ${durationMinutes} min`;
+  const times = formatTimeRange(iso, endIso, timeZone);
+  const range = showLength ? `${times} · ${durationMinutes} min` : times;
   return showDay ? `${formatDayFor(iso, timeZone)}, ${range}` : range;
 }
 
@@ -245,12 +251,13 @@ function formatFor(
   timeZone: string,
   variant: LocalDateTimeVariant,
   durationMinutes: number | undefined,
-  showDay: boolean
+  showDay: boolean,
+  showLength: boolean
 ): string {
   if (variant === 'day-month-time-range') {
     // Guaranteed a real number by `LocalDateTimeProps`'s discriminated union — the `?? 0` is
     // unreachable through the exported component, not a real fallback.
-    return formatRangeIn(iso, timeZone, durationMinutes ?? 0, showDay);
+    return formatRangeIn(iso, timeZone, durationMinutes ?? 0, showDay, showLength);
   }
   return formatIn(iso, timeZone, variant);
 }

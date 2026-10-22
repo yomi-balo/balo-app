@@ -32,7 +32,8 @@ import type {
 import { TOP_UP_LIMITS_MINOR, type EligibleCompany } from '@balo/shared/credit';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { BookingHeader, type BookingStep } from './booking-header';
-import { StepPickTime } from './step-pick-time';
+import { StepPickTime, pickerRestoreFor, type PickerRestore } from './step-pick-time';
+import { LengthNote } from './billing-line';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { hasCaseChoice } from './case-choice-section';
 import { StepBooked } from './step-booked';
@@ -654,6 +655,8 @@ export function BookingFlowDialog(
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [viewerTimezone, setViewerTimezone] = useState('UTC');
   const [slot, setSlot] = useState<ConfirmSlot | null>(null);
+  /** What the picker reopens with after Change / Back, so the client's length and day survive. */
+  const [pickerRestore, setPickerRestore] = useState<PickerRestore | null>(null);
   const [nonce, setNonce] = useState(randomNonce);
 
   const [caseSelection, setCaseSelection] = useState<CaseSelection>({ kind: 'new' });
@@ -880,6 +883,7 @@ export function BookingFlowDialog(
     if (entry.mode === 'fixed_case') {
       setPhase(entry.presetSlot === null ? 'pick_time' : 'confirm');
       setSlot(entry.presetSlot);
+      setPickerRestore(null);
       setCaseSelection({ kind: 'existing', engagementId: entry.fixedCase.engagementId });
       setCompanies(null);
       setCompanyId(null);
@@ -889,6 +893,7 @@ export function BookingFlowDialog(
     } else {
       const { context } = entry;
       setSlot(null);
+      setPickerRestore(null);
       setCaseSelection({ kind: 'new' });
       setPhase(context.arm === 'onboarding_required' ? 'onboarding' : 'pick_time');
       setCompanyReadFailed(context.arm === 'company_read_failed');
@@ -1022,10 +1027,11 @@ export function BookingFlowDialog(
   );
 
   const handleChangeTime = useCallback(() => {
+    setPickerRestore(pickerRestoreFor(slot, staleSlot));
     setStaleSlot(false);
     setFunded(null);
     setPhase('pick_time');
-  }, []);
+  }, [staleSlot, slot]);
 
   // A preset slot was the whole reason the dialog opened, so Back leaves rather than offering
   // a calendar the client never asked for.
@@ -1035,8 +1041,9 @@ export function BookingFlowDialog(
       onClose();
       return;
     }
+    setPickerRestore(pickerRestoreFor(slot, staleSlot));
     setPhase('pick_time');
-  }, [backCloses, onClose]);
+  }, [backCloses, onClose, slot, staleSlot]);
 
   const handleRetryCompanies = useCallback(async () => {
     // M3 — `requireOnboardedUser()` inside the action can still reject (an expired session);
@@ -1353,8 +1360,9 @@ export function BookingFlowDialog(
   }, [handleSubmit]);
 
   const handleChooseDifferentTimeAfterPartial = useCallback(() => {
+    setPickerRestore(pickerRestoreFor(slot, true));
     setPhase('pick_time');
-  }, []);
+  }, [slot]);
 
   /** Keeps the typed fields on this device, for a client who leaves this dialog or is signed out. */
   const writeCurrentDraft = useCallback((): void => {
@@ -1597,6 +1605,8 @@ export function BookingFlowDialog(
                 onMessage={onMessage}
                 scope={scope}
                 similarExpertsHref={expert.similarExpertsHref}
+                lengthNote={<LengthNote billing="per_minute" />}
+                {...pickerRestore}
               />
             </motion.div>
           )}

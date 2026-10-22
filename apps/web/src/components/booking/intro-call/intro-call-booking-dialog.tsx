@@ -12,7 +12,8 @@ import type {
   BookIntroCallInput,
   IntroCallBookingFailureCode,
 } from '@/lib/booking/actions/book-intro-call-types';
-import { StepPickTime } from '../step-pick-time';
+import { StepPickTime, pickerRestoreFor, type PickerRestore } from '../step-pick-time';
+import { LengthNote } from '../billing-line';
 import { HardFailurePanel } from '../booking-error-panels';
 import type { GuestDraft } from '../guest-invite-composer';
 import type { AvailabilitySlotSelection } from '@/components/availability';
@@ -177,6 +178,8 @@ export function IntroCallBookingDialog({
   const isMobile = useIsMobile(768);
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [slot, setSlot] = useState<ConfirmIntroCallSlot | null>(null);
+  /** What the picker reopens with after Change / Back, so the client's length and day survive. */
+  const [pickerRestore, setPickerRestore] = useState<PickerRestore | null>(null);
   const [guests, setGuests] = useState<readonly GuestDraft[]>([]);
   const [staleSlot, setStaleSlot] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -189,6 +192,7 @@ export function IntroCallBookingDialog({
   const resetForReopen = useCallback((): void => {
     setPhase('pick_time');
     setSlot(null);
+    setPickerRestore(null);
     setGuests([]);
     setStaleSlot(false);
     setSubmitting(false);
@@ -213,9 +217,10 @@ export function IntroCallBookingDialog({
   }, []);
 
   const handleChangeTime = useCallback((): void => {
+    setPickerRestore(pickerRestoreFor(slot, staleSlot));
     setStaleSlot(false);
     setPhase('pick_time');
-  }, []);
+  }, [slot, staleSlot]);
 
   const handleSubmit = useCallback(async (): Promise<void> => {
     if (slot === null || submitting) return;
@@ -310,6 +315,8 @@ export function IntroCallBookingDialog({
                 onSlotSelect={handleSlotSelect}
                 onMessage={onMessage}
                 scope="existing_work"
+                lengthNote={<LengthNote billing="project" />}
+                {...pickerRestore}
               />
             </motion.div>
           )}

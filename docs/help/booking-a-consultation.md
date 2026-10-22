@@ -1,6 +1,6 @@
 ---
 title: 'Booking a consultation'
-summary: 'Pick a time with an expert, choose a length and confirm the call.'
+summary: 'Choose how long you need, pick a time with an expert and confirm the call.'
 audience: [client]
 category:
   client: calls
@@ -17,15 +17,21 @@ that expert stay together.
 ## How to book
 
 1. Open the expert's profile and choose **Book a consultation**.
-2. On **Choose a time**, pick a slot from their open times. Times show in your device's timezone.
-3. Under **How long do you need?**, choose 15, 30, 45 or 60 minutes. The longest option is capped
-   at the length of the slot you picked.
-4. On **Review & confirm**, check the details and choose **Confirm & book**.
+2. On **Choose a time**, answer **How long do you need?** first: choose 15, 30, 45 or 60 minutes.
+   60 minutes is preselected when the expert has room for it, otherwise the longest length that
+   fits. You can change it at any point.
+3. Pick a day, then a time. Times show as ranges at that length, in your device's timezone. If an
+   earlier slot only fits a shorter call, it's offered under **Need it sooner?**, and you can
+   switch to it in one click. Choose **Continue with** your time range when you've found the one you want.
+4. On **Review & confirm**, check the details and choose **Confirm & book**. Choose **Change** to
+   go back and pick a different length or time.
+
+You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.
 
 You can also book from an open case's page with **Book with {name} again**. Their calendar opens
 right there, with that case already chosen.
 
-![The How long do you need? step after picking a time, with the 15, 30, 45 and 60 minute options highlighted.](01)
+![The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.](01)
 
 ## If your balance is low when you book
 

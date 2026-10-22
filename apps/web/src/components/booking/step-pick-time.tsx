@@ -1,6 +1,7 @@
 'use client';
 
-import type { AvailabilityScope } from '@balo/shared/availability';
+import type { ReactNode } from 'react';
+import type { AvailabilityScope, SlotDurationMinutes } from '@balo/shared/availability';
 import Link from 'next/link';
 import { MessageCircle, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,31 @@ import {
   ExpertAvailabilityCalendar,
   type AvailabilitySlotSelection,
 } from '@/components/availability';
+
+/** What the picker is reopened with after the client leaves the confirm step. */
+export interface PickerRestore {
+  initialSelection?: AvailabilitySlotSelection;
+  defaultDurationMinutes?: SlotDurationMinutes;
+}
+
+/**
+ * The picker's restore props for a slot the client is stepping back from. A taken (stale) slot
+ * must never be reselected, so it carries only its length; otherwise the whole choice returns.
+ */
+export function pickerRestoreFor(
+  slot: Readonly<{ startIso: string; endIso: string; durationMinutes: SlotDurationMinutes }> | null,
+  stale: boolean
+): PickerRestore | null {
+  if (slot === null) return null;
+  if (stale) return { defaultDurationMinutes: slot.durationMinutes };
+  return {
+    initialSelection: {
+      start: slot.startIso,
+      end: slot.endIso,
+      duration: slot.durationMinutes,
+    },
+  };
+}
 
 function MessageInsteadButton({
   expertFirstName,
@@ -34,6 +60,9 @@ export function StepPickTime({
   onMessage,
   scope,
   similarExpertsHref,
+  lengthNote,
+  defaultDurationMinutes,
+  initialSelection,
 }: Readonly<{
   expertProfileId: string;
   expertFirstName: string | null;
@@ -43,6 +72,12 @@ export function StepPickTime({
   scope?: AvailabilityScope;
   /** When set, a paused expert's state leads with "Find a similar expert". */
   similarExpertsHref?: string;
+  /** Billing copy shown under the picker's length control. */
+  lengthNote?: ReactNode;
+  /** The length preselected when there is no `initialSelection` (a stale slot's old length). */
+  defaultDurationMinutes?: SlotDurationMinutes;
+  /** Restores the previous choice after "Change". */
+  initialSelection?: AvailabilitySlotSelection;
 }>): React.JSX.Element {
   return (
     <div className="p-6">
@@ -51,6 +86,9 @@ export function StepPickTime({
         mode="selectable"
         viewerType="client"
         scope={scope}
+        lengthNote={lengthNote}
+        defaultDurationMinutes={defaultDurationMinutes}
+        initialSelection={initialSelection}
         onSlotSelect={onSlotSelect}
         pausedAction={
           <>

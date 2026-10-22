@@ -98,6 +98,16 @@ export function formatDayHeading(dayKey: string): string {
   return date.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
+/** `'Thursday'` from a day key. Floating date — no zone involved, by design. */
+export function formatWeekdayLong(dayKey: string): string {
+  return dayKeyToCalendarDate(dayKey).toLocaleDateString('en-AU', { weekday: 'long' });
+}
+
+/** `'9:00 am'` in the viewer's zone — lowercase to match the rows' en-AU range casing. */
+export function formatOfferTime(iso: string, viewerTimezone: string): string {
+  return formatInTimeZone(new Date(iso), viewerTimezone, 'h:mm aaa');
+}
+
 /** The timezone chip label, e.g. `'Times in Melbourne (AEST)'`. Falls back to the raw IANA
  *  string when no city can be extracted (e.g. `'UTC'`). */
 export function formatTimezoneLabel(viewerTimezone: string, now: Date = new Date()): string {
