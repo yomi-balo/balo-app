@@ -188,8 +188,9 @@ function Card({ children, style: xs }) {
 
 // ══════════════════════════════════════════════════════════════════
 // STATE 1: SYNC PENDING
-// When: OAuth completed but profile_initial_sync_required === true
-// (User didn't grant all Google/Outlook calendar permissions)
+// When: The account is connected but provisioning didn't complete —
+// calendars.list failed or listed no writable calendar
+// (credentialStatus SYNC_PENDING → slot state setting_up)
 // ══════════════════════════════════════════════════════════════════
 function SyncPendingCard({ provider = 'google' }) {
   const [showDetail, setShowDetail] = useState(false);
@@ -199,7 +200,7 @@ function SyncPendingCard({ provider = 'google' }) {
 
   return (
     <Card style={{ overflow: 'hidden', ...slideUp(0.05) }}>
-      {/* Header — amber tone, distinct from both connected (green) and auth_error (red) */}
+      {/* Header — amber tone, distinct from connected (green) */}
       <div
         style={{
           padding: '16px 20px',
@@ -504,7 +505,7 @@ function O365GuidanceModal({ onContinue, onCancel }) {
         ))}
 
         <a
-          href="https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/"
+          href="/help/connecting-your-calendar"
           target="_blank"
           rel="noreferrer"
           style={{
@@ -569,7 +570,7 @@ function O365GuidanceModal({ onContinue, onCancel }) {
 
 // ══════════════════════════════════════════════════════════════════
 // STATE 3: O365 ADMIN APPROVAL WAITING
-// When: User attempted O365 OAuth but returned without a token
+// When: User attempted O365 OAuth and the callback said o365_admin_approval
 // (admin hasn't approved yet — or they abandoned during the approval flow)
 // ══════════════════════════════════════════════════════════════════
 function O365WaitingCard({ onTryAgain, onCancel }) {
@@ -709,7 +710,7 @@ function O365WaitingCard({ onTryAgain, onCancel }) {
       </div>
 
       <a
-        href="https://docs.cronofy.com/calendar-admins/faqs/need-admin-approval-error/"
+        href="/help/connecting-your-calendar"
         target="_blank"
         rel="noreferrer"
         style={{
@@ -769,8 +770,10 @@ function O365WaitingCard({ onTryAgain, onCancel }) {
 
 // ══════════════════════════════════════════════════════════════════
 // STATE 4: SESSION EXPIRED
-// When: User spent >5 min in OAuth flow (link token expired)
-// or returned from a failed OAuth attempt with no token
+// When: A connect attempt fails while the provider has no connection — the
+// connect link can't be created, the 10-minute connecting timer fires, or the
+// callback returns an error for that provider other than o365_admin_approval
+// (slot state attempt_failed)
 // ══════════════════════════════════════════════════════════════════
 function SessionExpiredCard({ provider = 'google', onTryAgain }) {
   const ProviderIcon = provider === 'google' ? GoogleIcon : MicrosoftIcon;

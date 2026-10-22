@@ -30,7 +30,6 @@ const googleActive: CalendarConnection = {
   provider: 'google',
   credentialStatus: 'ACTIVE',
   providerEmail: 'test@gmail.com',
-  lastSyncedAt: null,
   targetCalendarId: null,
   subCalendars: [
     { id: 'c1', name: 'Work', provider: 'google', primary: true, conflictChecking: true },

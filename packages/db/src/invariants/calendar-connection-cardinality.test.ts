@@ -39,7 +39,7 @@ import { calendarConnections } from '../schema/calendar';
  * arbiter is a call-site fact that no table metadata records.
  *
  * ⚠ EXPLICITLY NOT IN THIS FILE: the real-Postgres behavioural proof — two providers
- * coexist, a duplicate `(expert, provider)` is rejected with 23505, `upsertConnection`
+ * coexist, a duplicate `(expert, provider)` is rejected with 23505, `upsertApirocConnection`
  * updates rather than raising 42P10, and reconnect-after-soft-delete succeeds. Those need
  * a database and live in `repositories/calendar.integration.test.ts`. They CANNOT live
  * here: this file runs in the UNIT job with no Docker, where the integration suite's global

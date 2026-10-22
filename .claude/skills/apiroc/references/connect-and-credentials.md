@@ -11,18 +11,6 @@ against the real API in the BAL-393 spike, **[stat]** read out of the published 
 **[docs]** vendor docs only. Untagged prose is a Balo design rule, or a description of Balo's
 own shipped code.
 
-✅ **BAL-396 (PR #221) is merged into this branch. Apiroc is the live connect/callback/credential
-path.** Cronofy is gone entirely: `apps/api/src/lib/cronofy.ts` and
-`apps/api/src/services/cronofy/` no longer exist, migration `0069_bal396_cronofy_removal.sql`
-dropped every Cronofy identity column (`cronofy_sub`, `access_token`, `refresh_token`,
-`token_expires_at`, `channel_id`) from `calendar_connections` and the two orphan
-`expert_profiles` columns (`cronofy_user_id`, `cronofy_sync_status`), and `end_user_account_id`
-is `NOT NULL`. Everywhere this file used to say "inert" or "the pattern BAL-396 reuses," read the
-real, shipped file instead — this reconciliation replaces every such claim with the as-built
-code. What is still genuinely unbuilt is called out explicitly and attributed to its own ticket
-(BAL-468 webhooks/subscriptions, BAL-397 the multi-connection settings UI, BAL-462 the re-consent
-explainer).
-
 ---
 
 ## 1. The connection model, as built
@@ -31,8 +19,8 @@ explainer).
 
 `packages/db/src/schema/calendar.ts`; migrations `0067_bal467_apiroc_per_provider_connections.sql`
 (the per-provider unique + `end_user_account_id`), `0068_bal396_apiroc_credential_status.sql` (the
-`status` → `credential_status` rename and vocabulary swap), `0069_bal396_cronofy_removal.sql` (the
-Cronofy column drop + `NOT NULL`).
+`status` → `credential_status` rename, its CHECK, and the health-probe columns), and `0069`
+(`end_user_account_id` made `NOT NULL`).
 
 | Column                  | Type                            | As-built truth                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -42,14 +30,12 @@ Cronofy column drop + `NOT NULL`).
 | `provider`              | text not null                   | 'google' \| 'microsoft' lowercase, no CHECK on it                                                                                                                                                                                                                                                                                                                                           |
 | `provider_email`        | text nullable                   | BAL-575 — written on every connect/reconnect from the account `endUserAccounts.get` already fetched (§3.2); never nulled once known — a blank or absent vendor email leaves the stored value alone (§1.3). Rows connected before BAL-575 stay null until they next reconnect — no backfill is planned. Feeds `loginHint` on a future connect (§2.1), and the settings card's `accountLabel` |
 | `credential_status`     | text not null, default 'ACTIVE' | Renamed from status by migration 0068. Vocabulary: ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED — see §5.1                                                                                                                                                                                                                                                                                  |
-| `credential_checked_at` | timestamptz, nullable           | Last time a real data call proved this credential works. Stamped by the health probe (§5.3) and by upsertApirocConnection on connect/reconnect                                                                                                                                                                                                                                              |
+| `credential_checked_at` | timestamptz, nullable           | The health probe's and the staleness cron's scan key, not proof the credential works. Stamped on every health-probe attempt, success or classified failure (§5.3), and by upsertApirocConnection's UPDATE arm (a reconnect of a live row); a fresh connect leaves it NULL, which findStaleConnections (§1.4) matches at once                                                                |
 | `reconnect_notified_at` | timestamptz, nullable           | "Already notified about the current breakage" marker — see §5.2/§5.3                                                                                                                                                                                                                                                                                                                        |
-| `last_synced_at`        | timestamptz, nullable           | Effectively dead. Its only production writer was the Cronofy webhook route BAL-396 deleted; nothing writes it any more, so every row's value is permanently NULL. findStaleConnections (§1.4) was repointed to credential_checked_at for exactly this reason — do not resurrect a query against this column                                                                                 |
 | `target_calendar_id`    | text nullable                   | Event-write target, per connection (ADR-1021 amendment §1)                                                                                                                                                                                                                                                                                                                                  |
 | timestamps / softDelete |                                 | created_at, updated_at, deleted_at                                                                                                                                                                                                                                                                                                                                                          |
 
-Indexes and constraints — the Cronofy-era ones (cal_conn_cronofy_sub_idx, cal_conn_channel_id_idx)
-are gone, dropped by migration 0069 alongside their columns:
+Indexes and constraints:
 
 | Index / constraint                       | Shape                                                                                            |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -149,9 +135,7 @@ return { outcome: 'persisted', connection };
 ```
 
 This is the real, shipped `calendarRepository.upsertApirocConnection` — the **only** writer that
-mints a `calendar_connections` row in the Apiroc world; `upsertConnection`,
-`updateConnectionTokens`, `updateConnectionChannelId`, `findConnectionByChannelId`, and the
-expert-wide `updateConnectionStatus` fan-out are all **deleted**, not renamed (see §1.4).
+mints a `calendar_connections` row.
 
 ⚠ Typecheck, lint, and the mocked unit test all stay **green** without `targetWhere` (the unit
 test mocks Drizzle and only records the argument object). Only the integration suite catches it.
@@ -204,30 +188,26 @@ method below is now checked against its **actual live callers** on this branch, 
 
 | Method                              | Class            | Live callers today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `findConnectionByExpertProfileId`   | legacy-single    | `routes/calendar/api.ts` (`GET /api/calendar/connection`'s single-connection `connection` shape, BAL-397 replaces it)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `findConnectionByExpertProfileId`   | legacy-single    | INERT. New code calls `findConnectionByExpertAndProvider`, or `listConnectionsByExpertProfileId` for every provider                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `findConnectionByExpertAndProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar` with an explicit `provider`), `services/calendar/apiroc-connection.ts` (`disconnectProvider`). BAL-575 added two more: `routes/calendar/auth.ts` (the connect route's `loginHint` read) and `persistApirocConnection`'s diagnostic pre-read on the OAuth callback                                                                                                                                                                                                                                                                                         |
 | `listConnectionsByExpertProfileId`  | fan-out          | `routes/calendar/api.ts` (`GET /connection`'s `connections` array, `disconnect`'s whole-account loop, `findConnectionOwningCalendar`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `findConnectionsByEndUserAccountId` | pointer          | BAL-575 — takes a required `{ excludingConnectionId }` option (a connection id or `null`), so no caller can forget the exclusion. Two callers: the OAuth callback's refusal-cleanup (`discardRefusedEndUserAccount`, §3.2) passes `null` — the just-refused account never got a row of its own to exclude — to check whether ANY live row, for ANY expert, still references it before deleting it at the vendor; `disconnectProvider`'s shared-account guard (§7.1) passes its own row id, since that row is still live when the check runs. Returns an array — the index is non-unique on purpose (§1.1) |
 | `upsertApirocConnection`            | provider-scoped  | `services/calendar/apiroc-connection.ts` (`persistApirocConnection`, called from the OAuth callback — §3.2). The only connection writer. BAL-575 — refuses a different EUA on a live row rather than repointing it (§1.3)                                                                                                                                                                                                                                                                                                                                                                                 |
-| `setCredentialStatusForProvider`    | provider-scoped  | `services/calendar/apiroc-connection.ts` (`provisionConnection`) — replaces the deleted expert-wide `updateConnectionStatus` fan-out                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `setCredentialStatusForProvider`    | provider-scoped  | `services/calendar/apiroc-connection.ts` (`provisionConnection`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `setCredentialStatus`               | connection-keyed | `services/calendar/credential-status.ts` (`flipToReconnectRequired`), `jobs/calendar-health-probe.ts` (recovery path)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `markCredentialChecked`             | connection-keyed | `jobs/calendar-health-probe.ts` — the probe's scan-key stamp, on EVERY attempt including a classified failure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `markReconnectNotified`             | connection-keyed | `services/calendar/credential-status.ts` — stamped after the notification publish, never before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `updateLastSyncedAt`                | connection-keyed | No live caller. Its only production writer was the Cronofy webhook route BAL-396 deleted — see `lastSyncedAt`'s note in §1.1                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `updateTargetCalendarIdForProvider` | provider-scoped  | `routes/calendar/api.ts` (`set-target-calendar`), `services/calendar/apiroc-connection.ts` (`provisionConnection`'s first-connect default)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `findConnectionWithSubCalendars`    | legacy-single    | `routes/calendar/api.ts` — backs `GET /connection`'s legacy `connection` shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `softDeleteConnection`              | fan-out          | `routes/calendar/api.ts` (`disconnect` with `provider` absent — the whole-account backstop, run after the per-provider loop)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `softDeleteConnectionForProvider`   | provider-scoped  | `services/calendar/apiroc-connection.ts` (`disconnectProvider`) — per-provider disconnect is now real, see §7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `findStaleConnections`              | unaffected       | `jobs/availability-cache.ts` — the 15-minute staleness cron. Repointed from `last_synced_at` to `credential_checked_at` by BAL-396's fix round (see §1.1); the old column had no writer left                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `findStaleConnections`              | unaffected       | `jobs/availability-cache.ts` — the 15-minute staleness cron. Keys on `credential_checked_at` (§1.1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `listConnectionsDueForHealthCheck`  | unaffected       | `jobs/calendar-health-probe.ts` — the probe's candidate scan (§5.3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `listBusyReadTargets`               | unaffected       | `services/availability/vendor-busy.ts` — the free/busy read's connection list. Returns non-ACTIVE and unprovisioned connections too, deliberately, so the booking gate can fail closed                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
-⚠ **The Cronofy-era fan-outs `updateConnectionStatus` (expert-wide status) and
-`updateTargetCalendarId` (expert-wide target calendar) are DELETED, not merely superseded.** They
-no longer exist in `packages/db/src/repositories/calendar.ts` at all. The "known imprecision"
-they used to represent (one provider's failure branding the other provider's row) cannot recur
-through them because they are gone; every write is now provider-scoped or connection-keyed by
-construction.
+⚠ **Status and target-calendar writes are provider-scoped or connection-keyed by construction —
+there is no expert-wide setter for either**, so one provider's failure can never brand the other
+provider's row. The only expert-wide `calendarRepository` write to `calendar_connections` is
+`softDeleteConnection`, the whole-account disconnect backstop (§7.1).
 
 ⚠ `findConnectionsByEndUserAccountId` returning an array remains deliberate for the reason in
 §1.1: nothing establishes a vendor one-to-one guarantee, and two experts connecting the same
@@ -235,20 +215,22 @@ Google account is possible, not routine — it would need the vendor to overwrit
 second OAuth, which has never been captured. Both live callers, and the required exclusion each
 one passes, are in the table row above.
 
-### 1.5 Tables that do NOT exist yet
+### 1.5 Related tables — sub-calendars and subscriptions
 
-SKILL.md's schema block also shows a `calendar_subscriptions` table with `endpointSecret` and
-`expiration`. **No such table is in `packages/db` today.** It is BAL-468's. What does exist is
-`calendar_sub_calendars` — the per-connection calendar list (`calendar_id`, `name`, `provider`,
-`profile_name`, `is_primary`, `conflict_check`, `color`), unique on `(connection_id, calendar_id)`,
-FK `ON DELETE cascade`. Do not conflate the two: sub-calendars are the conflict-check toggle list;
-subscriptions are the webhook registrations. `profile_name` stores the connection's
-`providerEmail` at provisioning time (`services/calendar/apiroc-connection.ts`) — display
-metadata, not an identity field.
+Two tables in `packages/db/src/schema/calendar.ts` hang off a connection by `connection_id` (FK
+`ON DELETE cascade`). Do not conflate them: sub-calendars are the conflict-check toggle list;
+subscriptions are the webhook registrations.
 
-⚠ Superseded by BAL-468: the `calendar_subscriptions` table shipped. See
-`packages/db/src/schema/calendar.ts` (FK `connection_id`; `cal_wsub_vendor_id_idx`, unique among live
-rows) and §7.1 step 2.
+- `calendar_sub_calendars` — the per-connection calendar list (`calendar_id`, `name`, `provider`,
+  `profile_name`, `is_primary`, `conflict_check`, `color`), unique on `(connection_id, calendar_id)`.
+  `profile_name` stores the connection's `providerEmail` at provisioning time
+  (`services/calendar/apiroc-connection.ts`) — display metadata, not an identity field.
+- `calendar_subscriptions` — one Apiroc `event` webhook registration per (connection, calendar)
+  (`calendar_id`, `webhook_subscription_id`, `endpoint_secret` encrypted per §4.2, `webhook_url`,
+  `expiration`, `expiration_synced_at`, `last_delivery_at`), soft-deleted. Unique on
+  `webhook_subscription_id` among live rows (`cal_wsub_vendor_id_idx`), and deliberately **not**
+  on `(connection_id, calendar_id)`: a create-then-delete renewal holds two live rows for one
+  calendar. Disconnect removes them in §7.1 steps 2 and 4.
 
 ---
 
@@ -321,18 +303,18 @@ accident — but a future call site building `state` some other way could.
 | `state`             | optional string                     | Signed, non-empty, round-trips intact on success **[live]**                                           |
 | `unifiedApiBaseUrl` | optional                            | Defaults `https://api.apiroc.com`. Leave unset                                                        |
 
-⚠ **Provider casing crosses three vocabularies.** The SDK wants `'GOOGLE'`/`'MICROSOFT'`; Balo's
+⚠ **Provider casing crosses two vocabularies.** The SDK wants `'GOOGLE'`/`'MICROSOFT'`; Balo's
 DB, zod schemas, and `CALENDAR_PROVIDERS` in `services/calendar/sync-capability.ts` all use
-lowercase `'google'`/`'microsoft'`. Cronofy used `'office365'` for Microsoft; that translation
-(`api.ts::mapProvider`'s old `office365` branch) is **gone** — migration `0069` removed every
-Cronofy-era row, the only source of that value, so `mapProvider` today narrows defensively (a
-garbage value falls back to `'google'`) rather than translating a value that can no longer occur.
-**Store lowercase.** Convert at the SDK boundary only (`oauth.ts::toApirocProviderType`).
+lowercase `'google'`/`'microsoft'`. The connect path (`persistApirocConnection`,
+`services/calendar/apiroc-connection.ts`) writes the lowercase value straight from the
+`z.enum`-validated connect body, carried through the signed `state` (§2.2). `provider` has no
+CHECK, so `api.ts::mapProvider` narrows defensively on read: `'microsoft'` stays `'microsoft'`,
+and any other value falls back to `'google'`. **Store lowercase.** Convert at the SDK boundary
+only (`oauth.ts::toApirocProviderType`).
 
 ### 2.2 `state` — signing, verification, and the CSRF-binding cookie
 
-The signed-state primitive lives in `apps/api/src/services/calendar/connect-state.ts` — this is
-the shipped Apiroc implementation now, not a Cronofy pattern being reused:
+The signed-state primitive lives in `apps/api/src/services/calendar/connect-state.ts`:
 
 ```typescript
 // Format: base64url(payload).base64url(hmac). Payload = { expertProfileId, provider, nonce, ts }.
@@ -424,7 +406,8 @@ debugging. It is **not** an identity or uniqueness lever:
 `redirectUrl` must be registered in the Apiroc dashboard under **Application Details → Authorized
 Redirect URIs** **[live]**. `http://localhost:8787/callback` was accepted there — **plain HTTP on
 localhost is not rejected for OAuth**, so connect-flow work needs no tunnel. (Webhook `webhookUrl`
-is the opposite: HTTPS required **[docs + stat]** — that is BAL-468's problem, not this one.)
+is the opposite: HTTPS required **[docs + stat]**, so `resolveWebhookBaseUrl`
+(`services/calendar/webhook-url.ts`) treats a non-`https://` `APIROC_WEBHOOK_BASE_URL` as unset.)
 Balo's env var is `APIROC_REDIRECT_URI`, read (and validated with a named `ApirocConfigError`
 throw, never a silent `!`) by `apps/api/src/lib/apiroc/oauth.ts::buildApirocAuthorizeUrl` —
 `apps/api/src/lib/apiroc/client.ts` deliberately does **not** read it or `APIROC_APP_ID`, only
@@ -492,9 +475,9 @@ branches on the three shapes from §3.1, in order:
 **Shape 1 — `error` present** (`handleCallbackErrorShape`): classifies via `classifyCallbackError`
 (matches `error`/`error_description`, case-insensitively, against `PARTIAL_GRANT_MARKERS`
 (`missing_required_permissions`) and `O365_ADMIN_MARKERS` (`access_denied`, `consent_required`,
-`admin_approval` — Microsoft/AAD vocabulary carried over from the Cronofy handler, **plausible but
-still unverified against a live Apiroc Microsoft callback**), else `callback_failed` and a `warn`
-log so the real vocabulary is learned from production rather than guessed at again. Extracts
+`admin_approval` — Microsoft/AAD OAuth vocabulary, **plausible but still unverified against a
+live Apiroc Microsoft callback**), else `callback_failed` and a `warn` log so the real
+vocabulary is learned from production rather than guessed at again. Extracts
 `{ expertProfileId, provider }` from `state` via `readStatePayloadUnverified` (unverified, since
 the signature may be expired or tampered — never trusted for anything beyond labelling the
 redirect and picking which cookie slot to clear), narrows `provider` through
@@ -598,14 +581,13 @@ alongside that error never throws and never persists a row.
 
 A connection persists **`end_user_account_id` + `provider` + `expert_profile_id`**, plus the
 derived `target_calendar_id` and display `provider_email`. That is the whole record. Balo stores
-**no provider access token, no refresh token, and no token expiry** — migration `0069` removed the
-columns that used to hold them (Cronofy's), and Apiroc never gave Balo a reason to add equivalents:
-the vendor refreshes provider tokens itself.
+**no provider access token, no refresh token, and no token expiry** — `calendar_connections` has
+no column for any of them, and the vendor refreshes provider tokens itself.
 
 ⚠ **`endUserAccounts.getCredentials(id)` DOES return raw provider tokens.** `EndUserAccountCredential`
 exposes `accessToken`, `refreshToken`, and (Apple) `password` **[stat]**. The "we never hold
-tokens" posture is **a choice Balo keeps making, not something the API enforces** — and, as of
-BAL-396, a choice enforced by the schema itself (there is no column left to put one in).
+tokens" posture is **a choice Balo keeps making, not something the API enforces** — though the
+schema enforces it on Balo's side (there is no column to put one in).
 Consequences:
 
 - Prefer `endUserAccounts.get(id)` — it returns `{ id, email, externalId, providerAccountId,
@@ -621,66 +603,54 @@ providerType, applicationId, authorizedScopes?, status, createdAt, updatedAt }` 
   `enumerable: false` precisely so Pino's default `err` serializer cannot copy a raw wire body
   into Axiom. Do not re-assign it as a plain property.
 
-### 4.2 No calendar-specific encryption module ships — and none is needed today
+### 4.2 The one calendar secret Balo encrypts — `endpoint_secret`
 
-⚠⚠ **`apps/api/src/lib/calendar-encryption.ts` no longer exists — BAL-396 deleted it.** It was
-real: it shipped with the Cronofy OAuth backend (BAL-232, PR #72) and existed on this branch's
-parent. This PR removed it (54 deletions in the BAL-396 commit) together with the Cronofy token
-columns it protected (`access_token`, `refresh_token` — migration 0069), because the Apiroc model
-stores a pointer and no tokens. Its only importers were the two Cronofy service files, which went
-in the same commit; nothing imports it now. Do not write code that imports
-`calendar-encryption.ts` or assumes `encryptCalendarToken`/`decryptCalendarToken` exist, and do
-not read its absence as evidence that calendar secrets were never encrypted — they were, until
-there stopped being any to encrypt.
+Balo encrypts exactly one calendar secret at rest: `calendar_subscriptions.endpoint_secret`, the
+per-subscription Svix verification secret. Its cipher is `apps/api/src/lib/calendar-encryption.ts`
+(`encryptCalendarSecret` / `decryptCalendarSecret`): AES-256-GCM, `iv:authTag:ciphertext` (all
+base64), under its own `CALENDAR_ENCRYPTION_KEY` — never `PAYOUT_ENCRYPTION_KEY`
+(`lib/encryption.ts`), which guards a different trust boundary.
+`services/calendar/subscription-reconcile.ts` encrypts on create and `routes/calendar/webhook.ts`
+decrypts to verify a delivery; `webhooks-and-events.md` A1 has the usage rules.
 
-Nothing calendar-related needs encrypting today: `end_user_account_id` is a pointer, not a secret
-(store it plaintext, per §4.1); the signed OAuth `state` is HMAC-signed, not encrypted (§2.2); and
-there is no `endpoint_secret` column because `calendar_subscriptions` (§1.5) does not exist yet.
-
-If BAL-468 introduces `endpoint_secret` for webhook subscriptions, the reuse target is the
-**payout-encryption precedent already in the codebase** — `apps/api/src/lib/encryption.ts`
-(`decryptValue`), paired with `apps/web`'s `encryptValue` (used today for Airwallex payout
-details): AES-256-GCM, key = bare SHA-256 of an env var (no KDF salt), output format
-`iv:authTag:ciphertext` (all base64), 12-byte random IV per call. Do not invent a second scheme,
-and do not resurrect a `calendar-encryption.ts` file — follow the one pairing that already exists.
-This is **intended shape**, attributed to BAL-468, not something built.
+Nothing else on the connection path is encrypted: `end_user_account_id` is a pointer, not a
+secret (store it plaintext, per §4.1); the signed OAuth `state` is HMAC-signed, not encrypted
+(§2.2); and there is no provider token to protect (§4.1).
 
 ---
 
 ## 5. Credential status and reconnect
 
-### 5.1 One status vocabulary now, not two out of sync
+### 5.1 The credential-status vocabulary
 
 | Vocabulary                                                   | Values                                               | Where                                                                    |
 | ------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------ |
 | Vendor `EndUserAccountCredentialStatus`                      | `ACTIVE` \| `EXPIRED` \| `REVOKED` **[stat]**        | Returned by `endUserAccounts.get()` / `.getCredentials()`                |
 | **Balo `calendar_connections.credential_status`** (as built) | `ACTIVE` \| `SYNC_PENDING` \| `EXPIRED` \| `REVOKED` | Enforced by CHECK `cal_conn_credential_status_check`, default `'ACTIVE'` |
 
-✅ **This used to be a warning about drift; it no longer is.** Migration `0068` renamed `status` to
-`credential_status` and swapped the CHECK vocabulary from the Cronofy shape
-(`connected|sync_pending|auth_error`) to the vendor-mirroring one. Writing `'ACTIVE'` is now
-literally the column's **default** — it is `'connected'` that would fail. Three of the four values
-mirror the vendor enum exactly; `SYNC_PENDING` is **Balo-side only**, with no vendor counterpart:
-it means "the credential is live at Apiroc but Balo has not finished first provisioning (no
-sub-calendar rows / no target calendar yet)." A `SYNC_PENDING` connection is UNREADABLE for
-free/busy — `listBusyReadTargets` (§1.4) still returns it (deliberately, so the caller can tell
-"cannot check" from "nothing to check"), and the booking gate must fail **closed** on it, never
-treat it as "no calendar."
+`'ACTIVE'` is the column's **default**, and the CHECK rejects any value outside these four. Three
+of the four values mirror the vendor enum exactly; `SYNC_PENDING` is **Balo-side only**, with no
+vendor counterpart: it means "the credential is live at Apiroc but Balo has not finished first
+provisioning (no sub-calendar rows / no target calendar yet)." A `SYNC_PENDING` connection is
+UNREADABLE for free/busy — `listBusyReadTargets` (§1.4) still returns it (deliberately, so the
+caller can tell "cannot check" from "nothing to check"), and the booking gate must fail
+**closed** on it, never treat it as "no calendar."
 
 `.$type<CalendarCredentialStatus>()` on the column is **load-bearing, not documentation**: it
-makes `eq(calendarConnections.credentialStatus, 'connected')` a compile error rather than a query
-that silently matches zero rows forever. `findStaleConnections`' docblock in
-`repositories/calendar.ts` names exactly this failure mode as the reason.
+makes a literal outside the four values — `eq(calendarConnections.credentialStatus, 'active')`,
+say — a compile error rather than a query that compiles, runs, and silently matches zero rows
+forever. `findStaleConnections`' `ACTIVE` filter (§1.4) is where that would bite: the 15-minute
+staleness cron would find nothing and report nothing wrong.
 
-⚠ **The `updateConnectionStatus` fan-out is gone, not merely deprecated** (§1.4) — replaced by
-`setCredentialStatusForProvider` (provider-scoped) and `setCredentialStatus` (connection-keyed).
-One provider's `EXPIRED` can no longer brand the other provider's row.
+⚠ **There is no expert-wide status setter** (§1.4) — status writes are provider-scoped
+(`upsertApirocConnection`, `setCredentialStatusForProvider`) or connection-keyed
+(`setCredentialStatus`), so one provider's `EXPIRED` never brands the other provider's row.
 
-⚠ The **old Cronofy vocabulary still exists in exactly one place**:
-`routes/calendar/api.ts::toLegacyStatus`, a presentation-only adapter
-(`ACTIVE→'connected'`, `SYNC_PENDING→'sync_pending'`, `EXPIRED`/`REVOKED→'auth_error'`, collapsed —
-no distinct UX) for `apps/web`'s pre-BAL-397 single-connection settings card. It is explicitly
-documented to die with BAL-397, and it is the **only** place the two vocabularies still meet.
+⚠ The four values reach `apps/web` verbatim: `GET /api/calendar/connection` returns
+`credentialStatus` as stored, and the callback's success redirect carries
+`calendar_status=ACTIVE|SYNC_PENDING` (§3.2). `EXPIRED` and `REVOKED` share one "Reconnect needed"
+UX but stay distinct in `GET /api/calendar/connection`'s `credentialStatus` — do not collapse
+them there.
 
 Also **[stat]**: `endUserAccounts.list({ statusFilter })` accepts only `'active' | 'expired'` —
 only two of the three vendor values are filterable, which lines up with `REVOKED` looking
@@ -811,12 +781,18 @@ Test coverage: `jobs/calendar-health-probe.test.ts` drives `runCalendarHealthPro
 
 ### 5.4 Reconnect ORDERING — reconnect FIRST
 
-**reconnect → delete stale subscriptions → re-create.** Never delete first. This remains
-**BAL-468's** problem in practice — `calendar_subscriptions` does not exist yet (§1.5; superseded
-by BAL-468 — the table shipped), so there is no subscription to delete or re-create today — but
-the vendor evidence and the ordering rule are
-unchanged and still the reason a future subscription-lifecycle implementation must not delete
-before reconnecting:
+**reconnect → re-create → delete stale subscriptions.** Never delete first.
+`services/calendar/subscription-reconcile.ts` makes no vendor call for a connection that is not
+`ACTIVE` (it skips with `connection_not_active`), so it never attempts a delete while the
+credential is broken. A reconnect that lands `ACTIVE` through the OAuth callback (§3.2), or an
+out-of-band recovery the health probe detects (§5.3), enqueues
+`enqueueSubscriptionReconcile(connection.id, { force: true }, …)`, which re-creates the
+connection's subscriptions and deletes each one it supersedes only after the replacement is
+created and stored (create-then-delete, `webhooks-and-events.md` A5). A reconnect whose
+provisioning lands `SYNC_PENDING` enqueues no reconcile; when the probe later re-provisions it to
+`ACTIVE` it reconciles with `force: false`, which re-creates only subscriptions the vendor no
+longer lists or that are inside the renewal lead time. The vendor evidence behind
+the rule:
 
 Deleting a subscription while the credential is `EXPIRED` returns
 `403 "End user account credential expired"` **[live]** — and the credential is expired precisely
@@ -834,17 +810,21 @@ behaviour, not a hazard to design around.** `upsertApirocConnection`'s ON CONFLI
 (`target: [expertProfileId, provider]`, `targetWhere: isNull(deletedAt)`) means a
 reconnect-after-_disconnect_ cannot match the soft-deleted row (it is invisible to the partial
 index) and therefore **INSERTs a fresh `calendar_connections` row**, leaving the old one behind as
-history. Anything keyed on `connection_id` — `calendar_sub_calendars` today, and BAL-468's
-subscriptions table once it exists — must be re-created against the **new** row, never looked up
-by the old one. `endUserAccountId` staying the same does **not** mean the Balo row did. (A
+history. Anything keyed on `connection_id` — `calendar_sub_calendars` and
+`calendar_subscriptions` — must be re-created against the **new** row, never looked up by the old
+one. `endUserAccountId` staying the same does **not** mean the Balo row did. (A
 reconnect that is **not** preceded by a disconnect — the connection is still live, just
 credential-broken — goes through the same upsert's UPDATE arm instead, and the row id does _not_
 churn; see `provisionConnection`'s "only default the target calendar when unset" rule in §3.2,
 which exists specifically because that arm is a re-provision of an existing row, not a fresh one.)
 
-⚠ Cleanup must be **verified, not best-effort**, once BAL-468 ships. A stale subscription keeps
-delivering duplicate webhooks for up to 7 days (BAL-468 §4). Whether subscriptions survive a
-reconnect at all is **still untested** — SKILL.md → "Still unverified."
+⚠ The reconciler's cleanup is **verified, not best-effort**: after running its plan it re-reads
+`calendarSubscriptions.list` and logs `apiroc_subscription_delete_unverified` (error) for every
+intended delete the vendor still lists, because a stale subscription keeps delivering duplicate
+webhooks for up to 7 days. Whether subscriptions survive a reconnect at all is **still untested**
+(SKILL.md → "Still unverified"); on the two forced paths the re-create makes the answer not
+matter, but a reconnect healed through re-provisioning (`force: false`) keeps any subscription the
+vendor still lists.
 
 ⚠⚠ **BAL-575 — the UPDATE arm above only fires when the incoming End User Account matches the
 STORED one.** A reconnect (or Fix permissions) that comes back signed in to a different account
@@ -900,23 +880,18 @@ live ticket in Linear before quoting a number in a PR description.
 
 ## 7. Disconnect
 
-### 7.1 As built — per-provider, and vendor-side deletion now happens
-
-⚠ **This section used to describe an inconsistent Cronofy whole-account path and defer the
-per-provider question to "BAL-396." That ticket is this branch — per-provider disconnect is now
-real, and so is calling `endUserAccounts.delete()`.**
+### 7.1 As built — per-provider, with vendor-side deletion
 
 `POST /api/calendar/disconnect` (`routes/calendar/api.ts`), body
 `{ expertProfileId, provider? }`:
 
 - **`provider` present** → `disconnectProvider(expertProfileId, provider)` only. That provider's
   connection is removed; the expert's other live connection (if any) is untouched.
-- **`provider` absent** → today's whole-account behaviour, and what the "Disconnect all
-  calendars" copy says: loop `disconnectProvider` over every live connection
-  (`listConnectionsByExpertProfileId`), **then** call `softDeleteConnection` (the fan-out) as a
-  defensive backstop for anything the per-provider loop did not enumerate — not a real code path
-  today (migration `0069` already removed every Cronofy-era row at the DB level), but cheap
-  insurance.
+- **`provider` absent** → the whole-account contract: loop `disconnectProvider` over every live
+  connection (`listConnectionsByExpertProfileId`), **then** call `softDeleteConnection` (the
+  fan-out) as a defensive backstop for any live row the loop did not enumerate. No shipped caller
+  takes this arm: the web action (`_actions/disconnect-calendar.ts`) requires `provider`, so one
+  provider's disconnect cannot escalate into an account-wide one.
 
 Either way, the route then **enqueues** an availability-cache **rebuild** (never a clear) —
 `enqueueAvailabilityCacheRebuild` — because with two providers connected, disconnecting one must
@@ -951,7 +926,7 @@ client.endUserAccounts.delete(connection.endUserAccountId))`, the existing best-
    subscription rows, soft-deleted regardless of whether their vendor-side deletes in step 2
    succeeded.
 5. `deleteSubCalendarsByConnectionId(connection.id)` — **hard delete**, scoped to **this**
-   connection only (not the expert-wide fan-out the Cronofy path used to run).
+   connection only.
 6. `softDeleteConnectionForProvider(expertProfileId, provider)` — soft-deletes **only** this
    provider's row.
 
@@ -993,8 +968,7 @@ self-repair that would detect and recover it automatically is deferred pending B
 
 - [ ] **Provider-scoped, not expert-scoped.** Every read and write names `provider`. If you
       reached for `findConnectionByExpertProfileId` / `softDeleteConnection` (the fan-out), justify
-      it or switch to the `…ForProvider`/provider-scoped sibling. `updateConnectionStatus` and the
-      expert-wide `updateTargetCalendarId` no longer exist to reach for at all — they were deleted.
+      it or switch to the `…ForProvider`/provider-scoped sibling.
 - [ ] **Lowercase in the DB, uppercase at the SDK.** `'google'`/`'microsoft'` in every column,
       zod schema, and analytics prop; `'GOOGLE'`/`'MICROSOFT'` only inside `oauth.ts`'s
       `toApirocProviderType` / the `getOAuthUrl` call.
@@ -1009,20 +983,20 @@ self-repair that would detect and recover it automatically is deferred pending B
 - [ ] **Callback branches on `error` first**, handles all three shapes, and writes **nothing** on
       the error or empty branch. Do not assume `state` is present on the error branch **[live]**.
 - [ ] **No provider tokens persisted, ever**, and no `getCredentials()` result logged, serialised,
-      or stored. Prefer `endUserAccounts.get()`. There is no `calendar-encryption.ts` to reach for
-      — if you think you need to encrypt a calendar-related secret, re-read §4.2 first.
-- [ ] **Status writes use the shipped `ACTIVE|SYNC_PENDING|EXPIRED|REVOKED` vocabulary** — the
-      CHECK now **rejects** the old Cronofy words (`connected`/`sync_pending`/`auth_error`); those
-      only exist any more in `api.ts::toLegacyStatus`'s presentation adapter, which dies with
-      BAL-397.
+      or stored. Prefer `endUserAccounts.get()`. The only calendar secret at rest is
+      `calendar_subscriptions.endpoint_secret`, under `lib/calendar-encryption.ts`'s own key (§4.2).
+- [ ] **Status writes use the `ACTIVE|SYNC_PENDING|EXPIRED|REVOKED` vocabulary** —
+      `cal_conn_credential_status_check` **rejects** anything else, and the column's `.$type`
+      makes an out-of-vocabulary literal a compile error (§5.1).
 - [ ] **Reconnect detection is error-driven**: run failures through
       `classifyCredentialFailure` (`lib/apiroc/reconnect.ts`) and `applyCredentialFailure`
       (`services/calendar/credential-status.ts`) — the one place a credential is marked broken.
       Never poll status as a leading indicator, and never hand-roll a second discriminator between
       an expert-side revoke and a platform-key fault.
-- [ ] **Reconnect order is reconnect → delete → recreate.** Re-create anything keyed on
-      `connection_id`; the Balo row id changed even though `endUserAccountId` did not, on a
-      reconnect that follows a disconnect (§5.4).
+- [ ] **Reconnect order is reconnect → re-create → delete stale subscriptions** — no reconnect
+      path deletes a subscription before the connection is `ACTIVE` again. Re-create anything
+      keyed on `connection_id`; the Balo row id changed even though `endUserAccountId` did not,
+      on a reconnect that follows a disconnect (§5.4).
 - [ ] **Every SDK call goes through `callApiroc('operation', () => …)`**, one call per wrapper.
       Never consume the SDK's thrown error directly; never branch on the wire `error` field or
       `error.constructor.name`.
@@ -1042,11 +1016,11 @@ self-repair that would detect and recover it automatically is deferred pending B
 
 ## Cross-references
 
-| For                                                                   | Read                                                                        |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Why the credential status lies; the full revoke evidence table        | SKILL.md → "Credential expiry & reconnect detection"                        |
-| The SDK's error envelopes, five defects, and retry policy             | SKILL.md → "Error Handling"                                                 |
-| What was refuted and why the first skill version was wrong            | SKILL.md → "Hypothesis ledger"                                              |
-| Provider semantic divergences (ids, tags, sync tokens)                | SKILL.md → "Provider-parity table", M1–M3                                   |
-| Subscription creation, the 7-day expiry, renewal (BAL-468, not built) | SKILL.md → "Subscriptions & lifecycle"                                      |
-| Raw captured evidence                                                 | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211, unmerged) |
+| For                                                            | Read                                                                        |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Why the credential status lies; the full revoke evidence table | SKILL.md → "Credential expiry & reconnect detection"                        |
+| The SDK's error envelopes, five defects, and retry policy      | SKILL.md → "Error Handling"                                                 |
+| What was refuted and why the first skill version was wrong     | SKILL.md → "Hypothesis ledger"                                              |
+| Provider semantic divergences (ids, tags, sync tokens)         | SKILL.md → "Provider-parity table", M1–M3                                   |
+| Subscription creation, the 7-day expiry, renewal               | SKILL.md → "Subscriptions & lifecycle"                                      |
+| Raw captured evidence                                          | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211, unmerged) |

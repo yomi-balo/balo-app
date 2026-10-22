@@ -354,9 +354,9 @@ describe('resolveAndCacheAvailability', () => {
 
   it('reads busyBlocks from the SHARED vendor port when none are supplied', async () => {
     // ⚠ BAL-129: NOT an inline `[]`. The booking gate reads vendor free/busy from the SAME
-    // `vendorBusyProvider`, so BAL-194/195 wiring Cronofy in that one place reaches BOTH the
-    // advertised answer and the accept check. The spy is what makes "shared" a test rather than
-    // a comment: an inlined default here would never call it.
+    // `vendorBusyProvider`, so the Apiroc free/busy read wired there reaches BOTH the advertised
+    // answer and the accept check. The spy is what makes "shared" a test rather than a comment:
+    // an inlined default here would never call it.
     mockFindResolverSettings.mockResolvedValue(settings());
     mockListRules.mockResolvedValue([]);
     mockListConsultations.mockResolvedValue([]);

@@ -565,8 +565,7 @@ describe('calendar auth routes (BAL-396)', () => {
 
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain('calendar_connected=true');
-      // BAL-397 §13.2 — the real DB vocabulary rides the wire now, not the retired
-      // `connected`/`sync_pending` strings.
+      // `calendar_status` carries the stored credential status.
       expect(res.headers.location).toContain('calendar_status=ACTIVE');
       // BAL-397 §13.1 — the callback lands on the Schedule tab (where the calendar section
       // actually renders), not the dead `?tab=calendar`.
@@ -624,7 +623,7 @@ describe('calendar auth routes (BAL-396)', () => {
       expect(setCookie[0]).toContain('Max-Age=0');
     });
 
-    it('SHAPE 2: SYNC_PENDING provisioning still redirects success with the sync_pending status', async () => {
+    it('SHAPE 2: SYNC_PENDING provisioning still redirects success with calendar_status=SYNC_PENDING', async () => {
       mockVerifyConnectState.mockReturnValue({
         expertProfileId: EXPERT_UUID,
         provider: 'google',

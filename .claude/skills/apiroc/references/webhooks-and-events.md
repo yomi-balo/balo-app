@@ -16,18 +16,14 @@ Evidence tags follow SKILL.md: **[live]** = observed against the real API in the
 
 ---
 
-## ⚠ A mixed bag now — Part A is still design, Part B mostly shipped. Know what you are looking at.
+## ⚠ Both parts are shipped code. Know what you are looking at.
 
-**This split changed under BAL-396, and it is the single most important fact in this file.**
-Part A (inbound Svix webhooks, subscriptions) is still **design + evidence**, not shipped code —
-BAL-468's scope, untouched by this branch. Part B (outbound consultation-event writes) is
-**mostly shipped**: `apps/api/src/services/consultation-events/` exists, complete and tested, for
-create/delete/reconcile (not update). It ships **INERT** — nothing calls it yet, because the
-booking flow that would (BAL-400) hasn't landed — but "nobody calls it" is a different claim from
-"it doesn't exist", and this file used to conflate the two. Every code block below that is not
-attributed to a real file is still **the intended shape**; a growing number now ARE attributed to a
-real file, and those are shipped, not sketches — read each block's own comment before assuming
-either way.
+Part A (inbound Svix webhooks, the subscription lifecycle, the `endpoint_secret` cipher) is
+**shipped** (BAL-468): `apps/api/src/routes/calendar/webhook.ts`, the `calendar_subscriptions`
+table, and `jobs/calendar-subscription-{reconcile,monitor}.ts`. Part B (outbound
+consultation-event writes) ships in `apps/api/src/services/consultation-events/`. A module with no
+production caller is **INERT**, not missing — "nobody calls it" is a different claim from "it
+doesn't exist".
 
 | Piece                                                          | State today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Ticket                                             |
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -37,28 +33,13 @@ either way.
 | Apiroc **connect / free-busy**                                 | **Shipped, LIVE** — `/auth/apiroc/callback`, `provisionConnection`, `vendorBusyProvider.listBusyBlocks` all have real callers on this branch                                                                                                                                                                                                                                                                                                                                                                                                                                     | BAL-396                                            |
 | Apiroc **event writes** (create/delete/reconcile/UPDATE)       | **Shipped, complete, tested. CREATE is LIVE; delete/reconcile remain INERT.** `projectBookingToExpertCalendar` is called from `provision-meeting.ts` on every `case` booking (BAL-400 D2); `delete-consultation-event.ts` and `reconcile-by-tag.ts` still have no production caller. `apps/api/src/services/consultation-events/` now also ships `update-consultation-event.ts` (BAL-409), which IS LIVE — called from the `meeting-calendar-amend` BullMQ job                                                                                                                   | BAL-396, caller = BAL-400; update caller = BAL-409 |
 | Apiroc **webhook route**, subscription CRUD, renewal           | **SHIPPED** (BAL-468) — `apps/api/src/routes/calendar/webhook.ts`, tested                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | BAL-468                                            |
-| `calendar_subscriptions` table                                 | **SHIPPED** (BAL-468) — `schema/calendar.ts`; SKILL.md's DB block now matches the real table                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | BAL-468                                            |
+| `calendar_subscriptions` table                                 | **SHIPPED** (BAL-468) — `schema/calendar.ts`; SKILL.md's DB block is a simplified target shape, and connect-and-credentials.md §1.5 lists every column                                                                                                                                                                                                                                                                                                                                                                                                                           | BAL-468                                            |
 | `svix` package                                                 | **SHIPPED** — a real dependency of `apps/api` (BAL-468)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | BAL-468                                            |
 | A cipher for `endpoint_secret`                                 | **SHIPPED** — `apps/api/src/lib/calendar-encryption.ts`, `encryptCalendarSecret`/`decryptCalendarSecret`, used by the webhook route to decrypt the stored secret before verifying a delivery                                                                                                                                                                                                                                                                                                                                                                                     | BAL-468                                            |
 | Vendor liaison (auto-renew answer, the 500, delete-on-expired) | **Open**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | BAL-455                                            |
 
-⚠ **`apps/api/src/routes/calendar/webhook.ts` — the old CRONOFY handler — no longer exists.**
-BAL-396's own commit (`70fdfe7`) deleted it as part of completing the Cronofy removal (migration
-0069 dropped the last Cronofy identity columns in the same PR). There is nothing left at
-`routes/calendar/webhook.ts` to accidentally copy — the file itself is gone, not merely
-deprecated. For the record, in case an older worktree or a stale local branch still has it: it
-served `POST /webhooks/cronofy`, parsed a `{ notification, channel }` body, resolved identity from
-`channel.channel_id`, and **performed no signature verification of any kind** — its only guard was
-string equality between the body's `channel.callback_url` and `${API_BASE_URL}/webhooks/cronofy`.
-That guard was not authentication (the body was attacker-supplied in its entirety) and it had no
-Apiroc analogue anyway: the Apiroc body has two fields and neither is a URL. **Do not resurrect
-that shape as the template.** The shipped template for a verified webhook is
-`apps/api/src/routes/daily/` (confirmed present on this branch: `index.ts` + `webhook.ts` +
-`webhook.test.ts`) — see [A3](#a3--verification-and-idempotency).
-
-⚠ SKILL.md's Architecture Summary sketches the Apiroc inbound flow in present tense
-("verify with svix … dedupe on svix-id … ack 2xx"). That is the **design**, adopted from the
-BAL-393 captures. No route implements it.
+SKILL.md's Architecture Summary sketches the Apiroc inbound flow ("verify with svix … dedupe on
+svix-id … ack 2xx"); `apps/api/src/routes/calendar/webhook.ts` implements it.
 
 ---
 
@@ -88,7 +69,8 @@ Multiply by providers: an expert connected to both Google and Microsoft holds tw
 The create call **[stat + live]**:
 
 ```typescript
-// Intended shape — BAL-468. Every SDK call goes through `callApiroc` (BAL-467 §4).
+// apps/api/src/services/calendar/subscription-reconcile.ts (`executeCreate`) — SHIPPED, condensed.
+// Every SDK call goes through `callApiroc` (BAL-467 §4).
 const { webhookSubscriptionId, endpointSecret } = await callApiroc(
   'calendarSubscriptions.create',
   () =>
@@ -110,8 +92,8 @@ The complete response body, verbatim from `captures/phase2/google/subscribe-even
 Two fields. That is all of it — see [A5](#a5--the-7-day-expiry-and-renewal) for the field that is
 _not_ there.
 
-**What Balo must store per subscription** (the table is BAL-468; SKILL.md's `calendarSubscriptions`
-Drizzle block is the target shape):
+**What Balo must store per subscription** (`calendar_subscriptions`, in
+`packages/db/src/schema/calendar.ts`):
 
 | Column                    | Source                                | Notes                                                      |
 | ------------------------- | ------------------------------------- | ---------------------------------------------------------- |
@@ -121,28 +103,14 @@ Drizzle block is the target shape):
 | `endpoint_secret`         | create response                       | **encrypted at rest** — see below                          |
 | `expiration`              | **`calendarSubscriptions.list` only** | never from the create response                             |
 
-**`endpoint_secret` at rest — ⚠ NO CIPHER FOR THIS EXISTS ON THIS BRANCH, AND THAT IS A REAL GAP
-FOR BAL-468 TO CLOSE, NOT SOMETHING TO PAPER OVER.** This section previously pointed at
-`encryptCalendarToken` / `decryptCalendarToken` in `apps/api/src/lib/calendar-encryption.ts`. That
-file is **gone** — BAL-396's Cronofy removal (migration 0069) dropped every Cronofy token column
-(`access_token`, `refresh_token`, `token_expires_at`, …) from `calendar_connections`, and the
-generic cipher that encrypted them at rest went with it. There is no `CALENDAR_ENCRYPTION_KEY` env
-var anywhere in `apps/api/.env.example` or `turbo.json` on this branch either.
-
-The only cipher left in the repo is `apps/api/src/lib/encryption.ts`'s `decryptValue` — and it is
-**not a substitute**: it is Airwallex-payout-specific, keyed on `PAYOUT_ENCRYPTION_KEY` (a
-deliberately separate secret from any future calendar key — do not reuse a payout key for a
-calendar secret), and it ships **decrypt-only** (there is no matching `encryptValue` in this repo;
-whatever encrypts a payout value at rest lives outside `apps/api`). Reusing it for
-`endpoint_secret` would mean sharing a key across two unrelated trust boundaries with no encrypt
-half to call.
-
-**BAL-468 needs an explicit cipher decision before it can store `endpointSecret` at all** — either
-resurrect an AES-256-GCM helper shaped like the old `calendar-encryption.ts` (own key, own env var,
-`iv:authTag:ciphertext` in base64, encrypt **and** decrypt) or pick another already-shipped one this
-file hasn't found. Whichever it is: the secret is the _only_ thing standing between a guessed URL
-and a forged availability rebuild, so it must never land in a log line, an analytics property, or
-an error body — that requirement is unchanged by the cipher's disappearance.
+**`endpoint_secret` at rest.** The cipher is `apps/api/src/lib/calendar-encryption.ts`
+(`encryptCalendarSecret` / `decryptCalendarSecret`): AES-256-GCM, `iv:authTag:ciphertext` in base64,
+under its own `CALENDAR_ENCRYPTION_KEY`. `services/calendar/subscription-reconcile.ts` encrypts on
+create; `routes/calendar/webhook.ts` decrypts before verifying a delivery. Never reuse
+`apps/api/src/lib/encryption.ts`'s `decryptValue` for it: that is the Airwallex-payout cipher, keyed
+on `PAYOUT_ENCRYPTION_KEY` for a different trust boundary, and decrypt-only. The secret is the
+_only_ thing standing between a guessed URL and a forged availability rebuild, so it must never land
+in a log line, an analytics property, or an error body.
 
 ## A2 · ⚠⚠ Identity is in the URL, not the body
 
@@ -216,7 +184,7 @@ would have to fan out.
    **[live]**.
 4. Consequence: **load the secret, verify, and only then read anything out of the path or the body.**
    A forged POST to a guessed URL must fail at step 3 with zero side effects — no DB write, no
-   enqueue, no analytics event, no `lastSyncedAt` bump.
+   enqueue, no analytics event.
 5. Corollary: a **per-subscription** secret means a compromised secret compromises exactly one
    calendar's trigger, not the platform. That is the reason not to collapse to one global secret
    even though it would be simpler.
@@ -264,12 +232,11 @@ same.
 ### Verification
 
 ```typescript
-// Intended shape — BAL-468. `svix` is not yet a dependency of apps/api, AND the decrypt call
-// below names a function that no longer exists on this branch — see A1's cipher-gap callout.
-// Whatever BAL-468 lands as the replacement cipher's decrypt half goes here.
+// apps/api/src/routes/calendar/webhook.ts — SHIPPED, condensed. The route decrypts and verifies
+// in separate `try` blocks: an undecryptable secret answers 503, a failed verification 400.
 import { Webhook } from 'svix';
 
-const wh = new Webhook(decryptCalendarSecret(row.endpointSecret)); // ⚠ placeholder name — no shipped implementation
+const wh = new Webhook(decryptCalendarSecret(row.endpointSecret));
 wh.verify(rawBody, {
   'svix-id': headers['svix-id'],
   'svix-timestamp': headers['svix-timestamp'],
@@ -316,12 +283,14 @@ idempotency key. The house marker-table pattern is `daily_webhook_events` (see
 `markProcessed` after, and — the subtle part — **branch on `processedAt`, not on row presence**, so
 a delivery that died before committing its effect is repaired by the retry rather than skipped.
 
-⚠ For _this_ handler the marker is optional today, and it is worth knowing why rather than
-cargo-culting it. The only effect is `enqueueAvailabilityCacheRebuild`, whose BullMQ `jobId` is a
-fixed `availability-${expertProfileId}` — a duplicate delivery collapses into the pending job by
+⚠ The Apiroc route keeps its own marker table, `apiroc_webhook_events`, and short-circuits on
+`processedAt`, but a duplicate that loses the insert race still proceeds, and it is worth knowing
+why rather than cargo-culting a branch. The only effect is `tryEnqueueAvailabilityCacheRebuild`,
+whose BullMQ `jobId` is the per-expert `buildJobId('availability', expertProfileId)`
+(`availability--{expertProfileId}`) — a duplicate delivery collapses into the pending job by
 construction. **The moment the handler grows a second, non-idempotent effect** (a counter, a
-notification, an audit row), the marker table becomes mandatory. Decide that explicitly in BAL-468;
-do not let it be decided by accident.
+notification, an audit row), it must branch on the marker insert and answer `200` when the row
+already existed, as `routes/daily/webhook.ts` does.
 
 ## A4 · What a ping does — and does not — mean
 
@@ -345,36 +314,55 @@ do not let it be decided by accident.
 ### The enqueue
 
 ```typescript
-// apps/api/src/jobs/availability-cache.ts — SHIPPED. ⚠ Today's callers are NOT a webhook of
-// any kind (the Cronofy webhook this comment used to name was deleted by BAL-396 itself, and
-// the Apiroc webhook is still BAL-468): the live callers on this branch are the OAuth connect
-// callback (`routes/calendar/auth.ts`), the schedule editor and availability-override routes
-// (`routes/experts/schedule.ts`, `routes/experts/availability-overrides.ts`), and booking-time
-// meeting-availability (`services/meetings/meeting-availability.ts`).
+// apps/api/src/jobs/availability-cache.ts — SHIPPED, condensed.
+async function enqueueRebuild(expertProfileId: string): Promise<void> {
+  const queue = getQueue(AVAILABILITY_CACHE_QUEUE);
+  await queue.add(
+    'rebuild-availability-cache',
+    { expertProfileId },
+    {
+      jobId: buildJobId('availability', expertProfileId), // ← the coalescing key
+      removeOnComplete: true,
+      removeOnFail: true, // ← self-heal; see below
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+    }
+  );
+}
+
+// The Apiroc webhook (`routes/calendar/webhook.ts`) calls this one: `false` means the enqueue did
+// not land, and the route answers 503 so the delivery stays in Svix's retry queue.
+export async function tryEnqueueAvailabilityCacheRebuild(
+  expertProfileId: string,
+  log: FastifyBaseLogger
+): Promise<boolean> {
+  try {
+    await enqueueRebuild(expertProfileId);
+    return true;
+  } catch (error: unknown) {
+    log.error(
+      { expertProfileId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to enqueue availability cache rebuild job'
+    );
+    return false;
+  }
+}
+
+// Best-effort for every other caller — the OAuth connect callback (`routes/calendar/auth.ts`),
+// disconnect and the conflict-check toggle (`routes/calendar/api.ts`), the schedule editor and
+// availability-override routes (`routes/experts/schedule.ts`,
+// `routes/experts/availability-overrides.ts`), booking-time meeting-availability
+// (`services/meetings/meeting-availability.ts`) and the health probe
+// (`jobs/calendar-health-probe.ts`): a Redis hiccup must never fail the caller's mutation.
 export async function enqueueAvailabilityCacheRebuild(
   expertProfileId: string,
   log: FastifyBaseLogger
 ): Promise<void> {
-  try {
-    const queue = getQueue(AVAILABILITY_CACHE_QUEUE); // 'rebuild-availability-cache'
-    await queue.add(
-      'rebuild-availability-cache',
-      { expertProfileId },
-      {
-        jobId: `availability-${expertProfileId}`, // ← the coalescing key
-        removeOnComplete: true,
-        removeOnFail: true, // ← self-heal; see below
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 },
-      }
-    );
-  } catch (err: unknown) {
-    /* best-effort: a Redis hiccup must never fail the caller's mutation */
-  }
+  await tryEnqueueAvailabilityCacheRebuild(expertProfileId, log);
 }
 ```
 
-Three properties to preserve when BAL-468 calls this from the Apiroc route:
+Three properties the Apiroc route relies on:
 
 1. **`jobId` is per EXPERT, not per calendar or per subscription.** The rebuild recomputes the whole
    forward window for the expert across every connection, so a per-calendar key would queue N
@@ -383,14 +371,13 @@ Three properties to preserve when BAL-468 calls this from the Apiroc route:
    job blocks every later enqueue for that expert — webhook, schedule save, override change,
    staleness cron — permanently wedging their availability. The worker's `failed` listener is the
    failure signal instead; it reaches Axiom and Sentry.
-3. **The enqueue swallows its own errors.** So the webhook route must not treat "enqueued" as proven.
-   If the route needs to answer `503` on a queue outage (per the table above), it has to check
-   Redis itself rather than rely on this helper throwing.
+3. **`enqueueAvailabilityCacheRebuild` swallows its own errors.** A caller that must answer `503`
+   on a queue outage (per the table above) uses `tryEnqueueAvailabilityCacheRebuild` and branches
+   on `false`, as `routes/calendar/webhook.ts` does.
 
-⚠ **The route holds an `endUserAccountId` (or a subscription row); the job wants an
-`expertProfileId`.** Resolve through the subscription row's `connection_id`, or via
-`findConnectionsByEndUserAccountId` — which **returns an array**, deliberately. Fan out over every
-live connection it returns; do not take `[0]`.
+⚠ **The route holds a subscription row; the job wants an `expertProfileId`.** It resolves through
+the row's `connection_id` with `findConnectionById`, one hop. `findConnectionsByEndUserAccountId`
+**returns an array**, deliberately, and is never an identity resolver; never take `[0]` from it.
 
 ## A5 · The 7-day expiry and renewal
 
@@ -414,10 +401,11 @@ and the captured body contains only those two keys. A caller reading `response.e
 > a check that never fires.
 
 **Whether Apiroc auto-renews before that expiry is UNCONFIRMED** and cannot be settled without a
-7-day observation. The vendor question is BAL-455; the sweep is BAL-468 §3. Treat renewal as
-caller-managed until told otherwise — the failure mode is silent and platform-wide (every expert's
-change-push dies a week after connecting, with no error raised anywhere), so the asymmetry favours
-building it.
+7-day observation; the vendor question is BAL-455. The failure mode is silent and platform-wide
+(every expert's change-push dies a week after connecting, with no error raised anywhere), so Balo
+manages renewal itself: the reconciler (`services/calendar/subscription-reconcile.ts`) renews a
+subscription once it is inside 72 hours of its vendor-reported expiry
+(`SUBSCRIPTION_RENEWAL_LEAD_MS`).
 
 ### ⚠ There is no renew method
 
@@ -431,29 +419,29 @@ therefore **create-then-delete**, in that order:
 
 Create-first leaves no gap in coverage. The cost is a short window where both subscriptions deliver,
 which is harmless here for one specific reason: the rebuild is coalesced on
-`availability-${expertProfileId}`, so duplicate pings collapse into one job. Do not reverse the
+`availability--{expertProfileId}`, so duplicate pings collapse into one job. Do not reverse the
 order to avoid the duplicates — a delete-first renewal has a real blind window, and a delete that
 succeeds followed by a create that fails leaves the expert with no change-push at all.
 
-### The monitor to add regardless of the vendor's answer
+### The expiry monitor, whatever the vendor's answer
 
 A daily job is cheap and catches the bad case either way:
 
 ```typescript
-// Intended shape — BAL-468 §3. Runs whether or not the renewal sweep exists.
-const soon = await calendarSubscriptionRepository.findExpiringBefore(addHours(new Date(), 48));
-if (soon.length > 0) {
-  log.warn(
-    { count: soon.length, subscriptionIds: soon.map((s) => s.id) },
-    'calendar subscriptions expiring inside 48h'
-  );
-}
+// apps/api/src/jobs/calendar-subscription-monitor.ts — SHIPPED, condensed. Daily, 07:00 UTC.
+const expiring = await calendarSubscriptionsRepository.listExpiringBefore(
+  new Date(now.getTime() + SUBSCRIPTION_EXPIRY_ALERT_MS), // 48h
+  SUBSCRIPTION_MONITOR_BATCH_LIMIT
+);
+// Two more arms: rows no `list` re-read has confirmed within two hours of their create, and
+// ACTIVE connections that should hold a subscription and hold none. Each connection found gets a
+// reconcile enqueued; any non-empty arm logs `apiroc_subscription_expiry_alert` at error level.
 ```
 
 - Alert on **count > 0**, not on a threshold. If renewal works, the steady state is zero.
-- **Re-read `expiration` from `calendarSubscriptions.list` on every sweep**, never trust the stored
-  copy alone — if Apiroc _does_ auto-renew, the vendor's record moves and ours does not, and a
-  monitor reading only our column would alert forever.
+- **Re-read `expiration` from `calendarSubscriptions.list` on every reconcile pass**, never trust
+  the stored copy alone — if Apiroc _does_ auto-renew, the vendor's record moves and ours does not,
+  and a monitor reading only our column would alert forever.
 - Also alert on the inverse: a live `calendar_connections` row with **zero** live subscriptions.
   That is the shape a silent expiry leaves behind, and no per-subscription check can see it.
 
@@ -483,26 +471,26 @@ delete cmssmvjh… → AuthorizationError 403 "End user account credential expir
 
 The credential is expired precisely _because_ the expert revoked, which is the reason you are
 reconnecting — so at cleanup time the delete is already forbidden. **The correct order is
-reconnect → delete stale → re-create**, never delete-then-recreate (SKILL.md Constraint 11).
+reconnect → re-create → delete stale**, never delete first (SKILL.md Constraint 11).
 
 It works because `endUserAccountId` is **stable across a revoke/reconnect cycle** **[live]**: the
 same id came back, `createdAt` unchanged and `updatedAt` moved — reconnect is an UPDATE, not an
 INSERT, so the old subscription records are still addressable afterwards.
 
 ⚠ **Cleanup must be verified, not best-effort.** A stale subscription keeps delivering for up to 7
-days. Combined with per-calendar subscriptions and the 7-day clock, skipped cleanup accumulates:
-verify by re-reading `calendarSubscriptions.list` after the deletes and reconciling against Balo's
-rows, and alert on any vendor-side subscription Balo has no row for (BAL-468 §4). Whether
-subscriptions survive a revoke → reconnect cycle at all is **untested** — SKILL.md's "Still
-unverified" table names it, and the reconcile-by-list step above is what makes the answer not
-matter.
+days. Combined with per-calendar subscriptions and the 7-day clock, skipped cleanup accumulates. The
+reconciler deletes any vendor-side subscription under Balo's webhook URL prefix that names no live
+row, then re-reads `calendarSubscriptions.list` and logs any delete the vendor still shows
+(`apiroc_subscription_delete_unverified`). Whether subscriptions survive a revoke → reconnect cycle
+at all is **untested** — SKILL.md's "Still unverified" table names it, and the reconcile-by-list
+step above is what makes the answer not matter.
 
 ## A7 · Inbound checklist
 
 - [ ] Subscription is `subscriptionType: 'event'` with an explicit `calendarId`. Never `'calendar'`.
 - [ ] One subscription row per subscribed calendar, per connection. `N` per expert is expected.
 - [ ] `webhookUrl` is HTTPS and encodes **Balo's** subscription row id — no vendor ids in the path.
-- [ ] `endpoint_secret` encrypted at rest with BAL-468's cipher of record (none shipped yet — see [A1](#a1--the-subscription-model)); never logged, never in analytics.
+- [ ] `endpoint_secret` encrypted at rest with `encryptCalendarSecret` (see [A1](#a1--the-subscription-model)); never logged, never in analytics.
 - [ ] `expiration` read from `calendarSubscriptions.list`, never from the create response.
 - [ ] `fastify-raw-body` registered scoped: `global: false`, `encoding: false`, `runFirst: true`,
       route in the `routes` array — **and re-registered in the route's test file**.
@@ -511,12 +499,13 @@ matter.
 - [ ] `svix-id` recorded; replay path is idempotent (or the enqueue is provably the only effect).
 - [ ] `200` only after the delivery is accepted; `400` for permanently-bad; `503` for our outages.
       The wire body names no reason; the log line does.
-- [ ] Enqueue is `enqueueAvailabilityCacheRebuild(expertProfileId, log)` with the per-expert `jobId`.
-      No delta read, no `syncToken`, no `events.list` on this path.
-- [ ] `endUserAccountId` → connections resolved as an **array**; fan out.
+- [ ] Enqueue is `tryEnqueueAvailabilityCacheRebuild(expertProfileId, log)` with the per-expert
+      `jobId`; `false` answers `503`. No delta read, no `syncToken`, no `events.list` on this path.
+- [ ] Identity resolves path → subscription row → `connection_id` (`findConnectionById`), never
+      through the `findConnectionsByEndUserAccountId` array.
 - [ ] Unknown `eventType` logs and acks.
 - [ ] Renewal is create → persist → delete-and-verify. 48h expiry monitor exists either way.
-- [ ] Reconnect path is reconnect → delete → re-create, and the delete failure mode (403 on an
+- [ ] Reconnect path is reconnect → re-create → delete stale, and the delete failure mode (403 on an
       expired credential) is handled rather than assumed away.
 
 ---
@@ -876,26 +865,22 @@ Reading a vendor capability as permission is exactly the mistake BAL-447 closed.
 Recorded here so the next person does not re-derive them. Each is a place SKILL.md or the BAL-393
 FINDINGS say one thing and the shipped code or the raw capture says another.
 
-| Claim                                                                    | What is actually there                                                                                                                                                                                                 |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SKILL.md's inbound flow, in present tense                                | No Apiroc webhook route exists. `routes/calendar/webhook.ts` **used to be** the Cronofy handler (no signature verification, identity read from the body) — BAL-396 deleted that file outright; nothing has replaced it |
-| SKILL.md's `calendarSubscriptions` Drizzle block                         | Correctly labelled a target — but worth stating flatly: **the table does not exist**, and neither does the `svix` dependency                                                                                           |
-| Lifecycle table: `expiration` "absent from the type; `null` in practice" | The **key is absent from the response body**. `=== null` never fires                                                                                                                                                   |
-| §M3: Microsoft tag "never echoed back on a read"                         | The captured `metadataFilters` read **does** echo it; only `create` and `update` return `{}`                                                                                                                           |
-| "Still unverified: 409 wire shapes"                                      | Captured — Google duplicate-id create returns `{"error": 409, "message": "The requested identifier already exists.", …}`, Envelope A with a numeric `error`                                                            |
-| Webhook snippet: bad signature "→ 400, no retry"                         | Only a `200` was observed to stop retries. Nothing establishes how Svix treats a `4xx`; design for "any non-2xx is retried"                                                                                            |
+| Claim                                                                    | What is actually there                                                                                                                                      |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lifecycle table: `expiration` "absent from the type; `null` in practice" | The **key is absent from the response body**. `=== null` never fires                                                                                        |
+| §M3: Microsoft tag "never echoed back on a read"                         | The captured `metadataFilters` read **does** echo it; only `create` and `update` return `{}`                                                                |
+| "Still unverified: 409 wire shapes"                                      | Captured — Google duplicate-id create returns `{"error": 409, "message": "The requested identifier already exists.", …}`, Envelope A with a numeric `error` |
+| Webhook snippet: bad signature "→ 400, no retry"                         | Only a `200` was observed to stop retries. Nothing establishes how Svix treats a `4xx`; design for "any non-2xx is retried"                                 |
 
 ### Reconciliation against BAL-396's shipped code (this pass, 2026-08-18)
 
 The previous revision of this file described Part B ("Outbound: writing consultation events") as
 entirely unbuilt design. BAL-396 (`70fdfe7`, this branch) shipped most of it for real:
 
-| Claim in the prior revision                                                                                                | What is actually there                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B1: store the vendor id via `consultationRepository.setCalendarEventId(...)`                                               | No such repository or column exists. A dedicated table, `meeting_calendar_events`, ships instead — keyed on `meeting_id`, written by `meetingCalendarEventsRepository.record`                                                                                                                                                                                                                                                                                                           |
-| B1/B2/B4 code blocks marked "Intended shape — BAL-396"                                                                     | `write-consultation-event.ts`, `delete-consultation-event.ts`, `reconcile-by-tag.ts`, `event-mapper.ts` all ship COMPLETE and TESTED in `services/consultation-events/` — INERT (no live caller) until BAL-400, but not aspirational sketches any more                                                                                                                                                                                                                                  |
-| B4's hand-rolled `findTaggedEvents` pagination loop                                                                        | A real, shared, generic `paginateApiroc` helper ships in `lib/apiroc/paginate.ts`, used by `reconcileByTag` and by calendar provisioning — with a same-cursor-twice guard the sketch never had                                                                                                                                                                                                                                                                                          |
-| A1: `endpoint_secret` cipher is `encryptCalendarToken`/`decryptCalendarToken` in `apps/api/src/lib/calendar-encryption.ts` | ⚠ N12 (2026-08-24) — SUPERSEDED. Accurate for THIS 2026-08-18 pass (BAL-396's Cronofy token-column removal had deleted that file with no replacement), but BAL-468 has since shipped a NEW cipher at the SAME path, `apps/api/src/lib/calendar-encryption.ts`, under NEW names — `encryptCalendarSecret`/`decryptCalendarSecret` (see the header table's `endpoint_secret` row above, which is current). Left here, unedited, as the historical record of what this pass actually found |
-| A4's enqueue snippet: "today's caller is the Cronofy webhook"                                                              | ⚠ N12 (2026-08-24) — PARTIALLY SUPERSEDED. Accurate for THIS pass (no Apiroc webhook route existed yet), but BAL-468 has since shipped one — `apps/api/src/routes/calendar/webhook.ts`, tested (see the header table's "Apiroc webhook route" row above, which is current). The list of non-webhook callers named here is still correct; it is simply no longer the WHOLE list                                                                                                          |
-| Header table: `callApiroc`, `end_user_account_id` "INERT" / "written by nobody"                                            | Both are live as of BAL-396 — the OAuth connect callback writes `end_user_account_id` and calls `callApiroc` for real, `freeBusy.get` and the health probe do too. Only the consultation-event write/delete/reconcile trio and `findConnectionsByEndUserAccountId` remain INERT. ⚠ BAL-575 (2026-09) — PARTIALLY SUPERSEDED: `findConnectionsByEndUserAccountId` now has two live callers (see the header row)                                                                          |
-| B3: Update and delete both "intended shape"                                                                                | Delete shipped (`delete-consultation-event.ts`, COMPLETE, TESTED, INERT). Update ALSO shipped (BAL-409) — `update-consultation-event.ts` exists and is LIVE, called from the `meeting-calendar-amend` job                                                                                                                                                                                                                                                                               |
+| Claim in the prior revision                                                     | What is actually there                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B1: store the vendor id via `consultationRepository.setCalendarEventId(...)`    | No such repository or column exists. A dedicated table, `meeting_calendar_events`, ships instead — keyed on `meeting_id`, written by `meetingCalendarEventsRepository.record`                                                                                                                                                                                                                                  |
+| B1/B2/B4 code blocks marked "Intended shape — BAL-396"                          | `write-consultation-event.ts`, `delete-consultation-event.ts`, `reconcile-by-tag.ts`, `event-mapper.ts` all ship COMPLETE and TESTED in `services/consultation-events/` — INERT (no live caller) until BAL-400, but not aspirational sketches any more                                                                                                                                                         |
+| B4's hand-rolled `findTaggedEvents` pagination loop                             | A real, shared, generic `paginateApiroc` helper ships in `lib/apiroc/paginate.ts`, used by `reconcileByTag` and by calendar provisioning — with a same-cursor-twice guard the sketch never had                                                                                                                                                                                                                 |
+| Header table: `callApiroc`, `end_user_account_id` "INERT" / "written by nobody" | Both are live as of BAL-396 — the OAuth connect callback writes `end_user_account_id` and calls `callApiroc` for real, `freeBusy.get` and the health probe do too. Only the consultation-event write/delete/reconcile trio and `findConnectionsByEndUserAccountId` remain INERT. ⚠ BAL-575 (2026-09) — PARTIALLY SUPERSEDED: `findConnectionsByEndUserAccountId` now has two live callers (see the header row) |
+| B3: Update and delete both "intended shape"                                     | Delete shipped (`delete-consultation-event.ts`, COMPLETE, TESTED, INERT). Update ALSO shipped (BAL-409) — `update-consultation-event.ts` exists and is LIVE, called from the `meeting-calendar-amend` job                                                                                                                                                                                                      |

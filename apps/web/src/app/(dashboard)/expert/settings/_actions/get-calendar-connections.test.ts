@@ -66,7 +66,6 @@ describe('getCalendarConnectionsAction', () => {
         provider: 'google',
         credentialStatus: 'ACTIVE',
         providerEmail: 'user@gmail.com',
-        lastSyncedAt: '2024-01-01T00:00:00Z',
         targetCalendarId: 'cal-1',
         subCalendars: [],
         isBookingTarget: true,

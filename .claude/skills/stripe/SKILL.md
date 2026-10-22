@@ -138,8 +138,8 @@ export const stripeWebhookEvents = pgTable('stripe_webhook_events', {
 ```
 
 Mandate/customer/PM ids are low-sensitivity references (not card data — Stripe holds the
-card), so encryption-at-rest isn't required the way Cronofy tokens are. Still treat them
-as PII-adjacent and keep them off client/expert surfaces.
+card), so encryption-at-rest isn't required. Still treat them as PII-adjacent and keep
+them off client/expert surfaces.
 
 ---
 
@@ -405,10 +405,10 @@ Rule of thumb: this skill encodes _what's specific to Balo and what's easy to ge
 
 ---
 
-## Optional: split into reference files (cronofy-style)
+## Optional: split into reference files
 
-If this grows, mirror the cronofy layout — move deep detail into `references/` and keep
-this file as the index:
+If this grows, mirror the apiroc skill's layout (`SKILL.md` plus `references/*.md`) — move
+deep detail into `references/` and keep this file as the index:
 
 | Task                                              | Reference File              |
 | ------------------------------------------------- | --------------------------- |

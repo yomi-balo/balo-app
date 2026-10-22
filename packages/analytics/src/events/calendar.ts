@@ -148,14 +148,6 @@ export interface CalendarEventMap {
 // ── Server-side events ──────────────────────────────────────────
 
 /**
- * ⚠ BAL-396 FIX ROUND — `TOKEN_REFRESHED`, `WEBHOOK_RECEIVED` and `RELINK_URL_GENERATED`
- * (Cronofy-era events) were REMOVED here, not merely left unemitted. They named concepts
- * BAL-396 deleted outright: Balo no longer holds or refreshes provider tokens (Apiroc's
- * pointer model, apiroc skill Constraint 1), the Cronofy webhook route these events were
- * emitted from is gone (BAL-468 owns its Apiroc-shaped replacement), and Cronofy's relink-URL
- * concept has no Apiroc counterpart. Keeping them would have pinned a permanently-zero-emitter
- * "as current" against the exact-key-set guard in `calendar.test.ts`.
- *
  * ⚠ BAL-235's date-override (time off) events (`AVAILABILITY_OVERRIDE_CREATED` /
  * `_DELETED`) MOVED OUT of this constant by BAL-416, to
  * `AVAILABILITY_SERVER_EVENTS.OVERRIDE_CREATED` / `.OVERRIDE_DELETED` in

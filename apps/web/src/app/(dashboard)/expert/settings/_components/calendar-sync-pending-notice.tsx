@@ -16,9 +16,8 @@ interface CalendarSyncPendingNoticeProps {
  * BAL-397 §9.4 — the `setting_up` body, rendered INSIDE a connection row (the header line is
  * owned by `CalendarConnectionCard`), so the root is a plain `<div>` with no padding of its own.
  *
- * Copy correction: the shipped copy said "some permissions weren't granted", which is
- * Cronofy-era and now false — Apiroc rejects a partial grant server-side and creates no
- * account (apiroc skill, [live]). `SYNC_PENDING` today means provisioning didn't complete.
+ * `SYNC_PENDING` means provisioning didn't complete, not that permissions were withheld:
+ * Apiroc rejects a partial grant server-side and creates no account (apiroc skill, [live]).
  */
 export function CalendarSyncPendingNotice({
   provider,

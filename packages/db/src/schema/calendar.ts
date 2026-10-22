@@ -24,11 +24,10 @@ import { timestamps, softDelete } from './helpers';
  * `SYNC_PENDING` connection stores no `calendarIds`, so it is UNREADABLE for free/busy —
  * which the booking gate must treat as fail-closed, not as "no calendar".
  *
- * ⚠ THIS REPLACES THE CRONOFY VOCABULARY (`connected | sync_pending | auth_error`)
- * WHOLESALE. `auth_error` collapsed to `EXPIRED` in migration 0068: a user-initiated
- * revoke surfaces as EXPIRED and REVOKED is unreachable on Google (apiroc skill,
- * credential-expiry table), and any non-ACTIVE value means the same thing to the expert —
- * "reconnect required" — with no distinct UX.
+ * ⚠ A user-initiated revoke surfaces as `EXPIRED`, and `REVOKED` is unreachable on Google
+ * (apiroc skill, credential-expiry table). `EXPIRED` and `REVOKED` mean the same thing to the
+ * expert — "reconnect required" — with no distinct UX; `SYNC_PENDING` is provisioning, not
+ * breakage.
  */
 export const CALENDAR_CREDENTIAL_STATUSES = [
   'ACTIVE',
@@ -46,12 +45,8 @@ export type CalendarCredentialStatus = (typeof CALENDAR_CREDENTIAL_STATUSES)[num
  * of busy blocks across all of the expert's connections; connect, disconnect, and
  * reconnect are per-provider. `targetCalendarId` is per connection."
  *
- * BAL-396 (ADR-1021 amendment 18 Aug 2026 §5) COMPLETED THE MIGRATION OFF CRONOFY. Migration
- * 0069 dropped every Cronofy identity column (`cronofy_sub`, `access_token`, `refresh_token`,
- * `token_expires_at`, `channel_id`) and made `end_user_account_id` — the only vendor identity
- * Balo stores — `NOT NULL`. It stays NON-unique — see `endUserAccountIdx`. Migration 0068 did
- * the credential-status lifecycle (the `status` → `credential_status` rename,
- * `credential_checked_at`, `reconnect_notified_at`, the new CHECK and the probe's scan index).
+ * Balo stores no provider tokens: `end_user_account_id` is the connection's only vendor
+ * identity, `NOT NULL` (migration 0069) and NON-unique (see `endUserAccountIdx`).
  *
  * ⚠ NO RLS, matching every other table in this package except `stripe_webhook_events`.
  * Balo authenticates at the application layer (WorkOS) and reads this table only through
@@ -75,27 +70,29 @@ export const calendarConnections = pgTable(
     providerEmail: text('provider_email'),
 
     /**
-     * ── replaces `status` (RENAMED in migration 0068, never dropped-and-re-added) ──
-     *
      * ⚠⚠ `.$type<CalendarCredentialStatus>()` IS LOAD-BEARING, NOT DOCUMENTATION. Drizzle
      * types `eq(column, value)` from the column's data type, so with this annotation
-     * `eq(calendarConnections.credentialStatus, 'connected')` is a COMPILE ERROR. Without
-     * it, a query left on the Cronofy vocabulary would compile, run, and match ZERO ROWS
-     * forever — silently. That is exactly how `findStaleConnections` would have died: the
-     * 15-minute staleness cron (`jobs/availability-cache.ts`) would report nothing wrong
-     * while no connection was ever resynced. A comment cannot buy that; a bare `text()`
-     * column cannot either.
+     * `eq(calendarConnections.credentialStatus, 'active')` — or any status outside this
+     * vocabulary — is a COMPILE ERROR. Without it, such a query would compile, run, and match
+     * ZERO ROWS forever — silently. On `findStaleConnections` that means the 15-minute
+     * staleness cron (`jobs/availability-cache.ts`), the only periodic rebuild of a healthy
+     * connection, would report nothing wrong while rebuilding nothing. A comment cannot buy
+     * that; a bare `text()` column cannot either.
      *
      * Belt-and-braces on top of the type: `calendar.integration.test.ts` seeds a live
-     * connection and asserts `findStaleConnections` returns it, so a vocabulary that
-     * migrated one way and queried the other fails on real Postgres too.
+     * connection and asserts `findStaleConnections` returns it, so a vocabulary the database
+     * does not agree with fails on real Postgres too.
      */
     credentialStatus: text('credential_status')
       .$type<CalendarCredentialStatus>()
       .notNull()
       .default('ACTIVE'),
 
-    /** Last time the health probe (or any live data call) proved this credential works. */
+    /**
+     * The health probe's and the staleness cron's scan key, not proof the credential works:
+     * stamped on every probe attempt (success or classified failure) and when a reconnect
+     * updates a live row in place. A fresh connect leaves it NULL.
+     */
     credentialCheckedAt: timestamp('credential_checked_at', { withTimezone: true }),
 
     /**
@@ -107,7 +104,6 @@ export const calendarConnections = pgTable(
      */
     reconnectNotifiedAt: timestamp('reconnect_notified_at', { withTimezone: true }),
 
-    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     targetCalendarId: text('target_calendar_id'), // PER CONNECTION (amendment §1)
     ...timestamps,
     ...softDelete,

@@ -778,6 +778,13 @@
       "when": 1792536817963,
       "tag": "0110_bal604_expert_declined",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1792623607942,
+      "tag": "0111_drop_calendar_last_synced_at",
+      "breakpoints": true
     }
   ]
 }

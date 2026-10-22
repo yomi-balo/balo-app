@@ -14,10 +14,8 @@ describe('CALENDAR_EVENTS — the Calendar page family (BAL-498, BAL-512)', () =
   });
 
   /**
-   * BAL-512 — the guard BAL-498 deferred, and the mechanism the ⚠ docblocks further down this
-   * module say was missing when Cronofy-era members were removed and the BAL-235 override events
-   * were moved out. An added, removed or renamed member now fails HERE instead of silently
-   * changing a re-export allowlist.
+   * BAL-512 — the exact-key-set guard. An added, removed or renamed member fails HERE instead of
+   * silently changing a re-export allowlist.
    *
    * ⚠ SOURCE-ORDERED, NOT SORTED — deliberately unlike the `CALENDAR_SERVER_EVENTS` guard below,
    * which sorts before comparing. The two conventions coexist on purpose (matching
@@ -90,7 +88,7 @@ describe('toCalendarEventProvider (BAL-396 §10.4)', () => {
   });
 
   it('degrades anything else to undefined rather than asserting', () => {
-    expect(toCalendarEventProvider('office365')).toBeUndefined();
+    expect(toCalendarEventProvider('outlook')).toBeUndefined();
     expect(toCalendarEventProvider('')).toBeUndefined();
     expect(toCalendarEventProvider('GOOGLE')).toBeUndefined();
   });

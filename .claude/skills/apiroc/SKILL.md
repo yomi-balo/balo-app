@@ -2,17 +2,17 @@
 name: apiroc
 description: >
   Integration patterns for the Apiroc Unified Calendar API (formerly branded OneCal) within
-  Balo — the calendar vendor chosen in ADR-1021. Use this skill whenever implementing or
-  modifying any calendar-related feature: expert calendar connection (Google/Microsoft
-  OAuth), listing calendars, subscribing to change webhooks to trigger an availability
-  rebuild, fetching free/busy for the expert profile slot picker, writing or deleting
-  consultation events, tagging events with baloBookingId, and applying the weekly-schedule
-  availability rules (BAL-195) in Balo's own slot calculator. Also covers the
-  endUserAccountId pointer model, error-driven reconnect detection, subscription
-  lifecycle, and the SDK's error/logging defects. Trigger on any mention of Apiroc,
-  OneCal, unified calendar, calendar sync, OAuth calendar, iCloud calendar, availability,
-  free/busy, calendar webhook / subscription, syncToken, calendar events, or availability
-  rules.
+  Balo — the calendar vendor chosen in ADR-1021; it takes precedence over any other
+  calendar-vendor skill. Use this skill whenever implementing or modifying any
+  calendar-related feature: expert calendar connection (Google/Microsoft OAuth), listing
+  calendars, subscribing to change webhooks to trigger an availability rebuild, fetching
+  free/busy for the expert profile slot picker, writing or deleting consultation events,
+  tagging events with baloBookingId, and applying the weekly-schedule availability rules
+  (BAL-195) in Balo's own slot calculator. Also covers the endUserAccountId pointer model,
+  error-driven reconnect detection, subscription lifecycle, and the SDK's error/logging
+  defects. Trigger on any mention of Apiroc, OneCal, unified calendar, calendar sync, OAuth
+  calendar, iCloud calendar, availability, free/busy, calendar webhook / subscription,
+  syncToken, calendar events, or availability rules.
 ---
 
 # Apiroc (formerly OneCal) Unified Calendar Integration Skill
@@ -31,9 +31,8 @@ description: >
 > An earlier revision of this skill documented v1.2.2 and `https://api.onecalunified.com`;
 > both are stale. (Both hosts still answer, but write the new one.)
 >
-> **Supersedes the Cronofy skill**, deleted in PR #197. BAL-396 has since removed the Cronofy
-> _code_ too — `apps/api/src/lib/cronofy.ts` and `apps/api/src/services/cronofy/` no longer
-> exist. Apiroc is the only calendar integration in the codebase.
+> **Apiroc is the only calendar integration in the codebase.** Any other calendar-vendor skill
+> listed or loaded in a session is obsolete; this skill takes precedence.
 
 ## How to read this document
 
@@ -81,43 +80,10 @@ Apiroc is Balo's calendar infrastructure. It handles:
   **vendor-returned** event id.
 - **Availability rules (BAL-195)** — the expert's weekly schedule is stored in **Balo's DB**
   and applied by **Balo's slot calculator** over Apiroc free/busy. Apiroc has **no
-  server-side availability-rule primitive** (unlike the prior Cronofy design — see "Deltas
-  from the Cronofy design" below).
+  server-side availability-rule primitive** — see Constraint 5.
 
 **Stack:** TypeScript, Fastify (backend on Railway), Drizzle ORM, BullMQ + Redis.
 **SDK:** `pnpm add @apiroc/unified-calendar-api-node-sdk`
-
----
-
-## Deltas from the Cronofy design (read first if porting old code)
-
-1. **Vendor holds the tokens.** We store only an `endUserAccountId` pointer + a credential
-   status. No encrypted `access_token` / `refresh_token` columns. Apiroc refreshes provider
-   tokens itself. ⚠ But `endUserAccounts.getCredentials(id)` **does** return raw provider
-   `accessToken` / `refreshToken` **[stat]** — the "we never hold tokens" posture is a choice
-   we keep making, not something the API enforces. Prefer `endUserAccounts.get(id)` (status
-   only) when the status is all you need; never log or persist a credential object.
-2. **Reconnect is detected from a FAILED DATA CALL, not from a status field.**
-   `EndUserAccountCredentialStatus` (`ACTIVE | EXPIRED | REVOKED`) is a **lagging** record —
-   it does not move until a data call has already failed. See
-   [Credential expiry & reconnect detection](#credential-expiry--reconnect-detection).
-   _(This inverts the rule the first version of this skill gave.)_
-3. **No server-side Availability Rules.** BAL-195 weekly schedule is Balo-owned data applied
-   in our slot calculator. `freeBusy.get` returns raw busy slots only.
-4. **One End User Account PER PROVIDER**, not one connection per expert. `calendar_connections`
-   is unique on `(expertId, provider)`; free/busy is merged across an expert's accounts;
-   disconnect is per-provider (BAL-467 §1).
-5. **No incremental sync — `syncToken` is not used.** Microsoft never returns one at all
-   (§M2, verified paginated to exhaustion at `pageSize=1`); Google returns one only on the
-   FINAL page (§P3); and availability is sourced from `freeBusy.get`, which has no delta mode
-   on either provider. Every webhook triggers a whole-window re-read instead. (No
-   Cronofy-style change channels either.) See BAL-447 / ADR-1021 amendment 2026-08-15.
-6. **Custom event tagging** via `privateExtendedProperties` / `publicExtendedProperties`
-   (`Record<string,string>`), queryable via `metadataFilters`. ⚠ On Microsoft the tag is
-   **write-and-query-only on create/update — those return `{}`** (§M3). ⚠ Nuance corrected
-   2026-08-18: a `metadataFilters` **read does echo the tag back** on Microsoft
-   (`captures/phase1/microsoft/05-metadata-filter.json`). Never special-case Microsoft as
-   "tag always absent" — it is absent on the create/update response only.
 
 ---
 
@@ -128,15 +94,15 @@ An earlier revision of this block said "almost none of it is wired today" and **
 five rows were false** — read it as a map of code you can go and open, and check the row before
 assuming a seam is inert:
 
-| Step                                              | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SDK client + error boundary                       | **shipped and LIVE** — `apps/api/src/lib/apiroc/`; `services/consultation-events/*`, `jobs/meeting-calendar-amend.ts` and `services/availability/vendor-busy.ts` all call through `callApiroc`                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `calendar_connections` per (expert, provider)     | **shipped** — BAL-467, migration `0067`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Connect / callback / free-busy / event writes     | **shipped (BAL-396)** — `routes/calendar/{auth,api,webhook}.ts`; create / update / delete all ship. ⚠ `deleteConsultationEvent` has **one production caller** since BAL-476: `services/meetings/withdraw-meeting-calendar.ts` (inline, post-commit, best-effort — never a retrying job, because it marks Balo's row first). `reconcileByTag` got its first live caller in **BAL-475 fix round 1** — `project-booking-to-calendar.ts`'s ambiguous vendor-create-failure branch (`server_error`/`network`/`unknown`) reconciles by tag before assuming non-creation; still no SCHEDULED orphan sweep |
-| Apiroc webhook route, subscriptions, renewal      | **shipped (BAL-468)** — `svix ^1.99.1`; `routes/calendar/webhook.ts`; `jobs/calendar-subscription-{reconcile,monitor}.ts`, both registered in `jobs/worker.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `vendorBusyProvider.listBusyBlocks`               | **shipped and live** — `services/availability/vendor-busy.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Per-party calendar grain + ICS-fallback condition | **shipped (BAL-433 Slice 1)** — `meeting_calendar_events` is unique on `(meeting_id, party)` with a `delivery_mode` discriminator (`provider_event` \| `ics`), and EVERY bookable context now projects (`services/consultation-events/calendar-context-registry.ts`). ⚠ There is **no vendor path for the CLIENT party** — `calendar_connections` is keyed on `expert_profile_id` and no client-side connection model exists.                                                                                                                                                                      |
-| Balo-organised ICS delivery (`METHOD:REQUEST`)    | **shipped (BAL-475)** — `apps/api/src/services/calendar-invites/` (builder on `ical-generator`, recipients, display facts) + `notifications/channels/calendar-invite-{message,delivery}.ts` (Brevo SMTP relay via `nodemailer`), fired from booking / guest-add / reschedule post-commit blocks. UID = the row's persisted `uid` column; SEQUENCE lives on the row and bumps once per committed reschedule. `METHOD:CANCEL` (guest removal + meeting cancellation) **shipped in BAL-476** — same builder, same UID, same SEQUENCE (no bump)                                                        |
+| Step                                              | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SDK client + error boundary                       | **shipped and LIVE** — `apps/api/src/lib/apiroc/`; `services/consultation-events/*`, `jobs/meeting-calendar-amend.ts` and `services/availability/vendor-busy.ts` all call through `callApiroc`                                                                                                                                                                                                                                                                                                                                                                      |
+| `calendar_connections` per (expert, provider)     | **shipped** — BAL-467, migration `0067`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Connect / callback / free-busy / event writes     | **shipped (BAL-396)** — `routes/calendar/{auth,api}.ts`; create / update / delete all ship. ⚠ `deleteConsultationEvent` has **one production caller** since BAL-476: `services/meetings/withdraw-meeting-calendar.ts` (inline, post-commit, best-effort — never a retrying job, because it marks Balo's row first). `reconcileByTag` has one live caller (BAL-475) — `project-booking-to-calendar.ts`'s ambiguous vendor-create-failure branch (`server_error`/`network`/`unknown`) reconciles by tag before assuming non-creation; still no SCHEDULED orphan sweep |
+| Apiroc webhook route, subscriptions, renewal      | **shipped (BAL-468)** — `svix ^1.99.1`; `routes/calendar/webhook.ts`; `jobs/calendar-subscription-{reconcile,monitor}.ts`, both registered in `jobs/worker.ts`                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `vendorBusyProvider.listBusyBlocks`               | **shipped and live** — `services/availability/vendor-busy.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Per-party calendar grain + ICS-fallback condition | **shipped (BAL-433 Slice 1)** — `meeting_calendar_events` is unique on `(meeting_id, party)` with a `delivery_mode` discriminator (`provider_event` \| `ics`), and EVERY bookable context now projects (`services/consultation-events/calendar-context-registry.ts`). ⚠ There is **no vendor path for the CLIENT party** — `calendar_connections` is keyed on `expert_profile_id` and no client-side connection model exists.                                                                                                                                       |
+| Balo-organised ICS delivery (`METHOD:REQUEST`)    | **shipped (BAL-475)** — `apps/api/src/services/calendar-invites/` (builder on `ical-generator`, recipients, display facts) + `notifications/channels/calendar-invite-{message,delivery}.ts` (Brevo SMTP relay via `nodemailer`), fired from booking / guest-add / reschedule post-commit blocks. UID = the row's persisted `uid` column; SEQUENCE lives on the row and bumps once per committed reschedule. `METHOD:CANCEL` (guest removal + meeting cancellation) **shipped in BAL-476** — same builder, same UID, same SEQUENCE (no bump)                         |
 
 Per-area detail, with the real signatures, is in `references/`.
 
@@ -161,7 +127,7 @@ Calendar changes externally (Google/Microsoft)
   → identity comes from the URL PATH — the body carries none
   → verify with svix lib over svix-id / svix-timestamp / svix-signature + endpointSecret
   → dedupe on svix-id; ack 2xx immediately
-  → BullMQ job (deduped on `availability-${expertProfileId}`):
+  → BullMQ job (deduped on `buildJobId('availability', expertProfileId)`):
       windowed freeBusy.get re-read over the whole forward window (NO delta read)
   → recompute earliest_available_at → update availability_cache
 
@@ -410,18 +376,17 @@ APIROC_REDIRECT_URI=https://api.balo.expert/auth/apiroc/callback
 
 ## DB Schema (Drizzle)
 
-⚠ **This is the TARGET shape, and as of BAL-396 the shipped
-`packages/db/src/schema/calendar.ts` matches it.** Corrected 2026-08-18 against migrations
-`0067` (BAL-467) + `0068`/`0069` (BAL-396).
+⚠ **This is the TARGET shape, simplified. The shipped `packages/db/src/schema/calendar.ts`
+implements it with more columns than shown.**
 
-| Claim below                                                            | Reality in `main` today                                                                                                                                |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Unique on `(expertId, provider)`                                       | ✅ **SHIPPED** (BAL-467, migration `0067`) — partial, on `deleted_at IS NULL`                                                                          |
-| `endUserAccountId` column                                              | ✅ shipped; **`NOT NULL` as of `0069`**, and deliberately **NON-unique** (BAL-396 §5)                                                                  |
-| `credentialStatus` with `ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED` | ✅ **SHIPPED** (BAL-396, migration `0068`) — renamed from `status`. ⚠ `SYNC_PENDING` is **Balo-side only**, it has no vendor counterpart               |
-| No token columns                                                       | ✅ true — `access_token` / `refresh_token` / `cronofy_sub` / `token_expires_at` / `channel_id` all **dropped** by `0069`. Balo stores only the pointer |
-| `calendar_subscriptions` table                                         | ❌ **does not exist at all** (BAL-468). `calendar_sub_calendars` is a different thing                                                                  |
-| `availability_cache`                                                   | ✅ shipped and live                                                                                                                                    |
+| Claim below                                                            | Reality in `main` today                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unique on `(expertId, provider)`                                       | ✅ **SHIPPED** (BAL-467, migration `0067`) — partial, on `deleted_at IS NULL`                                                                                                                                      |
+| `endUserAccountId` column                                              | ✅ shipped; **`NOT NULL` as of `0069`**, and deliberately **NON-unique** (BAL-396 §5)                                                                                                                              |
+| `credentialStatus` with `ACTIVE \| SYNC_PENDING \| EXPIRED \| REVOKED` | ✅ **SHIPPED** (BAL-396, migration `0068`) — renamed from `status`. ⚠ `SYNC_PENDING` is **Balo-side only**, it has no vendor counterpart                                                                           |
+| No token columns                                                       | ✅ true — Balo stores only the `endUserAccountId` pointer                                                                                                                                                          |
+| `calendar_subscriptions` table                                         | ✅ **SHIPPED** (BAL-468, migration `0070`) — the real table adds `webhook_url` (`NOT NULL`), `expiration_synced_at`, `last_delivery_at`, timestamps and soft delete. `calendar_sub_calendars` is a different thing |
+| `availability_cache`                                                   | ✅ shipped and live                                                                                                                                                                                                |
 
 **Read the real file before writing a query.** Full as-built column list, the upsert arbiter,
 and the cardinality invariant are in `references/connect-and-credentials.md`.
@@ -435,9 +400,8 @@ export const calendarConnections = pgTable('calendar_connections', {
     .references(() => expertProfiles.id),
   endUserAccountId: text('end_user_account_id').notNull(), // Apiroc account id (pointer)
   provider: text('provider').notNull(), // google | microsoft
-  credentialStatus: text('credential_status').notNull().default('ACTIVE'), // ACTIVE | EXPIRED | REVOKED
+  credentialStatus: text('credential_status').notNull().default('ACTIVE'), // ACTIVE | SYNC_PENDING | EXPIRED | REVOKED
   targetCalendarId: text('target_calendar_id'), // where consultations are written
-  lastSyncedAt: timestamp('last_synced_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -479,9 +443,11 @@ provider — see Constraint 3 (BAL-447 / ADR-1021 amendment 2026-08-15).
 > Correct a constraint in place; **append** new ones. Never renumber.
 
 1. **Vendor holds tokens.** Never store provider access/refresh tokens. Persist the
-   `endUserAccountId`. ⚠ **Do NOT drive reconnect off `credentialStatus`** — that rule was
-   refuted; see Constraint 10 and
-   [Credential expiry & reconnect detection](#credential-expiry--reconnect-detection).
+   `endUserAccountId`. ⚠ `endUserAccounts.getCredentials(id)` **does** return raw provider
+   tokens **[stat]** — prefer `endUserAccounts.get(id)` (no secrets) when the status is all you
+   need, and never log or persist a credential object (`references/connect-and-credentials.md`).
+   ⚠ **Do NOT drive reconnect off `credentialStatus`** — that rule was refuted; see Constraint 10
+   and [Credential expiry & reconnect detection](#credential-expiry--reconnect-detection).
 2. **Subscriptions are per-calendar** (`calendarId` required for `subscriptionType: 'event'`),
    not per-expert — subscribe each conflict-check calendar you need change-push for;
    Google/Microsoft only. ⚠ **They DO expire — a hard 7 days [live]**, and the create response
@@ -543,7 +509,7 @@ provider — see Constraint 3 (BAL-447 / ADR-1021 amendment 2026-08-15).
 11. **Reconnect ordering is reconnect-FIRST.** Deleting a subscription is forbidden while the
     credential is `EXPIRED` (`403 "End user account credential expired"` **[live]**) — and the
     credential is expired precisely _because_ the user revoked, which is why you are
-    reconnecting. So: **reconnect → delete stale subscriptions → re-create.** This works
+    reconnecting. So: **reconnect → re-create → delete stale subscriptions.** This works
     because `endUserAccountId` is stable across a revoke/reconnect cycle (**[live]**: same id
     returned, `createdAt` unchanged, `updatedAt` moved) — reconnect is an UPDATE, not an
     INSERT, and no orphan row is left behind. Cleanup must be **verified, not best-effort**: a
@@ -776,11 +742,12 @@ expire — which is very likely how this skill's original claim arose.
 7 days matches Google's maximum `watch` channel TTL, so Apiroc appears to pass the provider's
 channel expiry straight through. **Whether Apiroc auto-renews before that expiry is
 unconfirmed** and cannot be settled without a 7-day observation — the vendor question is
-BAL-455, the job is BAL-468 §3. Treat renewal as caller-managed until told otherwise: the
-failure mode is silent and platform-wide (every expert's sync dies a week after connecting,
-with no error raised anywhere), so the asymmetry favours building the sweep. Add the cheap
-monitor regardless — a daily check for subscriptions expiring inside 48h catches the bad case
-either way.
+BAL-455. Treat renewal as caller-managed until told otherwise: the failure mode is silent and
+platform-wide (every expert's sync dies a week after connecting, with no error raised
+anywhere). Balo renews a subscription once it is within 72h of its vendor-reported expiry
+(`SUBSCRIPTION_RENEWAL_LEAD_MS` in `services/calendar/subscription-plan.ts`), and
+`jobs/calendar-subscription-monitor.ts` alerts daily on any subscription expiring inside 48h —
+one whose renewal has been failing for a day.
 
 ---
 
@@ -809,7 +776,7 @@ belongs to.
 - Never infer _what_ changed from a ping — it carries no event id. And never chase the change
   with a delta read: enqueue the whole-window rebuild (Constraint 3).
 - The rebuild job must be **debounced and deduped per expert**
-  (`jobId: availability-${expertProfileId}`). One job per webhook wastes work; one job per
+  (`jobId: buildJobId('availability', expertProfileId)`). One job per webhook wastes work; one job per
   _change_ is impossible anyway.
 - **Dedupe on `svix-id`** — every delivery had a distinct one, so it is a usable idempotency
   key.

@@ -147,21 +147,6 @@ describe('calendarRepository', () => {
       );
     });
 
-    it('writes NONE of the Cronofy identity columns — an Apiroc row stores a pointer, not tokens', async () => {
-      mockReturning.mockReturnValue([{ id: 'conn-1' }]);
-
-      await calendarRepository.upsertApirocConnection({
-        expertProfileId: 'ep-1',
-        provider: 'microsoft',
-        endUserAccountId: 'eua-2',
-      });
-
-      const [values] = mockValues.mock.calls[0] as [Record<string, unknown>];
-      for (const column of ['cronofySub', 'accessToken', 'refreshToken', 'tokenExpiresAt']) {
-        expect(values).not.toHaveProperty(column);
-      }
-    });
-
     it('carries an explicit SYNC_PENDING through to the write', async () => {
       mockReturning.mockReturnValue([{ id: 'conn-1' }]);
 
@@ -428,11 +413,10 @@ describe('calendarRepository', () => {
     });
 
     /**
-     * ⚠ THE REASON THIS METHOD EXISTS. The deleted `updateConnectionStatus` fan-out scoped
-     * by `expertProfileId` ALONE, so one provider's EXPIRED branded the other provider's
-     * connection broken — and, via the fail-closed booking gate, made the expert unbookable
-     * on a healthy calendar. Asserts the WHERE argument itself, not merely that `.where()`
-     * was called.
+     * ⚠ THE REASON THIS METHOD EXISTS. Scoped by `expertProfileId` ALONE, one provider's
+     * EXPIRED would brand the other provider's connection broken — and, via the fail-closed
+     * booking gate, make the expert unbookable on a healthy calendar. Asserts the WHERE
+     * argument itself, not merely that `.where()` was called.
      */
     it('scopes the WHERE clause on provider, not merely expertProfileId', async () => {
       setupUpdateChain();
@@ -516,16 +500,6 @@ describe('calendarRepository', () => {
     });
   });
 
-  describe('updateLastSyncedAt', () => {
-    it('updates lastSyncedAt timestamp', async () => {
-      setupUpdateChain();
-
-      await calendarRepository.updateLastSyncedAt('conn-1');
-
-      expect(mockSet).toHaveBeenCalled();
-    });
-  });
-
   describe('softDeleteConnection', () => {
     it('sets deletedAt timestamp', async () => {
       setupUpdateChain();
@@ -551,14 +525,11 @@ describe('calendarRepository', () => {
     });
 
     /**
-     * ⚠ THE OBJECTION-1 REGRESSION, AS FAR AS A MOCKED SUITE CAN SEE IT. The old filter read
-     * `eq(status, 'connected')`. A rename WITHOUT the typed column would have left that
-     * literal compiling and matching zero rows forever, with the 15-minute staleness cron
-     * reporting nothing wrong. `.$type<CalendarCredentialStatus>()` makes the stale literal a
-     * `tsc` error; this asserts the RENDERED filter names the new column and the new value,
-     * which is the part a type cannot pin. The real-Postgres proof is in the integration suite.
+     * `.$type<CalendarCredentialStatus>()` makes an out-of-vocabulary status literal a `tsc`
+     * error; this asserts the RENDERED filter names the column and the value, which is the
+     * part a type cannot pin. The real-Postgres proof is in the integration suite.
      */
-    it('filters on credential_status = ACTIVE — not the retired `status`/`connected` pair', async () => {
+    it('filters on credential_status = ACTIVE', async () => {
       mockFindMany.mockResolvedValue([]);
 
       await calendarRepository.findStaleConnections(new Date('2026-08-18T00:00:00.000Z'));
@@ -566,22 +537,16 @@ describe('calendarRepository', () => {
       const [args] = mockFindMany.mock.calls[0] as [{ where: unknown }];
       const query = DIALECT.sqlToQuery(args.where as Parameters<PgDialect['sqlToQuery']>[0]);
       expect(query.sql).toContain('"credential_status"');
-      expect(query.sql).not.toContain('"status"');
       expect(query.params).toContain('ACTIVE');
-      expect(query.params).not.toContain('connected');
     });
 
     /**
-     * ⚠⚠ THE BAL-396 FIX-ROUND REGRESSION TEST. The filter used to read
-     * `lt(last_synced_at, threshold)`, and `last_synced_at`'s only writer was the deleted
-     * Cronofy webhook route — so it is NULL forever, `lt(NULL, threshold)` is NULL (not
-     * true), and the query returned `[]` on EVERY tick, permanently. Repointing at
-     * `credential_checked_at` restores a real signal (stamped by the health probe and by
-     * connect/reconnect); this asserts the RENDERED filter names the new column, which a
-     * mocked suite can see even though it cannot prove the behaviour end to end (that is
+     * Staleness keys on `credential_checked_at`, which the health probe and
+     * `upsertApirocConnection` stamp. This asserts the RENDERED filter names it, which a mocked
+     * suite can see even though it cannot prove the behaviour end to end (that is
      * `calendar.integration.test.ts`'s job).
      */
-    it('filters on credential_checked_at, NOT the dead-forever last_synced_at column', async () => {
+    it('renders both staleness arms on credential_checked_at — IS NULL and `<`', async () => {
       mockFindMany.mockResolvedValue([]);
 
       await calendarRepository.findStaleConnections(new Date('2026-08-18T00:00:00.000Z'));
@@ -589,7 +554,7 @@ describe('calendarRepository', () => {
       const [args] = mockFindMany.mock.calls[0] as [{ where: unknown }];
       const query = DIALECT.sqlToQuery(args.where as Parameters<PgDialect['sqlToQuery']>[0]);
       expect(query.sql).toContain('"credential_checked_at"');
-      expect(query.sql).not.toContain('"last_synced_at"');
+      expect(query.sql).toContain('"credential_checked_at" < $');
       // A NEVER-CHECKED connection (NULL) must match immediately, not wait out a threshold.
       expect(query.sql).toContain('"credential_checked_at" is null');
     });

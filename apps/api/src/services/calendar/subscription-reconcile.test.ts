@@ -89,7 +89,6 @@ function connection(overrides: Partial<CalendarConnection> = {}): CalendarConnec
     credentialStatus: 'ACTIVE',
     credentialCheckedAt: null,
     reconnectNotifiedAt: null,
-    lastSyncedAt: null,
     targetCalendarId: null,
     createdAt: new Date(),
     updatedAt: new Date(),

@@ -166,14 +166,11 @@ describe('time-off overrides and notice are threaded from the expert’s own set
 
 describe('vendor free/busy comes from the SHARED port, never an inline []', () => {
   /**
-   * ⚠ THE REGRESSION THIS BLOCK EXISTS FOR. `busyBlocks` was the ONE resolver input BAL-129's
-   * `resolver-inputs.ts` extraction did not share: this adapter hardcoded `[]` while
-   * `resolveAndCacheAvailability` took its own default. Both were `[]`, so nothing diverged —
-   * until BAL-194/195 wires Cronofy at the ADVERTISE call site, which
-   * `jobs/availability-cache.ts` says by name is where it will land. At that moment the booking
-   * gate would silently stop honouring vendor free/busy and double-book over an expert's real
-   * external commitments, with no type, no test and no helper failing. Reading the shared port
-   * is what makes that unrepresentable; these two tests are what keep it read.
+   * ⚠ THE REGRESSION THIS BLOCK EXISTS FOR. The booking gate must read vendor free/busy from the
+   * SAME `vendorBusyProvider` port the advertise path (`resolveAndCacheAvailability`) reads. Were
+   * it to default `busyBlocks` to `[]` instead, it would silently stop honouring vendor free/busy
+   * and double-book over an expert's real external commitments. Reading the shared port is what
+   * makes that unrepresentable; these two tests are what keep it read.
    */
   it('asks the port for the SAME padded range it loads consultations over', async () => {
     const spy = vi.spyOn(vendorBusyProvider, 'listBusyBlocks');

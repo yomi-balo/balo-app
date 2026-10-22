@@ -49,20 +49,6 @@ const MENU_HIDDEN_STATES = new Set<CalendarSlotState>([
   'o365_waiting',
 ]);
 
-/** Slot states whose subline reports the last sync — only once one is known. */
-const SYNC_REPORTING_STATES = new Set<CalendarSlotState>(['connected', 'reconnect_needed']);
-
-function formatLastSynced(lastSyncedAt: string): string {
-  const diffMs = Date.now() - new Date(lastSyncedAt).getTime();
-  const diffMinutes = Math.floor(diffMs / 60_000);
-  if (diffMinutes < 1) return 'Synced just now';
-  if (diffMinutes < 60) return `Last synced ${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `Last synced ${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `Last synced ${diffDays}d ago`;
-}
-
 /**
  * Who the row's account is: its email; else its primary calendar's name when that is an
  * address (Google names the primary calendar after the account email); else the provider's
@@ -76,14 +62,11 @@ function accountLabel(connection: CalendarConnection | undefined, sublabel: stri
 }
 
 /**
- * The fragment after the account label. `setting_up` is still reading the calendars; a live or
- * lapsed connection reports its last sync once there is one — never a pending-sync message
- * beside a "Connected" pill.
+ * The fragment after the account label. Only `setting_up` has one, while it is still reading
+ * the calendars — never a pending-sync message beside a "Connected" pill.
  */
-function syncFragment(slotState: CalendarSlotState, lastSyncedAt: string | null): string | null {
-  if (slotState === 'setting_up') return 'Reading your calendars…';
-  if (lastSyncedAt && SYNC_REPORTING_STATES.has(slotState)) return formatLastSynced(lastSyncedAt);
-  return null;
+function syncFragment(slotState: CalendarSlotState): string | null {
+  return slotState === 'setting_up' ? 'Reading your calendars…' : null;
 }
 
 /**
@@ -112,7 +95,7 @@ export function CalendarConnectionCard({
 }: Readonly<CalendarConnectionCardProps>): React.JSX.Element {
   const { label, sublabel } = PROVIDER_META[provider];
   const status = CALENDAR_SLOT_STATUS[slotState];
-  const syncLine = syncFragment(slotState, connection?.lastSyncedAt ?? null);
+  const syncLine = syncFragment(slotState);
 
   /**
    * The busy-calendars + target-calendar pair, rendered by BOTH `connected` and

@@ -30,15 +30,10 @@ import {
  *     `onConflictDoUpdate` merely records its argument and never reaches a planner. This is
  *     the live calendar connect path; a break here is a production outage.
  *
- *   · **23502** — an Apiroc connection stores ONLY the `end_user_account_id` pointer (Balo
- *     holds no provider tokens); migration 0069 dropped every Cronofy identity column
- *     outright, so a stray reference to one is now a compile error, not a runtime 23502.
- *
- *   · **A VOCABULARY THAT MIGRATED ONE WAY AND IS QUERIED THE OTHER** — migration 0068
- *     renames `status` → `credential_status` and replaces `connected|sync_pending|auth_error`
- *     with `ACTIVE|SYNC_PENDING|EXPIRED|REVOKED`. `.$type<CalendarCredentialStatus>()` turns
- *     the stale literal into a `tsc` error, but only real Postgres proves the CHECK, the
- *     DEFAULT and `findStaleConnections` actually agree with it.
+ *   · **A STATUS VOCABULARY THE DATABASE DOES NOT AGREE WITH** —
+ *     `.$type<CalendarCredentialStatus>()` turns an out-of-vocabulary literal into a `tsc`
+ *     error, but only real Postgres proves the CHECK, the DEFAULT and `findStaleConnections`
+ *     actually agree with `ACTIVE|SYNC_PENDING|EXPIRED|REVOKED`.
  *
  * ⚠ Correction (BAL-467 fix brief round 2, item 14 — measured with
  * `DOCKER_HOST=tcp://127.0.0.1:1`): a comment here used to claim Docker-down makes
@@ -171,7 +166,9 @@ describe('calendar_connections — per (expert, provider) cardinality [ADR-1021 
     await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'google'));
 
     // A raw insert, NOT an upsert: the upsert's whole job is to take the DO UPDATE arm.
-    // This probes the index itself, which is what actually holds the ruling.
+    // This probes the index itself, which is what actually holds the ruling. It also gates
+    // the column DEFAULT: `credential_status` is omitted, and Postgres evaluates the CHECK
+    // before the unique index, so a DEFAULT outside the vocabulary fails here with 23514.
     await expectConstraintViolation('23505', (tx) =>
       tx
         .insert(calendarConnections)
@@ -259,13 +256,7 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
     expect(await allRows(expert.id)).toHaveLength(1);
   });
 
-  /**
-   * ⚠ MIGRATION 0069 LANDED THIS PRECONDITION. It used to assert the four Cronofy identity
-   * columns stayed NULL on every Apiroc row — the evidence that dropping them was safe. 0069
-   * dropped them; the columns no longer exist to assert against. What survives is the positive
-   * half: an Apiroc row writes ONLY its pointer plus Balo's own lifecycle columns.
-   */
-  it('writes a row with ONLY the pointer set, on the new vocabulary default', async () => {
+  it('a fresh connect stores the pointer, ACTIVE when no status is given, unchecked and un-notified', async () => {
     const expert = await expertDraftFactory();
 
     const row = expectPersisted(
@@ -275,10 +266,8 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
     );
 
     expect(row.endUserAccountId).toBe('eua_apiroc_1');
-    // The new vocabulary's default, proving migration 0068's `SET DEFAULT 'ACTIVE'` landed —
-    // drizzle-kit emitted no default change for the renamed column, so this is the ONLY
-    // gate on the hand-added statement. A surviving `'connected'` default would fail the
-    // new CHECK on any insert that omits the column.
+    // `upsertApirocConnection` writes ACTIVE itself when the caller gives no status, so this
+    // pins the method's fallback; the 23505 raw insert above gates the column DEFAULT.
     expect(row.credentialStatus).toBe('ACTIVE');
     // A fresh connect has PROVEN nothing yet, so it is a probe candidate immediately.
     expect(row.credentialCheckedAt).toBeNull();
@@ -407,7 +396,7 @@ describe('calendarRepository.upsertApirocConnection — the 42P10 arbiter gate',
 // ── The credential-status vocabulary, on real Postgres ───────────
 
 describe('calendar_connections.credential_status — the CHECK is the backstop', () => {
-  it('accepts every value in the new vocabulary', async () => {
+  it('accepts every value in the vocabulary', async () => {
     const expert = await expertDraftFactory();
     const row = await seedApirocConnection(apirocInput(expert.id, 'google'));
 
@@ -418,13 +407,12 @@ describe('calendar_connections.credential_status — the CHECK is the backstop',
   });
 
   /**
-   * ⚠ THE MIGRATION-DIRECTION PROOF. `'connected'` is the Cronofy vocabulary migration 0068
-   * translated away. `.$type<>()` makes it a compile error in Balo code, but nothing stops a
-   * hand-written statement, a stale seed script or a rolled-back migration from writing it —
-   * the CHECK is what makes that impossible rather than merely discouraged. Raw SQL, because
-   * the typed column will not express the legacy value at all.
+   * ⚠ `.$type<>()` makes an out-of-vocabulary status a compile error in Balo code, but nothing
+   * stops a hand-written statement or a seed script from writing one — the CHECK is what makes
+   * that impossible rather than merely discouraged. Raw SQL, because the typed column will not
+   * express such a value at all.
    */
-  it('REJECTS the retired Cronofy vocabulary with 23514', async () => {
+  it('REJECTS a status outside the vocabulary with 23514', async () => {
     const expert = await expertDraftFactory();
 
     // `end_user_account_id` is supplied so the statement fails on the CHECK under test
@@ -433,12 +421,12 @@ describe('calendar_connections.credential_status — the CHECK is the backstop',
       tx.execute(
         sql`INSERT INTO calendar_connections
               (expert_profile_id, provider, end_user_account_id, credential_status)
-            VALUES (${expert.id}, 'google', 'eua_probe', 'connected')`
+            VALUES (${expert.id}, 'google', 'eua_probe', 'UNKNOWN')`
       )
     );
   });
 
-  it('REJECTS a lower-cased new value — the vocabulary is case-exact', async () => {
+  it('REJECTS a lower-cased value — the vocabulary is case-exact', async () => {
     const expert = await expertDraftFactory();
 
     await expectConstraintViolation('23514', (tx) =>
@@ -451,15 +439,13 @@ describe('calendar_connections.credential_status — the CHECK is the backstop',
   });
 });
 
-// ── Per-provider status writes (replacing the deleted fan-out) ───
+// ── Per-provider status writes ───────────────────────────────────
 
 describe('calendarRepository.setCredentialStatusForProvider', () => {
   /**
-   * ⚠ REPLACES THE PINNED FAN-OUT. This suite used to assert that `updateConnectionStatus`
-   * branded BOTH providers — "asserted as-is, not as-desired", with a note that BAL-396 would
-   * have to CHOOSE to change it. This is that choice, asserted the other way: one provider's
-   * breakage must never brand the other, because the booking gate fails CLOSED on a
-   * non-ACTIVE connection and would make the expert unbookable on a healthy calendar.
+   * ⚠ One provider's breakage must never brand the other, because the booking gate fails
+   * CLOSED on a non-ACTIVE connection and would make the expert unbookable on a healthy
+   * calendar.
    */
   it('moves ONE provider and leaves the other ACTIVE', async () => {
     const expert = await expertDraftFactory();
@@ -612,15 +598,14 @@ describe('calendarRepository — connection-keyed credential writes', () => {
   });
 });
 
-// ── findStaleConnections — the Objection-1 regression test ───────
+// ── findStaleConnections — the staleness cron's candidates ───────
 
 describe('calendarRepository.findStaleConnections', () => {
   /**
-   * ⚠⚠ THE DIRECT REGRESSION TEST FOR THE SILENT-ZERO-ROWS MODE. The filter used to read
-   * `eq(status, 'connected')`. Had the column been renamed without being TYPED, that literal
-   * would still compile, match ZERO rows forever, and leave the 15-minute staleness cron
-   * reporting nothing wrong while no connected expert's availability was ever resynced.
-   * A vocabulary that migrated one way and is queried the other fails HERE, on real Postgres.
+   * ⚠⚠ THE DIRECT TEST FOR THE SILENT-ZERO-ROWS MODE. A status filter the database does not
+   * agree with would match ZERO rows forever and leave the 15-minute staleness cron — the only
+   * periodic rebuild of a healthy connection — reporting nothing wrong while it rebuilt
+   * nothing. It fails HERE, on real Postgres.
    */
   it('returns a freshly-seeded ACTIVE connection whose credential was last checked before the threshold', async () => {
     const expert = await expertDraftFactory();
@@ -635,21 +620,16 @@ describe('calendarRepository.findStaleConnections', () => {
   });
 
   /**
-   * ⚠⚠ THE BAL-396 FIX-ROUND MANDATORY TEST. `findStaleConnections` used to filter on
-   * `last_synced_at`, whose only production writer was the Cronofy-era webhook route this
-   * PR deletes — so every row's `last_synced_at` is NULL forever, `lt(NULL, threshold)` is
-   * NULL (not true), and the query returned `[]` on EVERY tick: a PERMANENT no-op, not a
-   * genuinely-empty result. Repointing at `credential_checked_at` — which a fresh connect
-   * leaves NULL until the first probe or reconnect — restores a real signal: a never-synced
-   * connection is exactly the one most in need of an availability rebuild, so it must be a
-   * candidate from the moment it connects, not excluded the way NULL `last_synced_at` used
-   * to exclude it.
+   * ⚠⚠ A fresh connect leaves `credential_checked_at` NULL until the first probe or
+   * reconnect, and `lt(NULL, threshold)` is NULL (not true). A never-checked connection is
+   * exactly the one most in need of an availability rebuild, so it must be a candidate from
+   * the moment it connects.
    */
-  it('returns a NEVER-CHECKED connection — a never-synced connection must not be a permanent no-op', async () => {
+  it('returns a NEVER-CHECKED connection — a candidate from the moment it connects', async () => {
     const expert = await expertDraftFactory();
     const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
     // A fresh connect already leaves credential_checked_at NULL (see the `upsertApirocConnection`
-    // "writes a row with ONLY the pointer set" test above) — no extra stamp needed.
+    // "a fresh connect stores the pointer" test above) — no extra stamp needed.
 
     const stale = await calendarRepository.findStaleConnections(
       new Date('2001-01-01T00:00:00.000Z')
@@ -1187,8 +1167,7 @@ describe('calendarRepository — per-provider writes', () => {
     await calendarRepository.updateTargetCalendarIdForProvider(expert.id, 'google', 'cal_google');
 
     // "targetCalendarId is per connection" — a calendar id is only meaningful inside the
-    // provider account that issued it. The expert-wide fan-out that used to write BOTH rows
-    // is deleted (BAL-396).
+    // provider account that issued it.
     expect(
       (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google'))
         ?.targetCalendarId
@@ -1223,23 +1202,6 @@ describe('calendarRepository — per-provider writes', () => {
 
     expect(await liveRows(expert.id)).toHaveLength(0);
     expect(await allRows(expert.id)).toHaveLength(2);
-  });
-
-  it('updateLastSyncedAt is keyed by connectionId, so it touches only that provider', async () => {
-    const expert = await expertDraftFactory();
-    const google = await seedApirocConnection(apirocInput(expert.id, 'google'));
-    await calendarRepository.upsertApirocConnection(apirocInput(expert.id, 'microsoft'));
-
-    await calendarRepository.updateLastSyncedAt(google.id);
-
-    expect(
-      (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'google'))
-        ?.lastSyncedAt
-    ).toBeInstanceOf(Date);
-    expect(
-      (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'microsoft'))
-        ?.lastSyncedAt
-    ).toBeNull();
   });
 });
 

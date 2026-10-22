@@ -7,7 +7,6 @@ function buildConnection(overrides: Partial<CalendarConnection> = {}): CalendarC
     provider: 'google',
     credentialStatus: 'ACTIVE',
     providerEmail: 'dana@example.com',
-    lastSyncedAt: null,
     targetCalendarId: null,
     subCalendars: [],
     isBookingTarget: false,

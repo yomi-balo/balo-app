@@ -101,9 +101,9 @@ export interface ExpertReferralInvitedPayload {
 export interface CalendarAuthErrorPayload {
   correlationId: string; // connectionId
   expertProfileId: string;
-  // BAL-396 §7 — required, not optional: both publishers (the two Cronofy call sites this PR
-  // rewrites/deletes) already hold `connection.provider`. Drives the template's
-  // `providerLabel` copy.
+  // Required, not optional: the one publisher (`services/calendar/credential-status.ts`,
+  // reached from the calendar health probe) always holds `connection.provider`. Drives the
+  // template's `providerLabel` copy.
   provider: string;
   /**
    * BAL-414 (D10, addendum) — whether the expert REMAINS searchable despite this ONE
@@ -646,13 +646,12 @@ export type NotificationEvent =
   | 'meeting.calendar_invite';
 
 /**
- * Events published only from WITHIN the API (the calendar webhook / Cronofy
- * token-refresh path, the D7 auto-accept + review-reminder sweeps, the BAL-374
- * onboarding-reminder sweep, and the BAL-380 dormancy/expiry sweep) — never through the
- * internal `/notifications/publish` route, so they have no arm in `publishBodySchema` by
- * design. Keep this list tight: everything NOT listed here is treated as publishable
- * from apps/web and MUST have a schema arm — enforced at compile time in
- * apps/api/src/routes/notifications/schema.ts.
+ * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
+ * review-reminder sweeps, the BAL-374 onboarding-reminder sweep, and the BAL-380
+ * dormancy/expiry sweep) — never through the internal `/notifications/publish` route, so they
+ * have no arm in `publishBodySchema` by design. Keep this list tight: everything NOT listed here
+ * is treated as publishable from apps/web and MUST have a schema arm — enforced at compile time
+ * in apps/api/src/routes/notifications/schema.ts.
  */
 export type ServerOnlyNotificationEvent =
   | 'calendar.auth_error'
