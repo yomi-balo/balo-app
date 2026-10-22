@@ -41,8 +41,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "alt": "The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.",
           "lightSrc": "/help/booking-a-consultation/01-light.png",
           "darkSrc": "/help/booking-a-consultation/01-dark.png",
-          "width": 600,
-          "height": 1094
+          "width": 1680,
+          "height": 604
         }
       },
       {
@@ -72,7 +72,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "lightSrc": "/help/booking-a-consultation/03-light.png",
           "darkSrc": "/help/booking-a-consultation/03-dark.png",
           "width": 1680,
-          "height": 832
+          "height": 654
         }
       },
       {
