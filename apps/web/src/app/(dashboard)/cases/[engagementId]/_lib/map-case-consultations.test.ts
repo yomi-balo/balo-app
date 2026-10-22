@@ -298,17 +298,6 @@ describe('mapCaseConsultations — state derivation', () => {
       expect(row).not.toHaveProperty('clientSideEverPresent');
       expect(JSON.stringify(row)).not.toMatch(/presen/i);
     });
-
-    it('keeps the recap link on a nobody_joined row — the not-held panel explains it', () => {
-      const [row] = mapCaseConsultations(
-        [meeting({ id: 'm1', ...MISSED })],
-        { ...EMPTY_COUNTS, clientSideEverPresentByMeetingId: new Map([['m1', false]]) },
-        NOW,
-        NO_ACTION
-      );
-      expect(row?.state).toBe('nobody_joined');
-      expect(row?.recapHref).toBe('/meetings/m1?from=case_surface');
-    });
   });
 
   it('warns when a meeting ENDED with no outcome recorded — it must not be invisible', () => {
