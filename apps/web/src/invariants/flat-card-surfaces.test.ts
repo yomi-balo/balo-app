@@ -5,9 +5,8 @@ import { codeLinesOf, resolveRouteDir } from './_source-scan';
 /**
  * BAL-618 — "Flat everywhere": the files that DEFINE a Balo card surface carry no shadow.
  *
- * Deliberately narrow (no repo-wide scan): buttons, chips, avatars, active tabs, sticky bars and
- * floating layers legitimately keep a shadow. A re-added `shadow-*` in one of these files
- * would silently re-elevate every card built on it.
+ * A re-added `shadow-*` in one of these files would silently re-elevate every card built on it.
+ * Inline card surfaces elsewhere are covered by `no-elevated-card-surfaces.test.ts`.
  */
 
 interface CardDefinition {
