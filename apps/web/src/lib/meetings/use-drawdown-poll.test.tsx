@@ -183,7 +183,7 @@ describe('useDrawdownPoll — failures', () => {
     const { result } = renderHook(() => useDrawdownPoll({ balance: balanceFor(load) }));
 
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-    expect(result.current.state?.key).toBe('low');
+    await waitFor(() => expect(result.current.state?.key).toBe('low'));
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DRAWDOWN_POLL_INTERVAL_MS);
@@ -204,7 +204,7 @@ describe('useDrawdownPoll — failures', () => {
     const { result } = renderHook(() => useDrawdownPoll({ balance: balanceFor(load) }));
 
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-    expect(result.current.state?.key).toBe('low');
+    await waitFor(() => expect(result.current.state?.key).toBe('low'));
 
     for (let i = 0; i < DRAWDOWN_MAX_CONSECUTIVE_POLL_FAILURES; i += 1) {
       await act(async () => {
@@ -361,7 +361,7 @@ describe('useDrawdownPoll — ⚠⚠ fix round 2 (R6), retry() is guarded', () =
     const { result } = renderHook(() => useDrawdownPoll({ balance: balanceFor(load) }));
 
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-    expect(result.current.state?.key).toBe('grace');
+    await waitFor(() => expect(result.current.state?.key).toBe('grace'));
 
     // Drive to the retryable cap on the URGENT cadence (`lastKeyRef` is `'grace'` throughout —
     // a failure branch never touches it).
