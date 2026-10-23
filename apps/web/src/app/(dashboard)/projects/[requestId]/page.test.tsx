@@ -59,6 +59,7 @@ const {
 
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
+  companyBillingRepository: { findByCompanyId: () => Promise.resolve(undefined) },
   partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
   usersRepository: { findNamesByIds: (...a: unknown[]) => mockFindNamesByIds(...a) },
   auditEventsRepository: {
@@ -125,6 +126,11 @@ vi.mock('@/lib/project-request/load-balo-panel', () => ({
 
 // useIsMobile (inside the conversation island) reads window.matchMedia.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
+const mockLoadKickoffUpfront = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/project-request/kickoff-upfront', () => ({
+  loadKickoffUpfront: (...args: unknown[]) => mockLoadKickoffUpfront(...args),
+}));
 
 import { thread as conversationThread } from '@/test/fixtures/conversation';
 import RequestDetailPage, { generateMetadata } from './page';
@@ -696,5 +702,56 @@ describe('RequestDetailPage — generateMetadata (Fix 1: no existence/title leak
     expect(result.title).toBe('Project request — Balo');
     expect(mockResolveWorkspaceForEntity).not.toHaveBeenCalled();
     expect(mockRedirect).not.toHaveBeenCalled();
+  });
+});
+
+describe('RequestDetailPage (RSC) — kickoff upfront amount audience', () => {
+  const acceptedRel = (): ProjectRequestWithRelations['relationships'][number] =>
+    ({
+      ...liveRelationship(),
+      status: 'accepted',
+    }) as ProjectRequestWithRelations['relationships'][number];
+
+  function shellProps(node: unknown): { kickoffUpfront?: { amountCents: number | null } | null } {
+    const found: Array<{ kickoffUpfront?: { amountCents: number | null } | null }> = [];
+    const walk = (n: unknown): void => {
+      if (n === null || n === undefined || typeof n !== 'object') return;
+      if (Array.isArray(n)) {
+        n.forEach(walk);
+        return;
+      }
+      const el = n as React.ReactElement<Record<string, unknown>>;
+      if (el.props && 'kickoffUpfront' in el.props) found.push(el.props);
+      walk(el.props?.children);
+    };
+    walk(node);
+    return found[0] ?? {};
+  }
+
+  beforeEach(() => {
+    mockLoadKickoffUpfront.mockReset();
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'accepted', relationships: [acceptedRel()] })
+    );
+  });
+
+  it('withholds the amount from the expert lens', async () => {
+    mockLoadKickoffUpfront.mockResolvedValue({ amountCents: 522_000, currency: 'aud' });
+    mockGetCurrentUser.mockResolvedValue(
+      user({
+        companyId: OTHER_COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        activeMode: 'expert',
+      })
+    );
+    const ui = await RequestDetailPage({ params: Promise.resolve({ requestId: REQUEST_ID }) });
+    expect(shellProps(ui).kickoffUpfront).toEqual({ amountCents: null, currency: 'aud' });
+  });
+
+  it('gives the client lens the amount', async () => {
+    mockLoadKickoffUpfront.mockResolvedValue({ amountCents: 522_000, currency: 'aud' });
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    const ui = await RequestDetailPage({ params: Promise.resolve({ requestId: REQUEST_ID }) });
+    expect(shellProps(ui).kickoffUpfront).toEqual({ amountCents: 522_000, currency: 'aud' });
   });
 });

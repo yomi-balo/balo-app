@@ -2,18 +2,7 @@
 
 import { useCallback, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  BadgeCheck,
-  Banknote,
-  Check,
-  ClipboardCheck,
-  Clock,
-  Loader2,
-  PartyPopper,
-  Receipt,
-  User,
-  type LucideIcon,
-} from 'lucide-react';
+import { Check, Clock, Loader2, PartyPopper } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -25,7 +14,7 @@ import { formatProposalAmount } from './proposal-format';
 import { markUpfrontInvoiceRaisedAction } from '@/app/(dashboard)/projects/[requestId]/_actions/mark-upfront-invoice-raised';
 import { approveKickoffAction } from '@/app/(dashboard)/projects/[requestId]/_actions/approve-kickoff';
 
-/** The viewer lens — selects which row is "yours" and which action it fires. */
+/** The viewer lens — selects which step is "yours" and which action it fires. */
 type KickoffLens = 'client' | 'expert' | 'admin';
 
 interface KickoffBoardProps {
@@ -64,13 +53,10 @@ type KickoffStepKey = 'billing' | 'invoice' | 'payment' | 'approval';
 /** One resolved checklist row — everything the renderer reads, so the JSX stays branch-free. */
 interface KickoffStep {
   key: KickoffStepKey;
-  /** Whose step it is: earns the "You" pill and is named in other viewers' waiting copy. */
+  /** Whose step it is: labelled "You" for its owner and named for every other viewer. */
   owner: 'client' | 'admin';
   label: string;
-  icon: LucideIcon;
   done: boolean;
-  /** Every earlier step is done, so this one can be acted on now. */
-  ready: boolean;
   sub: string;
 }
 
@@ -111,8 +97,8 @@ function billingSub(done: boolean, c: StepCopyContext): string {
 
 function invoiceSub(done: boolean, ready: boolean, c: StepCopyContext): string {
   if (done) return c.amount === null ? 'Upfront invoice sent' : `Invoice for ${c.amount} sent`;
-  if (c.lens !== 'admin') return `Waiting on Balo to send ${theInvoice(c.amount)}`;
   if (!ready) return 'Available once billing details are in';
+  if (c.lens !== 'admin') return `Waiting on Balo to send ${theInvoice(c.amount)}`;
   return `Invoice ${c.company} for ${c.amount ?? 'the upfront amount'}, then mark it sent`;
 }
 
@@ -128,21 +114,22 @@ function paymentSub(done: boolean, ready: boolean, c: StepCopyContext): string {
       ? `Confirm once ${c.company}'s payment lands — this kicks off the project`
       : 'Available once the invoice is sent';
   }
-  return `Waiting on ${c.company} to pay the upfront invoice`;
+  return ready
+    ? `Waiting on ${c.company} to pay the upfront invoice`
+    : 'Due once Balo sends the upfront invoice';
 }
 
 function approvalSub(done: boolean, ready: boolean, c: StepCopyContext): string {
   if (done) return 'Kickoff approved';
+  if (!ready) return 'Available once billing details are in';
   if (c.lens !== 'admin') return 'Nothing is due upfront — waiting on Balo to approve kickoff';
-  return ready
-    ? 'Nothing is due upfront on this deal — approve to kick off'
-    : 'Available once billing details are in';
+  return 'Nothing is due upfront on this deal — approve to kick off';
 }
 
 /**
  * Resolve the checklist for this request. A deal with money due upfront gets three
  * steps (billing → invoice → payment); one with nothing due gets two (billing →
- * approval). Each step is `ready` once every earlier step is done.
+ * approval). Future-step copy depends on whether every earlier step is done.
  */
 function resolveSteps(
   state: { billingDone: boolean; invoiceRaised: boolean; approved: boolean; hasUpfront: boolean },
@@ -153,9 +140,7 @@ function resolveSteps(
     key: 'billing',
     owner: 'client',
     label: 'Add billing details',
-    icon: User,
     done: billingDone,
-    ready: true,
     sub: billingSub(billingDone, c),
   };
 
@@ -166,36 +151,27 @@ function resolveSteps(
         key: 'approval',
         owner: 'admin',
         label: 'Approve kickoff',
-        icon: BadgeCheck,
         done: approved,
-        ready: billingDone,
         sub: approvalSub(approved, billingDone, c),
       },
     ];
   }
 
-  // A kickoff approved before the invoice step existed has no raise timestamp — it was
-  // necessarily invoiced, so approval implies the invoice step is done.
-  const invoiceDone = invoiceRaised || approved;
-  const paymentReady = billingDone && invoiceDone;
+  const paymentReady = billingDone && invoiceRaised;
   return [
     billing,
     {
       key: 'invoice',
       owner: 'admin',
       label: 'Raise the upfront invoice',
-      icon: Receipt,
-      done: invoiceDone,
-      ready: billingDone,
-      sub: invoiceSub(invoiceDone, billingDone, c),
+      done: invoiceRaised,
+      sub: invoiceSub(invoiceRaised, billingDone, c),
     },
     {
       key: 'payment',
       owner: 'client',
       label: 'Pay the upfront invoice',
-      icon: Banknote,
       done: approved,
-      ready: paymentReady,
       sub: paymentSub(approved, paymentReady, c),
     },
   ];
@@ -251,6 +227,14 @@ export function KickoffBoard({
     }
   );
   const doneCount = steps.filter((step) => step.done).length;
+  const allDone = doneCount === steps.length;
+  const currentIndex = steps.findIndex((step) => !step.done);
+  const ownerIsViewer = (owner: KickoffStep['owner']): boolean =>
+    owner === 'client' ? lens === 'client' : lens === 'admin';
+  const ownerLabel = (owner: KickoffStep['owner']): string => {
+    if (ownerIsViewer(owner)) return 'You';
+    return owner === 'client' ? clientCompanyName : 'Balo';
+  };
 
   const handleMarkInvoiceSent = useCallback((): void => {
     if (pending) return;
@@ -309,44 +293,46 @@ export function KickoffBoard({
     <div className="flex flex-col gap-4">
       {approved && <KickoffCelebration />}
 
-      <RequestCard className={cn(mobile ? 'p-4' : 'p-6')}>
-        <div className="mb-1 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="bg-primary/10 border-primary/20 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border">
-              <ClipboardCheck className="text-primary h-3.5 w-3.5" aria-hidden="true" />
-            </span>
-            <h3 className="text-foreground text-sm font-semibold">What&apos;s blocking kickoff</h3>
-          </div>
+      <RequestCard className={mobile ? 'p-4' : 'p-[22px]'}>
+        <div className="mb-4.5 flex items-baseline justify-between gap-3">
+          <h3 className="text-foreground text-[15px] font-semibold">Before kickoff</h3>
           <span
             className={cn(
-              'shrink-0 text-xs font-semibold tabular-nums',
-              doneCount === steps.length ? 'text-success' : 'text-muted-foreground'
+              'shrink-0 text-[12.5px] font-medium tabular-nums',
+              allDone ? 'text-success-strong' : 'text-muted-foreground'
             )}
           >
-            {doneCount}/{steps.length} ready
+            {allDone ? 'All done' : `${doneCount} of ${steps.length} done`}
           </span>
         </div>
-        <p className="text-muted-foreground mb-4 text-[12.5px] leading-relaxed">
-          Everyone sees the same checklist — so no one&apos;s left wondering who they&apos;re
-          waiting on.
-        </p>
 
-        <ul className="flex flex-col gap-2.5">
-          {steps.map((step) => (
-            <KickoffRowItem
-              key={step.key}
-              step={step}
-              lens={lens}
-              expertName={expertName}
-              pending={pending}
-              billing={billing}
-              requestId={requestId}
-              relationshipId={acceptedRelationshipId}
-              onMarkInvoiceSent={handleMarkInvoiceSent}
-              onApprove={handleApprove}
-            />
-          ))}
-        </ul>
+        <ol className="flex flex-col">
+          {steps.map((step, index) => {
+            let state: StepState = 'future';
+            if (step.done) state = 'done';
+            else if (index === currentIndex) state = 'current';
+            let connector: StepConnector = null;
+            if (index < steps.length - 1) connector = step.done ? 'done' : 'pending';
+            return (
+              <KickoffThreadStep
+                key={step.key}
+                step={step}
+                state={state}
+                owner={ownerLabel(step.owner)}
+                ownerIsViewer={ownerIsViewer(step.owner)}
+                connector={connector}
+                lens={lens}
+                expertName={expertName}
+                pending={pending}
+                billing={billing}
+                requestId={requestId}
+                relationshipId={acceptedRelationshipId}
+                onMarkInvoiceSent={handleMarkInvoiceSent}
+                onApprove={handleApprove}
+              />
+            );
+          })}
+        </ol>
       </RequestCard>
     </div>
   );
@@ -369,8 +355,17 @@ function KickoffCelebration(): React.JSX.Element {
   );
 }
 
-interface KickoffRowItemProps {
+type StepState = 'done' | 'current' | 'future';
+/** The line joining a step to the next: solid once the step is done, neutral until then. */
+type StepConnector = 'done' | 'pending' | null;
+
+interface KickoffThreadStepProps {
   step: KickoffStep;
+  state: StepState;
+  owner: string;
+  /** The owner is the viewer's own side — "You" takes the primary colour on the current step. */
+  ownerIsViewer: boolean;
+  connector: StepConnector;
   lens: KickoffLens;
   expertName: string;
   pending: boolean;
@@ -381,14 +376,48 @@ interface KickoffRowItemProps {
   onApprove: () => void;
 }
 
+/** The step's circular node: a check when done, a clock when current, hollow when future. */
+function StepNode({ state }: Readonly<{ state: StepState }>): React.JSX.Element {
+  if (state === 'done') {
+    return (
+      <span
+        className="bg-success text-success-foreground flex size-6 shrink-0 items-center justify-center rounded-full"
+        aria-hidden="true"
+      >
+        <Check className="size-[13px]" />
+      </span>
+    );
+  }
+  if (state === 'current') {
+    return (
+      <span
+        className="border-primary bg-primary/10 text-primary flex size-6 shrink-0 items-center justify-center rounded-full border-2"
+        aria-hidden="true"
+      >
+        <Clock className="size-3" />
+      </span>
+    );
+  }
+  return (
+    <span
+      className="border-muted-foreground/40 flex size-6 shrink-0 rounded-full border-[1.5px]"
+      aria-hidden="true"
+    />
+  );
+}
+
 /**
- * One checklist row. Renders the status badge, the step icon, the label + "You"
- * pill, the sub-copy, and the trailing affordance. The client's own billing row
- * swaps the generic affordance for the BAL-323 capture flow (form / member notice /
- * view-edit).
+ * One step of the "Before kickoff" thread: node + connector on the left; label, owner and
+ * sub-copy with an optional trailing affordance on the right. The client's own billing step
+ * swaps in the BAL-323 capture flow (add / view-edit); the admin's current step carries its
+ * action button. Every other step shows no affordance.
  */
-function KickoffRowItem({
+function KickoffThreadStep({
   step,
+  state,
+  owner,
+  ownerIsViewer,
+  connector,
   lens,
   expertName,
   pending,
@@ -397,140 +426,77 @@ function KickoffRowItem({
   relationshipId,
   onMarkInvoiceSent,
   onApprove,
-}: Readonly<KickoffRowItemProps>): React.JSX.Element {
-  const RowIcon = step.icon;
-  const mine = step.owner === lens;
-  const adminAction = lens === 'admin' ? adminActionFor(step.key) : null;
-  // The row the viewer can act on right now gets the emphasis.
-  const highlight = !step.done && step.ready && (mine || adminAction !== null);
-  // The client's billing row (client lens only) owns the capture flow.
-  const isClientBillingRow = lens === 'client' && step.key === 'billing' && billing !== null;
+}: Readonly<KickoffThreadStepProps>): React.JSX.Element {
+  const future = state === 'future';
+  const adminAction = lens === 'admin' && state === 'current' ? adminActionFor(step.key) : null;
+  const showBilling =
+    lens === 'client' && step.key === 'billing' && billing !== null && state !== 'future';
+  let ownerClass = 'text-muted-foreground';
+  if (state === 'current' && ownerIsViewer) ownerClass = 'text-primary';
 
   return (
     <li
-      // `aria-current="step"` ties the visual emphasis of the viewer's actionable
-      // row (ring) to the assistive-tech tree.
-      aria-current={highlight ? 'step' : undefined}
-      className={cn(
-        'flex items-center gap-3 rounded-xl border p-3.5',
-        highlight
-          ? 'border-primary/40 bg-primary/5 ring-primary/10 ring-2'
-          : 'border-border bg-card'
-      )}
+      aria-current={state === 'current' ? 'step' : undefined}
+      data-step-state={state}
+      className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-3"
     >
-      <StatusBadge done={step.done} />
-
-      <span
-        className="bg-muted/60 border-border flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border"
-        aria-hidden="true"
-      >
-        <RowIcon className="text-muted-foreground h-3.5 w-3.5" />
-      </span>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-foreground text-sm font-medium">{step.label}</p>
-          {mine && (
-            <span className="text-primary bg-primary/10 border-primary/20 inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
-              You
-            </span>
-          )}
-        </div>
-        <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-relaxed">{step.sub}</p>
+      <div className="flex flex-col items-center">
+        <StepNode state={state} />
+        {connector !== null && (
+          <span
+            aria-hidden="true"
+            className={cn(
+              'my-1 min-h-3.5 w-0.5 flex-1',
+              connector === 'done' ? 'bg-success/35' : 'bg-border'
+            )}
+          />
+        )}
       </div>
 
-      {isClientBillingRow && billing !== null ? (
-        <ClientBillingAffordance
-          done={step.done}
-          canManage={billing.canManage}
-          requestId={requestId}
-          relationshipId={relationshipId}
-          details={billing.details}
-        />
-      ) : (
-        <RowAffordance
-          step={step}
-          mine={mine}
-          adminAction={adminAction}
-          expertName={expertName}
-          pending={pending}
-          onAction={adminAction?.handler === 'markInvoiceSent' ? onMarkInvoiceSent : onApprove}
-        />
-      )}
+      <div className={cn('min-w-0', connector !== null && 'pb-4.5')}>
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
+              <p
+                className={cn(
+                  'text-sm font-medium',
+                  future ? 'text-muted-foreground' : 'text-foreground'
+                )}
+              >
+                {step.label}
+              </p>
+              <span className={cn('text-xs', ownerClass)}>{owner}</span>
+            </div>
+            <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-normal">{step.sub}</p>
+          </div>
+
+          {showBilling && (
+            <ClientBillingAffordance
+              done={step.done}
+              canManage={billing.canManage}
+              requestId={requestId}
+              relationshipId={relationshipId}
+              details={billing.details}
+            />
+          )}
+          {adminAction !== null && (
+            <KickoffActionButton
+              label={adminAction.label}
+              onClick={adminAction.handler === 'markInvoiceSent' ? onMarkInvoiceSent : onApprove}
+              disabled={pending}
+              spinning={pending}
+              title={adminHint(adminAction, step, expertName)}
+              ariaLabel={`${adminAction.label} — ${adminHint(adminAction, step, expertName)}`}
+            />
+          )}
+        </div>
+      </div>
     </li>
   );
 }
 
-/** The leading circular status badge — a check on success, a clock when pending. */
-function StatusBadge({ done }: Readonly<{ done: boolean }>): React.JSX.Element {
-  if (done) {
-    return (
-      <span
-        className="from-success to-success/80 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br"
-        aria-hidden="true"
-      >
-        <Check className="h-3.5 w-3.5 text-white" />
-      </span>
-    );
-  }
-  return (
-    <span
-      className="bg-muted border-border flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2"
-      aria-hidden="true"
-    >
-      <Clock className="text-muted-foreground h-3.5 w-3.5" />
-    </span>
-  );
-}
-
-interface RowAffordanceProps {
-  step: KickoffStep;
-  mine: boolean;
-  adminAction: AdminStepAction | null;
-  expertName: string;
-  pending: boolean;
-  onAction: () => void;
-}
-
-/**
- * The trailing affordance for a row, selected via early returns: done → "Done"; the
- * admin's step action → a button (disabled until the step is ready); the client's own
- * ready payment → "To pay" (paid via the invoice, confirmed by Balo); else "Waiting".
- */
-function RowAffordance({
-  step,
-  mine,
-  adminAction,
-  expertName,
-  pending,
-  onAction,
-}: Readonly<RowAffordanceProps>): React.JSX.Element {
-  if (step.done) {
-    return <span className="text-success shrink-0 text-xs font-semibold">Done</span>;
-  }
-
-  if (adminAction !== null) {
-    const hint =
-      step.ready && adminAction.handler === 'approve'
-        ? `Kick off the project with ${expertName}`
-        : step.sub;
-    return (
-      <KickoffActionButton
-        label={adminAction.label}
-        onClick={onAction}
-        disabled={pending || !step.ready}
-        spinning={pending}
-        title={hint}
-        ariaLabel={`${adminAction.label} — ${hint}`}
-      />
-    );
-  }
-
-  if (mine && step.ready) {
-    return <span className="text-warning shrink-0 text-xs font-semibold">To pay</span>;
-  }
-
-  return <span className="text-warning shrink-0 text-xs font-semibold">Waiting</span>;
+function adminHint(action: AdminStepAction, step: KickoffStep, expertName: string): string {
+  return action.handler === 'approve' ? `Kick off the project with ${expertName}` : step.sub;
 }
 
 interface KickoffActionButtonProps {
@@ -558,7 +524,7 @@ function KickoffActionButton({
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}
-      className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-md px-3.5 text-[13px] font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3.5 text-[13px] font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-9"
     >
       {spinning && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
       {label}

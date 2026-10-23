@@ -5,9 +5,11 @@ import {
   Clock,
   FileText,
   MessageSquare,
+  PartyPopper,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
+import { deliveryWorkspaceHref } from '@/lib/engagement/delivery-workspace-href';
 import type { ProjectRequestStatus } from './resolve-request-lens';
 import {
   requestStatusRank,
@@ -25,7 +27,9 @@ import {
  * Pure + client-safe. `reply` (focus composer), `call` (mock action), `build`
  * (open the proposal composer — BAL-288 / A6.2), `view` (open the proposal
  * surface) and `accept` (open the client review with the accept confirmation
- * up) are wired; `stub` renders disabled (workspace/billing CTAs).
+ * up) are wired. `link` is a navigation (the delivery workspace) carrying its own `href`; a
+ * button whose handler is absent renders nothing. `event` is a one-line timeline marker with no
+ * card or buttons.
  *
  * KEYING (BAL-272): the pre-decision proposal cells (`eoi_submitted` /
  * `proposal_requested` / `proposal_submitted`) key off THIS THREAD's
@@ -36,16 +40,19 @@ import {
  * `stage` carries the per-thread outcome).
  */
 
-export type ThreadNudgeAction = 'reply' | 'call' | 'build' | 'view' | 'accept' | 'stub';
+export type ThreadNudgeAction = 'reply' | 'call' | 'build' | 'view' | 'accept';
 
-export interface ThreadNudgeButton {
+interface ThreadNudgeButtonBase {
   label: string;
   icon: LucideIcon;
-  action: ThreadNudgeAction;
 }
 
+export type ThreadNudgeButton =
+  | (ThreadNudgeButtonBase & { action: ThreadNudgeAction })
+  | (ThreadNudgeButtonBase & { action: 'link'; href: string });
+
 export interface ThreadNudgeContent {
-  variant: 'action' | 'waiting' | 'commit' | 'done';
+  variant: 'action' | 'waiting' | 'commit' | 'done' | 'event';
   icon: LucideIcon;
   headline: string;
   sub?: string;
@@ -148,9 +155,24 @@ function clientEoiNudge(
   };
 }
 
+/** The "open the workspace" link button — absent until the delivery engagement exists. */
+function workspaceLink(
+  label: string,
+  deliveryEngagementId: string | null
+): ThreadNudgeButton | undefined {
+  if (deliveryEngagementId === null) return undefined;
+  return {
+    label,
+    icon: Briefcase,
+    action: 'link',
+    href: deliveryWorkspaceHref(deliveryEngagementId),
+  };
+}
+
 function clientNudge(
   status: ProjectRequestStatus,
-  thread: ConversationThreadView
+  thread: ConversationThreadView,
+  deliveryEngagementId: string | null
 ): ThreadNudgeContent | null {
   const name = thread.expertFirstName;
   const preview = thread.latestMessagePreview ?? undefined;
@@ -160,9 +182,9 @@ function clientNudge(
 
   // BAL-540 — the request closed. Checked BEFORE the decided-rank branch below: `closed`
   // outranks `accepted` (requestStatusRank), so without this arm a closed request whose
-  // thread was `won` before the close would fall into the "{name} is your expert" cell with
-  // a live "Open project workspace" CTA — exactly the pre-decision-nudge fail-open this
-  // ticket's reader sweep exists to close.
+  // thread was `won` before the close would fall into the won cells below — the `accepted`
+  // event marker or the `kickoff_approved` "Open project workspace" link — exactly the
+  // pre-decision-nudge fail-open this ticket's reader sweep exists to close.
   if (status === 'closed') {
     return {
       variant: 'done',
@@ -184,12 +206,19 @@ function clientNudge(
         sub: "They've been notified graciously. The conversation stays here for your records.",
       };
     }
+    if (status === 'accepted') {
+      return {
+        variant: 'event',
+        icon: PartyPopper,
+        headline: `You chose ${name} for this project`,
+      };
+    }
     return {
       variant: 'done',
       icon: Zap,
-      headline: `${name} is your expert`,
-      sub: expertPreview,
-      primary: { label: 'Open project workspace', icon: Briefcase, action: 'stub' },
+      headline: 'Your project is underway',
+      sub: `Milestones, files and updates from ${name} live in the workspace.`,
+      primary: workspaceLink('Open project workspace', deliveryEngagementId),
     };
   }
 
@@ -245,7 +274,8 @@ function reviseProposalNudge(changeRequest: ThreadChangeRequestView): ThreadNudg
 function expertNudge(
   status: ProjectRequestStatus,
   thread: ConversationThreadView,
-  clientCompanyName: string | null
+  clientCompanyName: string | null,
+  deliveryEngagementId: string | null
 ): ThreadNudgeContent | null {
   const clientParty = clientPartyLabel(clientCompanyName);
 
@@ -296,7 +326,7 @@ function expertNudge(
       icon: Zap,
       headline: 'Kicked off — time to deliver',
       sub: 'Milestones are in the workspace. Mark them done as you go.',
-      primary: { label: 'Open workspace', icon: Briefcase, action: 'stub' },
+      primary: workspaceLink('Open workspace', deliveryEngagementId),
     };
   }
 
@@ -373,14 +403,16 @@ function expertNudge(
  * `clientCompanyName` is the CLIENT PARTY's display name, used only by the EXPERT lens (the
  * client already knows who they are). Optional so a caller that genuinely has no company name
  * degrades to the generic `'the client'`; the shipped call site always passes
- * `view.companyName`.
+ * `view.companyName`. `deliveryEngagementId` is the BAL-331 delivery engagement (null until
+ * kickoff approves); it feeds the workspace link on the `kickoff_approved` cells.
  */
 export function threadNudgeFor(
   lens: 'client' | 'expert',
   requestStatus: ProjectRequestStatus,
   thread: ConversationThreadView,
-  clientCompanyName: string | null = null
+  clientCompanyName: string | null = null,
+  deliveryEngagementId: string | null = null
 ): ThreadNudgeContent | null {
-  if (lens === 'client') return clientNudge(requestStatus, thread);
-  return expertNudge(requestStatus, thread, clientCompanyName);
+  if (lens === 'client') return clientNudge(requestStatus, thread, deliveryEngagementId);
+  return expertNudge(requestStatus, thread, clientCompanyName, deliveryEngagementId);
 }

@@ -12,6 +12,8 @@ interface AdminKickoffBillingPanelProps {
   acceptedRelationshipId: string;
   /** The client-billing kickoff gate — drives the reminder affordance visibility. */
   clientBillingConfirmed: boolean;
+  /** The request is `kickoff_approved` — the settled note credits approval, not a confirmation. */
+  approved: boolean;
 }
 
 /** Human label for a billing cadence. */
@@ -57,6 +59,7 @@ export function AdminKickoffBillingPanel({
   requestId,
   acceptedRelationshipId,
   clientBillingConfirmed,
+  approved,
 }: Readonly<AdminKickoffBillingPanelProps>): React.JSX.Element {
   return (
     <RequestCard className="p-6">
@@ -70,6 +73,7 @@ export function AdminKickoffBillingPanel({
       <BillingSection
         billing={view?.billing ?? null}
         clientBillingConfirmed={clientBillingConfirmed}
+        approved={approved}
         requestId={requestId}
         acceptedRelationshipId={acceptedRelationshipId}
       />
@@ -84,6 +88,7 @@ export function AdminKickoffBillingPanel({
 interface BillingSectionProps {
   billing: NonNullable<AdminKickoffBillingView['billing']> | null;
   clientBillingConfirmed: boolean;
+  approved: boolean;
   requestId: string;
   acceptedRelationshipId: string;
 }
@@ -92,6 +97,7 @@ interface BillingSectionProps {
 function BillingSection({
   billing,
   clientBillingConfirmed,
+  approved,
   requestId,
   acceptedRelationshipId,
 }: Readonly<BillingSectionProps>): React.JSX.Element {
@@ -110,6 +116,7 @@ function BillingSection({
       {billing === null ? (
         <BillingEmptyState
           clientBillingConfirmed={clientBillingConfirmed}
+          approved={approved}
           requestId={requestId}
           acceptedRelationshipId={acceptedRelationshipId}
         />
@@ -132,6 +139,7 @@ function BillingSection({
 
 interface BillingEmptyStateProps {
   clientBillingConfirmed: boolean;
+  approved: boolean;
   requestId: string;
   acceptedRelationshipId: string;
 }
@@ -144,13 +152,15 @@ interface BillingEmptyStateProps {
  */
 function BillingEmptyState({
   clientBillingConfirmed,
+  approved,
   requestId,
   acceptedRelationshipId,
 }: Readonly<BillingEmptyStateProps>): React.JSX.Element {
   if (clientBillingConfirmed) {
     return (
       <p className="text-muted-foreground text-[12.5px] leading-relaxed">
-        Billing gate confirmed — no company billing record is on file.
+        {approved ? 'Kickoff approved' : 'Billing gate confirmed'} — no company billing record is on
+        file.
       </p>
     );
   }

@@ -113,7 +113,7 @@ export function MobileActionRail({
             proposalHandler === null ? 'opacity-60' : 'active:opacity-90',
             proposalCta.kind === 'view' || proposalCta.quiet
               ? 'border-primary/30 bg-primary/5 text-primary border'
-              : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'
+              : 'bg-primary text-primary-foreground'
           )}
         >
           <FileText className="h-4 w-4" aria-hidden="true" />

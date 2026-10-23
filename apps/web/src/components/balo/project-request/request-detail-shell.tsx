@@ -524,6 +524,7 @@ export function RequestDetailShell({
                     requestId={view.id}
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
                     clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                    approved={view.kickoff.approved}
                   />
                 )}
                 {showHealthPanel && (
@@ -617,6 +618,7 @@ export function RequestDetailShell({
                   clientCompanyName={view.companyName}
                   viewerEmailDomain={viewerEmailDomain}
                   canDecline={canDecline}
+                  deliveryEngagementId={deliveryEngagementId}
                 />
               </div>
               <div className="hidden space-y-5 lg:block">

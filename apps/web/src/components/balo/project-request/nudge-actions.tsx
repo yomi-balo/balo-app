@@ -46,7 +46,7 @@ interface NudgeActionsProps {
    * client/admin lenses, which never reach that wired action.
    */
   viewerRelationshipId?: string | null;
-  /** Enables the `pass` CTA (its confirm dialog's inputs); `null` leaves it disabled. */
+  /** Enables the `pass` CTA (its confirm dialog's inputs); `null` renders no pass button. */
   passOn?: NudgePassContext | null;
   primary?: NudgeButtonDescriptor;
   secondary?: NudgeButtonDescriptor;
@@ -55,7 +55,7 @@ interface NudgeActionsProps {
 /**
  * The A2-wired CTAs that live in {@link NudgeActions}, keyed by `${lens}:${status}`.
  * Each names which presentational button slot ('primary'/'secondary') is live and
- * the behavior. Any CTA NOT listed here renders DISABLED (its owning slice wires
+ * the behavior. Any CTA NOT listed here renders NO button (its owning slice wires
  * it later). This keeps `nudgeFor` copy presentational while A2 only lights up the
  * triage/invite/book CTAs it owns.
  */
@@ -80,15 +80,15 @@ const WIRED: Record<string, { primary?: WiredAction; secondary?: WiredAction }> 
 };
 
 const PRIMARY_CLASS =
-  'from-primary inline-flex min-h-9 items-center gap-2 rounded-[10px] bg-gradient-to-r to-violet-600 px-4 text-[13.5px] font-semibold text-white transition-opacity dark:to-violet-500';
+  'bg-primary text-primary-foreground inline-flex min-h-11 items-center gap-2 rounded-[10px] px-4 text-[13.5px] font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none lg:min-h-9 focus-visible:ring-ring';
 const SECONDARY_CLASS =
-  'border-border bg-card text-muted-foreground hover:text-foreground inline-flex min-h-9 items-center gap-1.5 rounded-[10px] border px-3.5 text-[13px] font-medium transition-colors';
+  'border-border bg-card text-muted-foreground hover:text-foreground inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border px-3.5 text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none lg:min-h-9 focus-visible:ring-ring';
 
 /**
  * Interactive CTA island for the nudge bar. Renders the primary/secondary buttons
- * the presentational `NudgeBar` would otherwise draw disabled, wiring the A2 CTAs
+ * the presentational `NudgeBar` would otherwise draw inert, wiring the A2 CTAs
  * (invite, request-exploratory, book-exploratory) to Server Actions with toasts +
- * analytics. Unwired CTAs stay disabled.
+ * analytics. A CTA with no handler renders no button; the button row renders only when at least one does.
  */
 export function NudgeActions({
   lens,
@@ -168,37 +168,37 @@ export function NudgeActions({
   const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
   const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;
 
+  const showPrimary = primary !== undefined && PrimaryIcon !== null && primaryHandler !== undefined;
+  const showSecondary =
+    secondary !== undefined && SecondaryIcon !== null && secondaryHandler !== undefined;
+
   return (
-    <div className="mt-3.5 ml-8 flex flex-wrap items-center gap-2.5">
-      {primary && PrimaryIcon && (
-        <button
-          type="button"
-          disabled={primaryHandler === undefined || isPending || primarySharing}
-          onClick={primaryHandler}
-          className={cn(
-            PRIMARY_CLASS,
-            primaryHandler === undefined && 'opacity-60',
-            (isPending || primarySharing) && 'opacity-70'
+    <>
+      {(showPrimary || showSecondary) && (
+        <div className="mt-3.5 ml-8 flex flex-wrap items-center gap-2.5">
+          {showPrimary && (
+            <button
+              type="button"
+              disabled={isPending || primarySharing}
+              onClick={primaryHandler}
+              className={cn(PRIMARY_CLASS, (isPending || primarySharing) && 'opacity-70')}
+            >
+              <PrimaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              {primarySharing ? 'Sharing…' : primary.label}
+            </button>
           )}
-        >
-          <PrimaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          {primarySharing ? 'Sharing…' : primary.label}
-        </button>
-      )}
-      {secondary && SecondaryIcon && (
-        <button
-          type="button"
-          disabled={secondaryHandler === undefined || isPending || secondarySharing}
-          onClick={secondaryHandler}
-          className={cn(
-            SECONDARY_CLASS,
-            secondaryHandler === undefined && 'opacity-60',
-            (isPending || secondarySharing) && 'opacity-70'
+          {showSecondary && (
+            <button
+              type="button"
+              disabled={isPending || secondarySharing}
+              onClick={secondaryHandler}
+              className={cn(SECONDARY_CLASS, (isPending || secondarySharing) && 'opacity-70')}
+            >
+              <SecondaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              {secondarySharing ? 'Sharing…' : secondary.label}
+            </button>
           )}
-        >
-          <SecondaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          {secondarySharing ? 'Sharing…' : secondary.label}
-        </button>
+        </div>
       )}
 
       {(primaryAction === 'invite' || secondaryAction === 'invite') && (
@@ -219,6 +219,6 @@ export function NudgeActions({
           surface="nudge"
         />
       )}
-    </div>
+    </>
   );
 }

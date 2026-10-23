@@ -80,6 +80,14 @@ function renderTypingComposer(
 }
 
 describe('MessageComposer', () => {
+  it('styles the send button as solid primary, not a gradient', () => {
+    renderComposer();
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send.className).toContain('bg-primary');
+    expect(send.className).toContain('text-primary-foreground');
+    expect(send.className).not.toContain('bg-gradient-to-r');
+  });
+
   it('labels the textarea for the active thread', () => {
     renderComposer();
     expect(screen.getByRole('textbox', { name: 'Message Priya' })).toHaveAttribute(

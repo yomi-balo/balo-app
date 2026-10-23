@@ -55,16 +55,59 @@ describe('ThreadNudge', () => {
     expect(onReply).toHaveBeenCalled();
   });
 
-  it('renders stub CTAs disabled', () => {
+  it('renders a link primary as a navigation with the solid primary class', () => {
     renderNudge(
       nudge({
-        variant: 'commit',
-        primary: { label: "Accept Priya's proposal", icon: Calendar, action: 'stub' },
+        variant: 'done',
+        primary: {
+          label: 'Open project workspace',
+          icon: Calendar,
+          action: 'link',
+          href: '/engagements/eng-1?from=request_detail',
+        },
         secondary: undefined,
       })
     );
-    expect(screen.getByText('Your next step')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: "Accept Priya's proposal" })).toBeDisabled();
+    const link = screen.getByRole('link', { name: 'Open project workspace' });
+    expect(link).toHaveAttribute('href', '/engagements/eng-1?from=request_detail');
+    expect(link.className).toContain('bg-primary');
+    expect(link.className).toContain('text-primary-foreground');
+    expect(link.className).not.toContain('bg-gradient-to-r');
+  });
+
+  it('renders the event variant as a status marker with no eyebrow, button or link', () => {
+    renderNudge(
+      nudge({
+        variant: 'event',
+        headline: 'You chose Priya for this project',
+        sub: undefined,
+        primary: undefined,
+        secondary: undefined,
+      })
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('You chose Priya for this project');
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+    expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
+    expect(screen.queryByText('Your next step')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('renders no action row when the only button has no handler', () => {
+    const { container } = render(
+      <ThreadNudge
+        nudge={nudge({
+          variant: 'commit',
+          primary: { label: "Accept Priya's proposal", icon: Calendar, action: 'accept' },
+          secondary: undefined,
+        })}
+        callPending={false}
+        onReply={vi.fn()}
+        onCall={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(container.querySelector('.mt-2\\.5')).toBeNull();
   });
 
   it('wires the build primary to onBuild when provided (A6.2)', async () => {
@@ -84,14 +127,14 @@ describe('ThreadNudge', () => {
     expect(onBuild).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the build primary disabled when no onBuild handler is provided', () => {
+  it('renders no build button when no onBuild handler is provided', () => {
     renderNudge(
       nudge({
         primary: { label: 'Build proposal', icon: Calendar, action: 'build' },
         secondary: undefined,
       })
     );
-    expect(screen.getByRole('button', { name: 'Build proposal' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Build proposal' })).not.toBeInTheDocument();
   });
 
   it('wires the accept primary and view secondary to onAccept/onView', async () => {
@@ -118,7 +161,7 @@ describe('ThreadNudge', () => {
     expect(onView).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the accept primary disabled when no onAccept handler is provided', () => {
+  it('renders no accept button when no onAccept handler is provided', () => {
     renderNudge(
       nudge({
         variant: 'commit',
@@ -126,7 +169,9 @@ describe('ThreadNudge', () => {
         secondary: undefined,
       })
     );
-    expect(screen.getByRole('button', { name: "Accept Priya's proposal" })).toBeDisabled();
+    expect(
+      screen.queryByRole('button', { name: "Accept Priya's proposal" })
+    ).not.toBeInTheDocument();
   });
 
   it('uses the waiting/done eyebrows for those variants', () => {

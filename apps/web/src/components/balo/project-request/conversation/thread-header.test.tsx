@@ -86,6 +86,8 @@ describe('ThreadHeader', () => {
     const proposal = screen.getByRole('button', { name: 'Request proposal' });
     expect(proposal).toBeEnabled();
     expect(proposal).not.toHaveAttribute('aria-disabled');
+    expect(proposal.className).toContain('text-primary-foreground');
+    expect(proposal.className).not.toContain('bg-gradient-to-r');
     await user.click(proposal);
     expect(onRequestProposal).toHaveBeenCalledTimes(1);
   });
@@ -114,6 +116,8 @@ describe('ThreadHeader', () => {
     const proposal = screen.getByRole('button', { name: 'Build proposal' });
     expect(proposal).toBeEnabled();
     expect(proposal).not.toHaveAttribute('aria-disabled');
+    expect(proposal.className).toContain('text-primary-foreground');
+    expect(proposal.className).not.toContain('bg-gradient-to-r');
     await user.click(proposal);
     expect(onBuildProposal).toHaveBeenCalledTimes(1);
   });

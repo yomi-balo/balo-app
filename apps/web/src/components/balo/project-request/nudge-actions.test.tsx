@@ -56,7 +56,7 @@ describe('NudgeActions — A6.2 build-proposal CTA', () => {
     expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${RELATIONSHIP_ID}`);
   });
 
-  it('renders the CTA disabled (no navigation) when no relationship id is provided', () => {
+  it('renders no CTA when no relationship id is provided', () => {
     render(
       <NudgeActions
         lens="expert"
@@ -65,10 +65,37 @@ describe('NudgeActions — A6.2 build-proposal CTA', () => {
         primary={BUILD_PRIMARY}
       />
     );
-    const cta = screen.getByRole('button', { name: /Build proposal/i });
-    expect(cta).toBeDisabled();
-    fireEvent.click(cta);
+    expect(screen.queryByRole('button', { name: /Build proposal/i })).toBeNull();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('renders no button row when the only CTA is unwired', () => {
+    const { container } = render(
+      <NudgeActions
+        lens="expert"
+        status="proposal_requested"
+        requestId={REQUEST_ID}
+        primary={BUILD_PRIMARY}
+      />
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(container.querySelector('.mt-3\\.5')).toBeNull();
+  });
+
+  it('styles the wired primary as solid primary, not a gradient', () => {
+    render(
+      <NudgeActions
+        lens="expert"
+        status="proposal_requested"
+        requestId={REQUEST_ID}
+        viewerRelationshipId={RELATIONSHIP_ID}
+        primary={BUILD_PRIMARY}
+      />
+    );
+    const cta = screen.getByRole('button', { name: /Build proposal/i });
+    expect(cta.className).toContain('bg-primary');
+    expect(cta.className).toContain('text-primary-foreground');
+    expect(cta.className).not.toContain('bg-gradient-to-r');
   });
 
   it('does not wire build-proposal for a non-matching cell (client lens)', () => {
@@ -81,8 +108,8 @@ describe('NudgeActions — A6.2 build-proposal CTA', () => {
         primary={BUILD_PRIMARY}
       />
     );
-    // No WIRED['client:proposal_requested'] entry → the CTA renders disabled.
-    expect(screen.getByRole('button', { name: /Build proposal/i })).toBeDisabled();
+    // No WIRED['client:proposal_requested'] entry → no CTA renders.
+    expect(screen.queryByRole('button', { name: /Build proposal/i })).toBeNull();
     expect(mockPush).not.toHaveBeenCalled();
   });
 
@@ -161,7 +188,7 @@ describe('NudgeActions — direct-request choice CTAs (BAL-604)', () => {
     expect(screen.queryByRole('button', { name: 'Propose times' })).not.toBeInTheDocument();
   });
 
-  it('"Propose times" stays disabled when no stage registered a handler', () => {
+  it('"Propose times" renders no button when no stage registered a handler', () => {
     render(
       <ExpertCallBridgeProvider>
         <NudgeActions
@@ -172,7 +199,7 @@ describe('NudgeActions — direct-request choice CTAs (BAL-604)', () => {
         />
       </ExpertCallBridgeProvider>
     );
-    expect(screen.getByRole('button', { name: 'Propose times' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Propose times' })).toBeNull();
   });
 
   it('"Pass on this project" opens the pass confirm dialog', async () => {
@@ -209,10 +236,10 @@ describe('NudgeActions — direct-request choice CTAs (BAL-604)', () => {
     );
   });
 
-  it('"Pass on this project" is disabled without a passable track', () => {
+  it('"Pass on this project" renders no button without a passable track', () => {
     render(
       <NudgeActions lens="expert" status="eoi_submitted" requestId={REQUEST_ID} secondary={PASS} />
     );
-    expect(screen.getByRole('button', { name: 'Pass on this project' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Pass on this project' })).toBeNull();
   });
 });

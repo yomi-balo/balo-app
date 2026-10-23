@@ -230,6 +230,21 @@ function findAllOfType(node: unknown, type: React.ElementType): React.ReactEleme
   return [...here, ...findAllOfType(el.props?.children, type)];
 }
 
+/** Walk a server component's returned element tree for the `ConversationStage` element. */
+function findStage(node: unknown): React.ReactElement<{ deliveryEngagementId?: string }> | null {
+  if (node === null || node === undefined || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findStage(child);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  const el = node as React.ReactElement<{ children?: unknown; deliveryEngagementId?: string }>;
+  if (el.type === ConversationStage) return el;
+  return findStage(el.props?.children);
+}
+
 describe('RequestDetailShell — Lens × Status matrix', () => {
   it('client before Phase 2 renders the full hero (no conversation)', () => {
     render(<RequestDetailShell view={view({ status: 'requested' })} ctx={ctx()} />);
@@ -265,22 +280,19 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
       ctx: ctx(),
       conversation: conversation(),
     });
-    const findStage = (node: unknown): React.ReactElement | null => {
-      if (node === null || node === undefined || typeof node !== 'object') return null;
-      if (Array.isArray(node)) {
-        for (const child of node) {
-          const found = findStage(child);
-          if (found !== null) return found;
-        }
-        return null;
-      }
-      const el = node as React.ReactElement<{ children?: unknown }>;
-      if (el.type === ConversationStage) return el;
-      return findStage(el.props?.children);
-    };
     const stage = findStage(element);
     expect(stage).not.toBeNull();
     expect(stage?.key).toBe('req-1');
+  });
+
+  it('forwards deliveryEngagementId to the conversation stage', () => {
+    const element = RequestDetailShell({
+      view: view({ status: 'kickoff_approved' }),
+      ctx: ctx(),
+      conversation: conversation(),
+      deliveryEngagementId: 'eng-1',
+    });
+    expect(findStage(element)?.props.deliveryEngagementId).toBe('eng-1');
   });
 
   it('keys every EoiEntry card by request id (no EOI state bleed across /projects/A → /projects/B)', () => {
@@ -599,7 +611,7 @@ describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
         ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false, canSeeContact: true })}
       />
     );
-    expect(screen.getByText("What's blocking kickoff")).toBeInTheDocument();
+    expect(screen.getByText('Before kickoff')).toBeInTheDocument();
   });
 
   it('renders the KickoffBoard for the client participant (Phase-2 right column)', () => {
@@ -611,7 +623,7 @@ describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
       />
     );
     // Desktop + mobile-sheet both mount the board → at least one heading is present.
-    expect(screen.getAllByText("What's blocking kickoff").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Before kickoff').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders the KickoffBoard for the winning expert participant (Phase-2 right column)', () => {
@@ -631,12 +643,12 @@ describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
         conversation={conversation()}
       />
     );
-    expect(screen.getAllByText("What's blocking kickoff").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Before kickoff').length).toBeGreaterThanOrEqual(1);
   });
 
   it('does NOT render the KickoffBoard when kickoff is null (default fixtures)', () => {
     render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
-    expect(screen.queryByText("What's blocking kickoff")).not.toBeInTheDocument();
+    expect(screen.queryByText('Before kickoff')).not.toBeInTheDocument();
   });
 });
 
@@ -1203,6 +1215,20 @@ describe('RequestDetailShell — billing blocked-view analytics (BAL-323)', () =
       />
     );
     expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
+  });
+
+  it('tells the admin billing panel the kickoff is approved', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'kickoff_approved',
+          kickoff: kickoff({ clientBillingConfirmed: true, approved: true }),
+        })}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', canSeeContact: true })}
+      />
+    );
+    expect(screen.getByText(/kickoff approved — no company billing record/i)).toBeInTheDocument();
+    expect(screen.queryByText(/send them a reminder/i)).not.toBeInTheDocument();
   });
 
   it('does not fire once billing is already confirmed', () => {

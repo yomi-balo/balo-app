@@ -145,7 +145,7 @@ export function ThreadHeader({
             onRequestProposal === null ? 'opacity-60' : 'hover:opacity-90',
             headerProposal.quiet
               ? 'border-primary/30 bg-primary/5 text-primary border'
-              : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'
+              : 'bg-primary text-primary-foreground'
           )}
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />
@@ -163,7 +163,7 @@ export function ThreadHeader({
             onBuildProposal === null ? 'opacity-60' : 'hover:opacity-90',
             headerProposal.quiet
               ? 'border-primary/30 bg-primary/5 text-primary border'
-              : 'from-primary bg-gradient-to-r to-violet-600 text-white dark:to-violet-500'
+              : 'bg-primary text-primary-foreground'
           )}
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />

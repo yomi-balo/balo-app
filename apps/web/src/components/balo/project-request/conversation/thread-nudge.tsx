@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
@@ -15,15 +16,14 @@ interface ThreadNudgeProps {
   onCall: () => void;
   /**
    * Handler for the `build` action (expert "Build proposal" — opens the
-   * composer, BAL-288 / A6.2). Undefined (client lens) → the button renders
-   * disabled, as for `stub`.
+   * composer, BAL-288 / A6.2). Undefined (client lens) → no button renders.
    */
   onBuild?: () => void;
   /** Handler for the `view` action — opens the proposal surface. */
   onView?: () => void;
   /**
    * Handler for the `accept` action (client "Accept {name}'s proposal" — opens the
-   * review with the accept confirmation up). Undefined → the button renders disabled.
+   * review with the accept confirmation up). Undefined → no button renders.
    */
   onAccept?: () => void;
 }
@@ -35,17 +35,20 @@ interface ThreadNudgeProps {
  * hard-wired to `NudgeActions`' WIRED map, while this nudge's CTAs are thread-
  * scoped (`reply` focuses the composer, `call` hits the mock seam, `build`
  * opens the proposal composer, `view`/`accept` open the proposal surface,
- * `stub` renders disabled).
+ * `link` navigates). An action whose handler is absent renders no button; the `event` variant
+ * is a one-line timeline marker with no card.
  */
 
-const EYEBROW: Record<ThreadNudgeContent['variant'], string> = {
+type CardVariant = Exclude<ThreadNudgeContent['variant'], 'event'>;
+
+const EYEBROW: Record<CardVariant, string> = {
   action: 'Your next step',
   commit: 'Your next step',
   waiting: 'Waiting',
   done: 'Done',
 };
 
-function accentClasses(variant: ThreadNudgeContent['variant']): {
+function accentClasses(variant: CardVariant): {
   rail: string;
   iconWrap: string;
   icon: string;
@@ -76,7 +79,7 @@ function accentClasses(variant: ThreadNudgeContent['variant']): {
 }
 
 const PRIMARY_CLASS =
-  'from-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[10px] bg-gradient-to-r to-violet-600 px-3.5 text-[13px] font-semibold text-white transition-opacity focus-visible:ring-2 focus-visible:outline-none lg:min-h-9 dark:to-violet-500';
+  'bg-primary text-primary-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[10px] px-3.5 text-[13px] font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none lg:min-h-9';
 const SECONDARY_CLASS =
   'border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border px-3 text-[12.5px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none lg:min-h-9';
 /**
@@ -96,28 +99,59 @@ export function ThreadNudge({
   onView,
   onAccept,
 }: Readonly<ThreadNudgeProps>): React.JSX.Element {
-  const a = accentClasses(nudge.variant);
   const Icon = nudge.icon;
 
-  const handlerFor = (button: ThreadNudgeButton): (() => void) | undefined => {
-    if (button.action === 'reply') return onReply;
-    if (button.action === 'call') return onCall;
-    if (button.action === 'build') return onBuild;
-    if (button.action === 'view') return onView;
-    if (button.action === 'accept') return onAccept;
-    return undefined; // stub — disabled
+  if (nudge.variant === 'event') {
+    return (
+      <output data-nudge="event" className="flex items-center gap-2.5 p-0.5">
+        <span aria-hidden="true" className="bg-border h-px flex-1" />
+        <span className="text-muted-foreground inline-flex items-center gap-1.5 text-[12.5px]">
+          <Icon className="text-success size-3.5" aria-hidden="true" />
+          {nudge.headline}
+        </span>
+        <span aria-hidden="true" className="bg-border h-px flex-1" />
+      </output>
+    );
+  }
+
+  const a = accentClasses(nudge.variant);
+
+  const handlerFor = (
+    button: Exclude<ThreadNudgeButton, { action: 'link' }>
+  ): (() => void) | undefined => {
+    switch (button.action) {
+      case 'reply':
+        return onReply;
+      case 'call':
+        return onCall;
+      case 'build':
+        return onBuild;
+      case 'view':
+        return onView;
+      case 'accept':
+        return onAccept;
+    }
   };
 
-  const renderButton = (button: ThreadNudgeButton, className: string): React.JSX.Element => {
-    const handler = handlerFor(button);
-    const pending = button.action === 'call' && callPending;
+  const renderButton = (button: ThreadNudgeButton, className: string): React.JSX.Element | null => {
     const ButtonIcon = button.icon;
+    if (button.action === 'link') {
+      return (
+        <Link href={button.href} className={className}>
+          <ButtonIcon className="h-3.5 w-3.5" aria-hidden="true" />
+          {button.label}
+        </Link>
+      );
+    }
+    const handler = handlerFor(button);
+    if (handler === undefined) return null;
+    const pending = button.action === 'call' && callPending;
     return (
       <button
         type="button"
         onClick={handler}
-        disabled={handler === undefined || pending}
-        className={cn(className, (handler === undefined || pending) && 'opacity-60')}
+        disabled={pending}
+        className={cn(className, pending && 'opacity-60')}
       >
         {pending ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -128,6 +162,10 @@ export function ThreadNudge({
       </button>
     );
   };
+
+  const primary = nudge.primary ? renderButton(nudge.primary, PRIMARY_CLASS) : null;
+  const secondary = nudge.secondary ? renderButton(nudge.secondary, SECONDARY_CLASS) : null;
+  const tertiary = nudge.tertiary ? renderButton(nudge.tertiary, TERTIARY_CLASS) : null;
 
   return (
     <div className="border-border bg-card flex items-stretch overflow-hidden rounded-xl border">
@@ -148,7 +186,7 @@ export function ThreadNudge({
         </div>
         <p className="text-foreground ml-7 text-sm font-semibold">{nudge.headline}</p>
         {nudge.sub && (
-          <p className="text-muted-foreground mt-0.5 ml-7 truncate text-[13px] leading-relaxed">
+          <p className="text-muted-foreground mt-0.5 ml-7 line-clamp-2 text-[13px] leading-relaxed">
             {nudge.sub}
           </p>
         )}
@@ -158,16 +196,16 @@ export function ThreadNudge({
             that differed for every viewer outside UTC — a hydration mismatch on every page
             load, invisible to a `TZ=UTC` CI. */}
         {nudge.subInstant && (
-          <p className="text-muted-foreground mt-0.5 ml-7 truncate text-[13px] leading-relaxed">
+          <p className="text-muted-foreground mt-0.5 ml-7 line-clamp-2 text-[13px] leading-relaxed">
             <LocalDateTime iso={nudge.subInstant.iso} variant="day-month-time" />
             {nudge.subInstant.suffix}
           </p>
         )}
-        {(nudge.primary || nudge.secondary || nudge.tertiary) && (
+        {(primary || secondary || tertiary) && (
           <div className="mt-2.5 ml-7 flex flex-wrap items-center gap-2">
-            {nudge.primary && renderButton(nudge.primary, PRIMARY_CLASS)}
-            {nudge.secondary && renderButton(nudge.secondary, SECONDARY_CLASS)}
-            {nudge.tertiary && renderButton(nudge.tertiary, TERTIARY_CLASS)}
+            {primary}
+            {secondary}
+            {tertiary}
           </div>
         )}
       </div>

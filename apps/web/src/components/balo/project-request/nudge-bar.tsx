@@ -80,7 +80,7 @@ function accentClasses(variant: NudgeVariant): {
  * Presentational "always nudge" bar — one privileged next step per cell. Copy
  * comes from {@link nudgeFor}; the interactive CTA row is delegated to the
  * {@link NudgeActions} client island, which wires the A2 (BAL-269) triage/invite/
- * book CTAs to Server Actions and leaves the CTAs owned by later slices disabled.
+ * book CTAs to Server Actions and renders no button for the CTAs owned by later slices.
  * `NudgeBar` itself stays a server component.
  */
 export function NudgeBar({
@@ -137,7 +137,7 @@ export function NudgeBar({
 
 // ── nudgeFor — data-driven copy per (lens, status) ───────────────────
 // Returns the single privileged next step for a cell, or null (no nudge).
-// CTAs here are copy only — the NudgeBar renders them disabled (siblings wire).
+// CTAs here are copy only — the NudgeBar renders no button for a CTA nobody has wired (siblings wire).
 
 type NudgeMap = Partial<Record<ProjectRequestStatus, NudgeContent>>;
 

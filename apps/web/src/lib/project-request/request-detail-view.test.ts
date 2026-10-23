@@ -591,6 +591,36 @@ describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
     expect(both.kickoff?.upfrontInvoiceRaised).toBe(true);
   });
 
+  it('treats billing and the invoice as done on a legacy kickoff approved without either timestamp', () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'kickoff_approved',
+        relationships: [acceptedRel],
+        clientBillingConfirmedAt: null,
+        upfrontInvoiceRaisedAt: null,
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff?.clientBillingConfirmed).toBe(true);
+    expect(view.kickoff?.upfrontInvoiceRaised).toBe(true);
+  });
+
+  it('keeps billing and the invoice outstanding before approval when neither is recorded', () => {
+    const view = mapRequestToDetailView(
+      request({
+        status: 'accepted',
+        relationships: [acceptedRel],
+        clientBillingConfirmedAt: null,
+        upfrontInvoiceRaisedAt: null,
+      }),
+      ctx({ lens: 'client', relationshipId: null }),
+      NOW
+    );
+    expect(view.kickoff?.clientBillingConfirmed).toBe(false);
+    expect(view.kickoff?.upfrontInvoiceRaised).toBe(false);
+  });
+
   it('marks approved true at kickoff_approved (relationship stays accepted)', () => {
     const view = mapRequestToDetailView(
       request({

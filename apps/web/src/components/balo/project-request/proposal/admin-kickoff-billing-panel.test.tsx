@@ -64,6 +64,7 @@ function renderPanel(overrides: Partial<PanelProps> = {}): void {
     requestId: REQUEST_ID,
     acceptedRelationshipId: RELATIONSHIP_ID,
     clientBillingConfirmed: true,
+    approved: false,
     ...overrides,
   };
   render(<AdminKickoffBillingPanel {...props} />);
@@ -100,6 +101,17 @@ describe('AdminKickoffBillingPanel', () => {
     renderPanel({ view: { billing: null, terms: null }, clientBillingConfirmed: false });
     expect(screen.getByText(/hasn't added their company billing details/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /remind client/i })).toBeInTheDocument();
+  });
+
+  it('credits approval in the settled note on a kickoff approved with no billing record', () => {
+    renderPanel({
+      view: { billing: null, terms: null },
+      clientBillingConfirmed: true,
+      approved: true,
+    });
+    expect(screen.getByText(/kickoff approved — no company billing record/i)).toBeInTheDocument();
+    expect(screen.queryByText(/billing gate confirmed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /remind client/i })).not.toBeInTheDocument();
   });
 
   it('shows the settled note without a Remind button when billing is null but the gate is confirmed', () => {
@@ -266,6 +278,7 @@ describe('AdminKickoffBillingPanel', () => {
         requestId={REQUEST_ID}
         acceptedRelationshipId={RELATIONSHIP_ID}
         clientBillingConfirmed={false}
+        approved={false}
       />
     );
     expect(await axe(container)).toHaveNoViolations();
@@ -279,6 +292,7 @@ describe('AdminKickoffBillingPanel', () => {
         requestId={REQUEST_ID}
         acceptedRelationshipId={RELATIONSHIP_ID}
         clientBillingConfirmed
+        approved={false}
       />
     );
     expect(screen.getByText('Acme Pty Ltd')).toBeInTheDocument();
