@@ -11,6 +11,7 @@ import { updateNameAction } from '@/lib/auth/actions/update-name';
 import { PERSON_NAME_MAX, changedNameFields, personNameSchema } from '@/lib/auth/name-schema';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 const SAVE_FAILURE_MESSAGE = "We couldn't save your name — please try again.";
 const SAVE_SUCCESS_MESSAGE = 'Name updated.';
 
@@ -91,7 +92,7 @@ export function AccountNameSection({
   }, [runSave]);
 
   return (
-    <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+    <BaloCard className="p-6">
       <h2 className="text-foreground text-sm font-semibold">Your name</h2>
       <p className="text-muted-foreground mt-1 text-sm">
         How you appear to experts, clients and your team across Balo.
@@ -134,7 +135,7 @@ export function AccountNameSection({
           )}
         </Button>
       </div>
-    </div>
+    </BaloCard>
   );
 }
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useCallback, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Loader2, MessageSquareQuote, TriangleAlert } from 'lucide-react';
@@ -160,7 +161,7 @@ export function ReviewForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="border-border bg-card animate-slide-up mx-auto w-full max-w-md rounded-2xl border p-6 shadow-sm sm:p-8"
+      className="border-border bg-card animate-slide-up mx-auto w-full max-w-md rounded-2xl border p-6 sm:p-8"
     >
       <ContextCard context={context} />
 
@@ -356,7 +357,7 @@ function ReviewSent({
   onChangeReview: () => void;
 }>): React.JSX.Element {
   return (
-    <div className="border-border bg-card animate-slide-up mx-auto w-full max-w-md rounded-2xl border p-8 text-center shadow-sm">
+    <BaloCard className="animate-slide-up mx-auto w-full max-w-md p-8 text-center">
       <span className="relative mx-auto flex size-14 items-center justify-center">
         <span
           className="bg-success/25 absolute inset-0 rounded-full motion-safe:animate-[ping_0.9s_ease-out_1]"
@@ -396,6 +397,6 @@ function ReviewSent({
         </Link>
         .
       </p>
-    </div>
+    </BaloCard>
   );
 }

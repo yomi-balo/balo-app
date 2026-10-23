@@ -6,6 +6,7 @@ import { SectionEmpty, SectionHead } from '@/components/balo/section/section-sta
 import { cn } from '@/lib/utils';
 import type { RecapArtifactsView } from '@/lib/meetings/recap-view-types';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-388 §R5 — the SUMMARY section, with all four async states.
  *
@@ -25,7 +26,7 @@ export function SummarySection({
 
   if (collapsed) {
     return (
-      <section className="bg-card border-border rounded-2xl border p-6 shadow-sm">
+      <BaloCard as="section" className="p-6">
         <SectionHead icon={FileText} title="Summary" />
         {summary.state === 'failed' ? (
           <SectionEmpty
@@ -40,19 +41,19 @@ export function SummarySection({
             body="No summary or transcript for this one — your action items and files are still here."
           />
         )}
-      </section>
+      </BaloCard>
     );
   }
 
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 shadow-sm">
+    <BaloCard as="section" className="p-6">
       <SectionHead
         icon={Sparkles}
         title="Summary"
         meta={summary.state === 'processing' ? 'Writing up the consultation…' : 'AI-generated'}
       />
       <SummaryBody summary={summary} transcriptState={transcript.state} />
-    </section>
+    </BaloCard>
   );
 }
 

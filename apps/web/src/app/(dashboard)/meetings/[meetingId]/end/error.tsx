@@ -5,6 +5,7 @@ import { SectionError } from '@/components/balo/section/section-states';
 import { Button } from '@/components/ui/button';
 import { EndOfCallShell } from './_components/end-of-call-shell';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-389 — the end-of-call screen's route-level ERROR boundary. Every failure resolves to a
  * stated cause plus a way forward; nothing here can leave the viewer stuck.
@@ -28,7 +29,7 @@ export default function EndOfCallError({
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border rounded-xl border p-6 shadow-sm">
+      <BaloCard className="rounded-xl p-6">
         <SectionError
           label="this page"
           onRetry={reset}
@@ -39,7 +40,7 @@ export default function EndOfCallError({
             <Link href="/dashboard">Back to your dashboard</Link>
           </Button>
         </div>
-      </div>
+      </BaloCard>
     </EndOfCallShell>
   );
 }

@@ -108,7 +108,8 @@ describe('DashboardWalletCard — promo entry and chrome', () => {
   ] as const)('%s root fills the column and grows', (_lens, data) => {
     const { container } = render(<DashboardWalletCard data={data} />);
     const root = container.firstElementChild;
-    expect(root).toHaveClass('max-w-none', 'shadow-sm', 'lg:flex-1');
+    expect(root).toHaveClass('max-w-none', 'lg:flex-1');
+    expect(root?.className).not.toMatch(/\bshadow(\b|-)/);
     expect(root).not.toHaveClass('max-w-[380px]');
     if (data.kind === 'error') {
       expect(root).not.toHaveClass('flex-col');

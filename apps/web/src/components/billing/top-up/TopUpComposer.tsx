@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { TopUpHero } from './TopUpHero';
 import { AmountSlider } from './AmountSlider';
 import { PromoField, type AppliedPromo } from './PromoField';
@@ -147,14 +148,14 @@ export function TopUpComposer({
 
   if (completion) {
     return (
-      <div className="border-border bg-card w-full overflow-hidden rounded-2xl border shadow-sm">
+      <BaloCard className="w-full overflow-hidden">
         <TopUpReceipt
           completion={completion}
           previousBalanceMinor={wallet.balanceMinor}
           onFindExpert={handleFindExpert}
           onDone={handleDone}
         />
-      </div>
+      </BaloCard>
     );
   }
 
@@ -213,7 +214,7 @@ export function TopUpComposer({
   const body =
     layout === 'wide' ? (
       <div className="grid grid-cols-[minmax(0,1fr)_340px] items-start gap-6">
-        <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">{decisions}</div>
+        <BaloCard className="p-6">{decisions}</BaloCard>
         <div className="sticky top-5">
           <SummaryRail
             amountMinor={amountMinor}
@@ -226,7 +227,7 @@ export function TopUpComposer({
         </div>
       </div>
     ) : (
-      <div className="border-border bg-card flex w-full flex-col overflow-hidden rounded-2xl border shadow-sm">
+      <BaloCard className="flex w-full flex-col overflow-hidden">
         <TopUpHero amountMinor={amountMinor} promoMinor={promoMinor} fx={fx} compact />
         <div className="px-5 pt-[18px] pb-6">{decisions}</div>
         <MobilePayBar
@@ -234,7 +235,7 @@ export function TopUpComposer({
           promoMinor={promoMinor}
           payAction={payAction(true)}
         />
-      </div>
+      </BaloCard>
     );
 
   // With no publishable key there is no Elements provider to render — the payment section is

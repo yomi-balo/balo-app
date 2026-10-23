@@ -1,5 +1,7 @@
 'use client';
 
+import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { useEffect } from 'react';
 import * as Sentry from '@sentry/nextjs';
 import { motion } from 'motion/react';
@@ -53,7 +55,7 @@ export function CelebrationCard({
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="border-border bg-card relative mb-4 overflow-hidden rounded-2xl border px-8 py-12 text-center shadow-sm"
+      className={cn(baloCardClassName(), 'relative mb-4 overflow-hidden px-8 py-12 text-center')}
     >
       {/* Confetti particles */}
       {CONFETTI_COLORS.map((color, i) => (

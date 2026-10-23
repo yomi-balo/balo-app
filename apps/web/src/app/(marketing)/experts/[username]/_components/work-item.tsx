@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useState, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
@@ -41,7 +42,7 @@ export function WorkItem({ item, isLast }: Readonly<WorkItemProps>): React.JSX.E
 
       {/* Card */}
       <div className={cn('min-w-0 flex-1', isLast ? 'pb-0' : 'pb-3.5')}>
-        <div className="border-border bg-card rounded-[14px] border p-4 shadow-sm">
+        <BaloCard className="rounded-[14px] p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h4 className="text-foreground m-0 text-base font-semibold">{item.role}</h4>
@@ -91,7 +92,7 @@ export function WorkItem({ item, isLast }: Readonly<WorkItemProps>): React.JSX.E
               </button>
             </>
           )}
-        </div>
+        </BaloCard>
       </div>
     </div>
   );

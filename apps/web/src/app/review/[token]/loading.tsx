@@ -11,11 +11,14 @@
  * which SonarCloud flags under S6819); the `sr-only` line is what it announces. Same
  * shape as the shipped `(dashboard)/redeem/loading.tsx`.
  */
+
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 export default function ReviewLandingLoading(): React.JSX.Element {
   return (
     <output aria-busy="true" className="mx-auto block w-full max-w-md">
       <span className="sr-only">Loading your review…</span>
-      <div className="border-border bg-card w-full rounded-2xl border p-6 shadow-sm sm:p-8">
+      <BaloCard className="w-full p-6 sm:p-8">
         <div className="flex items-center gap-3">
           <div className="bg-muted h-11 w-11 animate-pulse rounded-full" />
           <div className="flex-1 space-y-2">
@@ -35,7 +38,7 @@ export default function ReviewLandingLoading(): React.JSX.Element {
 
         <div className="bg-muted mt-6 h-24 w-full animate-pulse rounded-xl" />
         <div className="bg-muted mt-4 h-11 w-full animate-pulse rounded-lg" />
-      </div>
+      </BaloCard>
     </output>
   );
 }

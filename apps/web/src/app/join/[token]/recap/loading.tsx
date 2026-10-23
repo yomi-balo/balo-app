@@ -11,6 +11,8 @@
  * "Loading your recaps…" line this element exists to announce.
  */
 
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /** The three row stubs' per-row variation — the last is dimmed to read as trailing off. */
 const ROW_STUBS: ReadonlyArray<{
   readonly key: string;
@@ -27,10 +29,7 @@ export default function GuestRecapIndexLoading(): React.JSX.Element {
     <output className="mx-auto block w-full max-w-md space-y-5">
       <span className="sr-only">Loading your recaps…</span>
 
-      <div
-        aria-busy="true"
-        className="border-border bg-card w-full rounded-2xl border p-6 shadow-sm sm:p-8"
-      >
+      <BaloCard aria-busy="true" className="w-full p-6 sm:p-8">
         <div className="bg-muted h-6 w-1/2 animate-pulse rounded" />
 
         <div className="mt-4 space-y-1">
@@ -45,7 +44,7 @@ export default function GuestRecapIndexLoading(): React.JSX.Element {
             </div>
           ))}
         </div>
-      </div>
+      </BaloCard>
     </output>
   );
 }

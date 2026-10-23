@@ -1,5 +1,7 @@
 'use client';
 
+import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import {
@@ -110,7 +112,7 @@ export function GettingStartedChecklist({
       initial={{ y: 16, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.4, delay: 0.1, ease: 'easeOut' }}
-      className="border-border bg-card mb-4 overflow-hidden rounded-2xl border shadow-sm"
+      className={cn(baloCardClassName(), 'mb-4 overflow-hidden')}
     >
       {/* Header section */}
       <div className="from-primary/5 dark:from-primary/10 bg-gradient-to-r to-purple-500/5 p-6 dark:to-purple-500/10">

@@ -105,7 +105,7 @@ These checks validate that the implementation delivers on Balo's design philosop
 **Motion & Delight:**
 
 - Does the page have a choreographed entrance (staggered reveal, fade-in) — or does content just hard-render?
-- Do clickable cards have hover lift (`y: -4`) + shadow transition?
+- Do clickable cards have hover lift (`y: -4`) + border tint (cards stay flat, no shadow)?
 - Do buttons have press feedback (`scale: 0.98` or similar)?
 - Are state transitions animated (loading → loaded, empty → populated) — or hard-swapped?
 - Do success moments have celebration beyond a toast (animated checkmark, summary card reveal, brief shimmer)?
@@ -133,7 +133,7 @@ These checks validate that the implementation delivers on Balo's design philosop
 **Premium Feel:**
 
 - Are shadcnspace enhanced components used for user-facing inputs/cards — not plain shadcn where an upgrade exists?
-- Are backgrounds creating depth (subtle gradients, layered cards) — not flat white/dark with floating elements?
+- Are backgrounds creating depth (subtle gradients, surface tiers) — with cards flat (border, no shadow) and elevation only on floating layers?
 - Are semantic color tokens used throughout — no hardcoded hex/rgb values?
 - Is dark mode working correctly with appropriate contrast and vivid accents?
 

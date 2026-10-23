@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, LogIn } from 'lucide-react';
@@ -527,7 +528,7 @@ function LobbyIdentify({
   const hasError = formError !== null;
 
   return (
-    <div className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 shadow-sm">
+    <BaloCard className="mx-auto w-full max-w-md p-8">
       <span className="border-border bg-muted/40 mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border">
         <LogIn className="text-muted-foreground h-6 w-6" aria-hidden="true" />
       </span>
@@ -648,7 +649,7 @@ function LobbyIdentify({
       <p className="text-muted-foreground border-border mt-6 border-t pt-4 text-[11.5px]">
         Powered by <span className="text-foreground font-semibold">Balo</span>
       </p>
-    </div>
+    </BaloCard>
   );
 }
 

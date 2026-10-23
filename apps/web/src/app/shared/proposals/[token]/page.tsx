@@ -1,3 +1,4 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -160,7 +161,7 @@ export default async function SharedProposalPage({
   const isWithdrawn = proposal.status === 'withdrawn';
 
   return (
-    <div className="border-border bg-card overflow-hidden rounded-2xl border shadow-sm">
+    <BaloCard className="overflow-hidden">
       <SharedProposalReveal index={0}>
         <SharedProposalHeader sharerName={sharerName} clientCompany={clientCompany} />
         <SharedProposalBanner
@@ -180,6 +181,6 @@ export default async function SharedProposalPage({
           expiresOn={formatUtcLongDate(row.expiresAt)}
         />
       </SharedProposalReveal>
-    </div>
+    </BaloCard>
   );
 }

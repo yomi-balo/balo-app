@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
@@ -482,7 +483,7 @@ function JoinPhaseContent({
 
   const isJoining = phase === 'joining';
   return (
-    <article className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-6 shadow-sm sm:p-8">
+    <BaloCard as="article" className="mx-auto w-full max-w-md p-6 sm:p-8">
       {children}
 
       <div className="mt-6">
@@ -556,7 +557,7 @@ function JoinPhaseContent({
       <p className="text-muted-foreground mt-4 text-[11.5px]">
         Powered by <span className="text-foreground font-semibold">Balo</span>
       </p>
-    </article>
+    </BaloCard>
   );
 }
 

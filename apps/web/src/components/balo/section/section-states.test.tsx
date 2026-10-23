@@ -25,6 +25,16 @@ describe('SectionCard', () => {
     expect(screen.getByText(/chip/)).toBeInTheDocument();
     expect(screen.getByText(/body content/)).toBeInTheDocument();
   });
+
+  it('is a flat card: no shadow on the root', () => {
+    const { container } = render(
+      <SectionCard title="Domains">
+        <p>body</p>
+      </SectionCard>
+    );
+    expect(container.firstElementChild).not.toHaveClass('shadow-sm');
+    expect(container.firstElementChild?.className).not.toMatch(/shadow/);
+  });
 });
 
 describe('SectionHead', () => {

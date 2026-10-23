@@ -27,9 +27,9 @@ description: Balo design system and UI component patterns using Shadcn/ui, shadc
 
 **Orchestrate motion, don't scatter it.** One well-choreographed page load with staggered reveals creates more delight than random hover effects everywhere. Focus animation budget on high-impact moments: first paint, meaningful state changes, success confirmations.
 
-**Create atmosphere, not just layouts.** Backgrounds should create depth — subtle gradients, layered transparencies, gentle texture. Avoid flat white pages with floating cards. The space between and around components matters as much as the components themselves.
+**Create atmosphere, not just layouts.** Backgrounds should create depth — subtle gradients, layered transparencies, gentle texture. Depth comes from the background, not card elevation — cards are flat (border, no shadow) on an atmospheric background. The space between and around components matters as much as the components themselves.
 
-**Every detail is intentional.** Shadows should have consistent direction. Border radii should be from a defined set. Spacing should follow a scale. Accidental inconsistency signals carelessness; intentional variation signals sophistication.
+**Every detail is intentional.** Shadows are reserved for floating layers (popover, dropdown, tooltip, dialog, sheet, toast, hover-card) and keep a consistent direction. Border radii should be from a defined set. Spacing should follow a scale. Accidental inconsistency signals carelessness; intentional variation signals sophistication.
 **Empty states are decisions, not afterthoughts — and hiding is the exception, not the default.** When a section has no data, the first question is _not_ "does it have a CTA?" but **"is there an action the user could take from here that moves them forward?"** If yes — they could start, request, or add something — the section **stays** and gets an empty state framed as an invitation centred on that action ("Start a project with Priya"), never defined by absence ("No quick-start packages yet"). Hiding is correct **only** when the section is purely retrospective data the user cannot act on or populate from here (e.g. a reviews list a visitor can't write, completed work history) — and even then, keep nav / scroll-spy data-driven so removal causes no jitter. Hiding a section to avoid designing its empty state is a defect, not a simplification: if you reach for hide because the copy is hard, that's the signal the section probably needs an invitation.
 
 ## Component Stack
@@ -148,9 +148,18 @@ Tailwind v4 uses OKLCH color format. Values are defined in `globals.css` and bri
 - Never hardcode hex values — always use `text-primary`, `bg-muted`, etc.
 - Status colors are semantic: `text-success`, `text-warning`, `text-info`, `text-destructive`
 - **Hero/feature sections:** Blue → purple gradient spectrum for energy and premium feel
-- **Backgrounds:** Create depth with subtle gradients, layered card shadows, and gentle color washes rather than flat white/dark surfaces. A `bg-gradient-to-b from-background to-muted/30` adds atmosphere without distraction.
+- **Backgrounds:** Create depth with subtle gradients, layered transparencies, and gentle color washes rather than flat white/dark surfaces. A `bg-gradient-to-b from-background to-muted/30` adds atmosphere without distraction.
 - **Dark mode gradients:** MORE vivid and saturated. Light mode gradients: subtler and softer. Dark mode is where the brand really glows.
 - **Accent usage:** Use `primary` boldly but sparingly — one accent color per viewport section. Too many competing accents create visual noise.
+
+### Cards — flat (BAL-618)
+
+- `BaloCard` is the one card surface: `bg-card rounded-2xl border border-border`, no shadow. Props: `as` (`div | section | article`), `emphasis="highlight"` (`border-primary/40`), `className` (merged last, so it can override the radius).
+- `BaloCard` takes no ref and no `dangerouslySetInnerHTML`; ref-bearing elements use `baloCardClassName`.
+- For `motion.*` or other elements, use `className={cn(baloCardClassName(), '…')}`.
+- shadcn `Card` is flat too, but Balo surfaces use `BaloCard`.
+- Still allowed a shadow: buttons, chips, avatars, active tabs (`tabs-are-static`), inset rules, sticky bars, and floating layers.
+- `invariants/flat-card-surfaces.test.ts` pins the four card-defining files as shadow-free.
 
 ## Typography
 
@@ -205,7 +214,7 @@ Implemented from day one. Not optional.
 | **Password input**        | `Input type="password"`      | `@shadcn-space/input-04` (password + strength)    | Eye icon to show/hide, strength indicator — expected UX in 2026                                                 |
 | **Search input**          | `Input` with icon            | `@shadcn-space/input-10` (clear button)           | Integrated clear button, works with search patterns                                                             |
 | **Input with addons**     | `Input` + wrapper div        | `@shadcn-space/input-08` (add-ons)                | https:// prefix, .com suffix — pre-built URL/domain inputs                                                      |
-| **Cards**                 | `Card`                       | shadcnspace Card variants + Motion hover lift     | Hover shadow + subtle y-translate makes cards feel interactive                                                  |
+| **Cards**                 | `Card`                       | `BaloCard` (`components/balo/card/balo-card.tsx`) | Flat — border, no shadow. Hover cue is border colour / translate, never shadow                                  |
 | **Sidebar**               | Custom sidebar               | shadcnspace Sidebar blocks                        | Pre-built collapse, mobile drawer, nav grouping, polish                                                         |
 | **Calendar/date picker**  | vendored `ui/calendar.tsx`   | ⚠ **NOT** `@shadcn-space/calendar-03` — see below | `calendar-03` OVERWRITES the vendored primitive. Build the two-panel layout on top of `ui/calendar.tsx` instead |
 | **Login/signup forms**    | shadcn Form + Input          | shadcnspace Auth blocks                           | Pre-built auth form layouts with social buttons, dividers, polish                                               |

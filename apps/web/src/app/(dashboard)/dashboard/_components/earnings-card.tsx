@@ -1,3 +1,4 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
 
@@ -12,10 +13,7 @@ const PAYOUTS_HREF = '/expert/settings?tab=payouts';
 /** Placeholder earnings summary: the figures are static until an earnings read exists. */
 export function EarningsCard(): React.JSX.Element {
   return (
-    <section
-      aria-labelledby="earnings-heading"
-      className="bg-card border-border rounded-2xl border px-[18px] pt-[18px] shadow-sm"
-    >
+    <BaloCard as="section" aria-labelledby="earnings-heading" className="px-[18px] pt-[18px]">
       <h2
         id="earnings-heading"
         className="text-foreground text-[15px] font-semibold tracking-tight"
@@ -42,6 +40,6 @@ export function EarningsCard(): React.JSX.Element {
           <ArrowRight className="size-3" aria-hidden="true" />
         </Link>
       </div>
-    </section>
+    </BaloCard>
   );
 }

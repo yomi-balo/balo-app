@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { saveBillingEmailAction } from '@/lib/credit/actions';
 import type { BillingEmailSnapshot } from '@/lib/credit/wallet-read';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 interface BillingEmailSectionProps {
   readonly initial: BillingEmailSnapshot;
 }
@@ -142,7 +143,7 @@ export function BillingEmailSection({
   }, [runSave]);
 
   return (
-    <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+    <BaloCard className="p-6">
       <h3 className="text-foreground text-sm font-semibold">Billing email</h3>
       <p className="text-muted-foreground mt-1 text-sm">
         Where Stripe keeps your team&apos;s billing record — used for disputes and support lookup.
@@ -200,6 +201,6 @@ export function BillingEmailSection({
           )}
         </Button>
       </div>
-    </div>
+    </BaloCard>
   );
 }

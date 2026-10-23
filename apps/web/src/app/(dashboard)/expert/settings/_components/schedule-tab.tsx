@@ -682,7 +682,7 @@ function ScheduleActions({
 /** Placeholder shaped like `WorkAvailabilityCard` (icon tile, title + description, switch). */
 function WorkAvailabilitySkeleton(): React.JSX.Element {
   return (
-    <output className="border-border bg-card flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px] shadow-xs">
+    <output className="border-border bg-card flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px]">
       <span className="sr-only">Loading your availability status</span>
       <div
         aria-hidden="true"

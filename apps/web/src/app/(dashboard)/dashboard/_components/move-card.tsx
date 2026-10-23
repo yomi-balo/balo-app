@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import {
   Briefcase,
   CalendarClock,
@@ -97,11 +98,12 @@ export function MoveCard({
       data-featured={featured ? 'true' : undefined}
       className="flex shrink-0 snap-start"
     >
-      <article
+      <BaloCard
+        as="article"
         className={cn(
-          'bg-card relative flex w-[292px] shrink-0 flex-col overflow-hidden rounded-[14px] border',
-          featured ? 'shadow-lg sm:w-[384px]' : 'shadow-sm sm:w-[300px]',
-          blocker ? 'border-warning/35' : 'border-border'
+          'relative flex w-[292px] shrink-0 flex-col overflow-hidden rounded-[14px]',
+          featured ? 'sm:w-[384px]' : 'sm:w-[300px]',
+          blocker && 'border-warning/35'
         )}
       >
         <span
@@ -189,7 +191,7 @@ export function MoveCard({
             </Link>
           </Button>
         </div>
-      </article>
+      </BaloCard>
     </li>
   );
 }

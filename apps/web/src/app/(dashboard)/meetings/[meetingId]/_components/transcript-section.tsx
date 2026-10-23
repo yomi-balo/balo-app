@@ -7,6 +7,7 @@ import { SectionHead } from '@/components/balo/section/section-states';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { RecapArtifactView } from '@/lib/meetings/recap-view-types';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-388 §R7 — the TRANSCRIPT section.
  *
@@ -38,10 +39,10 @@ export function TranscriptSection({
   );
 
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 shadow-sm">
+    <BaloCard as="section" className="p-6">
       <SectionHead icon={MessageSquare} title="Transcript" meta="cleaned" />
       <TranscriptBody transcript={transcript} open={open} onOpenChange={onOpenChange} />
-    </section>
+    </BaloCard>
   );
 }
 

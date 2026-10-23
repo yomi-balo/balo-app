@@ -74,7 +74,7 @@ export function GuestRecapCard({
   return (
     <div className="space-y-5">
       <Reveal delay={0.1}>
-        <header className="border-border bg-card rounded-2xl border p-6 shadow-sm sm:p-8">
+        <header className="border-border bg-card rounded-2xl border p-6 sm:p-8">
           <span className="border-border bg-muted/40 text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium">
             <Video className="h-3 w-3" aria-hidden="true" />
             {header.contextLabel}
