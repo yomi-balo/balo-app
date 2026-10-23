@@ -135,7 +135,10 @@ function resolveSteps(
   state: { billingDone: boolean; invoiceRaised: boolean; approved: boolean; hasUpfront: boolean },
   c: StepCopyContext
 ): KickoffStep[] {
-  const { billingDone, invoiceRaised, approved, hasUpfront } = state;
+  const { invoiceRaised, approved, hasUpfront } = state;
+  // A legacy or migrated kickoff approved without a billing confirmation — approval implies
+  // the billing gate was met, as it does for the invoice step below.
+  const billingDone = state.billingDone || approved;
   const billing: KickoffStep = {
     key: 'billing',
     owner: 'client',
@@ -232,9 +235,11 @@ export function KickoffBoard({
   const doneCount = steps.filter((step) => step.done).length;
   const allDone = doneCount === steps.length;
   const currentIndex = steps.findIndex((step) => !step.done);
+  const ownerIsViewer = (owner: KickoffStep['owner']): boolean =>
+    owner === 'client' ? lens === 'client' : lens === 'admin';
   const ownerLabel = (owner: KickoffStep['owner']): string => {
-    if (owner === 'client') return lens === 'client' ? 'You' : clientCompanyName;
-    return lens === 'admin' ? 'You' : 'Balo';
+    if (ownerIsViewer(owner)) return 'You';
+    return owner === 'client' ? clientCompanyName : 'Balo';
   };
 
   const handleMarkInvoiceSent = useCallback((): void => {
@@ -320,6 +325,7 @@ export function KickoffBoard({
                 step={step}
                 state={state}
                 owner={ownerLabel(step.owner)}
+                ownerIsViewer={ownerIsViewer(step.owner)}
                 connector={connector}
                 lens={lens}
                 expertName={expertName}
@@ -363,6 +369,8 @@ interface KickoffThreadStepProps {
   step: KickoffStep;
   state: StepState;
   owner: string;
+  /** The owner is the viewer's own side — "You" takes the primary colour on the current step. */
+  ownerIsViewer: boolean;
   connector: StepConnector;
   lens: KickoffLens;
   expertName: string;
@@ -414,6 +422,7 @@ function KickoffThreadStep({
   step,
   state,
   owner,
+  ownerIsViewer,
   connector,
   lens,
   expertName,
@@ -429,7 +438,7 @@ function KickoffThreadStep({
   const showBilling =
     lens === 'client' && step.key === 'billing' && billing !== null && state !== 'future';
   let ownerClass = 'text-muted-foreground';
-  if (state === 'current' && owner === 'You') ownerClass = 'text-primary';
+  if (state === 'current' && ownerIsViewer) ownerClass = 'text-primary';
 
   return (
     <li

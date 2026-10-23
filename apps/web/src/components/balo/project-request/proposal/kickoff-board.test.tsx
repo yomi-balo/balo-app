@@ -147,6 +147,13 @@ describe('KickoffBoard — structure', () => {
     expect(currentLabel()).toBeNull();
     expect(screen.getByText('All done')).toBeInTheDocument();
   });
+
+  it('treats billing as done on a legacy kickoff approved without a billing confirmation', () => {
+    renderBoard({ clientBillingConfirmed: false, upfrontInvoiceRaised: false, approved: true });
+    expect(currentLabel()).toBeNull();
+    expect(screen.getByText('All done')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add details/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('KickoffBoard — who each row is waiting on', () => {

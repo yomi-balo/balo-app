@@ -103,14 +103,14 @@ export function ThreadNudge({
 
   if (nudge.variant === 'event') {
     return (
-      <div role="status" data-nudge="event" className="flex items-center gap-2.5 p-0.5">
+      <output data-nudge="event" className="flex items-center gap-2.5 p-0.5">
         <span aria-hidden="true" className="bg-border h-px flex-1" />
         <span className="text-muted-foreground inline-flex items-center gap-1.5 text-[12.5px]">
           <Icon className="text-success size-3.5" aria-hidden="true" />
           {nudge.headline}
         </span>
         <span aria-hidden="true" className="bg-border h-px flex-1" />
-      </div>
+      </output>
     );
   }
 
@@ -186,7 +186,7 @@ export function ThreadNudge({
         </div>
         <p className="text-foreground ml-7 text-sm font-semibold">{nudge.headline}</p>
         {nudge.sub && (
-          <p className="text-muted-foreground mt-0.5 ml-7 text-[13px] leading-relaxed">
+          <p className="text-muted-foreground mt-0.5 ml-7 line-clamp-2 text-[13px] leading-relaxed">
             {nudge.sub}
           </p>
         )}
@@ -196,7 +196,7 @@ export function ThreadNudge({
             that differed for every viewer outside UTC — a hydration mismatch on every page
             load, invisible to a `TZ=UTC` CI. */}
         {nudge.subInstant && (
-          <p className="text-muted-foreground mt-0.5 ml-7 text-[13px] leading-relaxed">
+          <p className="text-muted-foreground mt-0.5 ml-7 line-clamp-2 text-[13px] leading-relaxed">
             <LocalDateTime iso={nudge.subInstant.iso} variant="day-month-time" />
             {nudge.subInstant.suffix}
           </p>
