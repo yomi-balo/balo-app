@@ -1,7 +1,7 @@
 import { Users } from 'lucide-react';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { RecapNotHeldView } from '@/lib/meetings/recap-view-types';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-388 §R11 — the NOT-HELD panel. REPLACES summary / action items / transcript; the party
  * card, the files card and Rule M's money line all still render around it.

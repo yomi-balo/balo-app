@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * The join-landing skeleton (BAL-408). Deliberately drawn in the PAGE'S OWN SHAPE — the
  * context eyebrow, the headline, the when/who rows, the people row and the access-scope
@@ -17,8 +19,6 @@
  * the very "Loading your invitation…" line that element exists to announce. On the skeleton it
  * means what it should: this subtree is being built.
  */
-
-import { BaloCard } from '@/components/balo/card/balo-card';
 
 export default function JoinLandingLoading(): React.JSX.Element {
   return (

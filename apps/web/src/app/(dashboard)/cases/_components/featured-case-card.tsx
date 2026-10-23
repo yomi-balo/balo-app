@@ -91,6 +91,7 @@ export function FeaturedCaseCard({
   return (
     <BaloCard
       as="article"
+      emphasis="highlight"
       className={cn(
         'relative grid overflow-hidden',
         'grid-cols-1 md:grid-cols-[minmax(0,1fr)_250px]'

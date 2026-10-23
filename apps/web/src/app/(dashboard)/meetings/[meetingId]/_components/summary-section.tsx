@@ -4,9 +4,9 @@ import { useCallback, useState } from 'react';
 import { FileText, Sparkles } from 'lucide-react';
 import { SectionEmpty, SectionHead } from '@/components/balo/section/section-states';
 import { cn } from '@/lib/utils';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { RecapArtifactsView } from '@/lib/meetings/recap-view-types';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-388 §R5 — the SUMMARY section, with all four async states.
  *

@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-492 — the guest recap INDEX's skeleton, drawn in the PAGE'S OWN SHAPE (a title bar, then
  * three row stubs) rather than a spinner, so the layout does not jump when the real content
@@ -10,8 +12,6 @@
  * SUPPRESSES a live region's own announcements — on the `<output>` it would silence the very
  * "Loading your recaps…" line this element exists to announce.
  */
-
-import { BaloCard } from '@/components/balo/card/balo-card';
 
 /** The three row stubs' per-row variation — the last is dimmed to read as trailing off. */
 const ROW_STUBS: ReadonlyArray<{

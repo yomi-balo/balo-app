@@ -1,6 +1,6 @@
 'use client';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
+import { BaloCard, baloCardClassName } from '@/components/balo/card/balo-card';
 import { useCallback, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Loader2, MessageSquareQuote, TriangleAlert } from 'lucide-react';
@@ -161,7 +161,7 @@ export function ReviewForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="border-border bg-card animate-slide-up mx-auto w-full max-w-md rounded-2xl border p-6 sm:p-8"
+      className={cn(baloCardClassName(), 'animate-slide-up mx-auto w-full max-w-md p-6 sm:p-8')}
     >
       <ContextCard context={context} />
 

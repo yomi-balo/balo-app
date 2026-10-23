@@ -8,9 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { saveBillingEmailAction } from '@/lib/credit/actions';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { BillingEmailSnapshot } from '@/lib/credit/wallet-read';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 interface BillingEmailSectionProps {
   readonly initial: BillingEmailSnapshot;
 }

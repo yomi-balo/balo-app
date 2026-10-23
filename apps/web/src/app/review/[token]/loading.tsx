@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * The review-landing skeleton (BAL-390). Deliberately drawn in the PAGE'S OWN SHAPE —
  * context card, five 48px star blocks, note field, button — rather than a spinner, so
@@ -11,8 +13,6 @@
  * which SonarCloud flags under S6819); the `sr-only` line is what it announces. Same
  * shape as the shipped `(dashboard)/redeem/loading.tsx`.
  */
-
-import { BaloCard } from '@/components/balo/card/balo-card';
 
 export default function ReviewLandingLoading(): React.JSX.Element {
   return (

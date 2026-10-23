@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { FileQuestion } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { EndOfCallShell } from './_components/end-of-call-shell';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-389 — the end-of-call screen's NOT-FOUND page.
  *

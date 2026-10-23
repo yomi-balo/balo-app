@@ -1,6 +1,8 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
+import { cn } from '@/lib/utils';
 
 /**
  * BAL-132's shipped "Connecting…" card, EXTRACTED VERBATIM so BAL-435 can reuse it as the
@@ -25,7 +27,12 @@ export function MeetingConnectingCard({
   headingRef,
 }: Readonly<{ headingRef?: React.Ref<HTMLHeadingElement> }>): React.JSX.Element {
   return (
-    <output className="border-border bg-card mx-auto flex w-full max-w-md flex-col items-center rounded-2xl border p-8 text-center">
+    <output
+      className={cn(
+        baloCardClassName(),
+        'mx-auto flex w-full max-w-md flex-col items-center p-8 text-center'
+      )}
+    >
       <span className="border-border bg-muted/40 flex h-12 w-12 items-center justify-center rounded-2xl border">
         <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" aria-hidden="true" />
       </span>

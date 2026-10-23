@@ -1,7 +1,7 @@
 import { WalletWidget } from '@/components/balo/credit/wallet-widget';
 import { SectionSkeleton } from '@/components/balo/section/section-states';
-
 import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-503 — Credits & billing's loading skeleton. The widget's own `loading` arm; no new logic.
  *

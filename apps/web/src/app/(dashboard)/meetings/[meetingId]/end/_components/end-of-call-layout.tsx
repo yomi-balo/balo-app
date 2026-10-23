@@ -1,10 +1,10 @@
 import { Check, CircleDashed, Clock, ShieldCheck } from 'lucide-react';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { CaseClosedGlyph } from '@/components/balo/meetings/case-closed-glyph';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { EndOfCallRecapState } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallShell } from './end-of-call-shell';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-389 — the SHARED end-of-call shell. One centred card: a mark, a headline, the duration
  * glance, the safe-to-leave reassurance, an optional post-call slot, and the onward CTA.

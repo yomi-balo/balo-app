@@ -10,8 +10,8 @@ import { Label } from '@/components/ui/label';
 import { updateNameAction } from '@/lib/auth/actions/update-name';
 import { PERSON_NAME_MAX, changedNameFields, personNameSchema } from '@/lib/auth/name-schema';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
-
 import { BaloCard } from '@/components/balo/card/balo-card';
+
 const SAVE_FAILURE_MESSAGE = "We couldn't save your name — please try again.";
 const SAVE_SUCCESS_MESSAGE = 'Name updated.';
 

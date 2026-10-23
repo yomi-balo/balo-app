@@ -3,6 +3,7 @@
 import { useCallback } from 'react';
 import Link from 'next/link';
 import { CalendarClock, CircleHelp, ListChecks, MessageSquare } from 'lucide-react';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -26,7 +27,6 @@ import type { ViewerClock } from '@/hooks/use-viewer-clock';
 import type { CasesIndexCardView, CasesIndexSide } from '../_lib/cases-index-view-types';
 import type { CasesIndexClickHandler, CasesIndexClickReporter } from './cases-index-click';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-567 — ONE open case in the grid.
  *

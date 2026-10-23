@@ -5,9 +5,9 @@ import { Loader2, Lock, MessageSquare } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { RecapArtifactView } from '@/lib/meetings/recap-view-types';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-388 §R7 — the TRANSCRIPT section.
  *

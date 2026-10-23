@@ -1,6 +1,6 @@
 'use client';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
+import { BaloCard, baloCardClassName } from '@/components/balo/card/balo-card';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Loader2, Sparkles } from 'lucide-react';
@@ -77,7 +77,7 @@ function OutcomeCard({
       initial={{ opacity: 0, y: reduce ? 0 : 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduce ? 0.15 : 0.35, ease: 'easeOut' }}
-      className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center sm:p-10"
+      className={cn(baloCardClassName(), 'mx-auto w-full max-w-md p-8 text-center sm:p-10')}
     >
       {badge}
       <h2

@@ -9,13 +9,13 @@ import {
   CARD_BACKED_MODE_TITLE,
 } from '@/components/billing/top-up/LowBalanceModePicker';
 import { autoTopupConfigErrors } from '@/lib/credit/display-constants';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { armSavedCardMandateAction, saveLowBalanceConfigAction } from '@/lib/credit/actions';
 import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo/shared/credit';
 import { resolveSetupIntentNextAction } from '@/lib/stripe/resolve-setup-next-action';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 export interface LowBalanceDraft {
   mode: LowBalanceMode;
   reloadMinor: number;

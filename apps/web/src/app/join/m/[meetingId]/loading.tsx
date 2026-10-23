@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-132 — the lobby segment's loading state.
  *
@@ -15,8 +17,6 @@
  * knows anything about the meeting (the page performs zero database reads), so a skeleton
  * shaped like a title and a date would promise content that is never coming.
  */
-
-import { BaloCard } from '@/components/balo/card/balo-card';
 
 export default function LobbyLoading(): React.JSX.Element {
   return (

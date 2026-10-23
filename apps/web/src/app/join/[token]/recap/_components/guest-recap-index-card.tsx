@@ -3,6 +3,8 @@ import { ArrowLeft, CalendarClock, Timer, Video } from 'lucide-react';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { guestInvitationPath, guestRecapPath } from '@/lib/meetings/join-link';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
+import { cn } from '@/lib/utils';
 import type { GuestRecapIndexRowView } from '../_lib/guest-recap-index-view-types';
 
 /** BAL-492 — the index's heading. Names nothing and nobody. */
@@ -42,7 +44,7 @@ export function GuestRecapIndexCard({
   return (
     <div className="space-y-5">
       <Reveal delay={0.1}>
-        <header className="border-border bg-card rounded-2xl border p-6 sm:p-8">
+        <header className={cn(baloCardClassName(), 'p-6 sm:p-8')}>
           <h1 className="text-foreground text-xl font-semibold tracking-tight">
             {GUEST_RECAP_INDEX_TITLE}
           </h1>

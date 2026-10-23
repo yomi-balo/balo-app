@@ -100,6 +100,7 @@ export function MoveCard({
     >
       <BaloCard
         as="article"
+        emphasis={featured ? 'highlight' : 'default'}
         className={cn(
           'relative flex w-[292px] shrink-0 flex-col overflow-hidden rounded-[14px]',
           featured ? 'sm:w-[384px]' : 'sm:w-[300px]',

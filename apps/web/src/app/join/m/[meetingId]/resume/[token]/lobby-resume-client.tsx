@@ -1,11 +1,12 @@
 'use client';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
+import { BaloCard, baloCardClassName } from '@/components/balo/card/balo-card';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { LOBBY_TOKEN_STORAGE_KEY, LOBBY_WAIT_STARTED_STORAGE_KEY } from '@/lib/meetings/lobby';
+import { cn } from '@/lib/utils';
 
 /**
  * BAL-442 — writes the resume link's raw token into the lobby's own `sessionStorage` keys,
@@ -122,7 +123,7 @@ export function LobbyResumeClient({
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: isReduced ? 0 : 0.18 }}
-      className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center"
+      className={cn(baloCardClassName(), 'mx-auto w-full max-w-md p-8 text-center')}
     >
       <span className="border-border bg-muted/40 mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border">
         <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" aria-hidden="true" />

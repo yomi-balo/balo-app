@@ -6,7 +6,7 @@ import { codeLinesOf, resolveRouteDir } from './_source-scan';
  * BAL-618 — "Flat everywhere": the files that DEFINE a Balo card surface carry no shadow.
  *
  * Deliberately narrow (no repo-wide scan): buttons, chips, avatars, active tabs, sticky bars and
- * floating layers legitimately keep a shadow. A re-added `shadow-*` on one of these four files
+ * floating layers legitimately keep a shadow. A re-added `shadow-*` in one of these files
  * would silently re-elevate every card built on it.
  */
 
@@ -28,6 +28,7 @@ const DEFINITIONS: readonly CardDefinition[] = [
   definition('RequestCard', 'components/balo/project-request/request-card.tsx', 'BaloCard'),
   definition('SectionCard', 'components/balo/section/section-states.tsx', 'BaloCard'),
   definition('shadcn Card', 'components/ui/card.tsx', 'data-slot="card"'),
+  definition('Wallet card chrome', 'lib/credit/display-constants.ts', 'WALLET_CARD_CHROME'),
 ];
 
 describe('invariant: card-defining files are flat (BAL-618)', () => {

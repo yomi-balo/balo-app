@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-439 §12 — the guest recap's skeleton, drawn in the PAGE'S OWN SHAPE (label chip, title
  * bar, two meta rows, then a summary block and a files block) rather than a spinner, so the
@@ -11,8 +13,6 @@
  * SUPPRESSES a live region's own announcements — on the `<output>` it would silence the very
  * "Loading the recap…" line this element exists to announce.
  */
-
-import { BaloCard } from '@/components/balo/card/balo-card';
 
 export default function GuestRecapLoading(): React.JSX.Element {
   return (

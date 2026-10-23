@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { SectionError } from '@/components/balo/section/section-states';
 import { Button } from '@/components/ui/button';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { EndOfCallShell } from './_components/end-of-call-shell';
 
-import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-389 — the end-of-call screen's route-level ERROR boundary. Every failure resolves to a
  * stated cause plus a way forward; nothing here can leave the viewer stuck.
