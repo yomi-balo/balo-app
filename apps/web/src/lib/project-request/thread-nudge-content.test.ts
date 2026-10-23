@@ -108,7 +108,7 @@ describe('threadNudgeFor — client lens', () => {
     );
     const won = threadNudgeFor('client', 'kickoff_approved', thread({ stage: 'won', ...ownLast }));
     expect(preparing?.sub).toBeUndefined();
-    expect(won?.sub).toBeUndefined();
+    expect(won?.sub).toBe('Milestones, files and updates from Priya live in the workspace.');
   });
 
   it("a client teammate's latest message is never framed as the expert's", () => {
@@ -177,10 +177,36 @@ describe('threadNudgeFor — client lens', () => {
     expect(nudge?.secondary).toBeUndefined();
   });
 
-  it('accepted + won → workspace stub', () => {
+  it('accepted + won → a quiet event marker with no sub or buttons', () => {
+    const nudge = threadNudgeFor('client', 'accepted', thread({ stage: 'won' }));
+    expect(nudge?.variant).toBe('event');
+    expect(nudge?.headline).toBe('You chose Priya for this project');
+    expect(nudge?.sub).toBeUndefined();
+    expect(nudge?.primary).toBeUndefined();
+    expect(nudge?.secondary).toBeUndefined();
+  });
+
+  it('kickoff_approved + won → underway cell linking to the workspace', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'kickoff_approved',
+      thread({ stage: 'won' }),
+      null,
+      'eng-1'
+    );
+    expect(nudge?.variant).toBe('done');
+    expect(nudge?.headline).toBe('Your project is underway');
+    expect(nudge?.primary).toMatchObject({
+      label: 'Open project workspace',
+      action: 'link',
+      href: '/engagements/eng-1?from=request_detail',
+    });
+  });
+
+  it('kickoff_approved + won without a delivery engagement → no button', () => {
     const nudge = threadNudgeFor('client', 'kickoff_approved', thread({ stage: 'won' }));
-    expect(nudge?.headline).toBe('Priya is your expert');
-    expect(nudge?.primary).toMatchObject({ label: 'Open project workspace', action: 'stub' });
+    expect(nudge?.headline).toBe('Your project is underway');
+    expect(nudge?.primary).toBeUndefined();
   });
 
   it('closed → records copy, NEVER "is your expert" even on a thread that was won (BAL-540)', () => {
@@ -306,10 +332,26 @@ describe('threadNudgeFor — expert lens', () => {
     expect(nudge?.primary).toBeUndefined();
   });
 
-  it('kickoff_approved (won) → done workspace stub', () => {
-    const nudge = threadNudgeFor('expert', 'kickoff_approved', thread({ stage: 'won' }));
+  it('kickoff_approved (won) → done cell linking to the workspace', () => {
+    const nudge = threadNudgeFor(
+      'expert',
+      'kickoff_approved',
+      thread({ stage: 'won' }),
+      null,
+      'eng-1'
+    );
     expect(nudge?.variant).toBe('done');
     expect(nudge?.headline).toBe('Kicked off — time to deliver');
+    expect(nudge?.primary).toMatchObject({
+      label: 'Open workspace',
+      action: 'link',
+      href: '/engagements/eng-1?from=request_detail',
+    });
+  });
+
+  it('kickoff_approved (won) without a delivery engagement → no button', () => {
+    const nudge = threadNudgeFor('expert', 'kickoff_approved', thread({ stage: 'won' }));
+    expect(nudge?.primary).toBeUndefined();
   });
 
   it('not_selected wins over any status → records copy, no CTAs', () => {

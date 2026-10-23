@@ -79,6 +79,8 @@ interface ConversationStageProps {
    * site keeps compiling.
    */
   canDecline?: boolean;
+  /** BAL-331 delivery engagement id — null until kickoff approves. Feeds the nudge's workspace link. */
+  deliveryEngagementId?: string | null;
 }
 
 interface ThreadData {
@@ -157,9 +159,24 @@ function deriveStageRender(input: {
   clientCompanyName: string | null;
   /** BAL-540 — threaded straight to `deriveThreadActions`. */
   canDecline: boolean;
+  deliveryEngagementId: string | null;
 }): StageRenderModel {
-  const { lens, requestStatus, activeThread, threadCount, clientCompanyName, canDecline } = input;
-  const nudge = threadNudgeFor(lens, requestStatus, activeThread, clientCompanyName);
+  const {
+    lens,
+    requestStatus,
+    activeThread,
+    threadCount,
+    clientCompanyName,
+    canDecline,
+    deliveryEngagementId,
+  } = input;
+  const nudge = threadNudgeFor(
+    lens,
+    requestStatus,
+    activeThread,
+    clientCompanyName,
+    deliveryEngagementId
+  );
   const nudgeIsProposal = Boolean(nudge?.primary && /proposal/i.test(nudge.primary.label));
   const actions = deriveThreadActions({
     lens,
@@ -379,6 +396,7 @@ export function ConversationStage({
   clientCompanyName,
   viewerEmailDomain,
   canDecline = false,
+  deliveryEngagementId = null,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
   const router = useRouter();
@@ -1116,6 +1134,7 @@ export function ConversationStage({
       threadCount: threads.length,
       clientCompanyName,
       canDecline,
+      deliveryEngagementId,
     });
 
   // Lens-gated handler wiring (pure helper — keeps the component body branch-light).

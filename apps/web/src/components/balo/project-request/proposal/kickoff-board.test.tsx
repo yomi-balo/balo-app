@@ -44,7 +44,7 @@ const UPFRONT = { amountCents: 522_000, currency: 'aud' };
 /** What the expert lens receives: the steps, never the client-price amount. */
 const UPFRONT_WITHHELD = { amountCents: null, currency: 'aud' };
 
-function renderBoard(overrides: Partial<BoardProps> = {}): void {
+function renderBoard(overrides: Partial<BoardProps> = {}): ReturnType<typeof render> {
   const props: BoardProps = {
     requestId: REQUEST_ID,
     acceptedRelationshipId: RELATIONSHIP_ID,
@@ -57,12 +57,24 @@ function renderBoard(overrides: Partial<BoardProps> = {}): void {
     upfront: UPFRONT,
     ...overrides,
   };
-  render(<KickoffBoard {...props} />);
+  return render(<KickoffBoard {...props} />);
 }
 
 /** The row labels, in order. */
 function rowLabels(): (string | null | undefined)[] {
   return screen.getAllByRole('listitem').map((li) => li.querySelector('p')?.textContent);
+}
+
+/** Each step's thread state, in order. */
+function stepStates(): (string | null)[] {
+  return screen.getAllByRole('listitem').map((li) => li.getAttribute('data-step-state'));
+}
+
+/** The label of the single row marked `aria-current="step"`, or null when none is. */
+function currentLabel(): string | null {
+  const current = document.querySelectorAll('[aria-current="step"]');
+  expect(current.length).toBeLessThanOrEqual(1);
+  return current[0]?.querySelector('p')?.textContent ?? null;
 }
 
 describe('KickoffBoard — structure', () => {
@@ -72,19 +84,29 @@ describe('KickoffBoard — structure', () => {
 
   it('renders billing → invoice → payment when money is due upfront', () => {
     renderBoard();
-    expect(screen.getByText("What's blocking kickoff")).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Before kickoff' })).toBeInTheDocument();
     expect(rowLabels()).toEqual([
       'Add billing details',
       'Raise the upfront invoice',
       'Pay the upfront invoice',
     ]);
-    expect(screen.getByText('0/3 ready')).toBeInTheDocument();
+    expect(screen.getByText('0 of 3 done')).toBeInTheDocument();
   });
 
   it('drops the invoice steps for a single Balo approval when nothing is due upfront', () => {
     renderBoard({ upfront: null });
     expect(rowLabels()).toEqual(['Add billing details', 'Approve kickoff']);
-    expect(screen.getByText('0/2 ready')).toBeInTheDocument();
+    expect(screen.getByText('0 of 2 done')).toBeInTheDocument();
+    expect(stepStates()).toEqual(['current', 'future']);
+    expect(screen.getByText('Available once billing details are in')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Nothing is due upfront — waiting on Balo to approve kickoff')
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the approval line once billing is in and nothing is due upfront', () => {
+    renderBoard({ upfront: null, clientBillingConfirmed: true });
+    expect(stepStates()).toEqual(['done', 'current']);
     expect(
       screen.getByText('Nothing is due upfront — waiting on Balo to approve kickoff')
     ).toBeInTheDocument();
@@ -92,7 +114,38 @@ describe('KickoffBoard — structure', () => {
 
   it('counts finished steps towards the ready tally', () => {
     renderBoard({ clientBillingConfirmed: true, upfrontInvoiceRaised: true });
-    expect(screen.getByText('2/3 ready')).toBeInTheDocument();
+    expect(screen.getByText('2 of 3 done')).toBeInTheDocument();
+    expect(stepStates()).toEqual(['done', 'done', 'current']);
+  });
+
+  it.each(['client', 'expert', 'admin'] as const)(
+    '%s lens: aria-current marks the first not-done step only',
+    (lens) => {
+      renderBoard({
+        lens,
+        upfront: lens === 'expert' ? UPFRONT_WITHHELD : UPFRONT,
+        clientBillingConfirmed: true,
+        billing: lens === 'client' ? billingCapture() : null,
+      });
+      expect(currentLabel()).toBe('Raise the upfront invoice');
+    }
+  );
+
+  it('styles steps by state: future label muted, current client owner in primary', () => {
+    renderBoard({ lens: 'client', billing: billingCapture() });
+    const labelOf = (text: string): HTMLElement => screen.getByText(text);
+    expect(labelOf('Add billing details').className).toContain('text-foreground');
+    expect(labelOf('Raise the upfront invoice').className).toContain('text-muted-foreground');
+    expect(labelOf('Raise the upfront invoice').className).not.toContain('text-foreground');
+    const [billingOwner, paymentOwner] = screen.getAllByText('You');
+    expect(billingOwner?.className).toContain('text-primary');
+    expect(paymentOwner?.className).not.toContain('text-primary');
+  });
+
+  it('has no aria-current step once approved, and the counter reads "All done"', () => {
+    renderBoard({ clientBillingConfirmed: true, upfrontInvoiceRaised: true, approved: true });
+    expect(currentLabel()).toBeNull();
+    expect(screen.getByText('All done')).toBeInTheDocument();
   });
 });
 
@@ -104,12 +157,18 @@ describe('KickoffBoard — who each row is waiting on', () => {
   it('client: billing is theirs; the invoice waits on Balo; payment is due once it is sent', () => {
     renderBoard({ lens: 'client', billing: billingCapture() });
     expect(screen.getByText('Add your billing details')).toBeInTheDocument();
+    expect(screen.getByText('Available once billing details are in')).toBeInTheDocument();
+    expect(screen.getByText('Due once Balo sends the A$5,220 upfront invoice')).toBeInTheDocument();
+    // Billing and payment are both the client's — two "You" owner labels.
+    expect(screen.getAllByText('You')).toHaveLength(2);
+    expect(screen.getByText('Balo')).toBeInTheDocument();
+  });
+
+  it('client: once billing is in, the invoice step waits on Balo', () => {
+    renderBoard({ lens: 'client', billing: billingCapture(), clientBillingConfirmed: true });
     expect(
       screen.getByText('Waiting on Balo to send the A$5,220 upfront invoice')
     ).toBeInTheDocument();
-    expect(screen.getByText('Due once Balo sends the A$5,220 upfront invoice')).toBeInTheDocument();
-    // Billing and payment are both the client's — two "You" pills.
-    expect(screen.getAllByText('You')).toHaveLength(2);
   });
 
   it('client: once the invoice is sent, the payment row is theirs to pay', () => {
@@ -125,7 +184,7 @@ describe('KickoffBoard — who each row is waiting on', () => {
         'Pay the A$5,220 upfront invoice Balo sent — kickoff follows as soon as it lands'
       )
     ).toBeInTheDocument();
-    expect(screen.getByText('To pay')).toBeInTheDocument();
+    expect(screen.queryByText('To pay')).not.toBeInTheDocument();
     const paymentRow = screen.getByText('Pay the upfront invoice').closest('li');
     expect(paymentRow).toHaveAttribute('aria-current', 'step');
   });
@@ -135,14 +194,33 @@ describe('KickoffBoard — who each row is waiting on', () => {
     expect(
       screen.getByText('Waiting on Northwind Industrial to add billing details')
     ).toBeInTheDocument();
-    expect(screen.getByText('Waiting on Balo to send the upfront invoice')).toBeInTheDocument();
-    expect(
-      screen.getByText('Waiting on Northwind Industrial to pay the upfront invoice')
-    ).toBeInTheDocument();
+    expect(screen.getByText('Available once billing details are in')).toBeInTheDocument();
+    expect(screen.getByText('Due once Balo sends the upfront invoice')).toBeInTheDocument();
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
     expect(screen.queryByText('You')).not.toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    expect(screen.getAllByText('Waiting')).toHaveLength(3);
+    expect(screen.queryByText('Waiting')).not.toBeInTheDocument();
+    expect(screen.getByText('Balo')).toBeInTheDocument();
+    expect(screen.getAllByText('Northwind Industrial')).toHaveLength(2);
+  });
+
+  it('expert: shows the waiting copy once each step is current', () => {
+    const { unmount } = renderBoard({
+      lens: 'expert',
+      upfront: UPFRONT_WITHHELD,
+      clientBillingConfirmed: true,
+    });
+    expect(screen.getByText('Waiting on Balo to send the upfront invoice')).toBeInTheDocument();
+    unmount();
+    renderBoard({
+      lens: 'expert',
+      upfront: UPFRONT_WITHHELD,
+      clientBillingConfirmed: true,
+      upfrontInvoiceRaised: true,
+    });
+    expect(
+      screen.getByText('Waiting on Northwind Industrial to pay the upfront invoice')
+    ).toBeInTheDocument();
   });
 });
 
@@ -151,17 +229,19 @@ describe('KickoffBoard — admin actions', () => {
     vi.clearAllMocks();
   });
 
-  it('Mark sent and Confirm payment stay disabled until the steps before them are done', () => {
+  it('shows no admin action until the step is current', () => {
     renderBoard({ lens: 'admin' });
-    expect(screen.getByRole('button', { name: /^Mark sent/ })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /^Confirm payment/ })).toBeDisabled();
-    expect(screen.getByText('Available once billing details are in')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Mark sent/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Confirm payment/ })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Available once billing details are in')).toHaveLength(1);
+    expect(screen.getAllByText('You')).toHaveLength(1);
+    expect(screen.getAllByText('Northwind Industrial')).toHaveLength(2);
   });
 
-  it('enables Mark sent once billing is in, with the invoice instruction', () => {
+  it('offers Mark sent once billing is in, with the invoice instruction', () => {
     renderBoard({ lens: 'admin', clientBillingConfirmed: true });
     expect(screen.getByRole('button', { name: /^Mark sent/ })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /^Confirm payment/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Confirm payment/ })).not.toBeInTheDocument();
     expect(
       screen.getByText('Invoice Northwind Industrial for A$5,220, then mark it sent')
     ).toBeInTheDocument();
@@ -279,7 +359,7 @@ describe('KickoffBoard — client billing capture (BAL-323)', () => {
     await waitFor(() => expect(screen.getByText('Legal / entity name')).toBeInTheDocument());
   });
 
-  it('shows "Done" + a View affordance on the confirmed billing row (owner/admin)', () => {
+  it('shows a View affordance and no "Done" chip on the confirmed billing step (owner/admin)', () => {
     renderBoard({
       lens: 'client',
       clientBillingConfirmed: true,
@@ -293,8 +373,17 @@ describe('KickoffBoard — client billing capture (BAL-323)', () => {
         },
       }),
     });
-    expect(screen.getByText('Done')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /View/i })).toBeInTheDocument();
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View billing details' })).toBeInTheDocument();
+  });
+
+  it('a member on a confirmed billing step gets no View button', () => {
+    renderBoard({
+      lens: 'client',
+      clientBillingConfirmed: true,
+      billing: billingCapture({ canManage: false, details: null }),
+    });
+    expect(screen.queryByRole('button', { name: 'View billing details' })).not.toBeInTheDocument();
   });
 
   it('a plain member sees the "what happens next" notice, not a capture button', () => {
@@ -302,7 +391,7 @@ describe('KickoffBoard — client billing capture (BAL-323)', () => {
     expect(
       screen.getByText(/A company owner or admin needs to add these billing details/i)
     ).toBeInTheDocument();
-    expect(screen.getByText('Owner/admin only')).toBeInTheDocument();
+    expect(screen.queryByText('Owner/admin only')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Add details/i })).not.toBeInTheDocument();
   });
 
@@ -326,7 +415,7 @@ describe('KickoffBoard — terminal (approved) state', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the celebratory banner with every row Done and no action buttons', () => {
+  it('renders the celebratory banner with every step done and no action buttons', () => {
     renderBoard({
       lens: 'admin',
       clientBillingConfirmed: true,
@@ -335,8 +424,9 @@ describe('KickoffBoard — terminal (approved) state', () => {
     });
     expect(screen.getByText('Project kicked off 🎉')).toBeInTheDocument();
     expect(screen.getByText(/left the request pipeline and entered delivery/i)).toBeInTheDocument();
-    expect(screen.getAllByText('Done')).toHaveLength(3);
-    expect(screen.getByText('3/3 ready')).toBeInTheDocument();
+    expect(stepStates()).toEqual(['done', 'done', 'done']);
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+    expect(screen.getByText('All done')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
@@ -347,6 +437,6 @@ describe('KickoffBoard — terminal (approved) state', () => {
       clientBillingConfirmed: true,
       approved: true,
     });
-    expect(screen.getAllByText('Done')).toHaveLength(3);
+    expect(stepStates()).toEqual(['done', 'done', 'done']);
   });
 });

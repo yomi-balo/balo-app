@@ -617,6 +617,7 @@ export function RequestDetailShell({
                   clientCompanyName={view.companyName}
                   viewerEmailDomain={viewerEmailDomain}
                   canDecline={canDecline}
+                  deliveryEngagementId={deliveryEngagementId}
                 />
               </div>
               <div className="hidden space-y-5 lg:block">

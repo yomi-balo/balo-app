@@ -320,10 +320,10 @@ interface ClientBillingAffordanceProps {
 }
 
 /**
- * The client's billing row affordance on the kickoff board. Replaces the generic
- * "Complete" button with the capture flow: owner/admin get a form (or a View/Edit
- * dialog once confirmed); a plain member gets a muted "owner/admin only" marker
- * (the "what happens next" notice is the row's sub-copy — see KickoffBoard).
+ * The client's billing step affordance on the kickoff board. Owner/admin get the capture form,
+ * or a "View" link to the captured details once confirmed. A plain member — and a legacy
+ * confirm with no captured row — gets nothing: the step's sub-copy carries the notice (see
+ * KickoffBoard).
  */
 export function ClientBillingAffordance({
   done,
@@ -331,21 +331,18 @@ export function ClientBillingAffordance({
   requestId,
   relationshipId,
   details,
-}: Readonly<ClientBillingAffordanceProps>): React.JSX.Element {
+}: Readonly<ClientBillingAffordanceProps>): React.JSX.Element | null {
   const [open, setOpen] = useState(false);
 
   if (done) {
-    // Confirmed. Owner/admin can re-open the captured details (read-only + edit);
-    // a member — or a legacy confirm with no row — just sees "Done".
     if (canManage && details !== null) {
       return (
-        <div className="flex shrink-0 items-center gap-2.5">
-          <span className="text-success text-xs font-semibold">Done</span>
+        <>
           <button
             type="button"
             onClick={() => setOpen(true)}
             aria-label="View billing details"
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring -mx-1.5 -my-1 inline-flex min-h-9 items-center rounded-md px-1.5 py-1 text-xs font-medium underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
+            className="text-primary focus-visible:ring-ring -mr-2 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md px-2 text-[12.5px] font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none lg:min-h-9 lg:min-w-0"
           >
             View
           </button>
@@ -357,19 +354,13 @@ export function ClientBillingAffordance({
             relationshipId={relationshipId}
             details={details}
           />
-        </div>
+        </>
       );
     }
-    return <span className="text-success shrink-0 text-xs font-semibold">Done</span>;
+    return null;
   }
 
-  if (!canManage) {
-    // A plain member — the row sub-copy frames what happens next; the affordance
-    // itself is a muted, non-actionable marker (never a disabled-looking button).
-    return (
-      <span className="text-muted-foreground shrink-0 text-xs font-medium">Owner/admin only</span>
-    );
-  }
+  if (!canManage) return null;
 
   return (
     <>

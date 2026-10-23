@@ -54,13 +54,13 @@ describe('NudgeBar', () => {
     expect(screen.getByText('Your next step')).toBeInTheDocument();
   });
 
-  it('leaves CTAs owned by later slices disabled (expert EOI CTA)', () => {
+  it('renders no button for CTAs owned by later slices (expert EOI CTA)', () => {
     const nudge = nudgeFor('expert', 'experts_invited')!;
     render(
       <NudgeBar nudge={nudge} lens="expert" status="experts_invited" requestId={REQUEST_ID} />
     );
-    expect(screen.getByRole('button', { name: /Write your EOI/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Re-read the brief/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Write your EOI/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Re-read the brief/i })).toBeNull();
   });
 
   it('renders the Waiting eyebrow for waiting variants', () => {
@@ -306,14 +306,12 @@ describe('NudgeBar', () => {
       expect(mockPush).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${RELATIONSHIP_ID}`);
     });
 
-    it('stays disabled (copy alone does not enable) when no relationship id is threaded', () => {
+    it('renders no button (copy alone does not enable) when no relationship id is threaded', () => {
       const nudge = nudgeFor('expert', 'proposal_requested', 'proposal_requested')!;
       render(
         <NudgeBar nudge={nudge} lens="expert" status="proposal_requested" requestId={REQUEST_ID} />
       );
-      const cta = screen.getByRole('button', { name: /Build proposal/i });
-      expect(cta).toBeDisabled();
-      fireEvent.click(cta);
+      expect(screen.queryByRole('button', { name: /Build proposal/i })).toBeNull();
       expect(mockPush).not.toHaveBeenCalled();
     });
 

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { ChevronRight } from 'lucide-react';
+import { deliveryWorkspaceHref } from '@/lib/engagement/delivery-workspace-href';
 
 interface DeliveryWorkspaceLinkProps {
   engagementId: string;
@@ -16,7 +17,7 @@ export function DeliveryWorkspaceLink({
 }: Readonly<DeliveryWorkspaceLinkProps>): React.JSX.Element {
   return (
     <Link
-      href={`/engagements/${engagementId}?from=request_detail`}
+      href={deliveryWorkspaceHref(engagementId)}
       className="text-primary inline-flex items-center gap-1 text-sm font-semibold transition-opacity hover:opacity-90"
     >
       View delivery workspace

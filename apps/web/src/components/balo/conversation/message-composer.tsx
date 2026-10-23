@@ -53,7 +53,7 @@ const COUNTER_VISIBLE_FROM = MESSAGE_MAX_TEXT - 200;
  * Plain-text composer (D4 — no rich-text toolbar): auto-growing textarea,
  * Enter sends / Shift+Enter newline, an OPTIONAL attach button driving the
  * presign → XHR PUT → confirm pipeline (rendered only when `onAttach` is
- * supplied — see that prop), gradient send button. CONTROLLED: the stage owns the
+ * supplied — see that prop), solid primary send button. CONTROLLED: the stage owns the
  * draft per thread, so switching tabs swaps drafts instead of leaking one
  * thread's reply into another. While sending the textarea is `readOnly` (not
  * disabled) so focus — and the mobile keyboard — survive the round trip; the
@@ -228,7 +228,7 @@ export function MessageComposer({
           onClick={submit}
           disabled={disabled || sending || overLimit || value.trim().length === 0}
           aria-label="Send message"
-          className="from-primary focus-visible:ring-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-r to-violet-600 text-white transition-opacity focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-60 dark:to-violet-500"
+          className="bg-primary text-primary-foreground focus-visible:ring-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] transition-opacity focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-60"
         >
           {sending ? (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

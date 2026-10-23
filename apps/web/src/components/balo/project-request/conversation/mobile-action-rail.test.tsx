@@ -64,7 +64,7 @@ describe('MobileActionRail', () => {
     expect(onProposal).toHaveBeenCalledTimes(1);
   });
 
-  it("kind:'build' renders the live gradient CTA and fires onBuildProposal (expert lens, A6.2)", async () => {
+  it("kind:'build' renders the live solid CTA and fires onBuildProposal (expert lens, A6.2)", async () => {
     const user = userEvent.setup();
     const onBuildProposal = vi.fn();
     render(
@@ -82,8 +82,9 @@ describe('MobileActionRail', () => {
     const cta = screen.getByRole('button', { name: 'Build proposal' });
     expect(cta).toBeEnabled();
     expect(cta).not.toHaveAttribute('aria-disabled');
-    // Live commit treatment — the gradient, not the outlined stub.
-    expect(cta.className).toContain('bg-gradient-to-r');
+    // Live commit treatment — solid primary, not the outlined stub.
+    expect(cta.className).toContain('bg-primary');
+    expect(cta.className).toContain('text-primary-foreground');
     await user.click(cta);
     expect(onBuildProposal).toHaveBeenCalledTimes(1);
   });
@@ -106,7 +107,7 @@ describe('MobileActionRail', () => {
     expect(stub).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('quiet proposal CTA drops the gradient when the nudge already pushes it', () => {
+  it('quiet proposal CTA drops the solid fill when the nudge already pushes it', () => {
     render(
       <MobileActionRail
         visible
@@ -121,7 +122,7 @@ describe('MobileActionRail', () => {
     );
     const cta = screen.getByRole('button', { name: 'Request proposal' });
     expect(cta.className).toContain('bg-primary/5');
-    expect(cta.className).not.toContain('bg-gradient-to-r');
+    expect(cta.className).not.toContain('text-primary-foreground');
   });
 
   it("kind:'view' renders ENABLED and fires onViewProposal when provided (BAL-289 / A6.3)", async () => {
@@ -142,9 +143,9 @@ describe('MobileActionRail', () => {
     const cta = screen.getByRole('button', { name: 'View proposal' });
     expect(cta).toBeEnabled();
     expect(cta).not.toHaveAttribute('aria-disabled');
-    // The "view" link keeps the outlined treatment, never the commit gradient.
+    // The "view" link keeps the outlined treatment, never the solid commit fill.
     expect(cta.className).toContain('bg-primary/5');
-    expect(cta.className).not.toContain('bg-gradient-to-r');
+    expect(cta.className).not.toContain('text-primary-foreground');
     await user.click(cta);
     expect(onViewProposal).toHaveBeenCalledTimes(1);
   });

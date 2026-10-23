@@ -267,6 +267,25 @@ beforeEach(() => {
   });
 });
 
+describe('ConversationStage — delivery workspace link', () => {
+  it('threads deliveryEngagementId into the kickoff_approved nudge link', () => {
+    render(
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens="client"
+        requestStatus="kickoff_approved"
+        view={view({ threads: [thread({ stage: 'won' })] })}
+        requestTitle="CPQ implementation"
+        clientCompanyName="Northwind Industrial"
+        viewerEmailDomain="northwind.example"
+        deliveryEngagementId="eng-1"
+      />
+    );
+    const link = screen.getByRole('link', { name: 'Open project workspace' });
+    expect(link).toHaveAttribute('href', '/engagements/eng-1?from=request_detail');
+  });
+});
+
 describe('ConversationStage — default tab + mount behaviour', () => {
   it('honors the server-picked default tab and marks it read on mount', async () => {
     const v = view({
