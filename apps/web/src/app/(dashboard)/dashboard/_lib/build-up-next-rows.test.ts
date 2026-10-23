@@ -110,6 +110,45 @@ describe('buildUpNextRowViews — titles', () => {
     expect(view?.title).toBe('Delivery with CloudPeak');
   });
 
+  it('a project call resolves its title like a kickoff: the engagement id feeds the kickoff lookup', async () => {
+    mockFindTitles.mockResolvedValue({
+      ...EMPTY_TITLES,
+      kickoffRequestTitleByEngagementId: new Map([['eng-1', 'CPQ rollout']]),
+    });
+    const [view] = await buildUpNextRowViews(
+      [row({ contextType: 'project_call', contextId: 'eng-1' })],
+      'company'
+    );
+    expect(mockFindTitles).toHaveBeenCalledWith({
+      caseEngagementIds: [],
+      kickoffEngagementIds: ['eng-1'],
+      projectRequestIds: [],
+    });
+    expect(view?.title).toBe('CPQ rollout');
+  });
+
+  it('a project call on the expert side still looks up the delivering expert party for the title fallback', async () => {
+    mockFindTitles.mockResolvedValue({
+      ...EMPTY_TITLES,
+      kickoffRequestTitleByEngagementId: new Map([['eng-1', null]]),
+    });
+    mockFindExpertPartyNames.mockResolvedValue([
+      {
+        expertProfileId: 'profile-1',
+        type: 'freelancer',
+        firstName: 'Priya',
+        lastName: 'Sharma',
+        agencyName: null,
+      },
+    ]);
+    const [view] = await buildUpNextRowViews(
+      [row({ contextType: 'project_call', contextId: 'eng-1' })],
+      'expert'
+    );
+    expect(mockFindExpertPartyNames).toHaveBeenCalledWith(['profile-1']);
+    expect(view?.title).toBe('Delivery with Priya');
+  });
+
   it('kickoff fallback: independent expert -> "Delivery with {person}"', async () => {
     mockFindTitles.mockResolvedValue({
       ...EMPTY_TITLES,
@@ -289,7 +328,7 @@ describe('toUpNextRowView — view-model key set (BAL-566 §11)', () => {
   // BAL-581 — `roomReady` matches `/room/i` but is a readiness boolean, not a room locator.
   // Exempt it BY NAME rather than weakening the pattern, which must keep rejecting roomName,
   // roomUrl and dailyRoomName.
-  const READINESS_BOOLEAN_KEYS: readonly string[] = ['roomReady'];
+  const READINESS_BOOLEAN_KEYS: ReadonlySet<string> = new Set(['roomReady']);
   const lookups = {
     titles: EMPTY_TITLES,
     partyNamesByProfileId: new Map(),
@@ -312,7 +351,7 @@ describe('toUpNextRowView — view-model key set (BAL-566 §11)', () => {
     const view = toUpNextRowView(smuggled, lookups, 'company');
     const keys = Object.keys(view).sort((a, b) => a.localeCompare(b));
     expect(keys).toEqual([...UP_NEXT_ROW_VIEW_KEYS].sort((a, b) => a.localeCompare(b)));
-    for (const key of keys.filter((k) => !READINESS_BOOLEAN_KEYS.includes(k))) {
+    for (const key of keys.filter((k) => !READINESS_BOOLEAN_KEYS.has(k))) {
       expect(key).not.toMatch(NO_MONEY_PATTERN);
     }
     expect(typeof view.roomReady).toBe('boolean');

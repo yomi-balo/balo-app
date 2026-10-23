@@ -25,6 +25,8 @@ export {
   // the two BAL-283 Server Actions derive their Zod enum from it instead of hand-writing a
   // sixth copy of `['header','rail','nudge']`.
   CONVERSATION_CALL_SURFACES,
+  // BAL-616 — the client call route tuple. ⚠ THE RE-EXPORT ALLOWLIST.
+  CONVERSATION_CALL_ROUTES,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,
@@ -118,6 +120,8 @@ export {
   DASHBOARD_UP_NEXT_MEETING_TYPES,
   DASHBOARD_UP_NEXT_TARGETS,
   DASHBOARD_UP_NEXT_ROW_STATES,
+  // BAL-616 — which surface sent an Up next click (the card or the request thread header).
+  DASHBOARD_UP_NEXT_SURFACES,
   DASHBOARD_YOUR_MOVE_CARD_KINDS,
   DASHBOARD_YOUR_MOVE_CHIPS,
   DASHBOARD_YOUR_MOVE_TARGETS,
@@ -160,6 +164,7 @@ export type {
   ConversationThreadSelectMethod,
   ConversationFilesSurface,
   ConversationCallSurface,
+  ConversationCallRoute,
   ConversationProposalSurface,
   ConversationProposalCta,
   ProjectsInboxEventMap,
@@ -283,6 +288,7 @@ export type {
   DashboardUpNextMeetingType,
   DashboardUpNextTarget,
   DashboardUpNextRowState,
+  DashboardUpNextSurface,
   // BAL-589 — the "Convert a case to a project" AI brief's event payload.
   CaseBriefEventMap,
 } from '../events';

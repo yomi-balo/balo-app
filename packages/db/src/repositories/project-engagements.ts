@@ -23,6 +23,7 @@ import { acquireRequestLock } from './_shared/request-lock';
 import { markNotSelectedByAward } from './request-expert-relationships';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { conversationsRepository } from './conversations';
+import { reanchorRequestCallsToEngagementTx } from './meeting-contexts';
 import { listByProposalTx } from './proposal-milestones';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
 import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
@@ -962,6 +963,8 @@ export const projectEngagementsRepository = {
    *    with anything due upfront (`upfrontDueCents`, read from `sourceProposalId`'s
    *    installments + the passed terms) → `KickoffGatesIncompleteError`
    *  - incoherent snapshotted terms → `EngagementTermsCoherenceError`
+   *  - a won-thread call whose owning company or delivering expert would change on re-anchor →
+   *    `MeetingReanchorOwnerMismatchError` (BAL-616; see the CARRY-OVER step)
    *
    * The engagement's `billingModel`/`approvalModel`/`deliveryStatus`/`currency` come
    * from the table defaults (`'proposal'`/`'admin_invoice'`/`'active'`/`'aud'`) unless
@@ -996,6 +999,12 @@ export const projectEngagementsRepository = {
      * can `log.info` the count. Empty on a single-track request.
      */
     closedRelationshipIds: string[];
+    /**
+     * BAL-616 — the won thread's live calls re-anchored onto the engagement as project calls
+     * in this same transaction, in `scheduled_start` order. Additive, like
+     * `closedRelationshipIds`. Empty when the thread had no live call.
+     */
+    reanchoredMeetingIds: string[];
   }> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
@@ -1122,6 +1131,20 @@ export const projectEngagementsRepository = {
       });
 
       /**
+       * BAL-616 CARRY-OVER — THE WON THREAD'S LIVE CALLS BECOME PROJECT CALLS (ADR-1046
+       * amendment 2026-10-23). Every live, not-ended, not-cancelled `request_interaction` call
+       * on the winning relationship gains a `project_call` context naming the new engagement,
+       * and keeps its `request_interaction` row. Each meeting's owning company and delivering
+       * expert are asserted unchanged across the re-anchor; a refusal throws and rolls this
+       * whole kickoff back (fail closed — the request stays `accepted`). The full rule lives on
+       * `reanchorRequestCallsToEngagementTx`.
+       */
+      const reanchoredMeetingIds = await reanchorRequestCallsToEngagementTx(tx, {
+        relationshipId: input.relationshipId,
+        engagementId: parent.id,
+      });
+
+      /**
        * BAL-431 / ADR-1048 §5 (Ruling 2) — AWARD CLOSURE. Every OTHER live track on this
        * request is now a LOSING track: it receives nothing new and keeps historical read of
        * everything shared before this instant. Stamped HERE, in the same transaction as the
@@ -1139,7 +1162,12 @@ export const projectEngagementsRepository = {
         at: new Date(),
       });
 
-      return { engagement: toProjectRow(parent, child), request, closedRelationshipIds };
+      return {
+        engagement: toProjectRow(parent, child),
+        request,
+        closedRelationshipIds,
+        reanchoredMeetingIds,
+      };
     });
   },
 

@@ -57,6 +57,7 @@ describe('sendConversationTypingAction', () => {
     const result = await sendConversationTypingAction(INPUT);
 
     expect(result).toEqual({ success: true });
+    // BAL-616: no admission argument, so the resolver's `'live'` default refuses a closed request.
     expect(mockReadAccess).toHaveBeenCalledWith(USER, REQUEST_ID, RELATIONSHIP_ID);
     expect(mockPublishTypingSignal).toHaveBeenCalledWith(GATE_CONVERSATION_ID, USER.id, 'started');
   });

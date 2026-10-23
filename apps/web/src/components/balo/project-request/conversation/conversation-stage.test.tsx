@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
+import { track, CONVERSATION_EVENTS, DASHBOARD_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
 import {
   ExpertCallBridgeProvider,
+  useClientBookCall,
   useExpertProposeTimes,
   useExpertProposeTimesPending,
 } from '../expert-call-bridge';
@@ -162,7 +163,9 @@ import { thread as baseThread } from '@/test/fixtures/conversation';
 import type {
   ConversationThreadView,
   ConversationView,
+  UpcomingCallView,
 } from '@/lib/project-request/conversation-view-types';
+import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 
 const mockTrack = vi.mocked(track);
 const mockToast = vi.mocked(toast);
@@ -253,6 +256,7 @@ beforeEach(() => {
     durationMinutes: 30,
     guestsInvited: 0,
     guestInviteFailed: false,
+    contextType: 'request_interaction',
   });
   mockRequestProposal.mockResolvedValue({
     success: true,
@@ -1349,5 +1353,440 @@ describe('ConversationStage — typing indicator', () => {
     await user.tab();
 
     expect(typing.onStopped).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── BAL-616 — always-bookable calls ──────────────────────────────────────────────────────────
+
+function callAt(meetingId: string, iso: string, contextType: UpcomingCallView['contextType']) {
+  return { meetingId, scheduledStartIso: iso, contextType } satisfies UpcomingCallView;
+}
+
+function renderStageAt(
+  v: ConversationView,
+  requestStatus: ProjectRequestStatus,
+  lens: 'client' | 'expert' = 'client',
+  children: React.ReactNode = null
+): void {
+  render(
+    <ExpertCallBridgeProvider>
+      {children}
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens={lens}
+        requestStatus={requestStatus}
+        view={v}
+        requestTitle="CPQ implementation"
+        clientCompanyName="Northwind Industrial"
+        viewerEmailDomain="northwind.example"
+        deliveryEngagementId={requestStatus === 'kickoff_approved' ? 'eng-1' : null}
+      />
+    </ExpertCallBridgeProvider>
+  );
+}
+
+describe('ConversationStage — call CTA analytics (BAL-616)', () => {
+  it('client, nothing booked: tracks request_status, upcoming_count 0 and the in_place route', async () => {
+    const user = userEvent.setup();
+    renderStageAt(view(), 'eoi_submitted');
+    await user.click(screen.getAllByRole('button', { name: 'Book a call' })[0] as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      lens: 'client',
+      surface: 'header',
+      request_status: 'eoi_submitted',
+      upcoming_count: 0,
+      route: 'in_place',
+    });
+  });
+
+  it('client with a call booked: Book another call tracks upcoming_count 1 and opens the dialog', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({
+        threads: [
+          thread({
+            upcomingCalls: [callAt('m-1', '2026-12-01T10:00:00.000Z', 'request_interaction')],
+          }),
+        ],
+      }),
+      'eoi_submitted'
+    );
+    await user.click(
+      screen.getAllByRole('button', { name: 'Book another call' })[0] as HTMLElement
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ upcoming_count: 1, route: 'in_place', surface: 'header' })
+    );
+    expect(await screen.findByText(/Pick a time/)).toBeInTheDocument();
+  });
+
+  it('expert: the route is null', async () => {
+    const user = userEvent.setup();
+    renderStageAt(view(), 'eoi_submitted', 'expert');
+    await user.click(screen.getAllByRole('button', { name: 'Propose times' })[0] as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ lens: 'expert', route: null, request_status: 'eoi_submitted' })
+    );
+  });
+});
+
+describe('ConversationStage — the profile route (BAL-616)', () => {
+  it('a thread the request moved on from links to the profile, tracks route profile, opens no dialog', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({ threads: [thread({ stage: 'not_selected', relationshipStatus: 'declined' })] }),
+      'accepted'
+    );
+    // jsdom cannot navigate; swallow the default action after React has handled the click.
+    document.addEventListener('click', (event) => event.preventDefault(), { once: true });
+    const [link] = screen.getAllByRole('link', { name: 'Book a call' });
+    expect(link).toHaveAttribute('href', '/experts/priya-nair?book=1&src=request_thread');
+    await user.click(link as HTMLElement);
+
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ route: 'profile', request_status: 'accepted' })
+    );
+    expect(screen.queryByText(/Pick a time/)).not.toBeInTheDocument();
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConversationStage — the three-call cap (BAL-616)', () => {
+  const THREE = [
+    callAt('m-1', '2026-12-01T10:00:00.000Z', 'request_interaction'),
+    callAt('m-2', '2026-12-02T10:00:00.000Z', 'request_interaction'),
+    callAt('m-3', '2026-12-03T10:00:00.000Z', 'request_interaction'),
+  ];
+
+  it('at the cap, Book another call toasts the cap copy and does not open the dialog', async () => {
+    const user = userEvent.setup();
+    renderStageAt(view({ threads: [thread({ upcomingCalls: THREE })] }), 'eoi_submitted');
+    await user.click(
+      screen.getAllByRole('button', { name: 'Book another call' })[0] as HTMLElement
+    );
+
+    expect(mockToast.info).toHaveBeenCalledWith('You have 3 calls booked with Priya.', {
+      description: 'Once one has happened you can book another.',
+    });
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ upcoming_count: 3 })
+    );
+    expect(screen.queryByText(/Pick a time/)).not.toBeInTheDocument();
+  });
+
+  it('below the cap it opens the dialog and shows no toast', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({ threads: [thread({ upcomingCalls: THREE.slice(0, 2) })] }),
+      'eoi_submitted'
+    );
+    await user.click(
+      screen.getAllByRole('button', { name: 'Book another call' })[0] as HTMLElement
+    );
+    expect(await screen.findByText(/Pick a time/)).toBeInTheDocument();
+    expect(mockToast.info).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConversationStage — optimistic booking insert (BAL-616)', () => {
+  it('keeps the list soonest-first: an earlier booking becomes the next call, the old one drops to "+1 more"', async () => {
+    const user = userEvent.setup();
+    const later = callAt('m-later', '2026-12-01T10:00:00.000Z', 'request_interaction');
+    renderStageAt(view({ threads: [thread({ upcomingCalls: [later] })] }), 'eoi_submitted');
+
+    await user.click(
+      screen.getAllByRole('button', { name: 'Book another call' })[0] as HTMLElement
+    );
+    await user.click(await screen.findByRole('button', { name: 'Pick 9am slot' }));
+    await user.click(await screen.findByRole('button', { name: 'Confirm & book call' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to conversation' }));
+
+    const [more] = await screen.findAllByRole('button', { name: 'Show 1 more upcoming call' });
+    await user.click(more as HTMLElement);
+    const items = within(await screen.findByRole('dialog')).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Fri 5 Jun at 9:00 am');
+    expect(items[1]).toHaveTextContent('Tue 1 Dec at 10:00 am');
+  });
+
+  it('passes the booked call context type through to the thread', async () => {
+    const user = userEvent.setup();
+    mockBookIntroCall.mockResolvedValue({
+      ok: true,
+      meetingId: 'meeting-9',
+      joinPath: '/meetings/meeting-9/call',
+      provisioned: true,
+      scheduledStartIso: '2026-06-05T09:00:00.000Z',
+      scheduledEndIso: '2026-06-05T09:30:00.000Z',
+      durationMinutes: 30,
+      guestsInvited: 0,
+      guestInviteFailed: false,
+      contextType: 'project_call',
+    });
+    renderStageAt(
+      view({ threads: [thread({ stage: 'won', relationshipStatus: 'accepted' })] }),
+      'kickoff_approved'
+    );
+    await user.click(screen.getAllByRole('button', { name: 'Book a call' })[0] as HTMLElement);
+    await user.click(await screen.findByRole('button', { name: 'Pick 9am slot' }));
+    await user.click(await screen.findByRole('button', { name: 'Confirm & book call' }));
+    await user.click(await screen.findByRole('button', { name: 'Back to conversation' }));
+
+    // A booked project call links to the delivery workspace (the engagement exists at kickoff).
+    expect(
+      (await screen.findAllByRole('link', { name: 'Fri 5 Jun at 9:00 am' }))[0]
+    ).toHaveAttribute('href', '/engagements/eng-1?from=request_detail');
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_INTRO_CALL_BOOKED,
+      expect.objectContaining({ context_type: 'project_call', request_status: 'kickoff_approved' })
+    );
+  });
+});
+
+describe('ConversationStage — dialog call kind (BAL-616)', () => {
+  it('an active thread books an intro call; the won thread books a call', async () => {
+    const user = userEvent.setup();
+    renderStageAt(view(), 'eoi_submitted');
+    await user.click(screen.getAllByRole('button', { name: 'Book a call' })[0] as HTMLElement);
+    expect(await screen.findByText('Book an intro call with Priya Nair')).toBeInTheDocument();
+  });
+
+  it('won thread: "Book a call with …" and no "intro" anywhere in the dialog', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({ threads: [thread({ stage: 'won', relationshipStatus: 'accepted' })] }),
+      'accepted'
+    );
+    await user.click(screen.getAllByRole('button', { name: 'Book a call' })[0] as HTMLElement);
+    expect(await screen.findByText('Book a call with Priya Nair')).toBeInTheDocument();
+    expect(screen.getByText('Pick a time — calls with Priya are free.')).toBeInTheDocument();
+  });
+});
+
+describe('ConversationStage — Join analytics (BAL-616)', () => {
+  it('Join reports UP_NEXT_CLICKED on the request_thread surface', async () => {
+    const assign = vi.fn();
+    const realLocation = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { href: realLocation.href, origin: realLocation.origin, assign },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-01T09:59:00.000Z'));
+    try {
+      const user = userEvent.setup();
+      renderStageAt(
+        view({
+          threads: [
+            thread({
+              upcomingCalls: [callAt('m-1', '2026-12-01T10:00:00.000Z', 'request_interaction')],
+            }),
+          ],
+        }),
+        'eoi_submitted'
+      );
+      const [join] = await screen.findAllByRole('button', { name: /Join Priya Nair's meeting/ });
+      await user.click(join as HTMLElement);
+
+      expect(mockTrack).toHaveBeenCalledWith(DASHBOARD_EVENTS.UP_NEXT_CLICKED, {
+        target: 'join',
+        meeting_type: 'request_interaction',
+        row_state: 'starting_soon',
+        surface: 'request_thread',
+      });
+      expect(assign).toHaveBeenCalledWith('/meetings/m-1/call');
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation });
+    }
+  });
+});
+
+describe('ConversationStage — the kickoff board bridge (BAL-616)', () => {
+  function BoardStandIn(): React.JSX.Element {
+    const bookCall = useClientBookCall();
+    return (
+      <button type="button" disabled={bookCall === null} onClick={() => bookCall?.()}>
+        Pick a time (board)
+      </button>
+    );
+  }
+
+  const WON = thread({
+    relationshipId: 'rel-2',
+    conversationId: 'conv-2',
+    expertFirstName: 'Marcus',
+    expertName: 'Marcus Chen',
+    expertInitials: 'MC',
+    stage: 'won',
+    relationshipStatus: 'accepted',
+  });
+
+  it('selects the won thread, tracks the kickoff_board surface and opens the dialog', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({
+        threads: [thread({ stage: 'not_selected', relationshipStatus: 'declined' }), WON],
+        defaultThreadId: 'rel-1',
+      }),
+      'accepted',
+      'client',
+      <BoardStandIn />
+    );
+    await user.click(screen.getByRole('button', { name: 'Pick a time (board)' }));
+
+    // The modal dialog hides the tab strip from the accessibility tree.
+    expect(screen.getByRole('button', { name: 'Marcus', hidden: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({
+        surface: 'kickoff_board',
+        relationship_id: 'rel-2',
+        upcoming_count: 0,
+        route: 'in_place',
+        request_status: 'accepted',
+      })
+    );
+    expect(await screen.findByText('Book a call with Marcus Chen')).toBeInTheDocument();
+  });
+
+  it('does not re-select when the won thread is already on screen', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({ threads: [thread({ stage: 'won', relationshipStatus: 'accepted' })] }),
+      'accepted',
+      'client',
+      <BoardStandIn />
+    );
+    mockTrack.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Pick a time (board)' }));
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_THREAD_SELECTED,
+      expect.anything()
+    );
+    expect(await screen.findByText('Book a call with Priya Nair')).toBeInTheDocument();
+  });
+
+  it('registers no handler once the won thread has an upcoming call, or off the won stage', () => {
+    renderStageAt(
+      view({
+        threads: [
+          thread({
+            stage: 'won',
+            relationshipStatus: 'accepted',
+            upcomingCalls: [callAt('m-1', '2026-12-01T10:00:00.000Z', 'request_interaction')],
+          }),
+        ],
+      }),
+      'accepted',
+      'client',
+      <BoardStandIn />
+    );
+    expect(screen.getByRole('button', { name: 'Pick a time (board)' })).toBeDisabled();
+  });
+
+  it('registers no handler for the expert lens', () => {
+    renderStageAt(
+      view({ threads: [thread({ stage: 'won', relationshipStatus: 'accepted' })] }),
+      'accepted',
+      'expert',
+      <BoardStandIn />
+    );
+    expect(screen.getByRole('button', { name: 'Pick a time (board)' })).toBeDisabled();
+  });
+});
+
+describe('ConversationStage — a closed request reads as a record (BAL-616)', () => {
+  const SURVIVING_CALL = callAt('m-1', '2026-12-01T10:00:00.000Z', 'request_interaction');
+  const closedView = (): ConversationView =>
+    view({
+      threads: [
+        thread({
+          stage: 'request_closed',
+          relationshipStatus: 'declined',
+          expertUsername: 'priya',
+          upcomingCalls: [SURVIVING_CALL],
+        }),
+      ],
+    });
+
+  it('disables the composer with the closed copy and never posts', async () => {
+    const user = userEvent.setup();
+    renderStageAt(closedView(), 'closed');
+    const box = screen.getByPlaceholderText('This request is closed — messaging is off.');
+    expect(box).toBeDisabled();
+    await user.type(box, 'hello');
+    expect(mockPostMessage).not.toHaveBeenCalled();
+  });
+
+  it('offers exactly one control, Book a call to the profile, and no join, proposal or decline', () => {
+    renderStageAt(closedView(), 'closed');
+    for (const link of screen.getAllByRole('link', { name: 'Book a call' })) {
+      expect(link).toHaveAttribute('href', '/experts/priya?book=1&src=request_thread');
+    }
+    expect(
+      screen.queryAllByRole('button', { name: /proposal|decline|join|book another/i })
+    ).toHaveLength(0);
+  });
+
+  it('shows the closed nudge', () => {
+    renderStageAt(closedView(), 'closed');
+    expect(screen.getByText('This request was closed.')).toBeInTheDocument();
+  });
+
+  it('attaches no typing signal, but still marks the thread read', async () => {
+    renderStageAt(closedView(), 'closed');
+    expect(realtimeCapture.input?.typingConversationId).toBeNull();
+    await waitFor(() =>
+      expect(mockMarkRead).toHaveBeenCalledWith({ requestId: REQUEST_ID, relationshipId: 'rel-1' })
+    );
+  });
+
+  it('tracks the Book a call click as a profile route with no upcoming calls', async () => {
+    const user = userEvent.setup();
+    renderStageAt(closedView(), 'closed');
+    document.addEventListener('click', (event) => event.preventDefault(), { once: true });
+    const [link] = screen.getAllByRole('link', { name: 'Book a call' });
+    await user.click(link as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
+      request_id: REQUEST_ID,
+      relationship_id: 'rel-1',
+      lens: 'client',
+      surface: 'header',
+      request_status: 'closed',
+      upcoming_count: 0,
+      route: 'profile',
+    });
+  });
+
+  it('a not-selected thread that still holds a call reports upcoming_count 0 with the profile route', async () => {
+    const user = userEvent.setup();
+    renderStageAt(
+      view({
+        threads: [
+          thread({
+            stage: 'not_selected',
+            relationshipStatus: 'declined',
+            upcomingCalls: [SURVIVING_CALL],
+          }),
+        ],
+      }),
+      'accepted'
+    );
+    document.addEventListener('click', (event) => event.preventDefault(), { once: true });
+    const [link] = screen.getAllByRole('link', { name: 'Book a call' });
+    await user.click(link as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ upcoming_count: 0, route: 'profile', request_status: 'accepted' })
+    );
   });
 });

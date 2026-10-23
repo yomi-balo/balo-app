@@ -27,7 +27,9 @@ vi.mock('@balo/db', () => ({
 // sanctioned "which party owns this context" rule, including its axis discipline (the EXPERT
 // from the relationship, the COMPANY from the request). A stubbed resolver would let the two
 // be swapped and every assertion below would still pass.
+import { CALENDAR_CONTEXT_REGISTRY } from './calendar-context-registry.js';
 import {
+  calendarEventLabelFor,
   resolveExpertCalendarFacts,
   titleOr,
   type ExpertCalendarFactsSubject,
@@ -153,6 +155,59 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
    * and the company id would describe different states. `loadSubject` states this verbatim;
    * this is the assertion that keeps it true after a refactor.
    */
+  it('request_interaction on the WON relationship → "Call", for the label and the blank-title fallback', async () => {
+    mockFindRelationshipById.mockResolvedValue({
+      id: RELATIONSHIP_ID,
+      projectRequestId: REQUEST_ID,
+      expertProfileId: 'expert-1',
+      status: 'accepted',
+    });
+    wireRequest(null);
+
+    const facts = await resolveExpertCalendarFacts(
+      subject('request_interaction', RELATIONSHIP_ID),
+      fakeLog()
+    );
+
+    expect(facts).toEqual({
+      clientCompanyName: 'Northwind Industrial',
+      title: 'Call',
+      eventLabel: 'Call',
+    });
+  });
+
+  it('request_interaction on a not-yet-won relationship keeps "Intro call"', async () => {
+    mockFindRelationshipById.mockResolvedValue({
+      id: RELATIONSHIP_ID,
+      projectRequestId: REQUEST_ID,
+      expertProfileId: 'expert-1',
+      status: 'eoi_submitted',
+    });
+    wireRequest();
+
+    const facts = await resolveExpertCalendarFacts(
+      subject('request_interaction', RELATIONSHIP_ID),
+      fakeLog()
+    );
+
+    expect(facts?.eventLabel).toBe('Intro call');
+  });
+
+  it('project_call → "Call" off the registry, with the label as the subject', async () => {
+    wireEngagement();
+
+    const facts = await resolveExpertCalendarFacts(
+      subject('project_call', ENGAGEMENT_ID),
+      fakeLog()
+    );
+
+    expect(facts).toEqual({
+      clientCompanyName: 'Northwind Industrial',
+      title: 'Call',
+      eventLabel: 'Call',
+    });
+  });
+
   it('⚠ reads the project request EXACTLY ONCE on the two-hop arm', async () => {
     mockFindRelationshipById.mockResolvedValue({
       id: RELATIONSHIP_ID,
@@ -359,5 +414,33 @@ describe('titleOr', () => {
     expect(titleOr('   ', 'Consultation')).toBe('Consultation');
     expect(titleOr(null, 'Consultation')).toBe('Consultation');
     expect(titleOr(undefined, 'Consultation')).toBe('Consultation');
+  });
+});
+
+describe('calendarEventLabelFor', () => {
+  const interaction = CALENDAR_CONTEXT_REGISTRY.request_interaction;
+
+  it.each([
+    ['request_interaction', 'accepted', 'Call'],
+    ['request_interaction', 'eoi_submitted', 'Intro call'],
+    ['request_interaction', null, 'Intro call'],
+  ] as const)('%s at relationship status %s → %s', (contextType, status, expected) => {
+    expect(calendarEventLabelFor(contextType, interaction, status)).toBe(expected);
+  });
+
+  it('project_call is "Call" whatever the relationship status', () => {
+    expect(
+      calendarEventLabelFor('project_call', CALENDAR_CONTEXT_REGISTRY.project_call, null)
+    ).toBe('Call');
+  });
+
+  it('a won relationship status never relabels another context', () => {
+    expect(
+      calendarEventLabelFor(
+        'project_discovery',
+        CALENDAR_CONTEXT_REGISTRY.project_discovery,
+        'accepted'
+      )
+    ).toBe('Discovery call');
   });
 });

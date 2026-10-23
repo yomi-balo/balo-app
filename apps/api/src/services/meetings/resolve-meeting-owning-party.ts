@@ -8,7 +8,7 @@
  * duplication gate — and, more importantly, a third place for the READ BINDING to drift.
  * ⚠ `authorize-meeting-participation.ts` STILL CARRIES ITS OWN COPY, AND THAT IS LEFT ALONE ON
  * PURPOSE RATHER THAN OVERLOOKED. Its copy exists behind a long, explicit argument — LOGGING
- * LOCALITY: it keeps the exhaustiveness witness at that gate so a seventh context label stops
+ * LOCALITY: it keeps the exhaustiveness witness at that gate so an eighth context label stops
  * `tsc` in the file whose log voice (`meeting-participation-authz`) would report it. Migrating
  * it would move that warn's scope name and overrule a settled decision in a gate BAL-410 is not
  * otherwise touching. If a future ticket does migrate it, move that reasoning here rather than
@@ -71,7 +71,7 @@ export async function loadOwningParty(
     case 'not_found':
       return undefined;
     default: {
-      // Compile-time exhaustiveness over the SIX holder-bearing labels — a SEVENTH non-admin
+      // Compile-time exhaustiveness over the SEVEN holder-bearing labels — an EIGHTH non-admin
       // label widens `UnhandledMeetingContextType` away from `never` and stops
       // `pnpm --filter api typecheck` right here until an arm is consciously written. Fails
       // CLOSED rather than throwing: every caller of this is an authorization gate.

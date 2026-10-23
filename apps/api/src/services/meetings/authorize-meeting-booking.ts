@@ -139,7 +139,7 @@
  *     context this route accepts is a COMPANY.
  *
  * ⚠ WHY `PARTICIPATE` AND NOT `CONSUME_CREDITS`. `CONSUME_CREDITS` is the WALLET-DRAWDOWN
- * token. Four of the five contexts (kickoff, discovery, package session, request_interaction
+ * token. Five of the six contexts (kickoff, project call, discovery, package session, request_interaction
  * — BAL-283 Ruling 2: NO credit hold on an intro call, ever) carry NO CREDIT HOLD AT ALL —
  * gating them on a wallet token is a category error. The money gate for a Case
  * consultation is `openSession`'s own `CONSUME_CREDITS` check, which stays exactly where it
@@ -162,6 +162,7 @@
  */
 import {
   engagementsRepository,
+  meetingsRepository,
   partyMembershipsRepository,
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
@@ -173,6 +174,8 @@ import type { RelationshipHostingStatus } from '@balo/shared/authz';
 import { relationshipIsOpened, type RelationshipOpenedFact } from '@balo/shared/project-requests';
 import { createLogger } from '@balo/shared/logging';
 import {
+  UPCOMING_CALL_CAP,
+  isUpcomingContextMeeting,
   resolveContextOwner,
   type MeetingBookingContextType,
   type MeetingContextOwnerReads,
@@ -184,8 +187,17 @@ const log = createLogger('meeting-booking-authz');
  * ⚠ ONE FAILURE LITERAL FOR EVERY DENIAL AN OUTSIDER CAN REACH. See the module docblock:
  * `context_type_mismatch` is reachable ONLY after membership has been proven, so it tells a
  * caller nothing they did not already know. There is deliberately no `forbidden`.
+ *
+ * `call_cap_reached` is the same kind of member-only answer, and the one code here that is
+ * NOT a tenancy denial: it is a product limit on a context the actor was already proven to
+ * own, so it carries its own literal (409) rather than collapsing into `context_not_found`.
+ * It is returned ONLY after authorization has succeeded, so it can never be read by an
+ * outsider.
  */
-export type AuthorizeMeetingBookingErrorCode = 'context_not_found' | 'context_type_mismatch';
+export type AuthorizeMeetingBookingErrorCode =
+  | 'context_not_found'
+  | 'context_type_mismatch'
+  | 'call_cap_reached';
 
 export type AuthorizeMeetingBookingResult =
   | {
@@ -207,6 +219,12 @@ export interface AuthorizeMeetingBookingInput {
   contextType: MeetingBookingContextType;
   contextId: string;
   userId: string;
+  /**
+   * The (already hashed) booking idempotency key, when the request carries one. Read ONLY by
+   * the upcoming-call cap, to leave this key's own meeting out of the count so a lost-201
+   * retry replays instead of being refused at the cap.
+   */
+  bookingIdempotencyKey?: string | undefined;
 }
 
 /** The bookable labels that anchor on something OTHER than an `engagements.id`. */
@@ -214,23 +232,48 @@ const NON_ENGAGEMENT_CONTEXT_TYPES = ['project_discovery', 'request_interaction'
 type NonEngagementContextType = (typeof NON_ENGAGEMENT_CONTEXT_TYPES)[number];
 
 /**
- * BAL-283 (round-1 HIGH) — the `project_request_status` values at or past the client's
- * DECISION, on which a free `request_interaction` intro call is no longer legitimate.
+ * The `project_request_status` values on which NO `request_interaction` call may be booked,
+ * whichever relationship asks.
+ *
+ *   · `kickoff_approved` — the engagement is materialized and the won thread books
+ *     `project_call` from here (BAL-616, ADR-1046 amendment 2026-10-23).
+ *   · `closed` — BAL-540's terminal state. Post-LIFECYCLE rather than post-acceptance, and the
+ *     answer is the same: no.
  *
  * ⚠ A SET OF LITERALS, NOT A RANK COMPARISON, AND DELIBERATELY SO. `project_request_status`
  * is a pgEnum whose ORDER is not a lifecycle guarantee this module may rely on, and this gate
  * must fail in the SAFE direction on a value it does not recognise — an unknown status is NOT
  * in the set, so it stays bookable, which matches the pre-decision default rather than
- * bricking the feature on an enum addition. A NEW post-decision label must be added here
+ * bricking the feature on an enum addition. A NEW terminal label must be added here
  * consciously; that is the intended cost.
+ *
+ * `accepted` is deliberately ABSENT: a request at `accepted` is decided, but its WON
+ * relationship still books (see {@link requestInteractionClosedByDecision}).
  */
-const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
-  'accepted',
+const REQUEST_INTERACTION_CLOSED_STATUSES: ReadonlySet<string> = new Set([
   'kickoff_approved',
-  // BAL-540 — the terminal `closed`. Not "post-decision" in the acceptance sense; it is
-  // post-LIFECYCLE, and the answer to "may a free intro call be booked here" is the same: no.
   'closed',
 ]);
+
+/**
+ * BAL-616 — whether a `request_interaction` booking is closed by the client's
+ * DECISION, given the request's status and the booking relationship's status. Pure.
+ *
+ *   · `kickoff_approved` and `closed` request → closed for every relationship.
+ *   · `accepted` request → open ONLY for the WON relationship (`accepted`). Every other
+ *     relationship on that request is a losing thread and stays refused.
+ *   · any other request status → open (the pre-decision default; an unknown status is
+ *     bookable, as {@link REQUEST_INTERACTION_CLOSED_STATUSES} explains).
+ */
+function requestInteractionClosedByDecision(
+  requestStatus: string,
+  relationshipStatus: string
+): boolean {
+  if (REQUEST_INTERACTION_CLOSED_STATUSES.has(requestStatus)) {
+    return true;
+  }
+  return requestStatus === 'accepted' && relationshipStatus !== 'accepted';
+}
 
 /**
  * The engagement `engagement_type` each ENGAGEMENT-anchored context label must name.
@@ -240,10 +283,10 @@ const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
  * `request_expert_relationships.id`), so neither has a supertype discriminator to agree
  * with. Their owning party is read from their own row instead (`loadSubject`).
  *
- * ⚠ `Record<Exclude<…>>`, NOT `Partial<Record<…>>` (BAL-283). Under `Partial` a sixth
+ * ⚠ `Record<Exclude<…>>`, NOT `Partial<Record<…>>` (BAL-283). Under `Partial` a new
  * bookable label needed no entry here and the TS7053 index error at this constant's use site
  * never fired — the constant silently agreed to know nothing about it. Non-partial makes a
- * sixth ENGAGEMENT-grain label a compile error in this object, and a sixth NON-engagement
+ * seventh ENGAGEMENT-grain label a compile error in this object, and a seventh NON-engagement
  * label a compile error in the tuple above.
  *
  * ⚠ EXPORTED (BAL-581) so `jobs/meeting-venue-repair.ts` reads the SAME map
@@ -255,6 +298,7 @@ const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
 export const ENGAGEMENT_TYPE_FOR_CONTEXT = {
   case: 'case',
   project_kickoff: 'project',
+  project_call: 'project',
   package_session: 'package',
 } as const satisfies Record<
   Exclude<MeetingBookingContextType, NonEngagementContextType>,
@@ -310,8 +354,8 @@ interface LoadedSubject {
 }
 
 /**
- * Per-context-type LOAD of the owning party — TOTAL over the FIVE bookable labels, and now
- * provably so: the switch's `default` arm assigns to `never`, so a sixth bookable label
+ * Per-context-type LOAD of the owning party — TOTAL over the SIX bookable labels, and now
+ * provably so: the switch's `default` arm assigns to `never`, so a seventh bookable label
  * fails `pnpm --filter api typecheck` HERE — at the load that must learn its subject shape —
  * instead of 120 lines downstream at `ENGAGEMENT_TYPE_FOR_CONTEXT`, or silently at runtime as
  * a 404 on every booking (BAL-283 plan §6.1: widening `BOOKABLE_CONTEXT_TYPES` alone raised no
@@ -392,31 +436,30 @@ async function loadSubject(
        *
        * The chain that made it reachable: `THREAD_OPEN_RELATIONSHIP_STATUSES` (web) includes
        * `'accepted'`, so `resolveConversationAccess` passes an accepted relationship straight
-       * through; the web UI hides the CTA (`callAllowed = beforeKickoff && stage === 'active'`)
-       * but a Server Action is a PUBLIC ENTRY POINT — a client-company member who reads
-       * `relationshipId`/`requestId` out of the rendered DOM can POST it directly. Past
-       * acceptance the delivering expert's hours are supposed to route through the BILLED
-       * `case`/`project_kickoff` path; free `request_interaction` bookings against them are
-       * exactly the leak. It applies equally to a LOSING expert on a decided request, whose
-       * thread also stays open.
+       * through, and a Server Action is a PUBLIC ENTRY POINT — a client-company member who
+       * reads `relationshipId`/`requestId` out of the rendered DOM can POST it directly.
        *
-       * ⚠ AND IT IS NO LONGER IRREVERSIBLE — corrected by BAL-410, which shipped the cancel
-       * route. A `request_interaction` booking IS reachable by that route's expert arm
-       * (`authorize-engagement-host.ts` implements all seven context labels, including both
-       * request-grain arms), so a slot consumed this way can be freed. The gate below still
-       * matters: it stops the slot being taken in the first place.
-       *
-       * ⚠ THE THRESHOLD IS `accepted`, MATCHING THE WEB'S OWN `beforeKickoff` DERIVATION —
-       * `deriveThreadActions` stops offering the CTA at `accepted`, and this is the server-side
-       * statement of the same rule. `kickoff_approved` is denied by the same clause.
+       * ⚠ THE THRESHOLD IS THE WON RELATIONSHIP ((BAL-616)). Calls are free and
+       * always bookable on the request page, so the won relationship is admitted while the
+       * request is `accepted` (and at any status short of `kickoff_approved`). Two things
+       * stay refused, both by {@link requestInteractionClosedByDecision}:
+       *   · a LOSING relationship once the request is decided — its thread stays open for
+       *     reading, but its expert's hours are not a free booking surface;
+       *   · EVERY relationship at `kickoff_approved` and `closed`. At kickoff the engagement
+       *     is materialized and the web books `project_call` instead.
        *
        * ⚠ AND IT ANSWERS `context_not_found`, NOT A NEW LITERAL — §3's oracle decision is that
        * every denial an outsider can reach is indistinguishable. Same posture as the decline
        * check above.
        */
-      if (POST_DECISION_REQUEST_STATUSES.has(request.status)) {
+      if (requestInteractionClosedByDecision(request.status, relationship.status)) {
         log.warn(
-          { contextType, contextId, requestStatus: request.status },
+          {
+            contextType,
+            contextId,
+            requestStatus: request.status,
+            relationshipStatus: relationship.status,
+          },
           'Meeting booking denied — the project request that owns this context is already decided'
         );
         return undefined; // §7 — collapses into `context_not_found` on the wire
@@ -429,8 +472,13 @@ async function loadSubject(
       };
     }
 
+    // `project_call` (BAL-616) anchors on the engagement the won thread materialized into; its
+    // delivering expert is `engagements.expert_profile_id`, like every other engagement-grain
+    // label. No funding arm: the `case`-only gates in `routes/meetings/index.ts` keep a
+    // project call money-free.
     case 'case':
     case 'project_kickoff':
+    case 'project_call':
     case 'package_session': {
       const engagement = await engagementsRepository.findById(contextId);
       if (engagement === undefined) {
@@ -445,7 +493,7 @@ async function loadSubject(
     }
 
     default: {
-      // ⚠ `never` TODAY, AND THAT IS THE POINT. A sixth bookable label widens this and fails
+      // ⚠ `never` TODAY, AND THAT IS THE POINT. A seventh bookable label widens this and fails
       // `pnpm --filter api typecheck` HERE. See the function docblock.
       const exhaustive: never = contextType;
       return exhaustive;
@@ -454,11 +502,102 @@ async function loadSubject(
 }
 
 /**
+ * The two labels whose booking is capped at {@link UPCOMING_CALL_CAP} upcoming calls per
+ * context: the pre-kickoff thread (`request_interaction`) and the engagement it becomes
+ * (`project_call`, which also carries every call re-anchored at kickoff).
+ */
+const CAPPED_CONTEXT_TYPES = [
+  'request_interaction',
+  'project_call',
+] as const satisfies readonly MeetingBookingContextType[];
+type CappedContextType = (typeof CAPPED_CONTEXT_TYPES)[number];
+
+function isCappedContextType(
+  contextType: MeetingBookingContextType
+): contextType is CappedContextType {
+  return (CAPPED_CONTEXT_TYPES as readonly string[]).includes(contextType);
+}
+
+/**
+ * BAL-616 — whether this context already holds {@link UPCOMING_CALL_CAP} upcoming calls.
+ *
+ * ⚠ RUNS ONLY AFTER AUTHORIZATION HAS SUCCEEDED, NEVER BEFORE IT. Counting first would let a
+ * non-member tell a full thread from an empty one by status code (409 vs 404): the same
+ * cross-tenant oracle the module docblock describes. The caller guarantees the actor is a
+ * proven member of the company that owns `contextId`.
+ *
+ * ONE definition of "upcoming": `isUpcomingContextMeeting` (`@balo/shared/meetings`), shared with
+ * the web page and its cap pre-check. It does NOT judge `cancelled`, so the read MUST be
+ * `listActiveMeetingsForContexts`, which already filters `status <> 'cancelled'`. Ids are
+ * de-duplicated so a meeting can never count twice.
+ *
+ * A request carrying a booking idempotency key leaves that key's own meeting out of the count:
+ * a lost-201 retry at the cap is a REPLAY of a booking that already counted, and must reach the
+ * replay path instead of being refused here. The extra read happens only when the thread is
+ * already at the cap.
+ *
+ * ⚠ CHECK-THEN-ACT, like the web pre-check: two concurrent bookings can both pass at 2 and land
+ * a 4th call. A product limit, not a safety property.
+ */
+async function threadIsAtUpcomingCallCap(
+  contextType: CappedContextType,
+  contextId: string,
+  bookingIdempotencyKey: string | undefined
+): Promise<boolean> {
+  const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+    contextType,
+    contextIds: [contextId],
+  });
+  const nowMs = Date.now();
+  const upcomingIds = new Set<string>();
+  for (const meeting of byContext.get(contextId) ?? []) {
+    if (isUpcomingContextMeeting(meeting, nowMs)) {
+      upcomingIds.add(meeting.meetingId);
+    }
+  }
+  if (upcomingIds.size < UPCOMING_CALL_CAP) {
+    return false;
+  }
+  if (bookingIdempotencyKey !== undefined) {
+    const replayed = await meetingsRepository.findByBookingIdempotencyKey(bookingIdempotencyKey);
+    if (replayed !== undefined) {
+      upcomingIds.delete(replayed.id);
+    }
+  }
+  return upcomingIds.size >= UPCOMING_CALL_CAP;
+}
+
+/**
  * Fail-closed context-vs-actor authorization for a booking. Returns the owning `companyId`,
  * the resolved `engagementType` and the `expertProfileId` on success, so the caller threads
  * all three onward and none is read twice (nor able to disagree with itself).
+ *
+ * On success for a capped label (`request_interaction`, `project_call`) it then refuses a
+ * thread that already holds {@link UPCOMING_CALL_CAP} upcoming calls with `call_cap_reached`.
  */
 export async function authorizeMeetingBooking(
+  input: AuthorizeMeetingBookingInput
+): Promise<AuthorizeMeetingBookingResult> {
+  const authorized = await authorizeContextMembership(input);
+  const { contextType, contextId, userId } = input;
+  if (!authorized.ok || !isCappedContextType(contextType)) {
+    return authorized;
+  }
+  if (await threadIsAtUpcomingCallCap(contextType, contextId, input.bookingIdempotencyKey)) {
+    log.warn(
+      { userId, contextType, contextId, companyId: authorized.companyId },
+      'Meeting booking denied — the thread already holds the maximum number of upcoming calls'
+    );
+    return { ok: false, code: 'call_cap_reached' };
+  }
+  return authorized;
+}
+
+/**
+ * The tenancy gate proper: load the subject, prove membership, then the engagement-state and
+ * coherence checks. Everything the module docblock says about ORDER applies to this function.
+ */
+async function authorizeContextMembership(
   input: AuthorizeMeetingBookingInput
 ): Promise<AuthorizeMeetingBookingResult> {
   const { contextType, contextId, userId } = input;

@@ -238,11 +238,17 @@ describe('threadNudgeFor — client lens', () => {
   });
 
   it('a booked call is a done cell — beats the availability-shared cell too', () => {
-    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+    const upcomingCalls = [
+      {
+        meetingId: 'meeting-1',
+        scheduledStartIso: '2026-09-01T04:00:00.000Z',
+        contextType: 'request_interaction' as const,
+      },
+    ];
     const nudge = threadNudgeFor(
       'client',
       'eoi_submitted',
-      thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z', bookedCall })
+      thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z', upcomingCalls })
     );
     expect(nudge?.variant).toBe('done');
     expect(nudge?.headline).toBe('Call booked with Priya');
@@ -258,8 +264,14 @@ describe('threadNudgeFor — client lens', () => {
    * one `TZ=UTC` CI could never catch. `<LocalDateTime>` owns the formatting.
    */
   it('the booked-call sub is a RAW ISO instant + suffix, never a formatted string', () => {
-    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
-    const nudge = threadNudgeFor('client', 'eoi_submitted', thread({ bookedCall }));
+    const upcomingCalls = [
+      {
+        meetingId: 'meeting-1',
+        scheduledStartIso: '2026-09-01T04:00:00.000Z',
+        contextType: 'request_interaction' as const,
+      },
+    ];
+    const nudge = threadNudgeFor('client', 'eoi_submitted', thread({ upcomingCalls }));
 
     expect(nudge?.sub).toBeUndefined();
     expect(nudge?.subInstant).toEqual({
@@ -392,11 +404,17 @@ describe('threadNudgeFor — expert lens', () => {
   });
 
   it('a booked call is a done cell — beats the availability-shared cell too', () => {
-    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+    const upcomingCalls = [
+      {
+        meetingId: 'meeting-1',
+        scheduledStartIso: '2026-09-01T04:00:00.000Z',
+        contextType: 'request_interaction' as const,
+      },
+    ];
     const nudge = threadNudgeFor(
       'expert',
       'eoi_submitted',
-      thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z', bookedCall })
+      thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z', upcomingCalls })
     );
     expect(nudge?.variant).toBe('done');
     expect(nudge?.headline).toBe('Call booked');
@@ -428,11 +446,17 @@ describe('threadNudgeFor — expert lens', () => {
     });
 
     it('the booked cell names the client company in its instant suffix', () => {
-      const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+      const upcomingCalls = [
+        {
+          meetingId: 'meeting-1',
+          scheduledStartIso: '2026-09-01T04:00:00.000Z',
+          contextType: 'request_interaction' as const,
+        },
+      ];
       const nudge = threadNudgeFor(
         'expert',
         'eoi_submitted',
-        thread({ bookedCall }),
+        thread({ upcomingCalls }),
         'Northwind Industrial'
       );
       expect(nudge?.subInstant).toEqual({

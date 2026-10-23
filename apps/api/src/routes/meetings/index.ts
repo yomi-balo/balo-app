@@ -15,7 +15,7 @@
  *     → per-USER rate limit                     → 429 / 503 (fail-CLOSED)
  *     → createMeetingBodySchema.safeParse       → 400 invalid_request
  *     → validateBookingWindow(start, end, now)  → 400 <stable code>
- *     → authorizeMeetingBooking(...)            → 404 / 400
+ *     → authorizeMeetingBooking(...)            → 404 / 400 / 409 call_cap_reached
  *     → lookupBookingReplay(key, window)        → `conflict` ⇒ 409 idempotency_key_conflict;
  *                                                 `match` SKIPS the guards below
  *     → checkExpertBookingEligibility(...)      → 409 expert_unavailable (owner suspended or
@@ -198,12 +198,14 @@ import {
 const log = createLogger('meetings-route');
 
 /**
- * The gate's outcome → HTTP status. Two entries, not three: see the module docblock on why
- * there is no `forbidden`.
+ * The gate's outcome → HTTP status. There is no `forbidden`: see the module docblock. The
+ * third entry, `call_cap_reached`, is a product limit answered only to a proven member of the
+ * context's company (BAL-616), so it can carry its own literal.
  */
 const GATE_ERROR_STATUS = {
   context_not_found: 404,
   context_type_mismatch: 400,
+  call_cap_reached: 409,
 } as const;
 
 /**
@@ -403,7 +405,12 @@ async function authorizeBookingRequest(
   }
 
   const authorized = await timeBookingPhase(timer, 'tenancyGate', () =>
-    authorizeMeetingBooking({ contextType, contextId, userId })
+    authorizeMeetingBooking({
+      contextType,
+      contextId,
+      userId,
+      bookingIdempotencyKey: parsed.bookingIdempotencyKey,
+    })
   );
   if (!authorized.ok) {
     reply.code(GATE_ERROR_STATUS[authorized.code]).send({ error: authorized.code });

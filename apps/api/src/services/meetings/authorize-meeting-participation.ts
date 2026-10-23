@@ -57,7 +57,7 @@
  * "ambiguous contexts" or "no holder". WHICH SHAPE IT WAS GOES TO THE LOG — the `log.warn`
  * calls below stay distinct on purpose — NEVER TO THE WIRE. Precedents:
  * `sessionActorErrorStatus`'s `not_found → 404` "(also hides existence)" and
- * `openSession`'s `meeting_not_bookable` (six shapes, one literal).
+ * `openSession`'s `meeting_not_bookable` (seven shapes, one literal).
  *
  * ⚠ DIVERGENCE FROM THE PLAN'S §4.1 ERROR TABLE, RECORDED AS A DECISION RATHER THAN LEFT
  * AS DRIFT. That table lists a distinct `409 meeting_context_ambiguous`. This gate returns
@@ -125,8 +125,8 @@ const log = createLogger('meeting-participation-authz');
 
 /**
  * ⚠ THE DRIFT GUARD FOR `@balo/shared/meetings`'s HAND-RESTATED LABEL LIST.
- * `MEETING_CONTEXT_PRECEDENCE` restates the seven `meeting_context_type` labels in a package
- * that cannot import the pgEnum. These two `AssertNever`s make an EIGHTH label added to the
+ * `MEETING_CONTEXT_PRECEDENCE` restates the eight `meeting_context_type` labels in a package
+ * that cannot import the pgEnum. These two `AssertNever`s make a NINTH label added to the
  * database fail `pnpm --filter api typecheck` RIGHT HERE until it is given a precedence —
  * the `AssertPublishCoverageComplete` idiom, split per direction so neither branch forms a
  * `never | never` union (S6571).
@@ -213,7 +213,7 @@ const OWNING_PARTY_READS = {
 } satisfies MeetingContextOwnerReads;
 
 /**
- * Per-context-type LOAD of the owning party — TOTAL over the six non-`admin` labels.
+ * Per-context-type LOAD of the owning party — TOTAL over the seven non-`admin` labels.
  *
  * ⚠ THE SWITCH ITSELF NOW LIVES IN `@balo/shared/meetings`'s `resolveContextOwner`, ONCE.
  * `@balo/db`'s `resolveMeetingContextOwner` delegates to the SAME core, so "which party owns
@@ -247,10 +247,10 @@ async function loadOwningParty(
       return undefined;
 
     default: {
-      // Compile-time exhaustiveness over the SIX holder-bearing labels, KEPT AT THIS GATE
+      // Compile-time exhaustiveness over the SEVEN holder-bearing labels, KEPT AT THIS GATE
       // ON PURPOSE. `admin` cannot reach here — `PrimaryMeetingContext.contextType` is
       // `MeetingContextTypeWithHolder`, and `selectPrimaryMeetingContext` drops admin rows —
-      // so this arm is unreachable today, but a SEVENTH non-admin label widens
+      // so this arm is unreachable today, but an EIGHTH non-admin label widens
       // `UnhandledMeetingContextType` away from `never` and stops `pnpm --filter api
       // typecheck` right here until an arm is consciously written.
       //

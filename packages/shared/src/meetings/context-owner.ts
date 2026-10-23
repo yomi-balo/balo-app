@@ -63,7 +63,7 @@ export interface MeetingContextOwner {
 
 /**
  * A row that names BOTH parties on itself. `engagements` and `project_requests` both do, so
- * ONE structural shape covers five of the six labels.
+ * ONE structural shape covers six of the seven labels.
  *
  * ⚠ STRUCTURAL, NOT `@balo/db`'s ROW TYPE — that is the whole point of the injection. It is
  * deliberately WIDER than either table: `engagements.expert_profile_id` is NOT NULL on the
@@ -91,7 +91,7 @@ export interface MeetingContextRelationshipRowLike {
  * "no live row", and this module cannot tell the difference.
  */
 export interface MeetingContextOwnerReads {
-  /** Live engagement by id — the four engagement-grain labels. */
+  /** Live engagement by id — the five engagement-grain labels. */
   readonly findEngagement: (
     engagementId: string
   ) => Promise<MeetingContextPartyRowLike | undefined>;
@@ -120,6 +120,7 @@ export type HandledMeetingContextType = Extract<
   | 'project_kickoff'
   | 'package_session'
   | 'retainer_checkin'
+  | 'project_call'
   | 'project_discovery'
   | 'request_interaction'
 >;
@@ -129,7 +130,7 @@ export type HandledMeetingContextType = Extract<
  *
  * ⚠ THIS TYPE IS THE COMPILE-TIME EXHAUSTIVENESS WITNESS, EXPORTED SO THE WITNESS CAN LIVE
  * AT THE CALLER. `apps/api`'s `loadOwningParty` writes `const exhaustive: never =
- * result.contextType` in its `unhandled` arm, so a SEVENTH holder-bearing
+ * result.contextType` in its `unhandled` arm, so a NEW holder-bearing
  * `meeting_context_type` label stops `pnpm --filter api typecheck` RIGHT THERE until an arm
  * is consciously written — the same guarantee the pre-refactor `default:` arm gave, at the
  * same command, on the same line count.
@@ -179,7 +180,7 @@ const NOT_FOUND: ResolveContextOwnerResult = Object.freeze({ outcome: 'not_found
 /**
  * Resolve ONE primary meeting context to its owning party, using the injected reads.
  *
- * TOTAL over the six holder-bearing labels. `admin` is unrepresentable by TYPE:
+ * TOTAL over the seven holder-bearing labels. `admin` is unrepresentable by TYPE:
  * `PrimaryMeetingContext.contextType` is `MeetingContextTypeWithHolder`, and
  * `selectPrimaryMeetingContext` drops admin rows before one can be built.
  *
@@ -192,11 +193,13 @@ export async function resolveContextOwner(
 ): Promise<ResolveContextOwnerResult> {
   switch (subject.contextType) {
     // Engagement grain — `engagements.company_id` / `.expert_profile_id` are both NOT NULL
-    // on the supertype (BAL-417), so the four labels share one branch.
+    // on the supertype (BAL-417), so the five labels share one branch. `project_call`
+    // (BAL-616) names the delivering expert through `engagements.expert_profile_id`.
     case 'case':
     case 'project_kickoff':
     case 'package_session':
-    case 'retainer_checkin': {
+    case 'retainer_checkin':
+    case 'project_call': {
       const engagement = await reads.findEngagement(subject.contextId);
       if (engagement === undefined) {
         return NOT_FOUND;
@@ -241,7 +244,7 @@ export async function resolveContextOwner(
     }
 
     default:
-      // Unreachable over the six holder-bearing labels — `subject.contextType` narrows to
+      // Unreachable over the seven holder-bearing labels — `subject.contextType` narrows to
       // `never` here today, which is precisely why the assignment below compiles. It is
       // handed OUT rather than logged: see `UnhandledMeetingContextType`.
       return { outcome: 'unhandled', contextType: subject.contextType };

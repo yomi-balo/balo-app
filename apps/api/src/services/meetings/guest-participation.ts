@@ -574,6 +574,7 @@ export function formatExpiryDate(expiresAt: Date): string {
 const MEETING_LABEL_FOR_CONTEXT: Record<PrimaryMeetingContext['contextType'], string> = {
   case: 'a consultation',
   project_kickoff: 'a project kickoff',
+  project_call: 'a project call',
   package_session: 'a package session',
   retainer_checkin: 'a retainer check-in',
   project_discovery: 'a discovery call',

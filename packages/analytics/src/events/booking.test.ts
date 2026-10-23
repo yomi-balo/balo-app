@@ -5,6 +5,7 @@ import {
   type BookingEventMap,
   type BookingFundingFailureReason,
   type BookingFundingMethodProperty,
+  type BookingSource,
 } from './booking';
 
 describe('BOOKING_EVENTS', () => {
@@ -107,5 +108,22 @@ describe('BookingFundingMethodProperty', () => {
     expectTypeOf<
       BookingEventMap[typeof BOOKING_EVENTS.FUNDING_METHOD_SELECTED]['method']
     >().toEqualTypeOf<BookingFundingMethodProperty>();
+  });
+});
+
+describe('BookingSource', () => {
+  it('is exactly the booking entry points, including the request thread (BAL-616)', () => {
+    expectTypeOf<
+      | 'profile'
+      | 'search'
+      | 'case_quick_pick'
+      | 'book_again'
+      | 'case_nudge'
+      | 'home_spotlight'
+      | 'request_thread'
+    >().toEqualTypeOf<BookingSource>();
+    expectTypeOf<
+      BookingEventMap[typeof BOOKING_EVENTS.FLOW_OPENED]['source']
+    >().toEqualTypeOf<BookingSource>();
   });
 });

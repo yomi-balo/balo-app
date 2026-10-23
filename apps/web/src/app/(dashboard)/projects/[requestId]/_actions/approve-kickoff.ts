@@ -110,6 +110,11 @@ async function loadApprovableKickoff(
  * always passes) — all three map to friendly copy. Any other error rethrows to the
  * action's generic boundary.
  *
+ * The same transaction re-anchors the won thread's live calls onto the engagement (BAL-616). A
+ * `MeetingReanchorOwnerMismatchError` from that step is not mapped here: it means a call's owning
+ * company or delivering expert differs from the engagement's, which no coherent request produces,
+ * so it falls through to the action's generic `log.error` + error copy and rolls the kickoff back.
+ *
  * `approvingAdminUserId` is the authenticated approving admin (`admin.id`) —
  * recorded by `@balo/db` as the milestone snapshot author + the actor on the
  * `engagement.milestones_snapshotted` audit event (BAL-330).
@@ -117,10 +122,13 @@ async function loadApprovableKickoff(
 async function commitKickoff(
   loaded: ApprovableKickoff,
   approvingAdminUserId: string
-): Promise<{ engagementId: string; closedRelationshipIds: string[] } | { error: string }> {
+): Promise<
+  | { engagementId: string; closedRelationshipIds: string[]; reanchoredMeetingIds: string[] }
+  | { error: string }
+> {
   const { request, rel, proposal } = loaded;
   try {
-    const { engagement, closedRelationshipIds } =
+    const { engagement, closedRelationshipIds, reanchoredMeetingIds } =
       await projectEngagementsRepository.materializeFromKickoff({
         requestId: request.id,
         companyId: request.companyId,
@@ -136,7 +144,7 @@ async function commitKickoff(
         rateCents: proposal.rateCents ?? undefined,
         cadence: proposal.cadence ?? undefined,
       });
-    return { engagementId: engagement.id, closedRelationshipIds };
+    return { engagementId: engagement.id, closedRelationshipIds, reanchoredMeetingIds };
   } catch (error) {
     if (error instanceof InvalidStatusTransitionError) {
       return { error: STALE };
@@ -202,7 +210,7 @@ export async function approveKickoffAction(
     }
 
     const { request, rel } = loaded;
-    const { engagementId, closedRelationshipIds } = committed;
+    const { engagementId, closedRelationshipIds, reanchoredMeetingIds } = committed;
 
     // Key business event (after the commit).
     log.info('Kickoff approved', {
@@ -214,6 +222,9 @@ export async function approveKickoffAction(
       // BAL-431 (Ruling 2) — how many OTHER live tracks this award closed for files
       // (`not_selected_at` stamped in the same transaction). Zero on a single-track request.
       closedTrackCount: closedRelationshipIds.length,
+      // BAL-616 — how many of the won thread's live calls moved onto the engagement in the
+      // same transaction (`project_call` attached, `request_interaction` kept).
+      reanchoredCallCount: reanchoredMeetingIds.length,
     });
 
     // Notify the client (and, via the resolver, the delivering expert) — AFTER

@@ -5,7 +5,8 @@ import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 const mockRequireOnboardedUser = vi.fn();
 const mockResolveConversationAccess = vi.fn();
 const mockAssertRelationshipBookable = vi.fn();
-const mockAssertNoLiveIntroCall = vi.fn();
+const mockAssertUnderUpcomingCallCap = vi.fn();
+const mockFindIdByProjectRequestId = vi.fn();
 const mockDeriveBookingIdempotencyKey = vi.fn();
 const mockResolveBookingExpertDisplay = vi.fn();
 const mockPostBookMeeting = vi.fn();
@@ -35,8 +36,13 @@ vi.mock('@/lib/project-request/resolve-conversation-access', () => ({
 vi.mock('@/lib/project-request/assert-relationship-bookable', () => ({
   assertRelationshipBookable: (...args: unknown[]) => mockAssertRelationshipBookable(...args),
 }));
-vi.mock('@/lib/project-request/assert-no-live-intro-call', () => ({
-  assertNoLiveIntroCall: (...args: unknown[]) => mockAssertNoLiveIntroCall(...args),
+vi.mock('@/lib/project-request/assert-under-upcoming-call-cap', () => ({
+  assertUnderUpcomingCallCap: (...args: unknown[]) => mockAssertUnderUpcomingCallCap(...args),
+}));
+vi.mock('@balo/db', () => ({
+  projectEngagementsRepository: {
+    findIdByProjectRequestId: (...args: unknown[]) => mockFindIdByProjectRequestId(...args),
+  },
 }));
 vi.mock('../booking-idempotency', () => ({
   deriveBookingIdempotencyKey: (...args: unknown[]) => mockDeriveBookingIdempotencyKey(...args),
@@ -61,6 +67,7 @@ const KEY = 'a'.repeat(64);
 const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
 const RELATIONSHIP_ID = '22222222-2222-4222-8222-222222222222';
 const MEETING_ID = '33333333-3333-4333-8333-333333333333';
+const ENGAGEMENT_ID = '55555555-5555-4555-8555-555555555555';
 const EXPERT_PROFILE_ID = '44444444-4444-4444-8444-444444444444';
 
 const START = '2026-09-01T04:00:00.000Z';
@@ -78,7 +85,7 @@ function input(overrides: Partial<BookIntroCallInput> = {}): BookIntroCallInput 
   };
 }
 
-function accessOk(overrides: { status?: string } = {}) {
+function accessOk(overrides: { status?: string; relationshipStatus?: string } = {}) {
   return {
     ok: true as const,
     ctx: { lens: 'client' as const, archetype: 'participant' as const },
@@ -87,7 +94,11 @@ function accessOk(overrides: { status?: string } = {}) {
       status: overrides.status ?? 'eoi_submitted',
       company: { name: 'Northwind Industrial' },
     },
-    relationship: { id: RELATIONSHIP_ID, expertProfileId: EXPERT_PROFILE_ID },
+    relationship: {
+      id: RELATIONSHIP_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      status: overrides.relationshipStatus ?? 'eoi_submitted',
+    },
     conversationId: 'conversation-1',
     recipient: { role: 'expert' as const, expertProfileId: EXPERT_PROFILE_ID },
   };
@@ -113,6 +124,7 @@ const EXPECTED_PAYLOAD = {
   joinPath: `/meetings/${MEETING_ID}/call`,
   provisioned: true,
   guestCount: 0,
+  callKind: 'intro',
 };
 
 beforeEach(() => {
@@ -121,7 +133,8 @@ beforeEach(() => {
   mockDeriveBookingIdempotencyKey.mockReturnValue(KEY);
   mockResolveConversationAccess.mockResolvedValue(accessOk());
   mockAssertRelationshipBookable.mockResolvedValue(true);
-  mockAssertNoLiveIntroCall.mockResolvedValue(true);
+  mockAssertUnderUpcomingCallCap.mockResolvedValue(true);
+  mockFindIdByProjectRequestId.mockResolvedValue(ENGAGEMENT_ID);
   mockResolveBookingExpertDisplay.mockResolvedValue({
     firstName: 'Dana',
     lastName: 'Okoro',
@@ -138,7 +151,12 @@ describe('bookIntroCallAction', () => {
   it('books against the request_interaction context, keyed on the relationshipId', async () => {
     const result = await bookIntroCallAction(input());
 
-    expect(result).toMatchObject({ ok: true, meetingId: MEETING_ID, provisioned: true });
+    expect(result).toMatchObject({
+      ok: true,
+      meetingId: MEETING_ID,
+      provisioned: true,
+      contextType: 'request_interaction',
+    });
     expect(mockPostBookMeeting).toHaveBeenCalledWith({
       contextType: 'request_interaction',
       contextId: RELATIONSHIP_ID,
@@ -294,38 +312,143 @@ describe('bookIntroCallAction', () => {
   });
 
   /**
-   * ⚠ THE REQUEST-LIFECYCLE GATE, WEB HALF (round-1 HIGH). `THREAD_OPEN_RELATIONSHIP_STATUSES`
-   * includes `'accepted'`, so `resolveConversationAccess` passes an accepted relationship
-   * straight through and the UI's `callAllowed` gate is browser-only. Past acceptance the
-   * delivering expert's hours must route through the BILLED case/kickoff path.
+   * ⚠ THE REQUEST-LIFECYCLE GATE, WEB HALF. Once the request is decided, only the WON thread may
+   * still book (on the relationship at `accepted`, on the engagement at `kickoff_approved`); a
+   * losing thread and a closed request are refused with no api call.
    */
-  it.each(['accepted', 'kickoff_approved', 'closed'])(
-    'not_permitted once the request is %s — and NO api call is made',
-    async (status) => {
-      mockResolveConversationAccess.mockResolvedValue(accessOk({ status }));
+  describe('call target (the server derives the context)', () => {
+    it.each(['eoi_submitted', 'proposal_requested', 'proposal_submitted'])(
+      'an open thread at %s books request_interaction on the relationship, callKind intro',
+      async (status) => {
+        mockResolveConversationAccess.mockResolvedValue(accessOk({ status }));
+        await expect(bookIntroCallAction(input())).resolves.toMatchObject({
+          ok: true,
+          contextType: 'request_interaction',
+        });
+        expect(mockPostBookMeeting).toHaveBeenCalledWith(
+          expect.objectContaining({
+            contextType: 'request_interaction',
+            contextId: RELATIONSHIP_ID,
+          })
+        );
+        expect(mockFindIdByProjectRequestId).not.toHaveBeenCalled();
+        expect(mockAssertUnderUpcomingCallCap).toHaveBeenCalledWith(RELATIONSHIP_ID, null);
+        expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+          'conversation.intro_call_booked',
+          expect.objectContaining({ callKind: 'intro' })
+        );
+      }
+    );
+
+    it('the WON thread at accepted books request_interaction, callKind call', async () => {
+      mockResolveConversationAccess.mockResolvedValue(
+        accessOk({ status: 'accepted', relationshipStatus: 'accepted' })
+      );
+      await expect(bookIntroCallAction(input())).resolves.toMatchObject({
+        ok: true,
+        contextType: 'request_interaction',
+      });
+      expect(mockPostBookMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contextType: 'request_interaction',
+          contextId: RELATIONSHIP_ID,
+        })
+      );
+      expect(mockFindIdByProjectRequestId).not.toHaveBeenCalled();
+      expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+        'conversation.intro_call_booked',
+        expect.objectContaining({ callKind: 'call' })
+      );
+    });
+
+    it('the WON thread at kickoff_approved books project_call on the engagement, callKind call', async () => {
+      mockResolveConversationAccess.mockResolvedValue(
+        accessOk({ status: 'kickoff_approved', relationshipStatus: 'accepted' })
+      );
+      await expect(bookIntroCallAction(input())).resolves.toMatchObject({
+        ok: true,
+        contextType: 'project_call',
+      });
+      expect(mockFindIdByProjectRequestId).toHaveBeenCalledWith(REQUEST_ID);
+      expect(mockPostBookMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ contextType: 'project_call', contextId: ENGAGEMENT_ID })
+      );
+      expect(mockAssertUnderUpcomingCallCap).toHaveBeenCalledWith(RELATIONSHIP_ID, ENGAGEMENT_ID);
+      expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+        'conversation.intro_call_booked',
+        expect.objectContaining({ callKind: 'call' })
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        'Call booked',
+        expect.objectContaining({ contextType: 'project_call' })
+      );
+    });
+
+    it('kickoff_approved with NO live engagement is not_permitted, warns, and posts nothing', async () => {
+      mockResolveConversationAccess.mockResolvedValue(
+        accessOk({ status: 'kickoff_approved', relationshipStatus: 'accepted' })
+      );
+      mockFindIdByProjectRequestId.mockResolvedValue(undefined);
       await expect(bookIntroCallAction(input())).resolves.toEqual({
         ok: false,
         code: 'not_permitted',
       });
       expect(mockPostBookMeeting).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each(['eoi_submitted', 'proposal_requested', 'proposal_submitted'])(
-    'still books at %s — the gate is the DECISION line, not any open thread',
-    async (status) => {
-      mockResolveConversationAccess.mockResolvedValue(accessOk({ status }));
-      await expect(bookIntroCallAction(input())).resolves.toMatchObject({ ok: true });
-    }
-  );
-
-  it('not_permitted when the thread already has a live intro call — one call per thread', async () => {
-    mockAssertNoLiveIntroCall.mockResolvedValue(false);
-    await expect(bookIntroCallAction(input())).resolves.toEqual({
-      ok: false,
-      code: 'not_permitted',
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Call booking denied — no live project engagement at kickoff_approved',
+        expect.objectContaining({ requestId: REQUEST_ID })
+      );
     });
-    expect(mockPostBookMeeting).not.toHaveBeenCalled();
+
+    it.each(['accepted', 'kickoff_approved'])(
+      'a LOSING thread is not_permitted once the request is %s — and NO api call is made',
+      async (status) => {
+        mockResolveConversationAccess.mockResolvedValue(accessOk({ status }));
+        await expect(bookIntroCallAction(input())).resolves.toEqual({
+          ok: false,
+          code: 'not_permitted',
+        });
+        expect(mockPostBookMeeting).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['accepted', 'eoi_submitted'])(
+      'a closed request is refused even for a %s thread — and NO api call is made',
+      async (relationshipStatus) => {
+        mockResolveConversationAccess.mockResolvedValue(
+          accessOk({ status: 'closed', relationshipStatus })
+        );
+        await expect(bookIntroCallAction(input())).resolves.toEqual({
+          ok: false,
+          code: 'not_permitted',
+        });
+        expect(mockPostBookMeeting).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  describe('the upcoming-call cap', () => {
+    it('call_cap_reached at the cap — and NO api call is made', async () => {
+      mockAssertUnderUpcomingCallCap.mockResolvedValue(false);
+      await expect(bookIntroCallAction(input())).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+      expect(mockPostBookMeeting).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith('Call booking denied — upcoming call cap reached', {
+        requestId: REQUEST_ID,
+        relationshipId: RELATIONSHIP_ID,
+        userId: USER.id,
+      });
+    });
+
+    it('maps an api 409 call_cap_reached onto the same failure code', async () => {
+      mockPostBookMeeting.mockResolvedValue({ ok: false, status: 409, code: 'call_cap_reached' });
+      await expect(bookIntroCallAction(input())).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+    });
   });
 
   /**

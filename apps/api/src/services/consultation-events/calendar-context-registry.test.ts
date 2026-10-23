@@ -16,7 +16,7 @@ import {
  * key-set assertion below is what refuses that.
  */
 describe('CALENDAR_CONTEXT_REGISTRY — the key set (the non-vacuity guard)', () => {
-  it('covers EXACTLY the five bookable context types, both directions', () => {
+  it('covers EXACTLY the six bookable context types, both directions', () => {
     expect(Object.keys(CALENDAR_CONTEXT_REGISTRY).sort()).toEqual(
       [...BOOKABLE_CONTEXT_TYPES].sort()
     );
@@ -31,40 +31,42 @@ describe('CALENDAR_CONTEXT_REGISTRY — the key set (the non-vacuity guard)', ()
 
   /**
    * ⚠ THE FLOOR IS THE POINT. An empty or one-entry registry would satisfy every "for each
-   * key…" assertion above for the wrong reason. Five is the arity BAL-433 settled on: 7 = the
-   * pgEnum, 6 = holder-bearing, 5 = bookable = THIS, 4 = web engagement-authz.
+   * key…" assertion above for the wrong reason. Six is the bookable arity: 8 = the pgEnum,
+   * 7 = holder-bearing, 6 = bookable = THIS.
    */
-  it('is five entries — the bookable arity, not the pgEnum arity', () => {
-    expect(Object.keys(CALENDAR_CONTEXT_REGISTRY)).toHaveLength(5);
-    expect(BOOKABLE_CONTEXT_TYPES).toHaveLength(5);
+  it('is six entries — the bookable arity, not the pgEnum arity', () => {
+    expect(Object.keys(CALENDAR_CONTEXT_REGISTRY)).toHaveLength(6);
+    expect(BOOKABLE_CONTEXT_TYPES).toHaveLength(6);
   });
 
   it('excludes the two non-bookable labels BY ABSENCE — `admin` and `retainer_checkin`', () => {
     // Both are excluded by TYPE, never by a runtime branch: `admin` has no owning party at all
     // (`context_id IS NULL` by CHECK) and `retainer_checkin` has no booking producer. Asserted
-    // here so "the registry is total over the SEVEN labels" cannot be read into it.
+    // here so "the registry is total over the EIGHT labels" cannot be read into it.
     expect(CALENDAR_CONTEXT_REGISTRY).not.toHaveProperty('admin');
     expect(CALENDAR_CONTEXT_REGISTRY).not.toHaveProperty('retainer_checkin');
   });
 });
 
 describe('CALENDAR_CONTEXT_REGISTRY — the descriptors', () => {
-  it('carries the five headline nouns verbatim', () => {
+  it('carries the six headline nouns verbatim', () => {
     // Pinned as VALUES, not as a shape: these strings land on an expert's own calendar and
     // share their vocabulary with `load-recap.ts`'s FALLBACK_TITLE map, so a silent edit here
     // would split the two surfaces apart.
     expect(CALENDAR_CONTEXT_REGISTRY.case.eventLabel).toBe('Consultation');
     expect(CALENDAR_CONTEXT_REGISTRY.project_kickoff.eventLabel).toBe('Project kickoff');
+    expect(CALENDAR_CONTEXT_REGISTRY.project_call.eventLabel).toBe('Call');
     expect(CALENDAR_CONTEXT_REGISTRY.package_session.eventLabel).toBe('Package session');
     expect(CALENDAR_CONTEXT_REGISTRY.project_discovery.eventLabel).toBe('Discovery call');
     expect(CALENDAR_CONTEXT_REGISTRY.request_interaction.eventLabel).toBe('Intro call');
   });
 
-  it('resolves the three title-less contexts to their own LABEL as the subject', () => {
+  it('resolves the title-less contexts to their own LABEL as the subject', () => {
     // BAL-433 D3 — no title column exists on `engagements` or on any delivery subtype, and
     // synthesising one from a proposal is a title CONCEPT no ticket has designed. A neutral
     // subject beats a confidently wrong one on an expert's calendar.
     expect(CALENDAR_CONTEXT_REGISTRY.project_kickoff.subjectSource).toBe('label');
+    expect(CALENDAR_CONTEXT_REGISTRY.project_call.subjectSource).toBe('label');
     expect(CALENDAR_CONTEXT_REGISTRY.package_session.subjectSource).toBe('label');
   });
 

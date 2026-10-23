@@ -31,13 +31,14 @@ describe('resolveEndOfCallRecapReadiness — a TWO-way question, not the recap s
 });
 
 describe('RATEABLE_CONTEXTS — decided by the WRITE path, not by taste', () => {
-  it('contains exactly case and project_kickoff', () => {
+  it('contains exactly case, project_kickoff and project_call', () => {
     // `applyReview`'s `reviewableKind` accepts `project` and `case` and REFUSES
     // `package` / `retainer`, so `package_session` / `retainer_checkin` would ALWAYS fail —
     // and `project_discovery` / `request_interaction` are REQUEST-grain, so their `context_id`
     // is not an engagement id at all.
     expect([...RATEABLE_CONTEXTS].sort((a, b) => a.localeCompare(b))).toEqual([
       'case',
+      'project_call',
       'project_kickoff',
     ]);
   });

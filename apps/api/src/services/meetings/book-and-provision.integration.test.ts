@@ -62,6 +62,8 @@ import {
   meetingGuestsRepository,
   meetings,
   meetingsRepository,
+  projectRequests,
+  requestExpertRelationships,
 } from '@balo/db';
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
@@ -544,6 +546,35 @@ describe('BAL-129 — book and provision, against a real database', () => {
       ).resolves.toMatchObject({ ok: true, expertProfileId: a.expertProfileId });
     });
 
+    it('REFUSES a cross-tenant project_call — the engagement-grain label BAL-616 added', async () => {
+      // ⚠ `projectEngagementId` is a `project` engagement, the type `project_call` must name.
+      // The membership read runs before the coherence verdict, so A learns nothing about B's.
+      const a = await seedBookingParties();
+      const b = await seedBookingParties();
+
+      await expect(
+        authorizeMeetingBooking({
+          contextType: 'project_call',
+          contextId: b.projectEngagementId,
+          userId: a.memberUserId,
+        })
+      ).resolves.toEqual({ ok: false, code: 'context_not_found' });
+
+      // ⚠ THE CONTROL — the same actor and call shape against their OWN engagement succeeds.
+      await expect(
+        authorizeMeetingBooking({
+          contextType: 'project_call',
+          contextId: a.projectEngagementId,
+          userId: a.memberUserId,
+        })
+      ).resolves.toEqual({
+        ok: true,
+        companyId: a.companyId,
+        engagementType: 'project',
+        expertProfileId: a.expertProfileId,
+      });
+    });
+
     it.each([
       {
         // `engagementsRepository.findById` filters `deleted_at IS NULL`. Proving that in SQL is
@@ -601,6 +632,198 @@ describe('BAL-129 — book and provision, against a real database', () => {
     expect(rebuildCalls[0]?.[1]).toEqual({ expertProfileId: parties.expertProfileId });
     expect(rebuildCalls[0]?.[2]).toMatchObject({
       jobId: `availability--${parties.expertProfileId}`,
+    });
+  });
+});
+
+/**
+ * BAL-616 — THE UPCOMING-CALL CAP, AGAINST REAL ROWS. Three upcoming calls per context;
+ * ended and cancelled calls do not count. The windows are relative to NOW (never a calendar
+ * constant): "upcoming" reads the clock, so a fixed date would turn this suite red on the day
+ * it passes.
+ *
+ * ⚠ `pnpm test:integration` PASSES VACUOUSLY WITHOUT DOCKER. Check the reported test COUNT.
+ */
+describe('BAL-616 — the upcoming-call cap, with nothing mocked', () => {
+  const HOUR_MS = 3_600_000;
+  const DAY_MS = 24 * HOUR_MS;
+
+  /** The won relationship: `accepted` on an `accepted` request, opened. */
+  async function acceptWonRelationship(parties: BookingParties): Promise<void> {
+    await db
+      .update(requestExpertRelationships)
+      .set({ status: 'accepted', openedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, parties.relationshipId));
+    await db
+      .update(projectRequests)
+      .set({ status: 'accepted' })
+      .where(eq(projectRequests.id, parties.directProjectRequestId));
+  }
+
+  type CappedTarget = {
+    contextType: 'request_interaction' | 'project_call';
+    contextId: string;
+    engagementType: 'project' | null;
+  };
+
+  function targetFor(
+    contextType: CappedTarget['contextType'],
+    parties: BookingParties
+  ): CappedTarget {
+    return contextType === 'request_interaction'
+      ? { contextType, contextId: parties.relationshipId, engagementType: null }
+      : { contextType, contextId: parties.projectEngagementId, engagementType: 'project' };
+  }
+
+  /** Books one call `dayOffset` days from now; each offset is its own non-overlapping slot. */
+  async function bookCall(
+    parties: BookingParties,
+    target: CappedTarget,
+    dayOffset: number,
+    bookingIdempotencyKey?: string
+  ): Promise<string> {
+    const scheduledStart = new Date(Date.now() + dayOffset * DAY_MS);
+    const booked = await bookAndProvisionMeeting(
+      {
+        ...target,
+        scheduledStart,
+        scheduledEnd: new Date(scheduledStart.getTime() + HOUR_MS),
+        userId: parties.memberUserId,
+        bookingIdempotencyKey,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+    return booked.meeting.id;
+  }
+
+  const gate = (parties: BookingParties, target: CappedTarget, key?: string) =>
+    authorizeMeetingBooking({
+      contextType: target.contextType,
+      contextId: target.contextId,
+      userId: parties.memberUserId,
+      bookingIdempotencyKey: key,
+    });
+
+  it.each(['request_interaction', 'project_call'] as const)(
+    '%s: the third call books, the fourth is refused, and ended and cancelled calls free a seat',
+    async (contextType) => {
+      const parties = await seedBookingParties();
+      await acceptWonRelationship(parties);
+      const target = targetFor(contextType, parties);
+
+      const first = await bookCall(parties, target, 1);
+      const second = await bookCall(parties, target, 2);
+      await expect(gate(parties, target)).resolves.toMatchObject({ ok: true });
+
+      await bookCall(parties, target, 3);
+      await expect(gate(parties, target)).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+
+      await db.update(meetings).set({ status: 'ended' }).where(eq(meetings.id, first));
+      await expect(gate(parties, target)).resolves.toMatchObject({ ok: true });
+
+      await bookCall(parties, target, 4);
+      await expect(gate(parties, target)).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+
+      await db.update(meetings).set({ status: 'cancelled' }).where(eq(meetings.id, second));
+      await expect(gate(parties, target)).resolves.toMatchObject({ ok: true });
+    }
+  );
+
+  it('a call whose window has already passed does not count', async () => {
+    const parties = await seedBookingParties();
+    await acceptWonRelationship(parties);
+    const target = targetFor('project_call', parties);
+    const first = await bookCall(parties, target, 1);
+    await bookCall(parties, target, 2);
+    await bookCall(parties, target, 3);
+    await expect(gate(parties, target)).resolves.toEqual({ ok: false, code: 'call_cap_reached' });
+
+    const past = new Date(Date.now() - 2 * DAY_MS);
+    await db
+      .update(meetings)
+      .set({ scheduledStart: new Date(past.getTime() - HOUR_MS), scheduledEnd: past })
+      .where(eq(meetings.id, first));
+
+    await expect(gate(parties, target)).resolves.toMatchObject({ ok: true });
+  });
+
+  it('the cap is per context: a full request_interaction does not block project_call', async () => {
+    const parties = await seedBookingParties();
+    await acceptWonRelationship(parties);
+    const interaction = targetFor('request_interaction', parties);
+    await bookCall(parties, interaction, 1);
+    await bookCall(parties, interaction, 2);
+    await bookCall(parties, interaction, 3);
+    await expect(gate(parties, interaction)).resolves.toEqual({
+      ok: false,
+      code: 'call_cap_reached',
+    });
+
+    await expect(gate(parties, targetFor('project_call', parties))).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('answers a non-member context_not_found, never the cap, on a full thread', async () => {
+    const parties = await seedBookingParties();
+    const outsider = await seedBookingParties();
+    await acceptWonRelationship(parties);
+    const target = targetFor('project_call', parties);
+    await bookCall(parties, target, 1);
+    await bookCall(parties, target, 2);
+    await bookCall(parties, target, 3);
+
+    await expect(
+      authorizeMeetingBooking({
+        contextType: target.contextType,
+        contextId: target.contextId,
+        userId: outsider.memberUserId,
+      })
+    ).resolves.toEqual({ ok: false, code: 'context_not_found' });
+  });
+
+  it('a lost-201 retry at the cap is admitted for its own key, and no other key', async () => {
+    const parties = await seedBookingParties();
+    await acceptWonRelationship(parties);
+    const target = targetFor('project_call', parties);
+    const keyFor = (nonce: string): string =>
+      createHash('sha256').update(`${parties.memberUserId}:${nonce}`).digest('hex');
+    await bookCall(parties, target, 1);
+    await bookCall(parties, target, 2);
+    await bookCall(parties, target, 3, keyFor('third'));
+
+    await expect(gate(parties, target, keyFor('third'))).resolves.toMatchObject({ ok: true });
+    await expect(gate(parties, target, keyFor('another'))).resolves.toEqual({
+      ok: false,
+      code: 'call_cap_reached',
+    });
+  });
+
+  it('the won relationship books at accepted; a request at kickoff_approved refuses request_interaction', async () => {
+    const parties = await seedBookingParties();
+    await acceptWonRelationship(parties);
+    const target = targetFor('request_interaction', parties);
+    await expect(gate(parties, target)).resolves.toEqual({
+      ok: true,
+      companyId: parties.companyId,
+      engagementType: null,
+      expertProfileId: parties.expertProfileId,
+    });
+
+    await db
+      .update(projectRequests)
+      .set({ status: 'kickoff_approved' })
+      .where(eq(projectRequests.id, parties.directProjectRequestId));
+    await expect(gate(parties, target)).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
     });
   });
 });

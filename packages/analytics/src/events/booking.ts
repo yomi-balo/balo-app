@@ -129,7 +129,12 @@ export type BookingSource =
   | 'book_again'
   /** The case surface's nudge "Book a consultation" CTA, booking in-page for a paused expert. */
   | 'case_nudge'
-  | 'home_spotlight';
+  | 'home_spotlight'
+  /**
+   * BAL-616 — the request page's "Book a call" on a not-selected thread or a closed request,
+   * which routes to the expert's profile booking (`?book=1&src=request_thread`).
+   */
+  | 'request_thread';
 
 /** Whether the confirm step renders the case chooser or a FIXED case (D4a #3). */
 export type BookingEntryMode = 'chooser' | 'fixed_case';

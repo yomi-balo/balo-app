@@ -155,9 +155,9 @@ export interface MeetingServerEventMap {
   [MEETING_SERVER_EVENTS.MEETING_JOIN_GRANTED]: {
     meeting_id: string;
     /**
-     * The PRIMARY context's type (the D3 precedence winner) — the SIX HOLDER-BEARING labels.
+     * The PRIMARY context's type (the D3 precedence winner) — the SEVEN HOLDER-BEARING labels.
      *
-     * ⚠ WIDER than `MeetingBookingContextType` on purpose: a meeting is BOOKED under FIVE
+     * ⚠ WIDER than `MeetingBookingContextType` on purpose: a meeting is BOOKED under SIX
      * labels — which now INCLUDES `request_interaction` (BAL-283 widened
      * `BOOKABLE_CONTEXT_TYPES`) — but JOINED under any context that resolves, which adds
      * `retainer_checkin`.

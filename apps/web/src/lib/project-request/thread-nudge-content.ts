@@ -108,13 +108,14 @@ function clientEoiNudge(
 ): ThreadNudgeContent {
   // BAL-283 — a live call beats everything else on this cell: nothing left to book, and
   // the message-momentum framing below no longer applies once a call exists.
-  if (thread.bookedCall !== null) {
+  const [nextCall] = thread.upcomingCalls;
+  if (nextCall !== undefined) {
     return {
       variant: 'done',
       icon: Calendar,
       headline: `Call booked with ${name}`,
       subInstant: {
-        iso: thread.bookedCall.scheduledStartIso,
+        iso: nextCall.scheduledStartIso,
         suffix: " — you'll get a join link by email.",
       },
       secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
@@ -332,13 +333,14 @@ function expertNudge(
 
   if (thread.relationshipStatus === 'eoi_submitted') {
     // BAL-283 — a live call beats everything else (both lenses share this precedence).
-    if (thread.bookedCall !== null) {
+    const [nextCall] = thread.upcomingCalls;
+    if (nextCall !== undefined) {
       return {
         variant: 'done',
         icon: Calendar,
         headline: 'Call booked',
         subInstant: {
-          iso: thread.bookedCall.scheduledStartIso,
+          iso: nextCall.scheduledStartIso,
           suffix: ` with ${clientParty}.`,
         },
         secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },

@@ -1660,11 +1660,23 @@ export interface ConversationAvailabilitySharedPayload {
 }
 
 /**
- * BAL-283 — a free intro call was booked on a project-request thread. SIBLING of
+ * Which copy a conversation call-booked notification renders: `intro` is the intro call on an
+ * open thread, `call` is any call with the won expert. THE one tuple every copy derives from.
+ */
+export const CALL_KINDS = ['intro', 'call'] as const;
+export type CallKind = (typeof CALL_KINDS)[number];
+
+/**
+ * BAL-283 — a free call was booked on a project-request thread. SIBLING of
  * `booking.confirmed`, never a reuse of it: that payload requires `engagementId`, `caseTitle`,
  * `isNewCase` and `priorConsultationCount`, and BOTH its templates build
- * `caseUrl = ${BASE_URL}/cases/${engagementId}`. There is no engagement here and there never
- * will be.
+ * `caseUrl = ${BASE_URL}/cases/${engagementId}`. This payload carries no engagement and its
+ * copy never links to a case.
+ *
+ * BAL-616 — `conversation.intro_call_booked` covers EVERY call booked from the request page's
+ * conversation: the intro call on an open thread, a call with the won expert before kickoff
+ * (`request_interaction`), and a project call after kickoff (`project_call`). The event NAME
+ * is unchanged; {@link ConversationIntroCallBookedPayload.callKind} picks the copy.
  */
 export interface ConversationIntroCallBookedPayload {
   /** `${meetingId}` — an idempotent replay publishes the same jobId and dedups. */
@@ -1695,6 +1707,16 @@ export interface ConversationIntroCallBookedPayload {
   joinPath: string;
   provisioned: boolean;
   guestCount: number;
+  /**
+   * BAL-616 — which copy the templates render. `'intro'` is the intro call on an open thread
+   * ("Intro call with …"). `'call'` is any call with the won expert, before or after kickoff
+   * ("Call with …"), and its copy never says "intro".
+   *
+   * ⚠ OPTIONAL, AND ABSENT MEANS `'intro'`. A web build that predates this field publishes
+   * payloads without it, and the api must still accept and render them, so the api's Zod
+   * boundary keeps the field optional too.
+   */
+  callKind?: CallKind;
 }
 
 /**

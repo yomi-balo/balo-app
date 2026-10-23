@@ -61,10 +61,13 @@ export type DashboardYourMoveTarget = (typeof DASHBOARD_YOUR_MOVE_TARGETS)[numbe
 /**
  * The context types Up next lists, in display-tile order. The web view model derives its type
  * from this (`NAV_ITEM_KEYS` precedent), so the event vocabulary and the listed set cannot drift.
+ * `project_call` (BAL-616) sits beside `project_kickoff`: both are calls on a project engagement,
+ * and a call carried over at kickoff must stay on the dashboard.
  */
 export const DASHBOARD_UP_NEXT_MEETING_TYPES = [
   'case',
   'project_kickoff',
+  'project_call',
   'project_discovery',
   'request_interaction',
 ] as const satisfies readonly MeetingContextTypeWithHolder[];
@@ -97,6 +100,14 @@ export type DashboardUpNextTarget = (typeof DASHBOARD_UP_NEXT_TARGETS)[number];
 export const DASHBOARD_UP_NEXT_ROW_STATES = ['upcoming', 'starting_soon', 'happening_now'] as const;
 export type DashboardUpNextRowState = (typeof DASHBOARD_UP_NEXT_ROW_STATES)[number];
 
+/**
+ * BAL-616 — which surface sent an `UP_NEXT_CLICKED`. `dashboard` is the Up next card;
+ * `request_thread` is the request page conversation header's Join, which reuses this event so
+ * every Join click is counted in one place.
+ */
+export const DASHBOARD_UP_NEXT_SURFACES = ['dashboard', 'request_thread'] as const;
+export type DashboardUpNextSurface = (typeof DASHBOARD_UP_NEXT_SURFACES)[number];
+
 export interface DashboardEventMap {
   [DASHBOARD_EVENTS.UP_NEXT_VIEWED]: {
     workspace_type: Workspace['type']; // 'company' | 'expert' (D11)
@@ -106,6 +117,8 @@ export interface DashboardEventMap {
     meeting_types: DashboardUpNextMeetingType[];
   };
   [DASHBOARD_EVENTS.UP_NEXT_CLICKED]: {
+    /** BAL-616 — the Up next card sends `dashboard`; the request page header `request_thread`. */
+    surface: DashboardUpNextSurface;
     target: DashboardUpNextTarget;
     /** `null` for footer links and the Empty-state "Find an expert" CTA. */
     meeting_type: DashboardUpNextMeetingType | null;

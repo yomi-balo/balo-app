@@ -8,6 +8,7 @@ function renderStep(overrides: Record<string, unknown> = {}) {
   const onDone = vi.fn();
   render(
     <StepBookedIntroCall
+      callKind="intro"
       expertFirstName="Priya"
       startIso="2026-06-05T09:00:00.000Z"
       viewerTimezone="UTC"
@@ -71,6 +72,18 @@ describe('StepBookedIntroCall', () => {
       durationMinutes: 30,
       filename: 'intro-call.ics',
     });
+    spy.mockRestore();
+  });
+
+  it('callKind "call" drops "Intro" from the confirmation and the .ics event', () => {
+    const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    renderStep({ callKind: 'call' });
+    expect(screen.getByText(/· Call with Priya\./)).toBeInTheDocument();
+    expect(screen.queryByText(/intro/i)).not.toBeInTheDocument();
+    screen.getByRole('button', { name: /Add to calendar/ }).click();
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'Call with Priya', filename: 'call.ics' })
+    );
     spy.mockRestore();
   });
 });

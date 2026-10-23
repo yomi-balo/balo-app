@@ -26,7 +26,7 @@ import {
 } from '@balo/shared/meetings';
 
 /**
- * The four labels whose `context_id` names an `engagements.id`.
+ * The five labels whose `context_id` names an `engagements.id`.
  *
  * ⚠ `Extract`, NOT A BARE UNION — the `context-owner.ts` discipline. A label RENAMED in the
  * database silently drops out of this type instead of leaving a stale name behind, which is
@@ -34,12 +34,13 @@ import {
  */
 export type EngagementGrainContextType = Extract<
   MeetingContextTypeWithHolder,
-  'case' | 'project_kickoff' | 'package_session' | 'retainer_checkin'
+  'case' | 'project_kickoff' | 'project_call' | 'package_session' | 'retainer_checkin'
 >;
 
 const ENGAGEMENT_GRAIN_CONTEXT_TYPES = [
   'case',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
 ] as const satisfies readonly EngagementGrainContextType[];
@@ -79,7 +80,7 @@ export type MeetingEngagementResolution =
  * 1. `meetingsRepository.findWithContexts` — filters soft-deleted contexts, `undefined` for a
  *    missing meeting.
  * 2. `selectPrimaryMeetingContext` over the live contexts.
- * 3. Narrow the winning context type to the four engagement-grain labels.
+ * 3. Narrow the winning context type to the five engagement-grain labels.
  * 4. `engagementsRepository.findById` — filters `deleted_at`.
  */
 export async function resolveMeetingEngagement(

@@ -222,3 +222,48 @@ describe('resolveMeetingExpertTx — the request_interaction arm (BAL-283, Rulin
     await expect(resolveMeetingExpertTx(UNUSED_EXECUTOR, [], 'meeting_1')).resolves.toBeNull();
   });
 });
+
+describe('resolveMeetingExpertTx — the project_call arm (BAL-616)', () => {
+  const PROJECT_CALL_CONTEXT: ProjectionContext = {
+    contextType: 'project_call',
+    contextId: '44444444-4444-4444-8444-444444444444',
+  };
+
+  it('resolves to the ENGAGEMENT row’s expert, reading `engagements` only', async () => {
+    // Engagement grain, like `project_kickoff`: the id is an `engagements.id`. Missing the
+    // `resolveOneContext` arm ⇒ `MeetingContextNotProjectableError`; queuing the id into any
+    // other batch ⇒ an empty `engagementExperts` map ⇒ `MeetingContextUnresolvableError`.
+    const rows = new Map<unknown, readonly unknown[]>([
+      [
+        engagements,
+        [{ id: PROJECT_CALL_CONTEXT.contextId, expertProfileId: ENGAGEMENT_EXPERT_ID }],
+      ],
+    ]);
+    const { exec, tablesQueried } = recordingExecutor(rows);
+
+    await expect(resolveMeetingExpertTx(exec, [PROJECT_CALL_CONTEXT], 'meeting_1')).resolves.toBe(
+      ENGAGEMENT_EXPERT_ID
+    );
+    expect(tablesQueried()).toEqual([engagements]);
+  });
+
+  it('a carried-over call (request_interaction + project_call, SAME expert) resolves', async () => {
+    // The kickoff re-anchor shape: both rows live, one expert. The projection guard
+    // (`assertProjectionExpertUnchangedTx`) relies on this resolving rather than throwing.
+    const rows = new Map<unknown, readonly unknown[]>([
+      [
+        requestExpertRelationships,
+        [{ id: INTERACTION_CONTEXT.contextId, expertProfileId: RELATIONSHIP_EXPERT_ID }],
+      ],
+      [
+        engagements,
+        [{ id: PROJECT_CALL_CONTEXT.contextId, expertProfileId: RELATIONSHIP_EXPERT_ID }],
+      ],
+    ]);
+    const { exec } = recordingExecutor(rows);
+
+    await expect(
+      resolveMeetingExpertTx(exec, [INTERACTION_CONTEXT, PROJECT_CALL_CONTEXT], 'meeting_1')
+    ).resolves.toBe(RELATIONSHIP_EXPERT_ID);
+  });
+});

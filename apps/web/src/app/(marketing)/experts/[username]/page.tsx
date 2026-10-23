@@ -22,7 +22,14 @@ interface ExpertProfilePageProps {
 
 /** `?src=` → `BookingSource` (D4a entry points 2 and 4, which deep-link here). Default `'profile'`. */
 function resolveBookingSource(src: string | undefined): BookingSource {
-  if (src === 'search' || src === 'book_again' || src === 'home_spotlight') return src;
+  if (
+    src === 'search' ||
+    src === 'book_again' ||
+    src === 'home_spotlight' ||
+    src === 'request_thread'
+  ) {
+    return src;
+  }
   return 'profile';
 }
 

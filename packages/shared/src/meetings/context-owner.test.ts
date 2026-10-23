@@ -33,12 +33,13 @@ const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
 const OTHER_EXPERT_PROFILE_ID = '99999999-9999-4999-8999-999999999999';
 
-/** The four ENGAGEMENT-GRAIN labels. All four read `engagements`, hence one branch. */
+/** The five ENGAGEMENT-GRAIN labels. All five read `engagements`, hence one branch. */
 const ENGAGEMENT_GRAIN_LABELS = [
   'case',
   'project_kickoff',
   'package_session',
   'retainer_checkin',
+  'project_call',
 ] as const;
 
 /**
@@ -67,7 +68,7 @@ function makeReads(overrides: Partial<MeetingContextOwnerReads> = {}): MeetingCo
 }
 
 describe('resolveContextOwner — engagement grain', () => {
-  it('resolves the owning company AND the delivering expert for ALL FOUR labels', async () => {
+  it('resolves the owning company AND the delivering expert for ALL FIVE labels', async () => {
     for (const contextType of ENGAGEMENT_GRAIN_LABELS) {
       const reads = makeReads();
 
@@ -78,6 +79,25 @@ describe('resolveContextOwner — engagement grain', () => {
         owner: { companyId: COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID },
       });
     }
+  });
+
+  it('`project_call` reads the ENGAGEMENT — never the relationship it was carried over from', async () => {
+    const reads = makeReads({
+      findEngagement: vi.fn().mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+      }),
+    });
+
+    await expect(
+      resolveContextOwner({ contextType: 'project_call', contextId: ENGAGEMENT_ID }, reads)
+    ).resolves.toEqual({
+      outcome: 'resolved',
+      owner: { companyId: COMPANY_ID, expertProfileId: OTHER_EXPERT_PROFILE_ID },
+    });
+    expect(reads.findEngagement).toHaveBeenCalledExactlyOnceWith(ENGAGEMENT_ID);
+    expect(reads.findRelationship).not.toHaveBeenCalled();
+    expect(reads.findProjectRequest).not.toHaveBeenCalled();
   });
 
   it('reads `engagements` ONLY — neither request read is touched', async () => {
@@ -193,17 +213,17 @@ describe('resolveContextOwner — relationship grain (`request_interaction`)', (
 describe('resolveContextOwner — the unhandled arm', () => {
   /**
    * ⚠ UNREACHABLE BY TYPE, AND REACHED HERE ON PURPOSE. `PrimaryMeetingContext.contextType`
-   * is `MeetingContextTypeWithHolder`, so no well-typed caller can supply a seventh label —
+   * is `MeetingContextTypeWithHolder`, so no well-typed caller can supply an unlisted label —
    * only a cast can. The arm exists so a label added to the DATABASE fails closed here and
    * fails LOUDLY at `apps/api`'s `const exhaustive: never` witness, and this is the only
    * place it can be exercised at all.
    */
   it('fails closed with the offending label rather than throwing', async () => {
     const reads = makeReads();
-    const seventhLabel = { contextType: 'quarterly_review', contextId: ENGAGEMENT_ID };
+    const unlistedLabel = { contextType: 'quarterly_review', contextId: ENGAGEMENT_ID };
 
     await expect(
-      resolveContextOwner(seventhLabel as unknown as PrimaryMeetingContext, reads)
+      resolveContextOwner(unlistedLabel as unknown as PrimaryMeetingContext, reads)
     ).resolves.toEqual({ outcome: 'unhandled', contextType: 'quarterly_review' });
 
     // Fails closed BEFORE any read — an unknown label must never become a subject we query.

@@ -38,9 +38,10 @@ describe('upNextWindow', () => {
 });
 
 describe('isUpNextMeetingType', () => {
-  it('accepts the four listed types', () => {
+  it('accepts the five listed types', () => {
     expect(isUpNextMeetingType('case')).toBe(true);
     expect(isUpNextMeetingType('project_kickoff')).toBe(true);
+    expect(isUpNextMeetingType('project_call')).toBe(true);
     expect(isUpNextMeetingType('project_discovery')).toBe(true);
     expect(isUpNextMeetingType('request_interaction')).toBe(true);
   });

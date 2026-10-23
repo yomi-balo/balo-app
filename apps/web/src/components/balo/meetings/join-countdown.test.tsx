@@ -55,6 +55,15 @@ describe('JoinCountdown', () => {
     expect(button).toBeInTheDocument();
   });
 
+  it('merges a caller className over the default size, keeping aria-disabled and no disabled attribute', () => {
+    render(<JoinCountdown label="Join tomorrow" className="min-h-9 px-3" />);
+    const button = screen.getByRole('button', { name: /Join tomorrow/ });
+    expect(button.className).toContain('min-h-9');
+    expect(button.className).not.toContain('min-h-11');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toHaveAttribute('disabled');
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<JoinCountdown label="Join in 2 days" />);
     expect(await axe(container)).toHaveNoViolations();

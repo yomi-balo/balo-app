@@ -36,6 +36,7 @@ import {
 import { ensureAdminBillingAutoskip } from '@/lib/project-request/ensure-admin-billing-autoskip';
 import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickoff-billing';
 import { loadKickoffUpfront } from '@/lib/project-request/kickoff-upfront';
+import { listUpcomingCallsByThread } from '@/lib/project-request/upcoming-calls';
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -126,6 +127,38 @@ async function loadKickoffUpfrontFor(
   const upfront = await loadKickoffUpfront(view.kickoff.acceptedRelationshipId);
   if (upfront === null || ctx.lens !== 'expert') return upfront;
   return { ...upfront, amountCents: null };
+}
+
+/**
+ * BAL-616 — the soonest upcoming call on the won thread while kickoff is still pending, so the
+ * kickoff board's call row can read "Booked for …" for EVERY lens (an admin has no conversation
+ * stage). Only the pre-kickoff `request_interaction` context is read: once kickoff is approved
+ * the board's row is gone. The relationship id comes from the authorised request row, never from
+ * input. A failed read degrades to `null` (the row offers "Pick a time" instead) rather than
+ * breaking the page.
+ */
+async function loadKickoffNextCallStartIso(
+  view: RequestDetailView,
+  requestId: string
+): Promise<string | null> {
+  if (view.kickoff === null || view.kickoff.approved) return null;
+  const relationshipId = view.kickoff.acceptedRelationshipId;
+  try {
+    const byThread = await listUpcomingCallsByThread({
+      relationshipIds: [relationshipId],
+      projectCall: null,
+      nowMs: Date.now(),
+    });
+    const [next] = byThread.get(relationshipId) ?? [];
+    return next?.scheduledStartIso ?? null;
+  } catch (error) {
+    log.warn('Kickoff next-call read failed — the board offers "Pick a time"', {
+      requestId,
+      relationshipId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /** The `project_request.closed` audit row's `metadata.counts` shape (narrowed, never cast). */
@@ -375,17 +408,6 @@ export default async function RequestDetailPage({
     request.companyId
   );
 
-  // Phase-2 participants get the live conversation payload (thread summaries +
-  // the default thread's first page). Observers/Phase-1 never pay for it.
-  let conversation: ConversationView | null = null;
-  if (ctx.archetype === 'participant' && requestPhase(view.status) === 'phase2') {
-    conversation = await loadConversationView(request, ctx, user);
-  }
-
-  const adminBilling = await loadAdminBilling(ctx, view, request.companyId);
-  const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
-  const kickoffUpfront = await loadKickoffUpfrontFor(ctx, view);
-
   // BAL-331 deep-link: once the request is `kickoff_approved` a delivery
   // engagement exists — resolve its id so the shell can surface the "View delivery
   // workspace" entry for every lens. `undefined` (no engagement yet / not that
@@ -395,6 +417,24 @@ export default async function RequestDetailPage({
     deliveryEngagementId =
       (await projectEngagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
   }
+
+  // Phase-2 participants get the live conversation payload (thread summaries +
+  // the default thread's first page); a closed request's client gets its surviving threads,
+  // read-only (an expert on a closed request has no lens and never reaches here).
+  // Observers/Phase-1 never pay for it.
+  let conversation: ConversationView | null = null;
+  const phase = requestPhase(view.status);
+  if (ctx.archetype === 'participant' && (phase === 'phase2' || phase === 'closed')) {
+    // BAL-616 — the engagement id also routes the won thread's `project_call` calls into
+    // its `upcomingCalls`, so it is resolved above and passed in.
+    conversation = await loadConversationView(request, ctx, user, deliveryEngagementId);
+  }
+
+  const adminBilling = await loadAdminBilling(ctx, view, request.companyId);
+  const billingCapture = await loadBillingCapture(ctx, view, user.companyRole, request.companyId);
+  const kickoffUpfront = await loadKickoffUpfrontFor(ctx, view);
+
+  const kickoffNextCallStartIso = await loadKickoffNextCallStartIso(view, requestId);
 
   // BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
   // engaged), for the intro-call dialog's guest composer disclosure. Same precedent as the
@@ -433,6 +473,7 @@ export default async function RequestDetailPage({
         billingCapture={billingCapture}
         kickoffUpfront={kickoffUpfront}
         deliveryEngagementId={deliveryEngagementId}
+        kickoffNextCallStartIso={kickoffNextCallStartIso}
         viewerEmailDomain={viewerEmailDomain}
         requestFilesView={requestFilesView}
         canClose={canClose}

@@ -1,5 +1,9 @@
 /**
- * BAL-283 — `bookIntroCallAction`'s wire types. Kept in a SIBLING, non-`'use server'` module
+ * BAL-283 / BAL-616 — `bookIntroCallAction`'s wire types. The action books EVERY conversation
+ * call: an intro call before the decision, a call with the won expert after it, and a project
+ * call once kickoff has materialized the engagement.
+ *
+ * Original BAL-283 note: Kept in a SIBLING, non-`'use server'` module
  * because `book-intro-call.ts` is `'use server'`, and a `'use server'` module may export ONLY
  * async functions (memory `reference_use_server_no_value_exports`) — mirrors
  * `actions/types.ts`'s own split for the same reason.
@@ -15,6 +19,7 @@ import type { SlotDurationMinutes } from '@balo/shared/availability';
 // `@balo/analytics`; re-declaring `'header' | 'rail' | 'nudge'` inline here (and in three other
 // modules) put the wire contract in six places, five of which could drift silently.
 import type { ConversationCallSurface } from '@balo/analytics/events';
+import type { UpcomingCallContextType } from '@/lib/project-request/conversation-view-types';
 
 export interface BookIntroCallInput {
   requestId: string;
@@ -36,6 +41,7 @@ export type IntroCallBookingFailureCode =
   | 'invalid_request' // zod, or api 400 context_type_mismatch
   | 'not_permitted' // gate denial, declined/withdrawn relationship, or api 404
   | 'slot_unavailable' // api 409 window_not_available
+  | 'call_cap_reached' // web pre-check, or api 409 call_cap_reached (3 upcoming calls per thread)
   | 'rate_limited' // api 429/503
   | 'booking_failed'; // anything else, incl. transport (status 0)
 
@@ -53,5 +59,7 @@ export type BookIntroCallResult =
       durationMinutes: number;
       guestsInvited: number;
       guestInviteFailed: boolean;
+      /** The context the call was booked on — the relationship before kickoff, the engagement after. */
+      contextType: UpcomingCallContextType;
     }
   | { ok: false; code: IntroCallBookingFailureCode };

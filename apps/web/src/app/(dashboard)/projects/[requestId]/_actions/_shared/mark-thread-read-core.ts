@@ -28,7 +28,7 @@ export async function runMarkThreadRead(
   const { requestId, relationshipId } = parsed.data;
 
   try {
-    const access = await resolveConversationAccess(user, requestId, relationshipId);
+    const access = await resolveConversationAccess(user, requestId, relationshipId, 'records');
     if (!access.ok) {
       return { success: false, error: access.error };
     }

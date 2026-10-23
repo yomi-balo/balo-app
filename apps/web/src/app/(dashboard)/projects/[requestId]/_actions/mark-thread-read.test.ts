@@ -59,6 +59,8 @@ describe('markThreadReadAction', () => {
   it('upserts the watermark and returns the persisted instant', async () => {
     const result = await markThreadReadAction(VALID_INPUT);
     expect(result).toEqual({ success: true, lastReadAtIso: READ_AT.toISOString() });
+    // BAL-616: the read watermark may advance on a closed request's records.
+    expect(mockResolveAccess).toHaveBeenCalledWith(USER, REQUEST_ID, REL_ID, 'records');
     expect(mockMarkThreadRead).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
       userId: USER.id,

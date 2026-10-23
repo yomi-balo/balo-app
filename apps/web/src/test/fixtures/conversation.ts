@@ -31,7 +31,7 @@ export function thread(overrides: Partial<ConversationThreadView> = {}): Convers
     eoiHtml: null,
     eoiSubmittedAtIso: null,
     availabilitySharedAtIso: null,
-    bookedCall: null,
+    upcomingCalls: [],
     changeRequest: null,
     ...overrides,
   };

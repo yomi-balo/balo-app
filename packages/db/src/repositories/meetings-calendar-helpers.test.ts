@@ -413,9 +413,9 @@ describe('foldMeetingContextRows', () => {
 });
 
 describe('classifyCalendarContextIds', () => {
-  it('buckets the four engagement-grain labels into engagementIds', () => {
+  it('buckets the five engagement-grain labels (incl. project_call, BAL-616) into engagementIds', () => {
     const folded = (
-      ['case', 'project_kickoff', 'package_session', 'retainer_checkin'] as const
+      ['case', 'project_kickoff', 'package_session', 'retainer_checkin', 'project_call'] as const
     ).map((contextType, index) => ({
       meetingId: `m${index}`,
       scheduledStart: START,
@@ -429,7 +429,7 @@ describe('classifyCalendarContextIds', () => {
     const buckets = classifyCalendarContextIds(folded);
 
     expect(buckets.engagementIds).toEqual(
-      new Set(['engagement-0', 'engagement-1', 'engagement-2', 'engagement-3'])
+      new Set(['engagement-0', 'engagement-1', 'engagement-2', 'engagement-3', 'engagement-4'])
     );
     expect(buckets.projectDiscoveryIds.size).toBe(0);
     expect(buckets.requestInteractionIds.size).toBe(0);
@@ -532,6 +532,40 @@ describe('assembleCalendarMeetings', () => {
         owningRowFound: true,
       },
     ]);
+  });
+
+  it('a project_call meeting (BAL-616) resolves through the engagement owner, like a kickoff', () => {
+    const result = assembleCalendarMeetings(
+      [
+        {
+          meetingId: 'm1',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'project_call',
+          contextId: 'engagement-1',
+          roomReady: true,
+        },
+      ],
+      {
+        ...EMPTY_OWNERS,
+        engagementById: new Map([
+          [
+            'engagement-1',
+            { id: 'engagement-1', engagementType: 'project', companyName: 'Acme Co' },
+          ],
+        ]),
+      },
+      'expert-1'
+    );
+
+    expect(result[0]).toMatchObject({
+      contextType: 'project_call',
+      engagementType: 'project',
+      projectRequestId: null,
+      counterpartyCompanyName: 'Acme Co',
+      owningRowFound: true,
+    });
   });
 
   it('a project_discovery meeting resolves projectRequestId + company, engagementType stays null', () => {

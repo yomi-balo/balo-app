@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
+import type { CallKind } from '@balo/shared/notifications';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -12,6 +13,10 @@ import type {
   BookIntroCallInput,
   IntroCallBookingFailureCode,
 } from '@/lib/booking/actions/book-intro-call-types';
+import {
+  upcomingCallCapCopy,
+  type UpcomingCallContextType,
+} from '@/lib/project-request/conversation-view-types';
 import { StepPickTime, pickerRestoreFor, type PickerRestore } from '../step-pick-time';
 import { LengthNote } from '../billing-line';
 import { HardFailurePanel } from '../booking-error-panels';
@@ -43,6 +48,8 @@ export interface IntroCallBookedSummary {
   relationshipId: string;
   meetingId: string;
   scheduledStartIso: string;
+  /** The context the call landed on — the relationship before kickoff, the engagement after. */
+  contextType: UpcomingCallContextType;
 }
 
 /**
@@ -59,11 +66,15 @@ export interface IntroCallBookedSummary {
  * ⚠ NO MONEY IN ANY VARIANT (Ruling 2) — the shared default body says "Nothing was charged",
  * which is both wrong and a non-sequitur on a free call.
  */
-const HARD_FAILURE_COPY: Readonly<
-  Record<
-    Exclude<IntroCallBookingFailureCode, 'slot_unavailable'>,
-    { title: string; body: string; hideRetry: boolean }
-  >
+type HardFailureCode = Exclude<IntroCallBookingFailureCode, 'slot_unavailable'>;
+interface HardFailureCopy {
+  title: string;
+  body: string;
+  hideRetry: boolean;
+}
+
+const STATIC_HARD_FAILURE_COPY: Readonly<
+  Record<Exclude<HardFailureCode, 'call_cap_reached'>, HardFailureCopy>
 > = {
   not_permitted: {
     title: 'This request has moved on',
@@ -88,6 +99,16 @@ const HARD_FAILURE_COPY: Readonly<
     hideRetry: false,
   },
 };
+
+/**
+ * Hard-panel copy for a failure code, total over the code union by TYPE. `call_cap_reached`
+ * names the expert, so it is computed rather than looked up; retrying cannot fix it.
+ */
+function hardFailureCopy(code: HardFailureCode, expertFirstName: string): HardFailureCopy {
+  if (code === 'call_cap_reached')
+    return { ...upcomingCallCapCopy(expertFirstName), hideRetry: true };
+  return STATIC_HARD_FAILURE_COPY[code];
+}
 
 /** Which visual step the header's progress indicator is on, per phase. */
 const STEP_FOR_PHASE: Readonly<Record<Phase, IntroCallStep>> = {
@@ -123,13 +144,17 @@ export interface IntroCallBookingDialogProps {
   viewerTimezone: string;
   /** Which surface opened the dialog — analytics only, never authorization. */
   surface: ConversationCallSurface;
+  /** `intro` before the decision; `call` once this expert is the one the request chose. Copy only. */
+  callKind: CallKind;
+  /** The request's status at open time — analytics only, never authorization. */
+  requestStatus: string;
   /**
    * Called once, after a successful booking, WITH the booked meeting's facts.
    *
-   * ⚠ IT CARRIES A PAYLOAD ON PURPOSE (round-1 C1). A bare `() => void` left the caller with
+   * ⚠ IT CARRIES A PAYLOAD ON PURPOSE. A bare `() => void` left the caller with
    * only `router.refresh()`, and a refresh PRESERVES client component state by design — so the
-   * client's thread kept `bookedCall === null`, the CTA never disappeared, the nudge never
-   * became the done cell, and a second call could be booked immediately. The caller flips its
+   * client's thread kept its old `upcomingCalls`, so the header never showed the new call and
+   * the cap count lagged behind the server. The caller flips its
    * own thread optimistically from this.
    */
   onBooked: (booked: IntroCallBookedSummary) => void;
@@ -172,6 +197,8 @@ export function IntroCallBookingDialog({
   viewerEmailDomain,
   viewerTimezone,
   surface,
+  callKind,
+  requestStatus,
   onBooked,
   onMessage,
 }: Readonly<IntroCallBookingDialogProps>): React.JSX.Element | null {
@@ -185,8 +212,7 @@ export function IntroCallBookingDialog({
   const [submitting, setSubmitting] = useState(false);
   const [bookedResult, setBookedResult] = useState<BookedSnapshot | null>(null);
   // Which failure produced `error_hard` — drives the panel's copy and whether Retry is offered.
-  const [failureCode, setFailureCode] =
-    useState<Exclude<IntroCallBookingFailureCode, 'slot_unavailable'>>('booking_failed');
+  const [failureCode, setFailureCode] = useState<HardFailureCode>('booking_failed');
   const nonceRef = useRef<string>(randomNonce());
 
   const resetForReopen = useCallback((): void => {
@@ -267,9 +293,11 @@ export function IntroCallBookingDialog({
         duration_minutes: result.durationMinutes,
         guest_count: guests.length,
         provisioned: result.provisioned,
+        context_type: result.contextType,
+        request_status: requestStatus,
       });
       toast.success('Booked', {
-        description: `${result.durationMinutes}-minute intro call with ${expertFirstName ?? expertName} confirmed.`,
+        description: `${result.durationMinutes}-minute ${callKind === 'call' ? 'call' : 'intro call'} with ${expertFirstName ?? expertName} confirmed.`,
       });
       setPhase('booked');
       setSubmitting(false);
@@ -277,6 +305,7 @@ export function IntroCallBookingDialog({
         relationshipId,
         meetingId: result.meetingId,
         scheduledStartIso: result.scheduledStartIso,
+        contextType: result.contextType,
       });
     } catch {
       setFailureCode('booking_failed');
@@ -293,13 +322,22 @@ export function IntroCallBookingDialog({
     expertProfileId,
     expertFirstName,
     expertName,
+    callKind,
+    requestStatus,
     onBooked,
   ]);
 
   if (!open) return null;
 
   const step: IntroCallStep = STEP_FOR_PHASE[phase];
-  const hardFailure = HARD_FAILURE_COPY[failureCode];
+  const isCall = callKind === 'call';
+  const dialogTitle = isCall
+    ? `Book a call with ${expertName}`
+    : `Book an intro call with ${expertName}`;
+  const dialogDescription = isCall
+    ? `Pick a time — calls with ${expertFirstName ?? expertName} are free.`
+    : 'Pick a time — this is a free intro call, no commitment.';
+  const hardFailure = hardFailureCopy(failureCode, expertFirstName ?? expertName);
 
   /** ⚠ `min-h-0 flex-1`, never `h-full` — see the note in `booking-flow-dialog.tsx`. */
   const body = (
@@ -332,6 +370,7 @@ export function IntroCallBookingDialog({
                 onGuestsChange={setGuests}
                 viewerEmailDomain={viewerEmailDomain}
                 clientCompanyName={clientCompanyName}
+                callKind={callKind}
                 staleSlot={staleSlot}
                 submitting={submitting}
                 onBack={handleChangeTime}
@@ -344,6 +383,7 @@ export function IntroCallBookingDialog({
           {phase === 'booked' && bookedResult !== null && (
             <motion.div key="booked" {...pageTransition}>
               <StepBookedIntroCall
+                callKind={callKind}
                 expertFirstName={expertFirstName}
                 startIso={bookedResult.scheduledStartIso}
                 viewerTimezone={viewerTimezone}
@@ -378,10 +418,8 @@ export function IntroCallBookingDialog({
     return (
       <Sheet open={open} onOpenChange={(next) => !next && handleClose()}>
         <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
-          <SheetTitle className="sr-only">Book an intro call with {expertName}</SheetTitle>
-          <SheetDescription className="sr-only">
-            Pick a time — this is a free intro call, no commitment.
-          </SheetDescription>
+          <SheetTitle className="sr-only">{dialogTitle}</SheetTitle>
+          <SheetDescription className="sr-only">{dialogDescription}</SheetDescription>
           {body}
         </SheetContent>
       </Sheet>
@@ -391,10 +429,8 @@ export function IntroCallBookingDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
       <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
-        <DialogTitle className="sr-only">Book an intro call with {expertName}</DialogTitle>
-        <DialogDescription className="sr-only">
-          Pick a time — this is a free intro call, no commitment.
-        </DialogDescription>
+        <DialogTitle className="sr-only">{dialogTitle}</DialogTitle>
+        <DialogDescription className="sr-only">{dialogDescription}</DialogDescription>
         {body}
       </DialogContent>
     </Dialog>
