@@ -149,10 +149,28 @@ describe('KickoffBoard — structure', () => {
   });
 
   it('treats billing as done on a legacy kickoff approved without a billing confirmation', () => {
-    renderBoard({ clientBillingConfirmed: false, upfrontInvoiceRaised: false, approved: true });
+    renderBoard({
+      lens: 'client',
+      billing: billingCapture(),
+      clientBillingConfirmed: false,
+      upfrontInvoiceRaised: false,
+      approved: true,
+    });
     expect(currentLabel()).toBeNull();
     expect(screen.getByText('All done')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add details/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a member no billing notice on a legacy kickoff approved without a billing confirmation', () => {
+    renderBoard({
+      lens: 'client',
+      billing: billingCapture({ canManage: false }),
+      clientBillingConfirmed: false,
+      upfrontInvoiceRaised: false,
+      approved: true,
+    });
+    expect(screen.getByText('Billing details added')).toBeInTheDocument();
+    expect(screen.queryByText(/owner or admin needs to add/i)).not.toBeInTheDocument();
   });
 });
 

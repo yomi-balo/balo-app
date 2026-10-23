@@ -214,7 +214,10 @@ function showsCloseControl(
   return (ctx.lens === 'client' && canClose) || (ctx.lens === 'admin' && canCloseAsAdmin);
 }
 
-/** A client-lens member (not owner/admin) blocked from the outstanding billing step. */
+/**
+ * A client-lens member (not owner/admin) blocked from the outstanding billing step. An approved
+ * kickoff has no outstanding billing step, even on a legacy request with no billing confirmation.
+ */
 function isBillingBlocked(
   ctx: RequestViewerContext,
   view: RequestDetailView,
@@ -224,6 +227,7 @@ function isBillingBlocked(
     ctx.lens === 'client' &&
     view.kickoff !== null &&
     !view.kickoff.clientBillingConfirmed &&
+    !view.kickoff.approved &&
     billingCapture !== null &&
     !billingCapture.canManage
   );
@@ -523,7 +527,10 @@ export function RequestDetailShell({
                     view={adminBilling ?? null}
                     requestId={view.id}
                     acceptedRelationshipId={view.kickoff.acceptedRelationshipId}
-                    clientBillingConfirmed={view.kickoff.clientBillingConfirmed}
+                    // Approval means the billing gate was met — never invite a reminder after it.
+                    clientBillingConfirmed={
+                      view.kickoff.clientBillingConfirmed || view.kickoff.approved
+                    }
                   />
                 )}
                 {showHealthPanel && (

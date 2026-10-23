@@ -213,7 +213,11 @@ export function KickoffBoard({
   // the board mounts twice per client (desktop + mobile sheet), so firing from the
   // component would over-count.
   const memberBlocked =
-    lens === 'client' && !clientBillingConfirmed && billing !== null && !billing.canManage;
+    lens === 'client' &&
+    !clientBillingConfirmed &&
+    !approved &&
+    billing !== null &&
+    !billing.canManage;
 
   const steps = resolveSteps(
     {
