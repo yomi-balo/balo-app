@@ -137,7 +137,7 @@ function JoinSlot({
         onJoin={() => onJoin(next)}
       >
         <span className="size-[7px] rounded-full bg-emerald-400" aria-hidden="true" />
-        Join now
+        <span>Join now</span>
       </JoinMeetingButton>
     );
   }

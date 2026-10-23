@@ -224,7 +224,7 @@ export interface AuthorizeMeetingBookingInput {
    * the upcoming-call cap, to leave this key's own meeting out of the count so a lost-201
    * retry replays instead of being refused at the cap.
    */
-  bookingIdempotencyKey?: string | undefined;
+  bookingIdempotencyKey?: string;
 }
 
 /** The bookable labels that anchor on something OTHER than an `engagements.id`. */

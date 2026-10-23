@@ -368,7 +368,7 @@ export async function bookIntroCallAction(
     const joinPath = memberCallPath(meetingId);
 
     // Fire-and-forget — only reached on a real 201.
-    publishNotificationEvent('conversation.intro_call_booked', {
+    void publishNotificationEvent('conversation.intro_call_booked', {
       correlationId: meetingId,
       meetingId,
       requestId,
