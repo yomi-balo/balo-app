@@ -147,31 +147,6 @@ describe('KickoffBoard — structure', () => {
     expect(currentLabel()).toBeNull();
     expect(screen.getByText('All done')).toBeInTheDocument();
   });
-
-  it('treats billing as done on a legacy kickoff approved without a billing confirmation', () => {
-    renderBoard({
-      lens: 'client',
-      billing: billingCapture(),
-      clientBillingConfirmed: false,
-      upfrontInvoiceRaised: false,
-      approved: true,
-    });
-    expect(currentLabel()).toBeNull();
-    expect(screen.getByText('All done')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /add details/i })).not.toBeInTheDocument();
-  });
-
-  it('shows a member no billing notice on a legacy kickoff approved without a billing confirmation', () => {
-    renderBoard({
-      lens: 'client',
-      billing: billingCapture({ canManage: false }),
-      clientBillingConfirmed: false,
-      upfrontInvoiceRaised: false,
-      approved: true,
-    });
-    expect(screen.getByText('Billing details added')).toBeInTheDocument();
-    expect(screen.queryByText(/owner or admin needs to add/i)).not.toBeInTheDocument();
-  });
 });
 
 describe('KickoffBoard — who each row is waiting on', () => {
@@ -453,15 +428,5 @@ describe('KickoffBoard — terminal (approved) state', () => {
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.getByText('All done')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
-  });
-
-  it('treats the invoice step as done on a kickoff approved before that step existed', () => {
-    renderBoard({
-      lens: 'expert',
-      upfront: UPFRONT_WITHHELD,
-      clientBillingConfirmed: true,
-      approved: true,
-    });
-    expect(stepStates()).toEqual(['done', 'done', 'done']);
   });
 });

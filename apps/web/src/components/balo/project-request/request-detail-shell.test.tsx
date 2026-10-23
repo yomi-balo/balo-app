@@ -1217,24 +1217,17 @@ describe('RequestDetailShell — billing blocked-view analytics (BAL-323)', () =
     expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
   });
 
-  it('does not fire on a legacy kickoff approved without a billing confirmation', () => {
+  it('tells the admin billing panel the kickoff is approved', () => {
     render(
       <RequestDetailShell
-        view={view({ status: 'kickoff_approved', kickoff: kickoff({ approved: true }) })}
-        ctx={ctx()}
-        billingCapture={{ companyId: 'company-1', canManage: false, details: null }}
-      />
-    );
-    expect(track).not.toHaveBeenCalledWith(BILLING_EVENTS.DETAILS_BLOCKED_VIEW, expect.anything());
-  });
-
-  it('offers the admin no billing reminder once kickoff is approved', () => {
-    render(
-      <RequestDetailShell
-        view={view({ status: 'kickoff_approved', kickoff: kickoff({ approved: true }) })}
+        view={view({
+          status: 'kickoff_approved',
+          kickoff: kickoff({ clientBillingConfirmed: true, approved: true }),
+        })}
         ctx={ctx({ lens: 'admin', archetype: 'observer', canSeeContact: true })}
       />
     );
+    expect(screen.getByText(/kickoff approved — no company billing record/i)).toBeInTheDocument();
     expect(screen.queryByText(/send them a reminder/i)).not.toBeInTheDocument();
   });
 

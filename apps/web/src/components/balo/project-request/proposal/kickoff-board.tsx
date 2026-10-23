@@ -135,10 +135,7 @@ function resolveSteps(
   state: { billingDone: boolean; invoiceRaised: boolean; approved: boolean; hasUpfront: boolean },
   c: StepCopyContext
 ): KickoffStep[] {
-  const { invoiceRaised, approved, hasUpfront } = state;
-  // A legacy or migrated kickoff approved without a billing confirmation — approval implies
-  // the billing gate was met, as it does for the invoice step below.
-  const billingDone = state.billingDone || approved;
+  const { billingDone, invoiceRaised, approved, hasUpfront } = state;
   const billing: KickoffStep = {
     key: 'billing',
     owner: 'client',
@@ -160,18 +157,15 @@ function resolveSteps(
     ];
   }
 
-  // A kickoff approved before the invoice step existed has no raise timestamp — it was
-  // necessarily invoiced, so approval implies the invoice step is done.
-  const invoiceDone = invoiceRaised || approved;
-  const paymentReady = billingDone && invoiceDone;
+  const paymentReady = billingDone && invoiceRaised;
   return [
     billing,
     {
       key: 'invoice',
       owner: 'admin',
       label: 'Raise the upfront invoice',
-      done: invoiceDone,
-      sub: invoiceSub(invoiceDone, billingDone, c),
+      done: invoiceRaised,
+      sub: invoiceSub(invoiceRaised, billingDone, c),
     },
     {
       key: 'payment',
@@ -213,11 +207,7 @@ export function KickoffBoard({
   // the board mounts twice per client (desktop + mobile sheet), so firing from the
   // component would over-count.
   const memberBlocked =
-    lens === 'client' &&
-    !clientBillingConfirmed &&
-    !approved &&
-    billing !== null &&
-    !billing.canManage;
+    lens === 'client' && !clientBillingConfirmed && billing !== null && !billing.canManage;
 
   const steps = resolveSteps(
     {

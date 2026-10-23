@@ -50,7 +50,12 @@ export type RelationshipState =
  */
 export interface KickoffView {
   acceptedRelationshipId: string;
+  /**
+   * The billing gate is met. An approved kickoff implies it even when no confirmation was
+   * recorded (a legacy or migrated request), so no reader shows billing as outstanding.
+   */
   clientBillingConfirmed: boolean;
+  /** The upfront invoice is raised — likewise implied by an approved kickoff. */
   upfrontInvoiceRaised: boolean;
   approved: boolean;
   expertName: string;
@@ -331,11 +336,12 @@ function deriveKickoffView(
   if (accepted === undefined) return null;
   // Only the winning expert sees the board; client + admin are never gated here.
   if (ctx.lens === 'expert' && ctx.relationshipId !== accepted.id) return null;
+  const approved = request.status === 'kickoff_approved';
   return {
     acceptedRelationshipId: accepted.id,
-    clientBillingConfirmed: request.clientBillingConfirmedAt !== null,
-    upfrontInvoiceRaised: request.upfrontInvoiceRaisedAt !== null,
-    approved: request.status === 'kickoff_approved',
+    clientBillingConfirmed: request.clientBillingConfirmedAt !== null || approved,
+    upfrontInvoiceRaised: request.upfrontInvoiceRaisedAt !== null || approved,
+    approved,
     expertName: relationshipName(accepted),
   };
 }
