@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -63,6 +63,16 @@ import { installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { LobbyClient } from './m/[meetingId]/lobby-client';
 import { JoinControl } from './[token]/join-control';
 import { JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lobby';
+
+/**
+ * ⚠ WARM THE CALL-SURFACE CHUNK BEFORE ANY ASSERTION WINDOW OPENS — the same fix as
+ * `lobby-client.test.tsx`. Both admitted-state tests mount `MeetingFrame` through `next/dynamic`,
+ * and the first import of `meeting-frame-impl` transforms its whole module graph (~900 ms idle)
+ * against `waitFor`'s 1000 ms default, so a cold or loaded CI worker timed out on "Connecting…".
+ */
+beforeAll(async () => {
+  await import('@/components/balo/meetings/meeting-frame-impl');
+});
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const RAW_TOKEN = 'z'.repeat(43);
