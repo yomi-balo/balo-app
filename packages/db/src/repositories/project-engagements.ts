@@ -1143,6 +1143,19 @@ export const projectEngagementsRepository = {
         relationshipId: input.relationshipId,
         engagementId: parent.id,
       });
+      if (reanchoredMeetingIds.length > 0) {
+        await recordDeliveryAudit(tx, {
+          actorUserId: input.approvingAdminUserId,
+          action: 'engagement.calls_reanchored',
+          entityType: 'engagement',
+          entityId: parent.id,
+          engagementId: parent.id,
+          metadata: {
+            meeting_ids: reanchoredMeetingIds,
+            relationship_id: input.relationshipId,
+          },
+        });
+      }
 
       /**
        * BAL-431 / ADR-1048 §5 (Ruling 2) — AWARD CLOSURE. Every OTHER live track on this
@@ -1172,16 +1185,19 @@ export const projectEngagementsRepository = {
   },
 
   /**
-   * The live project-engagement id for a source project request (BAL-331 deep-link
-   * resolution). CHILD-ROOTED, joined to the LIVE parent — so it is project-only by
-   * construction. At most one live project engagement per request
-   * (`project_engagement_request_unique_idx`, partial on `project_request_id IS NOT
-   * NULL AND deleted_at IS NULL`), so this is deterministic. Returns `undefined`
-   * for retainers / not-yet-approved requests / soft-deleted engagements.
+   * The live project engagement for a source project request, as its id and delivery-parent
+   * `status` (BAL-331 deep-link resolution; BAL-616 reads the status so a completed or
+   * cancelled project no longer offers a call booking the api would refuse). CHILD-ROOTED,
+   * joined to the LIVE parent — so it is project-only by construction. At most one live
+   * project engagement per request (`project_engagement_request_unique_idx`, partial on
+   * `project_request_id IS NOT NULL AND deleted_at IS NULL`), so this is deterministic.
+   * Returns `undefined` for retainers / not-yet-approved requests / soft-deleted engagements.
    */
-  async findIdByProjectRequestId(projectRequestId: string): Promise<string | undefined> {
+  async findByProjectRequestId(
+    projectRequestId: string
+  ): Promise<{ id: string; status: Engagement['status'] } | undefined> {
     const [row] = await db
-      .select({ id: projectEngagements.engagementId })
+      .select({ id: projectEngagements.engagementId, status: engagements.status })
       .from(projectEngagements)
       .innerJoin(engagements, eq(engagements.id, projectEngagements.engagementId))
       .where(
@@ -1192,7 +1208,7 @@ export const projectEngagementsRepository = {
         )
       )
       .limit(1);
-    return row?.id;
+    return row;
   },
 
   /**

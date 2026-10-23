@@ -79,6 +79,11 @@ interface RequestDetailShellProps {
    */
   deliveryEngagementId?: string | null;
   /**
+   * BAL-616 — true when the delivery engagement is `active`. Forwarded to `ConversationStage`,
+   * where a completed or cancelled project stops offering the in-place call dialog.
+   */
+  deliveryActive?: boolean;
+  /**
    * BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
    * engaged), resolved by the page from the session user's email. Threaded to
    * `ConversationStage` for the intro-call dialog's guest composer disclosure.
@@ -315,6 +320,7 @@ export function RequestDetailShell({
   kickoffUpfront = null,
   kickoffNextCallStartIso = null,
   deliveryEngagementId = null,
+  deliveryActive = true,
   viewerEmailDomain = null,
   requestFilesView = null,
   canClose = false,
@@ -659,6 +665,7 @@ export function RequestDetailShell({
                   viewerEmailDomain={viewerEmailDomain}
                   canDecline={canDecline}
                   deliveryEngagementId={deliveryEngagementId}
+                  deliveryActive={deliveryActive}
                 />
               </div>
               <div className="hidden space-y-5 lg:block">

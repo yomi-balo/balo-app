@@ -412,10 +412,14 @@ export default async function RequestDetailPage({
   // engagement exists — resolve its id so the shell can surface the "View delivery
   // workspace" entry for every lens. `undefined` (no engagement yet / not that
   // status) → the link is omitted.
+  // The request stays `kickoff_approved` after the project completes or is cancelled, so the
+  // engagement's own status is read too: only an `active` one takes `project_call` bookings.
   let deliveryEngagementId: string | null = null;
+  let deliveryActive = true;
   if (view.status === 'kickoff_approved') {
-    deliveryEngagementId =
-      (await projectEngagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
+    const delivery = await projectEngagementsRepository.findByProjectRequestId(requestId);
+    deliveryEngagementId = delivery?.id ?? null;
+    deliveryActive = delivery?.status === 'active';
   }
 
   // Phase-2 participants get the live conversation payload (thread summaries +
@@ -473,6 +477,7 @@ export default async function RequestDetailPage({
         billingCapture={billingCapture}
         kickoffUpfront={kickoffUpfront}
         deliveryEngagementId={deliveryEngagementId}
+        deliveryActive={deliveryActive}
         kickoffNextCallStartIso={kickoffNextCallStartIso}
         viewerEmailDomain={viewerEmailDomain}
         requestFilesView={requestFilesView}

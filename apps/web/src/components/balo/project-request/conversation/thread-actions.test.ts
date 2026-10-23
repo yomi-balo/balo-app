@@ -30,13 +30,15 @@ const REQUEST_STATUSES: readonly ProjectRequestStatus[] = [
 function slotFor(
   lens: 'client' | 'expert',
   requestStatus: ProjectRequestStatus,
-  overrides: Parameters<typeof thread>[0] = {}
+  overrides: Parameters<typeof thread>[0] = {},
+  deliveryActive = true
 ): ReturnType<typeof deriveThreadActions>['callSlot'] {
   return deriveThreadActions({
     lens,
     requestStatus,
     thread: thread(overrides),
     nudgeIsProposal: false,
+    deliveryActive,
   }).callSlot;
 }
 
@@ -70,6 +72,43 @@ describe('deriveThreadActions — the callSlot state matrix (BAL-283, BAL-616)',
         upcomingCalls: [NEXT],
       })
     ).toEqual({ kind: 'upcoming', next: NEXT, more: 0, canBookAnother: true });
+  });
+
+  describe('a won thread at kickoff_approved whose delivery engagement is not active', () => {
+    const won = { stage: 'won', relationshipStatus: 'accepted', expertUsername: 'priya' } as const;
+
+    it('routes the client to the expert profile, never the in-place dialog', () => {
+      expect(slotFor('client', 'kickoff_approved', won, false)).toEqual({
+        kind: 'book',
+        route: 'profile',
+      });
+    });
+
+    it('has no call control when the expert has no public profile', () => {
+      expect(
+        slotFor('client', 'kickoff_approved', { ...won, expertUsername: null }, false)
+      ).toEqual({ kind: 'none' });
+    });
+
+    it('keeps an already-booked call visible but offers no further booking', () => {
+      expect(
+        slotFor('client', 'kickoff_approved', { ...won, upcomingCalls: [NEXT] }, false)
+      ).toEqual({ kind: 'upcoming', next: NEXT, more: 0, canBookAnother: false });
+    });
+
+    it('is a no-op before kickoff, where no engagement exists to be inactive', () => {
+      expect(slotFor('client', 'accepted', won, false)).toEqual({
+        kind: 'book',
+        route: 'in_place',
+      });
+    });
+
+    it('is still bookable in place while the engagement is active', () => {
+      expect(slotFor('client', 'kickoff_approved', won, true)).toEqual({
+        kind: 'book',
+        route: 'in_place',
+      });
+    });
   });
 
   it('client, thread the request moved on from → book via the expert profile', () => {

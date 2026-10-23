@@ -42,6 +42,8 @@ function renderHeader(input: {
   canDecline?: boolean;
   profileBookingHref?: string | null;
   deliveryEngagementId?: string | null;
+  /** BAL-616 — threaded to `deriveThreadActions`. */
+  deliveryActive?: boolean;
 }): {
   onCall: ReturnType<typeof vi.fn>;
   onBookAnother: ReturnType<typeof vi.fn>;
@@ -56,6 +58,7 @@ function renderHeader(input: {
     thread: t,
     nudgeIsProposal: false,
     canDecline: input.canDecline ?? false,
+    deliveryActive: input.deliveryActive ?? true,
   });
   const onCall = vi.fn();
   const onBookAnother = vi.fn();
@@ -278,6 +281,35 @@ describe('ThreadHeader', () => {
     expect(link).toHaveAttribute('title', "Opens Priya's profile to book a consultation");
     await user.click(link);
     expect(onCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('a completed or cancelled project links the won thread to the expert profile, not the in-place dialog', () => {
+    renderHeader({
+      requestStatus: 'kickoff_approved',
+      threadOverrides: { stage: 'won', relationshipStatus: 'accepted', expertUsername: 'priya' },
+      profileBookingHref: '/experts/priya?book=1&src=request_thread',
+      deliveryEngagementId: 'eng-1',
+      deliveryActive: false,
+    });
+    expect(screen.getByRole('link', { name: 'Book a call' })).toHaveAttribute(
+      'href',
+      '/experts/priya?book=1&src=request_thread'
+    );
+    expect(screen.queryByRole('button', { name: 'Book a call' })).not.toBeInTheDocument();
+  });
+
+  it('an ended project keeps a booked call visible but hides Book another call', () => {
+    renderHeader({
+      requestStatus: 'kickoff_approved',
+      threadOverrides: {
+        stage: 'won',
+        relationshipStatus: 'accepted',
+        upcomingCalls: [IN_TWO_DAYS],
+      },
+      deliveryActive: false,
+    });
+    expect(screen.getByTestId('join-countdown')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book another call' })).not.toBeInTheDocument();
   });
 
   it('shows no call control at all when the expert has no public profile to book through', () => {

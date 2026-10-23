@@ -61,7 +61,7 @@ vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
   companyBillingRepository: { findByCompanyId: () => Promise.resolve(undefined) },
   projectEngagementsRepository: {
-    findIdByProjectRequestId: (...a: unknown[]) => mockFindEngagementIdByRequest(...a),
+    findByProjectRequestId: (...a: unknown[]) => mockFindEngagementIdByRequest(...a),
   },
   partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
   usersRepository: { findNamesByIds: (...a: unknown[]) => mockFindNamesByIds(...a) },
@@ -909,7 +909,7 @@ describe('RequestDetailPage (RSC) — BAL-616 kickoff next call + project calls'
     mockFindByIdWithRelations.mockResolvedValue(
       request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
     );
-    mockFindEngagementIdByRequest.mockResolvedValue('eng-1');
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status: 'active' });
     const ui = await pageUi();
     expect(mockListUpcomingCallsByThread).not.toHaveBeenCalled();
     expect(shellPropsWith(ui, 'kickoffNextCallStartIso').kickoffNextCallStartIso).toBeNull();
@@ -938,7 +938,7 @@ describe('RequestDetailPage (RSC) — BAL-616 kickoff next call + project calls'
     mockFindByIdWithRelations.mockResolvedValue(
       request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
     );
-    mockFindEngagementIdByRequest.mockResolvedValue('eng-1');
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status: 'active' });
     await pageUi();
     expect(mockLoadConversationView).toHaveBeenCalledWith(
       expect.anything(),
@@ -946,6 +946,19 @@ describe('RequestDetailPage (RSC) — BAL-616 kickoff next call + project calls'
       expect.anything(),
       'eng-1'
     );
+  });
+
+  it.each([
+    ['active', true],
+    ['completed', false],
+    ['cancelled', false],
+  ])('passes deliveryActive for a %s engagement as %s', async (status, expected) => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
+    );
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status });
+    const ui = await pageUi();
+    expect(shellPropsWith(ui, 'deliveryActive').deliveryActive).toBe(expected);
   });
 
   it('passes null for the engagement before kickoff', async () => {

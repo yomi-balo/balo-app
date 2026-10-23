@@ -697,23 +697,36 @@ describe('engagementsRepository.findById — the SUPERTYPE point read', () => {
   });
 });
 
-describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', () => {
+describe('projectEngagementsRepository.findByProjectRequestId (BAL-331 deep-link, BAL-616 status)', () => {
   it('returns the live engagement id for a request that has one', async () => {
     const { engagement } = await engagementFactory({ withSourceProposal: true });
     const requestId = engagement.projectRequestId;
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBe(
-      engagement.id
-    );
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toEqual({
+      id: engagement.id,
+      status: 'active',
+    });
+  });
+
+  it('reports the parent status, so a completed or cancelled project is distinguishable (BAL-616)', async () => {
+    const { engagement } = await engagementFactory({
+      withSourceProposal: true,
+      projectValues: { deliveryStatus: 'cancelled' },
+    });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toEqual({
+      id: engagement.id,
+      status: 'cancelled',
+    });
   });
 
   it('returns undefined for a request with no engagement (and for an unknown request id)', async () => {
     const request = await projectRequestFactory();
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(request.id)).toBeUndefined();
-    expect(
-      await projectEngagementsRepository.findIdByProjectRequestId(randomUUID())
-    ).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(request.id)).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(randomUUID())).toBeUndefined();
   });
 
   it('returns undefined when the only engagement for the request is soft-deleted', async () => {
@@ -723,7 +736,7 @@ describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-li
 
     await softDeleteEngagementFixture(engagement.id);
 
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toBeUndefined();
   });
 
   it('returns the LIVE id when a soft-deleted engagement co-exists for the same request', async () => {
@@ -744,9 +757,9 @@ describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-li
       priceCents: 2000,
     });
 
-    const found = await projectEngagementsRepository.findIdByProjectRequestId(requestId);
-    expect(found).toBe(replacement.id);
-    expect(found).not.toBe(engagement.id);
+    const found = await projectEngagementsRepository.findByProjectRequestId(requestId);
+    expect(found?.id).toBe(replacement.id);
+    expect(found?.id).not.toBe(engagement.id);
   });
 });
 
@@ -2963,6 +2976,18 @@ describe('projectEngagementsRepository.materializeFromKickoff — call carry-ove
     );
     expect(await projectCallRowsFor(ended.id)).toHaveLength(0);
     expect(await projectCallRowsFor(cancelled.id)).toHaveLength(0);
+
+    const reanchorEvents = (await auditEventsForEntity(engagement.id)).filter(
+      (event) => event.action === 'engagement.calls_reanchored'
+    );
+    expect(reanchorEvents).toHaveLength(1);
+    expect(reanchorEvents[0]?.entityType).toBe('engagement');
+    expect(reanchorEvents[0]?.actorUserId).toBe(adminId);
+    expect(reanchorEvents[0]?.metadata).toMatchObject({
+      meeting_ids: [upcomingId],
+      relationship_id: source.relationshipId,
+      engagementId: engagement.id,
+    });
   });
 
   it('a kickoff with NO calls on the thread succeeds and returns reanchoredMeetingIds = []', async () => {
@@ -2974,6 +2999,11 @@ describe('projectEngagementsRepository.materializeFromKickoff — call carry-ove
 
     expect(result.reanchoredMeetingIds).toEqual([]);
     expect(result.request.status).toBe('kickoff_approved');
+    expect(
+      (await auditEventsForEntity(result.engagement.id)).some(
+        (event) => event.action === 'engagement.calls_reanchored'
+      )
+    ).toBe(false);
   });
 
   it('SAME-TX ROLLBACK — an expert that differs from the call’s expert throws, and the kickoff leaves nothing behind', async () => {

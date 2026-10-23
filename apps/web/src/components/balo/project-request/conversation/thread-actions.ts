@@ -135,6 +135,12 @@ function deriveRailProposal(
  * request moved on from shows no upcoming call (its calls belong to a relationship the client
  * is no longer working with) and routes the client to the expert's profile to book instead.
  *
+ * ⚠ THE SAME ROUTE APPLIES ONCE THE REQUEST IS `kickoff_approved` BUT ITS DELIVERY ENGAGEMENT IS
+ * NO LONGER `active` (completed or cancelled — the request status never moves off
+ * `kickoff_approved` when the project ends). `apps/api` refuses a `project_call` on a
+ * non-`active` engagement, so an in-place dialog would end in "This request has moved on". Calls
+ * already booked stay visible; only the ability to book another goes.
+ *
  * ⚠ `upcomingCalls` MEANS "UPCOMING", never "a call ever happened": ended calls are filtered
  * upstream by `isUpcomingContextMeeting`, so the CTA returns once a call has happened. The cap
  * on how many may be upcoming is enforced by the booking action, not here — "Book another call"
@@ -147,9 +153,17 @@ function deriveCallSlot(input: {
   availabilitySharedAtIso: string | null;
   upcomingCalls: readonly UpcomingCallView[];
   expertUsername: string | null;
+  deliveryEnded: boolean;
 }): CallSlot {
-  const { lens, stage, beforeKickoff, availabilitySharedAtIso, upcomingCalls, expertUsername } =
-    input;
+  const {
+    lens,
+    stage,
+    beforeKickoff,
+    availabilitySharedAtIso,
+    upcomingCalls,
+    expertUsername,
+    deliveryEnded,
+  } = input;
   const inPlace = stage === 'active' || stage === 'won';
   const [next] = upcomingCalls;
   if (inPlace && next !== undefined) {
@@ -157,14 +171,14 @@ function deriveCallSlot(input: {
       kind: 'upcoming',
       next,
       more: upcomingCalls.length - 1,
-      canBookAnother: lens === 'client',
+      canBookAnother: lens === 'client' && !deliveryEnded,
     };
   }
   if (lens === 'expert') {
     if (!(stage === 'active' && beforeKickoff)) return { kind: 'none' };
     return availabilitySharedAtIso === null ? { kind: 'propose' } : { kind: 'shared' };
   }
-  if (inPlace) return { kind: 'book', route: 'in_place' };
+  if (inPlace && !deliveryEnded) return { kind: 'book', route: 'in_place' };
   return expertUsername === null ? { kind: 'none' } : { kind: 'book', route: 'profile' };
 }
 
@@ -176,8 +190,14 @@ export function deriveThreadCallSlot(input: {
   lens: 'client' | 'expert';
   requestStatus: ProjectRequestStatus;
   thread: ConversationThreadView;
+  /**
+   * True when the request's delivery engagement is `active`. Only read at `kickoff_approved`,
+   * where a completed or cancelled engagement stops accepting `project_call` bookings. Defaults
+   * `true` so every call site outside the page's kickoff window is unaffected.
+   */
+  deliveryActive?: boolean;
 }): CallSlot {
-  const { lens, requestStatus, thread } = input;
+  const { lens, requestStatus, thread, deliveryActive = true } = input;
   return deriveCallSlot({
     lens,
     stage: thread.stage,
@@ -185,6 +205,7 @@ export function deriveThreadCallSlot(input: {
     availabilitySharedAtIso: thread.availabilitySharedAtIso,
     upcomingCalls: thread.upcomingCalls,
     expertUsername: thread.expertUsername,
+    deliveryEnded: requestStatus === 'kickoff_approved' && !deliveryActive,
   });
 }
 
@@ -214,15 +235,24 @@ export function deriveThreadActions(input: {
    * included) keeps compiling unchanged.
    */
   canDecline?: boolean;
+  /** See {@link deriveThreadCallSlot}. */
+  deliveryActive?: boolean;
 }): ThreadActions {
-  const { lens, requestStatus, thread, nudgeIsProposal, canDecline = false } = input;
+  const {
+    lens,
+    requestStatus,
+    thread,
+    nudgeIsProposal,
+    canDecline = false,
+    deliveryActive = true,
+  } = input;
   const rank = requestStatusRank(requestStatus);
   const beforeKickoff = rank < requestStatusRank('kickoff_approved');
   const pastAcceptance = rank >= requestStatusRank('accepted');
   const proposalAllowed = beforeKickoff && thread.stage === 'active';
   const revising = thread.changeRequest !== null;
 
-  const callSlot = deriveThreadCallSlot({ lens, requestStatus, thread });
+  const callSlot = deriveThreadCallSlot({ lens, requestStatus, thread, deliveryActive });
 
   return {
     callSlot,

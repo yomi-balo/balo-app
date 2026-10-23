@@ -70,6 +70,13 @@ describe('markThreadReadAction', () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
+  it('is a no-op success when a closed request has no conversation row to mark', async () => {
+    mockResolveAccess.mockResolvedValue({ ok: true, conversationId: undefined });
+    const result = await markThreadReadAction(VALID_INPUT);
+    expect(result).toEqual({ success: true, lastReadAtIso: expect.any(String) });
+    expect(mockMarkThreadRead).not.toHaveBeenCalled();
+  });
+
   it('maps repo failures to a friendly error and logs', async () => {
     mockMarkThreadRead.mockRejectedValue(new Error('boom'));
     const result = await markThreadReadAction(VALID_INPUT);

@@ -151,6 +151,12 @@ async function authorizeThread(
  * `admission` defaults to `'live'` and fails closed: only the read watermark (mark-read)
  * passes `'records'`, never a content write.
  *
+ * ⚠ `'records'` ON A CLOSED REQUEST NEVER CREATES (BAL-616). It admits a thread to be READ, so a
+ * missing row is an empty thread — resolved through `findByContext`, with `conversationId`
+ * `undefined` — rather than a row minted on a request that no longer takes writes. A live
+ * request keeps the get-or-create under either admission, hence the second overload's
+ * {@link ConversationReadAccess} result.
+ *
  * ⚠ IT WRITES, TRANSITIVELY. Every caller must therefore authenticate with
  * `requireOnboardedUser()`, and none may sit on `onboarding-mutation-gate.test.ts`'s
  * `READ_ONLY_ALLOWLIST` — that invariant test inspects the action file's own source and
@@ -161,11 +167,31 @@ export async function resolveConversationAccess(
   user: SessionUser,
   requestId: string,
   relationshipId: string,
+  admission?: 'live'
+): Promise<ConversationAccess>;
+export async function resolveConversationAccess(
+  user: SessionUser,
+  requestId: string,
+  relationshipId: string,
+  admission: ThreadAdmission
+): Promise<ConversationReadAccess>;
+export async function resolveConversationAccess(
+  user: SessionUser,
+  requestId: string,
+  relationshipId: string,
   admission: ThreadAdmission = 'live'
-): Promise<ConversationAccess> {
+): Promise<ConversationReadAccess> {
   const authorized = await authorizeThread(user, requestId, relationshipId, admission);
   if (!authorized.ok) {
     return authorized;
+  }
+
+  if (admission === 'records' && authorized.request.status === 'closed') {
+    const existing = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: relationshipId,
+    });
+    return { ...authorized, conversationId: existing?.id };
   }
 
   // AUTHORIZATION IS COMPLETE ABOVE THIS LINE. Only now may we touch (and, if it is

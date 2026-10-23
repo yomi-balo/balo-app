@@ -89,6 +89,12 @@ interface ConversationStageProps {
   canDecline?: boolean;
   /** BAL-331 delivery engagement id — null until kickoff approves. Feeds the nudge's workspace link. */
   deliveryEngagementId?: string | null;
+  /**
+   * BAL-616 — true when that engagement is `active`. A completed or cancelled project keeps
+   * `kickoff_approved` but no longer takes `project_call` bookings, so the won thread's call CTA
+   * routes to the expert's profile instead of the in-place dialog.
+   */
+  deliveryActive?: boolean;
 }
 
 interface ThreadData {
@@ -170,6 +176,7 @@ function deriveStageRender(input: {
   /** BAL-540 — threaded straight to `deriveThreadActions`. */
   canDecline: boolean;
   deliveryEngagementId: string | null;
+  deliveryActive: boolean;
 }): StageRenderModel {
   const {
     lens,
@@ -179,6 +186,7 @@ function deriveStageRender(input: {
     clientCompanyName,
     canDecline,
     deliveryEngagementId,
+    deliveryActive,
   } = input;
   const nudge = threadNudgeFor(
     lens,
@@ -194,6 +202,7 @@ function deriveStageRender(input: {
     thread: activeThread,
     nudgeIsProposal,
     canDecline,
+    deliveryActive,
   });
   const profileHref =
     lens === 'client' && activeThread.expertUsername !== null
@@ -480,6 +489,7 @@ export function ConversationStage({
   viewerEmailDomain,
   canDecline = false,
   deliveryEngagementId = null,
+  deliveryActive = true,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
   const router = useRouter();
@@ -905,7 +915,10 @@ export function ConversationStage({
       thread: ConversationThreadView,
       surface: ConversationCallSurface
     ): ConversationCallRoute | null => {
-      const slot = lens === 'client' ? deriveThreadCallSlot({ lens, requestStatus, thread }) : null;
+      const slot =
+        lens === 'client'
+          ? deriveThreadCallSlot({ lens, requestStatus, thread, deliveryActive })
+          : null;
       const route = slot === null ? null : callRouteOf(slot);
       track(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
         request_id: requestId,
@@ -918,7 +931,7 @@ export function ConversationStage({
       });
       return route;
     },
-    [lens, requestStatus, requestId]
+    [lens, requestStatus, requestId, deliveryActive]
   );
 
   /**
@@ -1312,6 +1325,7 @@ export function ConversationStage({
     clientCompanyName,
     canDecline,
     deliveryEngagementId,
+    deliveryActive,
   });
 
   // Lens-gated handler wiring (pure helper — keeps the component body branch-light).

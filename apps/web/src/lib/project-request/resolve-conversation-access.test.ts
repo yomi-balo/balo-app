@@ -357,10 +357,29 @@ describe('closed request admission', () => {
     if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
   });
 
-  it("admits a thread that was open at the close under 'records' (read watermark)", async () => {
+  it("admits a thread that was open at the close under 'records' (read watermark) WITHOUT creating", async () => {
     const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
     expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
+    expect(mockFindByContext).toHaveBeenCalledTimes(1);
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it("'records' on a closed request with no conversation row resolves empty and never creates", async () => {
+    mockFindByContext.mockResolvedValue(undefined);
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBeUndefined();
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it("'records' on a LIVE request still get-or-creates, exactly as 'live' does", async () => {
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph());
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
     expect(mockEnsureForContext).toHaveBeenCalledTimes(1);
+    expect(mockFindByContext).not.toHaveBeenCalled();
   });
 
   it("still refuses a track declined before the close, or never opened, under 'records'", async () => {

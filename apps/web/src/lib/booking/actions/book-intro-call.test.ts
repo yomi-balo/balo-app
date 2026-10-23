@@ -41,7 +41,7 @@ vi.mock('@/lib/project-request/assert-under-upcoming-call-cap', () => ({
 }));
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
-    findIdByProjectRequestId: (...args: unknown[]) => mockFindIdByProjectRequestId(...args),
+    findByProjectRequestId: (...args: unknown[]) => mockFindIdByProjectRequestId(...args),
   },
 }));
 vi.mock('../booking-idempotency', () => ({
@@ -134,7 +134,7 @@ beforeEach(() => {
   mockResolveConversationAccess.mockResolvedValue(accessOk());
   mockAssertRelationshipBookable.mockResolvedValue(true);
   mockAssertUnderUpcomingCallCap.mockResolvedValue(true);
-  mockFindIdByProjectRequestId.mockResolvedValue(ENGAGEMENT_ID);
+  mockFindIdByProjectRequestId.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
   mockResolveBookingExpertDisplay.mockResolvedValue({
     firstName: 'Dana',
     lastName: 'Okoro',
@@ -384,21 +384,28 @@ describe('bookIntroCallAction', () => {
       );
     });
 
-    it('kickoff_approved with NO live engagement is not_permitted, warns, and posts nothing', async () => {
-      mockResolveConversationAccess.mockResolvedValue(
-        accessOk({ status: 'kickoff_approved', relationshipStatus: 'accepted' })
-      );
-      mockFindIdByProjectRequestId.mockResolvedValue(undefined);
-      await expect(bookIntroCallAction(input())).resolves.toEqual({
-        ok: false,
-        code: 'not_permitted',
-      });
-      expect(mockPostBookMeeting).not.toHaveBeenCalled();
-      expect(mockLogWarn).toHaveBeenCalledWith(
-        'Call booking denied — no live project engagement at kickoff_approved',
-        expect.objectContaining({ requestId: REQUEST_ID })
-      );
-    });
+    it.each([
+      ['no live engagement', undefined, null],
+      ['a completed engagement', { id: ENGAGEMENT_ID, status: 'completed' }, 'completed'],
+      ['a cancelled engagement', { id: ENGAGEMENT_ID, status: 'cancelled' }, 'cancelled'],
+    ])(
+      'kickoff_approved with %s is not_permitted, warns, and posts nothing',
+      async (_label, engagement, engagementStatus) => {
+        mockResolveConversationAccess.mockResolvedValue(
+          accessOk({ status: 'kickoff_approved', relationshipStatus: 'accepted' })
+        );
+        mockFindIdByProjectRequestId.mockResolvedValue(engagement);
+        await expect(bookIntroCallAction(input())).resolves.toEqual({
+          ok: false,
+          code: 'not_permitted',
+        });
+        expect(mockPostBookMeeting).not.toHaveBeenCalled();
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          'Call booking denied — no active project engagement at kickoff_approved',
+          expect.objectContaining({ requestId: REQUEST_ID, engagementStatus })
+        );
+      }
+    );
 
     it.each(['accepted', 'kickoff_approved'])(
       'a LOSING thread is not_permitted once the request is %s — and NO api call is made',

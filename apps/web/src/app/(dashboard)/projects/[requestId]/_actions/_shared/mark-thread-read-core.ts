@@ -33,6 +33,12 @@ export async function runMarkThreadRead(
       return { success: false, error: access.error };
     }
 
+    // A closed request's thread that was never provisioned has no watermark to advance, and
+    // `'records'` does not mint one: nothing to mark is a success.
+    if (access.conversationId === undefined) {
+      return { success: true, lastReadAtIso: new Date().toISOString() };
+    }
+
     const state = await conversationsRepository.markThreadRead({
       conversationId: access.conversationId,
       userId: user.id,

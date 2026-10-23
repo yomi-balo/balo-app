@@ -119,9 +119,15 @@ describe('the writing resolver is the only one that provisions', () => {
     expect(code).toContain(`export async function ${READ_ONLY_ACCESS_RESOLVER}`);
   });
 
-  it('calls ensureForContext exactly once, and findByContext exactly once', () => {
+  /**
+   * `findByContext` appears twice: once in the read-only variant, and once in the writing
+   * variant's `'records'`-on-a-closed-request branch, which must never mint a thread (BAL-616).
+   * `ensureForContext` stays at exactly one, so the only provisioning call is still the writing
+   * variant's live path.
+   */
+  it('calls ensureForContext exactly once, and findByContext exactly twice', () => {
     expect(code.match(/ensureForContext/g)).toHaveLength(1);
-    expect(code.match(/findByContext/g)).toHaveLength(1);
+    expect(code.match(/findByContext/g)).toHaveLength(2);
   });
 
   /**
@@ -135,8 +141,8 @@ describe('the writing resolver is the only one that provisions', () => {
     // Neither variant re-implements the lens/status guards.
     expect(code.match(/resolveRequestLens\(/g)).toHaveLength(1);
     expect(code.match(/threadAdmits\(/g)).toHaveLength(1);
-    // Both exports default to `'live'`: only a caller that asks for `'records'` reaches a closed
-    // request's threads, and it is never a content write.
+    // Both implementations default to `'live'`: only a caller that asks for `'records'` reaches a
+    // closed request's threads, and it is never a content write.
     expect(code.match(/admission: ThreadAdmission = 'live'/g)).toHaveLength(2);
   });
 });

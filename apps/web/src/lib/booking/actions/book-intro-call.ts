@@ -136,7 +136,7 @@ interface CallTarget {
  *
  *   · `closed` request → deny (BAL-540);
  *   · the won relationship at `kickoff_approved` → `project_call` on the request's engagement
- *     (none live → deny);
+ *     (none live, or not `active` → deny);
  *   · the won relationship at `accepted` → `request_interaction` on the relationship;
  *   · any other relationship once the request is decided (a losing thread) → deny;
  *   · otherwise (the request is still open) → `request_interaction`.
@@ -165,15 +165,19 @@ async function resolveCallTarget(
 
   const won = access.relationship.status === 'accepted';
   if (won && requestStatus === 'kickoff_approved') {
-    const engagementId = await projectEngagementsRepository.findIdByProjectRequestId(requestId);
-    if (engagementId === undefined) {
-      log.warn('Call booking denied — no live project engagement at kickoff_approved', {
+    const engagement = await projectEngagementsRepository.findByProjectRequestId(requestId);
+    // The request stays `kickoff_approved` after the project completes or is cancelled, and
+    // `apps/api` refuses a `project_call` on a non-`active` engagement — so say so here.
+    if (engagement?.status !== 'active') {
+      log.warn('Call booking denied — no active project engagement at kickoff_approved', {
         requestId,
         relationshipId,
         userId,
+        engagementStatus: engagement?.status ?? null,
       });
       return { ok: false, code: 'not_permitted' };
     }
+    const engagementId = engagement.id;
     return {
       ok: true,
       target: { contextType: 'project_call', contextId: engagementId, engagementId },
