@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-441 — the ONE outer wrapper every route state (loaded, loading, error, not-found) renders
  * into, so the container width and padding stay IDENTICAL across all four and the route never
@@ -21,9 +23,5 @@ export function StatementPageShell({
 export function StatementCard({
   children,
 }: Readonly<{ children: React.ReactNode }>): React.JSX.Element {
-  return (
-    <div className="border-border bg-card rounded-xl border p-5 shadow-sm sm:p-8 lg:p-10">
-      {children}
-    </div>
-  );
+  return <BaloCard className="rounded-xl p-5 sm:p-8 lg:p-10">{children}</BaloCard>;
 }

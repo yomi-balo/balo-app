@@ -1,5 +1,7 @@
 'use client';
 
+import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { motion } from 'motion/react';
 import { Users } from 'lucide-react';
 import { IconBadge } from '@/components/balo/icon-badge';
@@ -26,7 +28,7 @@ export function GhostClientsCard(): React.JSX.Element {
       initial={{ y: 12, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.35, delay: 0.28, ease: 'easeOut' }}
-      className="border-border bg-card relative overflow-hidden rounded-2xl border shadow-sm lg:flex-1"
+      className={cn(baloCardClassName(), 'relative overflow-hidden lg:flex-1')}
     >
       {/* Card content */}
       <div className="p-6">

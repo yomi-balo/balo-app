@@ -1,6 +1,7 @@
 import { WalletWidget } from '@/components/balo/credit/wallet-widget';
 import { SectionSkeleton } from '@/components/balo/section/section-states';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-503 — Credits & billing's loading skeleton. The widget's own `loading` arm; no new logic.
  *
@@ -23,12 +24,12 @@ export default function Loading(): React.JSX.Element {
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <WalletWidget state="loading" />
 
-      <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+      <BaloCard className="p-6">
         <div className="bg-muted mb-2.5 h-4 w-48 animate-pulse rounded" />
         <SectionSkeleton rows={3} />
-      </div>
+      </BaloCard>
 
-      <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+      <BaloCard className="p-6">
         <div className="bg-muted mb-3 h-4 w-32 animate-pulse rounded" />
         <div
           className="border-border flex items-center gap-3 rounded-xl border p-3.5"
@@ -40,18 +41,15 @@ export default function Loading(): React.JSX.Element {
             <span className="bg-muted/60 block h-2.5 w-1/3 animate-pulse rounded" />
           </div>
         </div>
-      </div>
+      </BaloCard>
 
-      <div
-        className="border-border bg-card rounded-2xl border p-6 shadow-sm"
-        data-testid="billing-email-skeleton"
-      >
+      <BaloCard className="p-6" data-testid="billing-email-skeleton">
         <div className="bg-muted mb-3 h-4 w-28 animate-pulse rounded" />
         <div className="bg-muted/60 h-9 w-full animate-pulse rounded-lg" />
         <div className="mt-4 flex justify-end">
           <div className="bg-muted h-9 w-28 animate-pulse rounded-lg" />
         </div>
-      </div>
+      </BaloCard>
     </div>
   );
 }

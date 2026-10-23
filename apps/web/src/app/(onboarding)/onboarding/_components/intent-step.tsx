@@ -73,15 +73,13 @@ const CHOICES: readonly Choice[] = [
 const TONE: Record<Intent, { tint: string; hover: string; eyebrow: string; cta: string }> = {
   client: {
     tint: '[--tint:color-mix(in_oklch,var(--primary)_7%,var(--card))] dark:[--tint:color-mix(in_oklch,var(--primary)_14%,var(--card))]',
-    hover:
-      'hover:border-primary/30 hover:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_18px_40px_-12px_color-mix(in_oklch,var(--primary)_22%,transparent)]',
+    hover: 'hover:border-primary/30',
     eyebrow: 'text-primary',
     cta: 'text-primary md:bg-primary md:text-primary-foreground md:hover:bg-[color-mix(in_oklch,var(--primary)_94%,black)]',
   },
   expert: {
     tint: '[--tint:color-mix(in_oklch,var(--violet)_8%,var(--card))] dark:[--tint:color-mix(in_oklch,var(--violet)_16%,var(--card))]',
-    hover:
-      'hover:border-violet/30 hover:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_18px_40px_-12px_color-mix(in_oklch,var(--violet)_22%,transparent)]',
+    hover: 'hover:border-violet/30',
     eyebrow: 'text-violet-deep dark:text-violet-400',
     cta: 'text-violet-deep dark:text-violet-400 md:border md:border-violet/25 md:bg-card md:hover:border-violet/40 md:hover:bg-violet/5',
   },
@@ -134,10 +132,8 @@ function IntentChoice({
       <div
         className={cn(
           'bg-card relative flex w-full items-center gap-4 rounded-[20px] border p-4',
-          'shadow-[0_1px_2px_rgb(15_23_42/0.04),0_8px_24px_-14px_rgb(15_23_42/0.12)]',
-          'transition-[translate,box-shadow,border-color,opacity] duration-200 ease-out',
+          'transition-[translate,border-color,opacity] duration-200 ease-out',
           'md:flex-col md:items-stretch md:gap-6 md:rounded-[22px] md:p-3',
-          'md:shadow-[0_1px_2px_rgb(15_23_42/0.04),0_8px_24px_-12px_rgb(15_23_42/0.10)]',
           // Mobile has no visible button chrome to ring, so the focus ring moves to the card.
           'max-md:has-[button:focus-visible]:ring-ring/50 max-md:has-[button:focus-visible]:ring-[3px]',
           tone.tint,

@@ -45,7 +45,7 @@ export function HeroCard({ row, lens, index }: Readonly<HeroCardProps>): React.J
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.08 + index * 0.06 }}
-      className="border-primary/40 bg-card relative flex flex-col gap-3 overflow-hidden rounded-2xl border p-5 shadow-sm"
+      className="border-primary/40 bg-card relative flex flex-col gap-3 overflow-hidden rounded-2xl border p-5"
     >
       <span
         className="from-primary absolute inset-y-0 left-0 w-1 bg-gradient-to-b to-violet-600 dark:to-violet-500"

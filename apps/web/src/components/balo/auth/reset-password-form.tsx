@@ -13,6 +13,7 @@ import { InputPassword } from '@/components/enhanced/input-password';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '@/components/balo/auth/auth-header';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { resetPasswordAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS } from '@/lib/analytics';
 import { resetPasswordSchema, type ResetPasswordFormData } from '@/components/balo/auth/schemas';
@@ -76,7 +77,7 @@ export function ResetPasswordForm({ token }: Readonly<ResetPasswordFormProps>): 
   };
 
   return (
-    <div className="bg-card w-full max-w-sm rounded-xl border p-8 shadow-sm">
+    <BaloCard className="w-full max-w-sm rounded-xl p-8">
       <AnimatePresence mode="wait">
         {viewState === 'form' && (
           <BlurFade
@@ -277,6 +278,6 @@ export function ResetPasswordForm({ token }: Readonly<ResetPasswordFormProps>): 
           </BlurFade>
         )}
       </AnimatePresence>
-    </div>
+    </BaloCard>
   );
 }

@@ -26,6 +26,7 @@ import type { ViewerClock } from '@/hooks/use-viewer-clock';
 import type { CasesIndexCardView, CasesIndexSide } from '../_lib/cases-index-view-types';
 import type { CasesIndexClickHandler, CasesIndexClickReporter } from './cases-index-click';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-567 — ONE open case in the grid.
  *
@@ -98,7 +99,10 @@ export function CaseCard({
   }, [handleTrack]);
 
   return (
-    <article className="border-border bg-card hover:border-muted-foreground/30 flex min-w-0 flex-col overflow-hidden rounded-2xl border shadow-sm transition-colors">
+    <BaloCard
+      as="article"
+      className="hover:border-muted-foreground/30 flex min-w-0 flex-col overflow-hidden transition-colors"
+    >
       {band !== null && <CardStateBand band={band} />}
 
       <Link
@@ -159,7 +163,7 @@ export function CaseCard({
           </span>
         )}
       </div>
-    </article>
+    </BaloCard>
   );
 }
 

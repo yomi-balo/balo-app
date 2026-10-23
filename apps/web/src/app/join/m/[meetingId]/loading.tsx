@@ -15,14 +15,14 @@
  * knows anything about the meeting (the page performs zero database reads), so a skeleton
  * shaped like a title and a date would promise content that is never coming.
  */
+
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 export default function LobbyLoading(): React.JSX.Element {
   return (
     <output className="mx-auto block w-full max-w-md">
       <span className="sr-only">Loading…</span>
-      <div
-        aria-busy="true"
-        className="border-border bg-card w-full rounded-2xl border p-8 shadow-sm"
-      >
+      <BaloCard aria-busy="true" className="w-full p-8">
         <div className="bg-muted mx-auto h-12 w-12 animate-pulse rounded-2xl" />
         <div className="bg-muted mx-auto mt-4 h-6 w-2/3 animate-pulse rounded" />
         <div className="bg-muted mx-auto mt-2 h-4 w-1/2 animate-pulse rounded" />
@@ -37,7 +37,7 @@ export default function LobbyLoading(): React.JSX.Element {
           ))}
           <div className="bg-muted h-11 w-full animate-pulse rounded-lg" />
         </div>
-      </div>
+      </BaloCard>
     </output>
   );
 }

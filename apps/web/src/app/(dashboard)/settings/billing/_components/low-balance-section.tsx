@@ -15,6 +15,7 @@ import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo
 import { resolveSetupIntentNextAction } from '@/lib/stripe/resolve-setup-next-action';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 export interface LowBalanceDraft {
   mode: LowBalanceMode;
   reloadMinor: number;
@@ -400,7 +401,7 @@ export function LowBalanceSection({
   }, [runRetryArm]);
 
   return (
-    <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+    <BaloCard className="p-6">
       <LowBalanceModePicker
         mode={draft.mode}
         onModeChange={handleModeChange}
@@ -508,6 +509,6 @@ export function LowBalanceSection({
           )}
         </Button>
       </div>
-    </div>
+    </BaloCard>
   );
 }

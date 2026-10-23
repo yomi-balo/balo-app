@@ -42,7 +42,7 @@ export function GuestRecapIndexCard({
   return (
     <div className="space-y-5">
       <Reveal delay={0.1}>
-        <header className="border-border bg-card rounded-2xl border p-6 shadow-sm sm:p-8">
+        <header className="border-border bg-card rounded-2xl border p-6 sm:p-8">
           <h1 className="text-foreground text-xl font-semibold tracking-tight">
             {GUEST_RECAP_INDEX_TITLE}
           </h1>

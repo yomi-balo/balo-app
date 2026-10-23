@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Loader2, Sparkles } from 'lucide-react';
@@ -76,7 +77,7 @@ function OutcomeCard({
       initial={{ opacity: 0, y: reduce ? 0 : 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduce ? 0.15 : 0.35, ease: 'easeOut' }}
-      className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center shadow-sm sm:p-10"
+      className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center sm:p-10"
     >
       {badge}
       <h2
@@ -243,13 +244,13 @@ export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX
   // ── Loading ─────────────────────────────────────────────────────
   if (result === null) {
     return (
-      <div
+      <BaloCard
         aria-live="polite"
-        className="border-border bg-card mx-auto flex w-full max-w-md flex-col items-center gap-3.5 rounded-2xl border p-10 shadow-sm"
+        className="mx-auto flex w-full max-w-md flex-col items-center gap-3.5 p-10"
       >
         <Loader2 className="text-primary h-7 w-7 animate-spin" aria-hidden="true" />
         <p className="text-muted-foreground text-sm">Setting up your expert profile&hellip;</p>
-      </div>
+      </BaloCard>
     );
   }
 

@@ -1,3 +1,4 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { FileText, Sparkles } from 'lucide-react';
 import { SectionEmpty, SectionHead } from '@/components/balo/section/section-states';
 import type { GuestRecapSummaryView } from '../_lib/guest-recap-view-types';
@@ -19,14 +20,14 @@ export function GuestRecapSummary({
   summary,
 }: Readonly<{ summary: GuestRecapSummaryView }>): React.JSX.Element {
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 shadow-sm">
+    <BaloCard as="section" className="p-6">
       <SectionHead
         icon={Sparkles}
         title="Summary"
         meta={summary.state === 'processing' ? 'Writing up the call…' : undefined}
       />
       <GuestRecapSummaryBody summary={summary} />
-    </section>
+    </BaloCard>
   );
 }
 

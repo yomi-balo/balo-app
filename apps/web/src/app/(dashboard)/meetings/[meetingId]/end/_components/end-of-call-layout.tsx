@@ -4,6 +4,7 @@ import { CaseClosedGlyph } from '@/components/balo/meetings/case-closed-glyph';
 import type { EndOfCallRecapState } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallShell } from './end-of-call-shell';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 /**
  * BAL-389 — the SHARED end-of-call shell. One centred card: a mark, a headline, the duration
  * glance, the safe-to-leave reassurance, an optional post-call slot, and the onward CTA.
@@ -87,7 +88,7 @@ export function EndOfCallLayout({
 }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border w-full rounded-xl border p-8 text-center shadow-sm">
+      <BaloCard className="w-full rounded-xl p-8 text-center">
         <Reveal>
           <EndOfCallMark sessionHeld={sessionHeld} caseClosed={caseClosed} />
         </Reveal>
@@ -129,7 +130,7 @@ export function EndOfCallLayout({
             <p className="text-muted-foreground text-xs">Your recap is being prepared.</p>
           )}
         </Reveal>
-      </div>
+      </BaloCard>
     </EndOfCallShell>
   );
 }

@@ -2,6 +2,7 @@
 
 import { Clock, CreditCard, Gift, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { TopUpHero } from './TopUpHero';
 import { formatAud, formatIndicative, timeStr } from '@/lib/credit/display-constants';
 import type { DisplayFxSnapshot } from './types';
@@ -79,7 +80,7 @@ export function SummaryRail({
   const hasPromo = promoMinor > 0 && promoCode !== null;
 
   return (
-    <div className="border-border bg-card overflow-hidden rounded-2xl border shadow-lg">
+    <BaloCard className="overflow-hidden">
       <TopUpHero amountMinor={amountMinor} promoMinor={promoMinor} fx={fx} />
 
       <div className="px-5 pt-3.5 pb-5">
@@ -132,6 +133,6 @@ export function SummaryRail({
           {'.'}
         </p>
       </div>
-    </div>
+    </BaloCard>
   );
 }
