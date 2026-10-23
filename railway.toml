@@ -15,6 +15,12 @@ buildCommand = "pnpm install --frozen-lockfile && pnpm build --filter api"
 # meeting_guests and audit rows that were not in its blast radius before. Do not remove
 # this without closing that gate some other way.
 startCommand = "TZ=UTC NODE_ENV=production node apps/api/dist/index.js"
+# Apply pending Drizzle migrations before the new build takes traffic. A failed migration
+# fails the deploy, so the previous build keeps serving and the schema is never behind the
+# code that ships with it. `drizzle-kit migrate` applies every pending journal entry and
+# records each in `drizzle.__drizzle_migrations`; drizzle.config.ts reads DATABASE_URL from
+# the service environment. drizzle-kit is a runtime dependency of @balo/db for this reason.
+preDeployCommand = "pnpm --filter @balo/db db:migrate"
 numReplicas = 1
 healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"
