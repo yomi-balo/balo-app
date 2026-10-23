@@ -143,6 +143,8 @@ describe('approveKickoffAction', () => {
       // BAL-431 (Ruling 2) — the losing-track closure count `commitKickoff` now destructures
       // and logs. Empty on this single-track fixture.
       closedRelationshipIds: [],
+      // BAL-616 — the won thread's live calls re-anchored onto the engagement in the same tx.
+      reanchoredMeetingIds: ['meeting-1', 'meeting-2'],
     });
     mockPublish.mockResolvedValue(undefined);
   });
@@ -339,7 +341,10 @@ describe('approveKickoffAction', () => {
       clientCompanyName: 'Acme Corp',
     });
 
-    expect(log.info).toHaveBeenCalledWith('Kickoff approved', expect.any(Object));
+    expect(log.info).toHaveBeenCalledWith(
+      'Kickoff approved',
+      expect.objectContaining({ reanchoredCallCount: 2, closedTrackCount: 0 })
+    );
 
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${REL_ID}`);
@@ -418,6 +423,20 @@ describe('approveKickoffAction', () => {
       error: 'Could not approve this kickoff. Please try again.',
     });
     expect(log.error).toHaveBeenCalledWith('Failed to approve kickoff', expect.any(Object));
+  });
+
+  it('a re-anchor owner mismatch (BAL-616) takes the generic error branch, never a bespoke one', async () => {
+    const mismatch = new Error('call owner differs from the engagement');
+    mismatch.name = 'MeetingReanchorOwnerMismatchError';
+    mockMaterializeFromKickoff.mockRejectedValue(mismatch);
+    expect(await approveKickoffAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: 'Could not approve this kickoff. Please try again.',
+    });
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to approve kickoff',
+      expect.objectContaining({ error: 'call owner differs from the engagement' })
+    );
   });
 
   // fix round R1 — `projectEngagementsRepository.materializeFromKickoff` is one of the twelve

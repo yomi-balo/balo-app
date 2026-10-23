@@ -8,7 +8,7 @@ import {
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens, type RequestViewerContext } from './resolve-request-lens';
-import { isThreadOpenStatus } from './conversation-view-types';
+import { threadAdmits, type ThreadAdmission } from './conversation-view-types';
 
 /**
  * Per-action conversation guard (BAL-271 / A4) — the multi-thread extension of
@@ -21,8 +21,10 @@ import { isThreadOpenStatus } from './conversation-view-types';
  *  - expert lens → the claimed id MUST equal the viewer's own relationship;
  *  - client lens → the claimed id must be one of the OWNED request's live
  *    relationships with an OPEN thread status;
- *  - both lenses → the relationship's thread must be open
- *    (`THREAD_OPEN_RELATIONSHIP_STATUSES`).
+ *  - both lenses → the relationship's thread must be admitted for the caller's
+ *    {@link ThreadAdmission} (`threadAdmits`): `'live'` (the default) is an open thread on a
+ *    request that still takes messages; `'records'` also admits a closed request's surviving
+ *    threads, for reads and the read watermark ONLY — never a content write.
  *
  * Error copy is uniform so probing leaks nothing about other requests/threads.
  *
@@ -109,7 +111,8 @@ type AuthorizedThread =
 async function authorizeThread(
   user: SessionUser,
   requestId: string,
-  relationshipId: string
+  relationshipId: string,
+  admission: ThreadAdmission
 ): Promise<AuthorizedThread> {
   const request = await projectRequestsRepository.findByIdWithRelations(requestId);
   if (request === undefined) {
@@ -127,7 +130,7 @@ async function authorizeThread(
   }
 
   const relationship = request.relationships.find((r) => r.id === relationshipId);
-  if (relationship === undefined || !isThreadOpenStatus(relationship.status)) {
+  if (relationship === undefined || !threadAdmits(relationship, request.status, admission)) {
     return denied(user, requestId, relationshipId, ctx.lens);
   }
 
@@ -145,6 +148,15 @@ async function authorizeThread(
  * The WRITING variant — for MUTATING actions only (post, mark-read, presign, confirm,
  * request-proposal). Get-or-creates the thread, so `conversationId` is non-nullable.
  *
+ * `admission` defaults to `'live'` and fails closed: only the read watermark (mark-read)
+ * passes `'records'`, never a content write.
+ *
+ * ⚠ `'records'` ON A CLOSED REQUEST NEVER CREATES (BAL-616). It admits a thread to be READ, so a
+ * missing row is an empty thread — resolved through `findByContext`, with `conversationId`
+ * `undefined` — rather than a row minted on a request that no longer takes writes. A live
+ * request keeps the get-or-create under either admission, hence the second overload's
+ * {@link ConversationReadAccess} result.
+ *
  * ⚠ IT WRITES, TRANSITIVELY. Every caller must therefore authenticate with
  * `requireOnboardedUser()`, and none may sit on `onboarding-mutation-gate.test.ts`'s
  * `READ_ONLY_ALLOWLIST` — that invariant test inspects the action file's own source and
@@ -154,11 +166,32 @@ async function authorizeThread(
 export async function resolveConversationAccess(
   user: SessionUser,
   requestId: string,
-  relationshipId: string
-): Promise<ConversationAccess> {
-  const authorized = await authorizeThread(user, requestId, relationshipId);
+  relationshipId: string,
+  admission?: 'live'
+): Promise<ConversationAccess>;
+export async function resolveConversationAccess(
+  user: SessionUser,
+  requestId: string,
+  relationshipId: string,
+  admission: ThreadAdmission
+): Promise<ConversationReadAccess>;
+export async function resolveConversationAccess(
+  user: SessionUser,
+  requestId: string,
+  relationshipId: string,
+  admission: ThreadAdmission = 'live'
+): Promise<ConversationReadAccess> {
+  const authorized = await authorizeThread(user, requestId, relationshipId, admission);
   if (!authorized.ok) {
     return authorized;
+  }
+
+  if (admission === 'records' && authorized.request.status === 'closed') {
+    const existing = await conversationsRepository.findByContext({
+      contextType: 'relationship',
+      contextId: relationshipId,
+    });
+    return { ...authorized, conversationId: existing?.id };
   }
 
   // AUTHORIZATION IS COMPLETE ABOVE THIS LINE. Only now may we touch (and, if it is
@@ -183,7 +216,8 @@ export async function resolveConversationAccess(
 }
 
 /**
- * The READ-ONLY variant — identical authorization, `findByContext` instead of
+ * The READ-ONLY variant — identical authorization (`admission` defaults to `'live'`; reads of a
+ * closed request's conversation pass `'records'`), `findByContext` instead of
  * `ensureForContext`, and therefore NO WRITE ON ANY PATH.
  *
  * ⚠ WHY IT EXISTS. `fetch-thread.ts` — and, until BAL-431 (OSD-2) retired it,
@@ -202,9 +236,10 @@ export async function resolveConversationAccess(
 export async function readConversationAccess(
   user: SessionUser,
   requestId: string,
-  relationshipId: string
+  relationshipId: string,
+  admission: ThreadAdmission = 'live'
 ): Promise<ConversationReadAccess> {
-  const authorized = await authorizeThread(user, requestId, relationshipId);
+  const authorized = await authorizeThread(user, requestId, relationshipId, admission);
   if (!authorized.ok) {
     return authorized;
   }

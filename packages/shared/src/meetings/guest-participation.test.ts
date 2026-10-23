@@ -24,7 +24,7 @@ const REQUEST_ID = '33333333-3333-4333-8333-333333333333';
 const RELATIONSHIP_ID = '44444444-4444-4444-8444-444444444444';
 
 describe('MEETING_CONTEXT_PRECEDENCE', () => {
-  it('covers exactly the seven meeting_context_type labels', () => {
+  it('covers exactly the eight meeting_context_type labels', () => {
     // ⚠ EXACT KEY SET, not a superset check: the map's keys ARE the label list this
     // package restates, and `apps/api` asserts that list against `@balo/db`'s pgEnum.
     // `localeCompare` rather than a bare `.sort()` — a bare sort is a SonarCloud
@@ -33,11 +33,22 @@ describe('MEETING_CONTEXT_PRECEDENCE', () => {
       'admin',
       'case',
       'package_session',
+      'project_call',
       'project_discovery',
       'project_kickoff',
       'request_interaction',
       'retainer_checkin',
     ]);
+  });
+
+  it('ranks `project_call` at engagement grain — level with a kickoff, above the relationship call it carries over', () => {
+    expect(MEETING_CONTEXT_PRECEDENCE.project_call).toBe(100);
+    expect(MEETING_CONTEXT_PRECEDENCE.project_call).toBe(
+      MEETING_CONTEXT_PRECEDENCE.project_kickoff
+    );
+    expect(MEETING_CONTEXT_PRECEDENCE.project_call).toBeGreaterThan(
+      MEETING_CONTEXT_PRECEDENCE.request_interaction
+    );
   });
 
   it('ranks engagement grain above request grain, and admin below both', () => {
@@ -67,6 +78,17 @@ describe('selectPrimaryMeetingContext', () => {
     expect(selectPrimaryMeetingContext(contexts)).toEqual({
       ok: true,
       context: { contextType: 'project_kickoff', contextId: CASE_ID },
+    });
+  });
+
+  it('⚠ a call carried over at kickoff — `request_interaction` plus `project_call` — resolves to the ENGAGEMENT', () => {
+    const contexts: MeetingContextRowLike[] = [
+      { contextType: 'request_interaction', contextId: RELATIONSHIP_ID },
+      { contextType: 'project_call', contextId: CASE_ID },
+    ];
+    expect(selectPrimaryMeetingContext(contexts)).toEqual({
+      ok: true,
+      context: { contextType: 'project_call', contextId: CASE_ID },
     });
   });
 
@@ -160,6 +182,20 @@ describe('findPrimaryMeetingContextRepoint', () => {
     expect(findPrimaryMeetingContextRepoint(before, after)).toEqual({
       from: { contextType: 'project_discovery', contextId: REQUEST_ID },
       to: { contextType: 'case', contextId: CASE_ID },
+    });
+  });
+
+  it('REPOINT — the kickoff carry-over (`project_call` over `request_interaction`) is one, so `attach` alone cannot make it', () => {
+    const before: MeetingContextRowLike[] = [
+      { contextType: 'request_interaction', contextId: RELATIONSHIP_ID },
+    ];
+    const after: MeetingContextRowLike[] = [
+      ...before,
+      { contextType: 'project_call', contextId: CASE_ID },
+    ];
+    expect(findPrimaryMeetingContextRepoint(before, after)).toEqual({
+      from: { contextType: 'request_interaction', contextId: RELATIONSHIP_ID },
+      to: { contextType: 'project_call', contextId: CASE_ID },
     });
   });
 

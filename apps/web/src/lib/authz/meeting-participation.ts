@@ -61,11 +61,11 @@ export type AuthorizeMeetingParticipationResult =
  * ⚠⚠ THE ENGAGEMENT ARM ON THIS APP IS **TOTAL BUT NOT COMPLETE**, AND THAT IS A DECISION.
  *
  * `apps/web`'s engagement resolver (`lib/authz/engagement.ts`, opened by BAL-421) is NARROWED
- * BY TYPE to the four ENGAGEMENT-GRAIN labels. ⚠ THAT NARROWING NO LONGER HAS A NAMED WIDENER:
+ * BY TYPE to the five ENGAGEMENT-GRAIN labels. ⚠ THAT NARROWING NO LONGER HAS A NAMED WIDENER:
  * BAL-410 and BAL-411 have both shipped WITHOUT widening it (BAL-410 declined explicitly —
  * orchestrator D7 — because its cancel action is structurally `contextType: 'case'`). See
  * `engagement.ts`'s own "CORRECTED TRIGGER" note for the real trigger. This switch is therefore
- * TOTAL over the six holder-bearing labels — a seventh breaks `pnpm --filter web check-types`
+ * TOTAL over the seven holder-bearing labels — an eighth breaks `pnpm --filter web check-types`
  * right here — but the two request-grain arms answer `false` rather than resolving.
  *
  * ⚠ WHY THAT IS SAFE AT THIS CONSUMER, PROVEN RATHER THAN ASSERTED: the engagement arm can only
@@ -91,6 +91,7 @@ async function holdsMeetingEngagementCapability(
   switch (subject.contextType) {
     case 'case':
     case 'project_kickoff':
+    case 'project_call':
     case 'package_session':
     case 'retainer_checkin':
       return hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
@@ -101,7 +102,7 @@ async function holdsMeetingEngagementCapability(
     case 'request_interaction':
       return false;
     default: {
-      // A SEVENTH holder-bearing `meeting_context_type` label stops `check-types` HERE.
+      // An EIGHTH holder-bearing `meeting_context_type` label stops `check-types` HERE.
       const exhaustive: never = subject.contextType;
       log.warn('Unhandled meeting context type in the web engagement arm — failing closed', {
         contextType: exhaustive as string,

@@ -96,6 +96,11 @@ describe('postConversationMessageAction', () => {
     expect(result).toEqual({ success: false, error: 'Invalid request.' });
   });
 
+  it('gates on the default (live) admission, so a closed request refuses the post', async () => {
+    await postConversationMessageAction(VALID_INPUT);
+    expect(mockResolveAccess).toHaveBeenCalledWith(USER, REQUEST_ID, REL_ID);
+  });
+
   it('returns the access guard error verbatim on denial', async () => {
     mockResolveAccess.mockResolvedValue({
       ok: false,

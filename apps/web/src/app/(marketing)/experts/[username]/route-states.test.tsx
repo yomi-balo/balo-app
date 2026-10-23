@@ -59,8 +59,20 @@ vi.mock('next/navigation', () => ({ notFound: mockNotFound }));
 // Stub the client tree — page.tsx coverage is about the server gate/fetch/mapper
 // wiring, not re-rendering the (separately tested) presentational tree.
 vi.mock('./_components/expert-profile-client', () => ({
-  ExpertProfileClient: ({ view, isLoggedIn }: { view: { name: string }; isLoggedIn: boolean }) => (
-    <div data-testid="profile-client" data-logged-in={String(isLoggedIn)}>
+  ExpertProfileClient: ({
+    view,
+    isLoggedIn,
+    autoOpenBookingSource,
+  }: {
+    view: { name: string };
+    isLoggedIn: boolean;
+    autoOpenBookingSource?: string;
+  }) => (
+    <div
+      data-testid="profile-client"
+      data-logged-in={String(isLoggedIn)}
+      data-booking-source={autoOpenBookingSource}
+    >
       {view.name}
     </div>
   ),
@@ -109,6 +121,20 @@ describe('ExpertProfilePage (RSC)', () => {
 
     await renderPage();
     expect(screen.getByTestId('profile-client')).toHaveAttribute('data-logged-in', 'false');
+  });
+
+  it.each([
+    ['request_thread', 'request_thread'],
+    ['home_spotlight', 'home_spotlight'],
+    ['unknown', 'profile'],
+  ])('?src=%s resolves the auto-open booking source to %s', async (src, expected) => {
+    mockFindProfile.mockResolvedValue({ id: 'p1' });
+    mockMapView.mockReturnValue(VIEW);
+    mockGetAvatarUrl.mockReturnValue(null);
+    mockGetCurrentUser.mockResolvedValue({ id: 'u1', email: 'anil@example.com' });
+
+    await renderPage('anil', { book: '1', src });
+    expect(screen.getByTestId('profile-client')).toHaveAttribute('data-booking-source', expected);
   });
 
   it('calls notFound() when the profile is missing or gated', async () => {

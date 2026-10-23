@@ -9,6 +9,7 @@ import { resolveContextOwner, type MeetingContextOwnerReads } from '@balo/shared
 import type { FastifyBaseLogger } from 'fastify';
 import {
   CALENDAR_CONTEXT_REGISTRY,
+  type CalendarContextDescriptor,
   type CalendarProjectedContextType,
   type CalendarSubjectSource,
 } from './calendar-context-registry.js';
@@ -60,6 +61,25 @@ export interface ExpertCalendarFactsSubject {
 export function titleOr(title: string | null | undefined, fallback: string): string {
   const trimmed = title?.trim() ?? '';
   return trimmed.length === 0 ? fallback : trimmed;
+}
+
+/**
+ * The headline noun for one booking. A `request_interaction` booked on the WON relationship
+ * (status `accepted`) is a plain "Call"; on any other relationship it is the registry's
+ * "Intro call". Every other context takes its registry label unchanged.
+ *
+ * ⚠ DECIDED AT PROJECTION TIME, NOT STORED. The label follows the relationship's status when the
+ * calendar entry is written, so a call carried onto the engagement at kickoff keeps the title
+ * it was projected with (BAL-616, ADR-1046 amendment 2026-10-23).
+ */
+export function calendarEventLabelFor(
+  contextType: CalendarProjectedContextType,
+  descriptor: CalendarContextDescriptor,
+  relationshipStatus: string | null
+): string {
+  return contextType === 'request_interaction' && relationshipStatus === 'accepted'
+    ? 'Call'
+    : descriptor.eventLabel;
 }
 
 /**
@@ -129,6 +149,7 @@ export async function resolveExpertCalendarFacts(
      * reason the pre-BAL-433 resolver already did it.
      */
     let capturedRequest: { title: string | null } | undefined;
+    let capturedRelationshipStatus: string | null = null;
     const reads: MeetingContextOwnerReads = {
       findEngagement: (id) => engagementsRepository.findById(id),
       findProjectRequest: async (id) => {
@@ -136,7 +157,11 @@ export async function resolveExpertCalendarFacts(
         capturedRequest = row;
         return row;
       },
-      findRelationship: (id) => requestExpertRelationshipsRepository.findById(id),
+      findRelationship: async (id) => {
+        const row = await requestExpertRelationshipsRepository.findById(id);
+        capturedRelationshipStatus = row?.status ?? null;
+        return row;
+      },
     };
 
     /**
@@ -165,10 +190,12 @@ export async function resolveExpertCalendarFacts(
 
     const subject = await resolveSubject(descriptor.subjectSource, contextId, capturedRequest);
 
+    const eventLabel = calendarEventLabelFor(contextType, descriptor, capturedRelationshipStatus);
+
     return {
       clientCompanyName: company.name,
-      title: titleOr(subject, descriptor.eventLabel),
-      eventLabel: descriptor.eventLabel,
+      title: titleOr(subject, eventLabel),
+      eventLabel,
     };
   } catch (error) {
     // ⚠ CAUGHT ERROR BOUNDARY (CLAUDE.md). The booking has already committed; a repository

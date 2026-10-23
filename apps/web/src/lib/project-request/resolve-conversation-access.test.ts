@@ -299,3 +299,111 @@ describe('readConversationAccess', () => {
     expect(mockFindByContext).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * BAL-616 — a closed request keeps its conversation for reading. `'live'` (the default) refuses
+ * every thread on it; `'records'` admits only the threads that were open when the close landed.
+ */
+describe('closed request admission', () => {
+  const OPENED_AT = new Date('2026-10-01T00:00:00Z');
+  const closedGraph = (relationshipOverrides: Record<string, unknown> = {}) =>
+    requestGraph({
+      status: 'closed',
+      relationships: [
+        relationship({
+          status: 'declined',
+          declineReason: 'request_closed',
+          openedAt: OPENED_AT,
+          ...relationshipOverrides,
+        }),
+      ],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByIdWithRelations.mockResolvedValue(closedGraph());
+    mockFindByContext.mockResolvedValue({ id: CONVERSATION_ID });
+    mockEnsureForContext.mockResolvedValue({
+      conversation: { id: CONVERSATION_ID },
+      created: false,
+    });
+  });
+
+  it('refuses the writing resolver by default, without ensuring a thread', async () => {
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(result).toEqual({ ok: false, error: DENIED });
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it('refuses the reading resolver by default (typing rides it)', async () => {
+    const result = await readConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(result).toEqual({ ok: false, error: DENIED });
+    expect(mockFindByContext).not.toHaveBeenCalled();
+  });
+
+  it('refuses an accepted relationship on a closed request, whatever the cascade did', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      closedGraph({ status: 'accepted', declineReason: null })
+    );
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(result).toEqual({ ok: false, error: DENIED });
+    const read = await readConversationAccess(user(), REQUEST_ID, REL_ID);
+    expect(read).toEqual({ ok: false, error: DENIED });
+  });
+
+  it("admits a thread that was open at the close under 'records' (read)", async () => {
+    const result = await readConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
+  });
+
+  it("admits a thread that was open at the close under 'records' (read watermark) WITHOUT creating", async () => {
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
+    expect(mockFindByContext).toHaveBeenCalledTimes(1);
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it("'records' on a closed request with no conversation row resolves empty and never creates", async () => {
+    mockFindByContext.mockResolvedValue(undefined);
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBeUndefined();
+    expect(mockEnsureForContext).not.toHaveBeenCalled();
+  });
+
+  it("'records' on a LIVE request still get-or-creates, exactly as 'live' does", async () => {
+    mockFindByIdWithRelations.mockResolvedValue(requestGraph());
+    const result = await resolveConversationAccess(user(), REQUEST_ID, REL_ID, 'records');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.conversationId).toBe(CONVERSATION_ID);
+    expect(mockEnsureForContext).toHaveBeenCalledTimes(1);
+    expect(mockFindByContext).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a track declined before the close, or never opened, under 'records'", async () => {
+    mockFindByIdWithRelations.mockResolvedValue(closedGraph({ declineReason: 'client_declined' }));
+    expect(await readConversationAccess(user(), REQUEST_ID, REL_ID, 'records')).toEqual({
+      ok: false,
+      error: DENIED,
+    });
+    mockFindByIdWithRelations.mockResolvedValue(closedGraph({ openedAt: null }));
+    expect(await readConversationAccess(user(), REQUEST_ID, REL_ID, 'records')).toEqual({
+      ok: false,
+      error: DENIED,
+    });
+  });
+
+  it("'records' on a live request admits exactly what 'live' admits", async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      requestGraph({
+        relationships: [relationship({ status: 'declined', declineReason: 'request_closed' })],
+      })
+    );
+    expect(await readConversationAccess(user(), REQUEST_ID, REL_ID, 'records')).toEqual({
+      ok: false,
+      error: DENIED,
+    });
+  });
+});

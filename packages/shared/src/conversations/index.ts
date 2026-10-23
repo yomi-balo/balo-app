@@ -52,12 +52,17 @@ export interface ConversationSubject {
  * Map ONE resolved primary meeting context to the conversation subject it implies, or `null`
  * when it implies none. Pure — no I/O.
  *
- *   case | project_kickoff | package_session | retainer_checkin → engagements.id  ⇒ 'engagement'
+ *   case | project_kickoff | package_session | retainer_checkin | project_call
+ *                                                              → engagements.id  ⇒ 'engagement'
  *   request_interaction                                        → relationship id ⇒ 'relationship'
  *   project_discovery                                          → a project_requests.id, which
  *     fans out to MANY relationships and therefore names NO single thread ⇒ null (fail closed).
  *
- * ⚠ TOTAL OVER `MeetingContextTypeWithHolder` WITH A `never` DEFAULT, so a seventh
+ * `project_call` (BAL-616) is the engagement thread that kickoff attaches to the won
+ * relationship's conversation (`projectEngagementsRepository.materializeFromKickoff`), so a
+ * project call's chat is the same continuous thread the relationship had.
+ *
+ * ⚠ TOTAL OVER `MeetingContextTypeWithHolder` WITH A `never` DEFAULT, so a new
  * holder-bearing meeting label stops typechecking here until an arm is consciously written.
  * (`admin` is absent from that union by construction — `selectPrimaryMeetingContext` drops
  * it — which is also why this seam has no `admin` conversation label to map onto.)
@@ -70,6 +75,7 @@ export function conversationSubjectForMeetingContext(
     case 'project_kickoff':
     case 'package_session':
     case 'retainer_checkin':
+    case 'project_call':
       return { contextType: 'engagement', contextId: ctx.contextId };
     case 'request_interaction':
       return { contextType: 'relationship', contextId: ctx.contextId };
@@ -78,7 +84,7 @@ export function conversationSubjectForMeetingContext(
       // thread. No single conversation is implied, so the honest answer is "none".
       return null;
     default: {
-      // Exhaustiveness: a seventh holder-bearing label fails to compile here.
+      // Exhaustiveness: a new holder-bearing label fails to compile here.
       const unreachable: never = ctx.contextType;
       return unreachable;
     }

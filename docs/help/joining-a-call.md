@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 2
 published: true
-updated: 2026-10-18
+updated: 2026-10-23
 related: [booking-a-consultation, your-cases]
 ---
 
@@ -20,6 +20,9 @@ Join opens 3 minutes before the scheduled start and stays available until 30 min
 scheduled end, or until the call itself ends. Try earlier and you'll see "This call isn't open yet
 — you can join from {time}." — the time is shown in your device's timezone, and you can come back
 to the same page when it arrives.
+
+On your project request page, **Join** also appears in the conversation header once a call with your
+expert is booked. It opens at the same time and shows a countdown until then.
 
 If you're signed in to Balo and you're part of the consultation, opening the link takes you
 straight in. There's no name or email step.

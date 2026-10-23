@@ -2,6 +2,7 @@
 import 'server-only';
 
 import { z } from 'zod';
+import { projectEngagementsRepository } from '@balo/db';
 // ⚠ `@balo/analytics/events` — the PURE constants subpath, never `/client` (which pulls
 // `posthog-js` into a `server-only` module's graph).
 import { CONVERSATION_CALL_SURFACES } from '@balo/analytics/events';
@@ -11,11 +12,14 @@ import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { assertRelationshipBookable } from '@/lib/project-request/assert-relationship-bookable';
-import { assertNoLiveIntroCall } from '@/lib/project-request/assert-no-live-intro-call';
+import { assertUnderUpcomingCallCap } from '@/lib/project-request/assert-under-upcoming-call-cap';
 // ⚠ THE WEB'S ONE DEFINITION OF REQUEST-STATUS ORDER — the same helper `deriveThreadActions`
 // uses to compute `pastAcceptance` for the CTA. Reused, never re-derived, so the server-side
 // denial and the CTA that hides itself can never disagree about where the decision line is.
-import { requestStatusRank } from '@/lib/project-request/conversation-view-types';
+import {
+  requestStatusRank,
+  type UpcomingCallContextType,
+} from '@/lib/project-request/conversation-view-types';
 import { deriveBookingIdempotencyKey } from '../booking-idempotency';
 import { bookingSlotSchema, MS_PER_MINUTE } from '../booking-slot-schema';
 import { resolveBookingExpertDisplay } from '../load-booking-context';
@@ -23,32 +27,35 @@ import { postBookMeeting, postInviteGuests } from '../booking-api-client';
 import type { BookIntroCallInput, BookIntroCallResult } from './book-intro-call-types';
 
 /**
- * BAL-283 — `bookIntroCallAction`, the CLIENT lens's "Book a call" flow (plan §12.5).
+ * BAL-283 / BAL-616 — `bookIntroCallAction`, the CLIENT lens's "Book a call" flow. It books EVERY
+ * conversation call, intro or project; the name is kept to avoid churn.
  *
  * ⚠⚠ NO MONEY, ANYWHERE (Ruling 2). No `openSession`, no credit hold, no billing floor — this
  * action never imports a credit module. The 15-minute FLOOR on `SLOT_DURATION_LADDER` is a
  * WINDOW bound shared with the ladder itself, not the banned billing floor (plan §2.5); it
  * stays, exactly like `book-consultation.ts`'s own `validateBookingWindow` reliance.
  *
- * ⚠ THE RELATIONSHIP IS THE BOOKING SUBJECT (D3/D4). `contextId` is
- * `request_expert_relationships.id`, never an `engagement.id` — `apps/api`'s `loadSubject`
- * `request_interaction` arm resolves it through `resolveContextOwner`'s two-hop, and a DECLINED
- * relationship denies there independently of this action's own `assertRelationshipBookable`
- * belt-and-braces check.
+ * ⚠ THE SUBJECT IS RESOLVED ON THE SERVER, NEVER TAKEN FROM THE CLIENT (BAL-616). Before
+ * kickoff it is the relationship (`request_interaction`, `contextId` =
+ * `request_expert_relationships.id`); once the request is `kickoff_approved` the won thread
+ * books on the engagement (`project_call`, `contextId` = `engagements.id`, read from the
+ * request's own `project_engagements` row). `resolveCallTarget` derives which; the input carries
+ * no engagement id. A DECLINED relationship denies in `apps/api` independently of this action's
+ * own `assertRelationshipBookable` belt-and-braces check.
  *
  * ── WHICH GUARD IS AUTHORITATIVE, AND WHICH IS COURTESY ─────────────────────────────────────
  *
  * ⚠ THE TENANCY AND LIFECYCLE GATES ARE `apps/api`'s. `authorizeMeetingBooking` resolves the
- * owning company on the MEMBERSHIP axis (`PARTICIPATE`), denies a declined relationship, and
- * denies a decided request — all independently of anything here, and all answering one
- * indistinguishable `404 context_not_found`. The two pre-flight checks below (`request.status`,
- * `assertRelationshipBookable`) exist ONLY so a LEGITIMATE user gets worded copy instead of a
- * bare not-found, at no extra read. Deleting either does NOT reopen a hole; deleting the
- * api-side arms does.
+ * owning company on the MEMBERSHIP axis (`PARTICIPATE`), denies a declined relationship, admits
+ * only the WON relationship once the request is decided, and answers every denial an outsider
+ * can reach with one indistinguishable `404 context_not_found`. The pre-flight checks below
+ * exist so a LEGITIMATE user gets worded copy instead of a bare not-found, at no extra read.
+ * Deleting them does NOT reopen a hole; deleting the api-side arms does.
  *
- * ⚠ THE ONE-CALL-PER-THREAD GUARD (`assertNoLiveIntroCall`) IS DIFFERENT — it is the ONLY
- * enforcement of a rule the UI already claims, and `apps/api` has no equivalent. See that
- * module's docblock.
+ * ⚠ THE UPCOMING-CALL CAP (`assertUnderUpcomingCallCap`, 3 per thread) IS ENFORCED IN BOTH APPS.
+ * This is the pre-check, for the friendly copy; `apps/api` refuses the 4th with
+ * `409 call_cap_reached`, which maps to the same failure code. Both are check-then-act, so two
+ * racing bookings can both pass at 2 — a product limit, not a safety property.
  *
  * ⚠ NO SYMMETRIC "client lens" ASSERTION, DELIBERATELY, and this is not an oversight (round-1
  * LOW). `shareAvailabilityAction` gates on the ENGAGEMENT axis because its act has no other
@@ -111,43 +118,105 @@ type ConversationAccessOk = Extract<
 >;
 type BookMeetingFailure = Extract<Awaited<ReturnType<typeof postBookMeeting>>, { ok: false }>;
 
+/** Where the call is booked: the context pair `apps/api` takes, and the engagement the cap reads. */
+interface CallTarget {
+  contextType: UpcomingCallContextType;
+  contextId: string;
+  engagementId: string | null;
+}
+
 /**
- * The three pre-flight gates (round-1 HIGH / security MEDIUM), extracted so
- * `bookIntroCallAction` reads as one straight line. See the module docblock for which of these
- * is authoritative (api-side) versus courtesy (worded copy only) — extracting them does not
- * change that posture, only where the `if`s live.
+ * Which context this booking lands on, or a worded denial.
+ *
+ * ⚠ THE REQUEST-LIFECYCLE GATE, WEB HALF. The AUTHORITATIVE gate is `apps/api`'s booking
+ * authorization, which denies the same states independently (a bare `404 context_not_found`).
+ * This exists so a LEGITIMATE user who hit a stale CTA gets the worded "This request has moved
+ * on" copy before spending a network hop. It costs no extra read for the relationship cases:
+ * `resolveConversationAccess` already returned the request row.
+ *
+ *   · `closed` request → deny (BAL-540);
+ *   · the won relationship at `kickoff_approved` → `project_call` on the request's engagement
+ *     (none live, or not `active` → deny);
+ *   · the won relationship at `accepted` → `request_interaction` on the relationship;
+ *   · any other relationship once the request is decided (a losing thread) → deny;
+ *   · otherwise (the request is still open) → `request_interaction`.
  */
-async function checkIntroCallPreflight(
+async function resolveCallTarget(
   access: ConversationAccessOk,
-  requestId: string,
-  relationshipId: string,
-  userId: string
-): Promise<Denial | null> {
-  /**
-   * ⚠ THE REQUEST-LIFECYCLE GATE, WEB HALF (round-1 HIGH). The AUTHORITATIVE gate is
-   * `apps/api`'s `loadSubject` `request_interaction` arm, which denies the same states
-   * independently and answers a bare `404 context_not_found` (its oracle posture: every
-   * denial an outsider can reach is indistinguishable). This exists ONLY so a LEGITIMATE
-   * user — someone whose thread stayed open past acceptance and who hit a stale CTA — gets
-   * the worded "This request has moved on" copy instead of a bare not-found, and gets it
-   * before spending a network hop.
-   *
-   * It costs NO extra read: `resolveConversationAccess` already returned the request row.
-   * ⚠ Deleting this does NOT reopen the hole; deleting the api-side arm does.
-   */
-  if (requestStatusRank(access.request.status) >= requestStatusRank('accepted')) {
-    log.warn('Intro call booking denied — the project request is already decided', {
+  ids: { requestId: string; relationshipId: string; userId: string }
+): Promise<{ ok: true; target: CallTarget } | Denial> {
+  const { requestId, relationshipId, userId } = ids;
+  const requestStatus = access.request.status;
+  const requestInteraction: CallTarget = {
+    contextType: 'request_interaction',
+    contextId: relationshipId,
+    engagementId: null,
+  };
+
+  if (requestStatus === 'closed') {
+    log.warn('Call booking denied — the project request is closed', {
       requestId,
       relationshipId,
       userId,
-      requestStatus: access.request.status,
+      requestStatus,
     });
     return { ok: false, code: 'not_permitted' };
+  }
+
+  const won = access.relationship.status === 'accepted';
+  if (won && requestStatus === 'kickoff_approved') {
+    const engagement = await projectEngagementsRepository.findByProjectRequestId(requestId);
+    // The request stays `kickoff_approved` after the project completes or is cancelled, and
+    // `apps/api` refuses a `project_call` on a non-`active` engagement — so say so here.
+    if (engagement?.status !== 'active') {
+      log.warn('Call booking denied — no active project engagement at kickoff_approved', {
+        requestId,
+        relationshipId,
+        userId,
+        engagementStatus: engagement?.status ?? null,
+      });
+      return { ok: false, code: 'not_permitted' };
+    }
+    const engagementId = engagement.id;
+    return {
+      ok: true,
+      target: { contextType: 'project_call', contextId: engagementId, engagementId },
+    };
+  }
+  if (won) {
+    return { ok: true, target: requestInteraction };
+  }
+
+  if (requestStatusRank(requestStatus) >= requestStatusRank('accepted')) {
+    log.warn('Call booking denied — the project request is already decided', {
+      requestId,
+      relationshipId,
+      userId,
+      requestStatus,
+    });
+    return { ok: false, code: 'not_permitted' };
+  }
+  return { ok: true, target: requestInteraction };
+}
+
+/**
+ * The pre-flight gates, extracted so `bookIntroCallAction` reads as one straight line. See the
+ * module docblock for which are authoritative (api-side) versus courtesy (worded copy only).
+ */
+async function checkCallPreflight(
+  access: ConversationAccessOk,
+  ids: { requestId: string; relationshipId: string; userId: string }
+): Promise<{ ok: true; target: CallTarget } | Denial> {
+  const { requestId, relationshipId, userId } = ids;
+
+  const resolved = await resolveCallTarget(access, ids);
+  if (!resolved.ok) {
+    return resolved;
   }
 
   const bookable = await assertRelationshipBookable(relationshipId);
   if (!bookable) {
-    log.warn('Intro call booking denied — relationship declined or withdrawn', {
+    log.warn('Call booking denied — relationship declined or withdrawn', {
       requestId,
       relationshipId,
       userId,
@@ -155,22 +224,19 @@ async function checkIntroCallPreflight(
     return { ok: false, code: 'not_permitted' };
   }
 
-  // ⚠ ONE INTRO CALL PER THREAD, ENFORCED (round-1 security MEDIUM). The UI has always
-  // CLAIMED this — `deriveCallSlot` removes the CTA once a call exists and the nudge tells
-  // both parties there is nothing left to book — while `bookingIdempotencyKey` is
-  // `sha256(userId:nonce)` over a CLIENT-MINTED nonce, so a fresh nonce was a fresh booking
-  // by construction. See `assertNoLiveIntroCall` for what this does and does not close.
-  const noLiveCall = await assertNoLiveIntroCall(relationshipId);
-  if (!noLiveCall) {
-    log.warn('Intro call booking denied — this thread already has a live intro call', {
+  // The cap pre-check (see the module docblock): the same shared rule the page's list and the
+  // api's gate count with, so a call that has ended never blocks a new booking.
+  const underCap = await assertUnderUpcomingCallCap(relationshipId, resolved.target.engagementId);
+  if (!underCap) {
+    log.warn('Call booking denied — upcoming call cap reached', {
       requestId,
       relationshipId,
       userId,
     });
-    return { ok: false, code: 'not_permitted' };
+    return { ok: false, code: 'call_cap_reached' };
   }
 
-  return null;
+  return resolved;
 }
 
 /** Maps a failed `postBookMeeting` onto the action's own result codes, logging as it goes. */
@@ -179,8 +245,12 @@ function mapBookingFailure(
   ctx: { requestId: string; relationshipId: string; userId: string }
 ): Denial {
   if (booked.code === 'window_not_available') {
-    log.warn('Intro call booking failed — slot no longer available', ctx);
+    log.warn('Call booking failed — slot no longer available', ctx);
     return { ok: false, code: 'slot_unavailable' };
+  }
+  if (booked.code === 'call_cap_reached') {
+    log.warn('Call booking denied by the api — upcoming call cap reached', ctx);
+    return { ok: false, code: 'call_cap_reached' };
   }
   if (booked.code === 'context_not_found' || booked.code === 'expert_unavailable') {
     return { ok: false, code: 'not_permitted' };
@@ -191,7 +261,7 @@ function mapBookingFailure(
   if (booked.status === 429 || booked.status === 503) {
     return { ok: false, code: 'rate_limited' };
   }
-  log.error('Intro call booking failed', { ...ctx, status: booked.status, code: booked.code });
+  log.error('Call booking failed', { ...ctx, status: booked.status, code: booked.code });
   return { ok: false, code: 'booking_failed' };
 }
 
@@ -214,7 +284,7 @@ async function inviteGuestsIfAny(
   if (inviteResult.code === 'guest_already_invited') {
     return { guestsInvited: guests.length, guestInviteFailed: false };
   }
-  log.warn('Guest invite failed after intro call booking', {
+  log.warn('Guest invite failed after call booking', {
     meetingId,
     failedCount: guests.length,
   });
@@ -233,7 +303,7 @@ export async function bookIntroCallAction(
 
   const parsed = bookIntroCallSchema.safeParse(rawInput);
   if (!parsed.success) {
-    log.warn('Intro call booking failed validation', {
+    log.warn('Call booking failed validation', {
       userId: user.id,
       issues: parsed.error.issues.map((issue) => issue.path.join('.')),
     });
@@ -245,7 +315,7 @@ export async function bookIntroCallAction(
   try {
     const access = await resolveConversationAccess(user, requestId, relationshipId);
     if (!access.ok) {
-      log.warn('Intro call booking denied — conversation access', {
+      log.warn('Call booking denied — conversation access', {
         requestId,
         relationshipId,
         userId: user.id,
@@ -253,16 +323,21 @@ export async function bookIntroCallAction(
       return { ok: false, code: 'not_permitted' };
     }
 
-    const denial = await checkIntroCallPreflight(access, requestId, relationshipId, user.id);
-    if (denial !== null) {
-      return denial;
+    const preflight = await checkCallPreflight(access, {
+      requestId,
+      relationshipId,
+      userId: user.id,
+    });
+    if (!preflight.ok) {
+      return preflight;
     }
+    const { target } = preflight;
 
     const key = deriveBookingIdempotencyKey(user.id, input.bookingNonce);
 
     const booked = await postBookMeeting({
-      contextType: 'request_interaction',
-      contextId: relationshipId,
+      contextType: target.contextType,
+      contextId: target.contextId,
       scheduledStart: input.slot.startIso,
       scheduledEnd: input.slot.endIso,
       bookingIdempotencyKey: key,
@@ -277,21 +352,23 @@ export async function bookIntroCallAction(
 
     const { guestsInvited, guestInviteFailed } = await inviteGuestsIfAny(meetingId, input.guests);
 
-    log.info('Intro call booked', {
+    log.info('Call booked', {
       requestId,
       relationshipId,
       meetingId,
+      contextType: target.contextType,
       durationMinutes,
       provisioned,
       guestCount: input.guests.length,
     });
 
     const expertProfileId = access.relationship.expertProfileId;
+    const won = access.relationship.status === 'accepted';
     const expertDisplay = await resolveBookingExpertDisplay(expertProfileId);
     const joinPath = memberCallPath(meetingId);
 
     // Fire-and-forget — only reached on a real 201.
-    publishNotificationEvent('conversation.intro_call_booked', {
+    void publishNotificationEvent('conversation.intro_call_booked', {
       correlationId: meetingId,
       meetingId,
       requestId,
@@ -319,6 +396,7 @@ export async function bookIntroCallAction(
       joinPath,
       provisioned,
       guestCount: input.guests.length,
+      callKind: target.contextType === 'project_call' || won ? 'call' : 'intro',
     });
 
     return {
@@ -331,9 +409,10 @@ export async function bookIntroCallAction(
       durationMinutes,
       guestsInvited,
       guestInviteFailed,
+      contextType: target.contextType,
     };
   } catch (error) {
-    log.error('Intro call booking failed unexpectedly', {
+    log.error('Call booking failed unexpectedly', {
       requestId,
       relationshipId,
       userId: user.id,

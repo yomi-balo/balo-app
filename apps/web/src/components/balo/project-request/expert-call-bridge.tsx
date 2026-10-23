@@ -12,8 +12,14 @@ const RegisterContext = createContext<Register | null>(null);
 const HandlerContext = createContext<Handler | null>(null);
 const RegisterPendingContext = createContext<RegisterPending | null>(null);
 const PendingContext = createContext(false);
+// The client lens's book-call channel: same two-context shape, no pending flag.
+const RegisterClientBookContext = createContext<Register | null>(null);
+const ClientBookHandlerContext = createContext<Handler | null>(null);
 
 /**
+ * Bridges both lenses' call handlers from the conversation stage to page-level surfaces: the
+ * expert's "Propose times" (page nudge) and the client's "Pick a time" (kickoff board).
+ *
  * Lets the page nudge's "Propose times" run the conversation stage's OWN call handler.
  *
  * The stage owns the expert's share-availability flow and its optimistic thread state (the
@@ -29,13 +35,21 @@ export function ExpertCallBridgeProvider({
 }: Readonly<{ children: React.ReactNode }>): React.JSX.Element {
   const [handler, setHandler] = useState<Handler | null>(null);
   const [pending, setPending] = useState(false);
+  const [clientBookHandler, setClientBookHandler] = useState<Handler | null>(null);
   // The updater form: a bare function argument to a state setter is called, not stored.
   const register = useCallback<Register>((next) => setHandler(() => next), []);
+  const registerClientBook = useCallback<Register>((next) => setClientBookHandler(() => next), []);
   return (
     <RegisterContext.Provider value={register}>
       <RegisterPendingContext.Provider value={setPending}>
         <HandlerContext.Provider value={handler}>
-          <PendingContext.Provider value={pending}>{children}</PendingContext.Provider>
+          <PendingContext.Provider value={pending}>
+            <RegisterClientBookContext.Provider value={registerClientBook}>
+              <ClientBookHandlerContext.Provider value={clientBookHandler}>
+                {children}
+              </ClientBookHandlerContext.Provider>
+            </RegisterClientBookContext.Provider>
+          </PendingContext.Provider>
         </HandlerContext.Provider>
       </RegisterPendingContext.Provider>
     </RegisterContext.Provider>
@@ -75,4 +89,27 @@ export function useExpertProposeTimes(): Handler | null {
 /** The nudge side: whether the registered handler's call is currently in flight. */
 export function useExpertProposeTimesPending(): boolean {
   return useContext(PendingContext);
+}
+
+/**
+ * The stage side of the client book-call channel: expose `handler` while mounted and non-null,
+ * through the same stable-forwarder pattern as {@link useRegisterExpertProposeTimes}.
+ */
+export function useRegisterClientBookCall(handler: Handler | null): void {
+  const register = useContext(RegisterClientBookContext);
+  const latest = useRef(handler);
+  useEffect(() => {
+    latest.current = handler;
+  });
+  const enabled = handler !== null;
+  useEffect(() => {
+    if (register === null || !enabled) return undefined;
+    register(() => latest.current?.());
+    return () => register(null);
+  }, [register, enabled]);
+}
+
+/** The kickoff board side: the registered client book-call handler, or `null` when none. */
+export function useClientBookCall(): Handler | null {
+  return useContext(ClientBookHandlerContext);
 }

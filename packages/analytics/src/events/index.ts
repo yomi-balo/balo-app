@@ -47,6 +47,8 @@ export {
   type DashboardUpNextTarget,
   DASHBOARD_UP_NEXT_ROW_STATES,
   type DashboardUpNextRowState,
+  DASHBOARD_UP_NEXT_SURFACES,
+  type DashboardUpNextSurface,
   DASHBOARD_YOUR_MOVE_CARD_KINDS,
   type DashboardYourMoveCardKind,
   DASHBOARD_YOUR_MOVE_CHIPS,
@@ -92,6 +94,9 @@ export {
   // Zod enum from it rather than hand-writing a sixth copy of the surface list.
   CONVERSATION_CALL_SURFACES,
   type ConversationCallSurface,
+  // BAL-616 — the client call route tuple, exported as a value for the same reason.
+  CONVERSATION_CALL_ROUTES,
+  type ConversationCallRoute,
   type ConversationProposalSurface,
   type ConversationProposalCta,
 } from './conversation';

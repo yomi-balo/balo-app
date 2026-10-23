@@ -139,6 +139,10 @@ export * from './closed-to-join';
 // moved out of `apps/api`'s `provision-meeting.ts` so the API probe and the web booking action's
 // replay skip classify a key identically. Pure — the callers do the reads.
 export * from './booking-replay';
+// BAL-616 — THE ONE DEFINITION of "an upcoming call on a conversation context" and the
+// per-thread call cap, here so `apps/web`'s conversation view and booking action and
+// `apps/api`'s booking gate count the same calls. Pure — `nowMs` is injected.
+export * from './upcoming-context-meeting';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

@@ -748,11 +748,13 @@ describe('POST /meetings', () => {
     expect(mockAuthorizeMeetingBooking).not.toHaveBeenCalled();
   });
 
-  // ── The gate's TWO outcomes ───────────────────────────────────────────────
+  // ── The gate's rejections ───────────────────────────────────────────────
 
   it.each([
     { code: 'context_not_found', status: 404 },
     { code: 'context_type_mismatch', status: 400 },
+    // BAL-616 — a product limit, not a tenancy denial: its own literal, never the 404 one.
+    { code: 'call_cap_reached', status: 409 },
   ])(
     '$status on the gate’s "$code" rejection, without booking anything',
     async ({ code, status }) => {
@@ -765,6 +767,16 @@ describe('POST /meetings', () => {
       expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
     }
   );
+
+  it('hands the gate the booking idempotency key, so a retry at the cap can replay', async () => {
+    const key = 'b'.repeat(64);
+
+    await post(body({ bookingIdempotencyKey: key }));
+
+    expect(mockAuthorizeMeetingBooking).toHaveBeenCalledWith(
+      expect.objectContaining({ bookingIdempotencyKey: key })
+    );
+  });
 
   it('NEVER answers 403 — a non-member and a nonexistent context are one 404 literal', async () => {
     // The gate has no `forbidden` code at all: distinguishing "this uuid is a live engagement

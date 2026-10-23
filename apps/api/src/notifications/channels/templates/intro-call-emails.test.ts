@@ -214,3 +214,40 @@ describe('getEmailTemplate — intro-call-booked-expert', () => {
     expect(html.toLowerCase()).not.toMatch(/\b(he|she|him|her|his|hers)\b/);
   });
 });
+
+describe('getEmailTemplate — intro-call-booked callKind (BAL-616)', () => {
+  const CALL_DATA = { ...BOOKED_DATA, callKind: 'call' };
+
+  it('client: "call" copy in the subject, heading and body, and never "intro"', async () => {
+    const out = getEmailTemplate('intro-call-booked-client', CALL_DATA);
+    expect(out.subject).toBe('Your call with CloudPeak is confirmed');
+    const text = textOf(await render(out.component)).replaceAll('&quot;', '"');
+    expect(text).toContain('Your call is confirmed');
+    expect(text).toContain('Your call with CloudPeak is confirmed for');
+    expect(text).toContain(
+      'Free — calls on this project never cost credit. This is about "Salesforce CPQ rollout".'
+    );
+    expect(`${out.subject} ${text}`.toLowerCase()).not.toContain('intro');
+  });
+
+  it('expert: "call" copy in the subject, heading and body, and never "intro"', async () => {
+    const out = getEmailTemplate('intro-call-booked-expert', CALL_DATA);
+    expect(out.subject).toBe('Sam Reilly @ Northwind Industrial booked a call with you');
+    const text = textOf(await render(out.component));
+    expect(text).toContain('A new call was booked');
+    expect(text).toContain('Sam Reilly @ Northwind Industrial booked a call with you for');
+    expect(`${out.subject} ${text}`.toLowerCase()).not.toContain('intro');
+  });
+
+  it.each(['intro-call-booked-client', 'intro-call-booked-expert'] as const)(
+    '%s: an absent or unknown callKind renders the intro copy',
+    async (template) => {
+      for (const callKind of [undefined, 'other']) {
+        const out = getEmailTemplate(template, { ...BOOKED_DATA, callKind });
+        const text = textOf(await render(out.component));
+        expect(out.subject).toContain('intro call');
+        expect(text).toContain('Free — no charge, no commitment.');
+      }
+    }
+  );
+});

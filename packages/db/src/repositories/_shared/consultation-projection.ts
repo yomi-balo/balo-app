@@ -38,6 +38,7 @@ import type { DbExecutor } from './db-executor';
  * `meeting_contexts` polymorphic seam:
  *
  *   case / project_kickoff / package_session / retainer_checkin → `engagements.expert_profile_id`
+ *   project_call (BAL-616)                                       → `engagements.expert_profile_id`
  *   project_discovery                                            → `project_requests.expert_profile_id`
  *   admin                                                        → IGNORED (no expert exists)
  *   request_interaction                                          → `request_expert_relationships.expert_profile_id`
@@ -45,13 +46,13 @@ import type { DbExecutor } from './db-executor';
  * ⚠ THE WALK IS EXHAUSTIVE OVER `meeting_context_type`, AND MUST STAY SO. Every label gets
  * an arm in BOTH `loadContextExperts` and `resolveOneContext`; there is no safe default,
  * because the fall-through arm treats a `context_id` as an `engagements.id`, and handing it
- * some other table's id is a silent misresolution or a misdiagnosed throw. An 8th label
+ * some other table's id is a silent misresolution or a misdiagnosed throw. A new label
  * must add an arm to both — `packages/db/src/invariants/meeting-context-type-labels.test.ts`
  * names this module in its sweep list for exactly that reason.
  *
  * ⚠ THE TWO HALVES ARE COUPLED THROUGH THE LOOKUP MAPS, AND THAT COUPLING IS THE ONLY
  * MECHANICAL GUARD AGAINST A HALF-ADD (BAL-283). `resolveOneContext` is now a `switch` whose
- * `default` assigns to `never`, so an 8th label with no arm THERE fails
+ * `default` assigns to `never`, so a new label with no arm THERE fails
  * `pnpm --filter api typecheck` (this module is inside `apps/api`'s program — `@balo/db`'s
  * exports point at raw `./src/*.ts` and the meetings route value-imports the barrel).
  * `loadContextExperts` is NOT typechecked by anything, so an arm added only to it, or only to
@@ -125,9 +126,9 @@ export class MeetingExpertAmbiguousError extends Error {
  * made and shipped: it DOES block the slot** (BAL-283 Ruling 1, owner-ratified, recorded as an
  * ADR-1046 amendment), and `request_interaction` resolves through
  * `request_expert_relationships.expert_profile_id` like any other projected label. Every one
- * of the seven labels now has an arm, so nothing in the shipped enum reaches this class.
+ * of the eight labels now has an arm, so nothing in the shipped enum reaches this class.
  *
- * WHAT IT IS FOR NOW: an 8th label. Both guards fire, and they are deliberately different:
+ * WHAT IT IS FOR NOW: a 9th label. Both guards fire, and they are deliberately different:
  *   · TYPE-LEVEL — `resolveOneContext`'s `default` assigns `context.contextType` to `never`,
  *     so a new label with no arm fails `pnpm --filter api typecheck` at the switch itself.
  *   · RUNTIME — a label can still ARRIVE from a raw DB row that a cast let past the type
@@ -239,6 +240,8 @@ function classifyContextIds(contexts: readonly ProjectionContext[]): ContextIdBu
     if (context.contextType === 'project_discovery') {
       requestIds.add(context.contextId);
     } else {
+      // Engagement grain: `case`, `project_kickoff`, `package_session`, `retainer_checkin`
+      // and `project_call` (BAL-616) all name an `engagements.id`.
       engagementIds.add(context.contextId);
     }
   }
@@ -404,13 +407,14 @@ function resolveOneContext(context: ProjectionContext, maps: ContextExpertMaps):
     case 'case':
     case 'project_kickoff':
     case 'package_session':
-    case 'retainer_checkin': {
+    case 'retainer_checkin':
+    case 'project_call': {
       const expertProfileId = maps.engagementExperts.get(contextId);
       return expertProfileId === undefined ? unresolvable : { kind: 'expert', expertProfileId };
     }
     default: {
       // ⚠ TWO GUARDS, ONE ARM, AND BOTH ARE LOAD-BEARING.
-      //   TYPE-LEVEL: `never` today, so an 8th `meeting_context_type` label fails
+      //   TYPE-LEVEL: `never` today, so a new `meeting_context_type` label fails
       //   `pnpm --filter api typecheck` RIGHT HERE — this module really is inside `apps/api`'s
       //   program (`@balo/db`'s exports point at raw `./src/*.ts`, and the meetings route
       //   value-imports the barrel), verified by probe. `@balo/db` has no typecheck script of

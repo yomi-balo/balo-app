@@ -23,10 +23,11 @@ import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
  * restating the mapping — read that test, not these pins, for "is this still correct".
  */
 
-/** The four engagement-grain labels — all anchored on ONE `engagements.id`. */
+/** The five engagement-grain labels — all anchored on ONE `engagements.id`. */
 const ENGAGEMENT_GRAIN_CONTEXT_TYPES = [
   'case',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
 ] as const satisfies readonly MeetingContextTypeWithHolder[];
@@ -69,7 +70,7 @@ export function meetingContextTypesForEnvelope(envelope: ConversationSubject): R
 
 /**
  * ⚠⚠ COMPILE-TIME HALF, the SECOND exhaustiveness pin — the `member-join-envelope.ts:37-45`
- * pattern. Catches a SEVENTH `MeetingContextTypeWithHolder` label that nobody assigned to
+ * pattern. Catches an EIGHTH `MeetingContextTypeWithHolder` label that nobody assigned to
  * either array above, which the `switch`'s `never` default cannot see (that default only fires
  * on a new `ConversationContextTypeLabel`, not on a new meeting-context label folded into an
  * EXISTING arm).

@@ -325,6 +325,12 @@ const KICKOFF_SPEC: ArmSpec = {
   ],
 };
 
+/**
+ * BAL-616 — a project call gates exactly like the kickoff (a live project engagement of the
+ * company), so it reuses the kickoff spec's parent seed, gate re-check and exclusions.
+ */
+const PROJECT_CALL_SPEC: ArmSpec = { ...KICKOFF_SPEC, arm: 'project_call' };
+
 const DISCOVERY_SPEC: ArmSpec = {
   arm: 'project_discovery',
   seedParent: async (companyId, expertProfileId) => {
@@ -429,7 +435,13 @@ const COMMON_EXCLUSIONS: readonly Exclusion[] = [
   },
 ];
 
-const ARM_SPECS: readonly ArmSpec[] = [CASE_SPEC, KICKOFF_SPEC, DISCOVERY_SPEC, INTERACTION_SPEC];
+const ARM_SPECS: readonly ArmSpec[] = [
+  CASE_SPEC,
+  KICKOFF_SPEC,
+  PROJECT_CALL_SPEC,
+  DISCOVERY_SPEC,
+  INTERACTION_SPEC,
+];
 
 describe.each(ARM_SPECS)('upcomingMeetingsRepository.listForCompany — $arm arm', (spec) => {
   it('member with permission: participates, lists EXACTLY company A’s meeting, and the row passes its own gate', async () => {
@@ -567,6 +579,39 @@ describe('upcomingMeetingsRepository.listForCompany — fold and tenancy', () =>
     expect(rows[0]).toMatchObject({
       meetingId: meeting.id,
       contextType: 'project_kickoff',
+      contextId: engagement.id,
+      projectRequestId: null,
+      expertProfileId,
+      owningRowFound: true,
+    });
+  });
+
+  it('a carried-over call — request_interaction(R) + project_call(E), both company A — is listed ONCE, as project_call (BAL-616)', async () => {
+    const { companyId, expertProfileId } = await seedCompanyAndExpert();
+    const request = await projectRequestFactory({ companyId, expertProfileId });
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId,
+    });
+    const { engagement } = await engagementFactory({
+      companyId,
+      expertProfileId,
+      projectValues: { projectRequestId: request.id, relationshipId: relationship.id },
+    });
+    const { meeting } = await meetingFactory({
+      contexts: [
+        { contextType: 'request_interaction', contextId: relationship.id },
+        { contextType: 'project_call', contextId: engagement.id },
+      ],
+      values: inWindow(),
+    });
+
+    const rows = await listForCompany(companyId);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      meetingId: meeting.id,
+      contextType: 'project_call',
       contextId: engagement.id,
       projectRequestId: null,
       expertProfileId,

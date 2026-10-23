@@ -4,10 +4,13 @@ import { useId } from 'react';
 import { Clock } from 'lucide-react';
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface JoinCountdownProps {
   /** `joinCountdownLabel`'s output, e.g. "Join in 2 days" / "Join tomorrow" / "Join in 40 minutes". */
   readonly label: string;
+  /** Merged over the default `min-h-11 px-4` (the desktop request header passes `min-h-9 px-3`). */
+  readonly className?: string;
 }
 
 /**
@@ -21,7 +24,10 @@ interface JoinCountdownProps {
  * 4.5:1). `JoinMeetingButton` itself keeps its "rendered ONLY inside the join window" invariant
  * untouched — this is a wholly separate element, not that component plus a prop.
  */
-export function JoinCountdown({ label }: Readonly<JoinCountdownProps>): React.JSX.Element {
+export function JoinCountdown({
+  label,
+  className,
+}: Readonly<JoinCountdownProps>): React.JSX.Element {
   const hintId = useId();
   return (
     <>
@@ -33,7 +39,7 @@ export function JoinCountdown({ label }: Readonly<JoinCountdownProps>): React.JS
         aria-describedby={hintId}
         onClick={(event) => event.preventDefault()}
         data-testid="join-countdown"
-        className="min-h-11 px-4"
+        className={cn('min-h-11 px-4', className)}
       >
         <Clock size={14} className="text-muted-foreground" aria-hidden="true" />
         {label}

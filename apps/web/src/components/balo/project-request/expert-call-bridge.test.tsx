@@ -3,7 +3,9 @@ import { render, screen, fireEvent } from '@/test/utils';
 import {
   ExpertCallBridgeProvider,
   useExpertProposeTimes,
+  useClientBookCall,
   useExpertProposeTimesPending,
+  useRegisterClientBookCall,
   useRegisterExpertProposeTimes,
 } from './expert-call-bridge';
 
@@ -98,5 +100,68 @@ describe('expert-call-bridge', () => {
       </>
     );
     expect(screen.getByText('idle')).toBeInTheDocument();
+  });
+
+  describe('client book-call channel', () => {
+    function BookRegistrar({ handler }: Readonly<{ handler: (() => void) | null }>): null {
+      useRegisterClientBookCall(handler);
+      return null;
+    }
+
+    function BookInvoker(): React.JSX.Element {
+      const bookCall = useClientBookCall();
+      return (
+        <button type="button" disabled={bookCall === null} onClick={() => bookCall?.()}>
+          Pick
+        </button>
+      );
+    }
+
+    function bookHarness(handler: (() => void) | null, mounted = true): React.JSX.Element {
+      return (
+        <ExpertCallBridgeProvider>
+          {mounted && <BookRegistrar handler={handler} />}
+          <BookInvoker />
+          <Invoker />
+        </ExpertCallBridgeProvider>
+      );
+    }
+
+    it('has no handler until one is registered, and is independent of the expert channel', () => {
+      const handler = vi.fn();
+      render(bookHarness(handler));
+      expect(screen.getByRole('button', { name: 'Pick' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Propose' })).toBeDisabled();
+    });
+
+    it('invokes the latest handler without re-registering', () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { rerender } = render(bookHarness(first));
+      rerender(bookHarness(second));
+      fireEvent.click(screen.getByRole('button', { name: 'Pick' }));
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the handler on null or unmount, and is inert outside a provider', () => {
+      const handler = vi.fn();
+      const { rerender } = render(bookHarness(handler));
+      rerender(bookHarness(null));
+      expect(screen.getByRole('button', { name: 'Pick' })).toBeDisabled();
+      rerender(bookHarness(handler));
+      rerender(bookHarness(handler, false));
+      expect(screen.getByRole('button', { name: 'Pick' })).toBeDisabled();
+    });
+
+    it('is inert outside a provider', () => {
+      render(
+        <>
+          <BookRegistrar handler={vi.fn()} />
+          <BookInvoker />
+        </>
+      );
+      expect(screen.getByRole('button', { name: 'Pick' })).toBeDisabled();
+    });
   });
 });

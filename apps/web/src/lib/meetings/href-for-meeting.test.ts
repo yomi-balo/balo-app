@@ -19,6 +19,7 @@ describe('hrefForMeeting (BAL-566 D6)', () => {
   const EXPECTED: Record<MeetingContextTypeWithHolder, string | null> = {
     case: `/cases/${CONTEXT_ID}`,
     project_kickoff: `/engagements/${CONTEXT_ID}`,
+    project_call: `/engagements/${CONTEXT_ID}`,
     project_discovery: `/projects/${PROJECT_REQUEST_ID}`,
     request_interaction: `/projects/${PROJECT_REQUEST_ID}`,
     package_session: null,

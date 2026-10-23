@@ -7,7 +7,7 @@
  * arms — those callers are anonymous or token-bearing and Decision 9's no-oracle rule applies
  * to them.
  *
- * ── ⚠⚠ WHY THREE OF THE SIX SHAPES ANSWER `null`, STATED RATHER THAN HIDDEN ────────────────
+ * ── ⚠⚠ WHY FOUR OF THE SEVEN SHAPES ANSWER `null`, STATED RATHER THAN HIDDEN ────────────────
  *
  * Balo has no `meetings.title` column and no single "engagement title" concept. Titles live per
  * SUBTYPE:
@@ -19,13 +19,13 @@
  *          BAL-567 / D1. `context_id` on this arm is a RELATIONSHIP id, not a request id; it
  *          used to be passed straight to `projectRequestsRepository.findById`, which matched
  *          nothing and silently nulled the heading for every such meeting.)
- *   · `project_kickoff` / `package_session` / `retainer_checkin`
+ *   · `project_kickoff` / `project_call` / `package_session` / `retainer_checkin`
  *        → NO title column exists on `engagements` or on any of its delivery subtypes. A label
  *          for those would have to be SYNTHESISED from a proposal or a source request, which is
  *          a title CONCEPT this ticket has no mandate to design — and a confidently wrong title
  *          on a live call is worse than no title.
  *
- * So those three answer `null` and the web surface renders its neutral heading ("In the call").
+ * So those four answer `null` and the web surface renders its neutral heading ("In the call").
  *
  * ⚠ BAL-567 — THIS RESOLVER ALSO SUPPLIES THE "Back to {context}" LINK TARGET. It used to need
  * only `type` + `id`; as of BAL-567 the web side routes through the ONE shared `hrefForMeeting`
@@ -76,7 +76,7 @@ async function readRequestFacts(projectRequestId: string): Promise<ContextFacts>
 }
 
 /**
- * ⚠ TOTAL OVER THE SIX HOLDER-BEARING SHAPES, WITH NO `default:` ARM. A seventh label added to
+ * ⚠ TOTAL OVER THE SEVEN HOLDER-BEARING SHAPES, WITH NO `default:` ARM. A label added to
  * the enum fails `tsc` here rather than silently answering `null` forever.
  *
  * ⚠⚠ THE TWO REQUEST-GRAIN ARMS ARE **SPLIT**, AND BAL-567 (D1) SPLIT THEM TO FIX A LIVE BUG.
@@ -109,9 +109,10 @@ async function readContextFacts(context: PrimaryMeetingContext): Promise<Context
         ? NO_FACTS
         : readRequestFacts(relationship.projectRequestId);
     }
-    // ⚠ NO TITLE COLUMN EXISTS FOR THESE THREE. See the module docblock — this is a stated
+    // ⚠ NO TITLE COLUMN EXISTS FOR THESE FOUR. See the module docblock — this is a stated
     // absence, not an omission. They carry no request either.
     case 'project_kickoff':
+    case 'project_call':
     case 'package_session':
     case 'retainer_checkin':
       return NO_FACTS;

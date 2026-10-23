@@ -10,7 +10,7 @@
  * from a route directory is a layering inversion, and a hand-copied union in a third package
  * is a drift waiting to happen; one `as const` tuple in `@balo/shared/meetings` closes both.
  *
- * ⚠ TWO OF THE SEVEN `meeting_context_type` LABELS ARE ABSENT, each for its own reason:
+ * ⚠ TWO OF THE EIGHT `meeting_context_type` LABELS ARE ABSENT, each for its own reason:
  *   · `admin` — scoped out by BAL-129. An internal Balo meeting projects no consultation row
  *     and occupies nobody's calendar, so there is no booking to authorize.
  *   · `retainer_checkin` — scoped out by BAL-129. (Its engagement kind, `retainer`, is
@@ -21,6 +21,11 @@
  * candidate's calendar, and the consultation projection now has a rule for the label
  * (`request_expert_relationships.expert_profile_id`, see `_shared/consultation-projection.ts`).
  *
+ * `project_call` is admitted by BAL-616 (ADR-1045 §2 / ADR-1046 amendment 2026-10-23): a client
+ * call with the delivering expert on a project after kickoff. Its `context_id` is an
+ * `engagements.id`, it resolves to an engagement of type `project`, and the delivering expert
+ * comes from `engagements.expert_profile_id`. It is money-free, like `request_interaction`.
+ *
  * ⚠ THE CONSEQUENCE BELOW SURVIVES BAL-283, BUT ITS REASON CHANGES (plan §2.4 — do not "flip
  * it to live", that would be a false statement in the opposite direction). `admin` and
  * `retainer_checkin` are still refused at the Zod boundary here, so
@@ -28,7 +33,7 @@
  * this tuple refuses `request_interaction` (it no longer does), but because EVERY label this
  * tuple now admits has an explicit projection rule in `_shared/consultation-projection.ts`. It
  * nevertheless STAYS MAPPED in that route's error table — `409 context_not_bookable` — as
- * DEFENCE against an eighth `meeting_context_type` label admitted here later without a
+ * DEFENCE against a new `meeting_context_type` label admitted here later without a
  * matching projection arm, so that case cannot reach the client as an unexplained 500.
  *
  * ⚠ `MeetingContextRequiredError` IS THE OPPOSITE CASE, AND AN EARLIER VERSION OF THIS BLOCK
@@ -49,11 +54,12 @@ export const BOOKABLE_CONTEXT_TYPES = [
   'package_session',
   'project_discovery',
   'request_interaction',
+  'project_call',
 ] as const;
 
 /**
- * The five labels a booking may name. DERIVED from the tuple above — never restated, so a
- * sixth label cannot be admitted to one layer and not another.
+ * The six labels a booking may name. DERIVED from the tuple above — never restated, so a
+ * seventh label cannot be admitted to one layer and not another.
  */
 export type MeetingBookingContextType = (typeof BOOKABLE_CONTEXT_TYPES)[number];
 

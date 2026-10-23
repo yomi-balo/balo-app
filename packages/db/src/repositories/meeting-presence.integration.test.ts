@@ -1237,6 +1237,19 @@ describe('meetingPresenceRepository.listClientUserIdsForEngagement', () => {
     ).resolves.toEqual([]);
   });
 
+  it('INCLUDES the client attendees of a project_call (BAL-616) — engagement grain, like a kickoff', async () => {
+    const { engagement } = await engagementFactory();
+    const call = await meetingFactory({
+      contexts: [{ contextType: 'project_call', contextId: engagement.id }],
+    });
+    const client = await userFactory();
+    await join(call.meeting.id, client.id, 'client', 0);
+
+    await expect(
+      meetingPresenceRepository.listClientUserIdsForEngagement(engagement.id)
+    ).resolves.toEqual([client.id]);
+  });
+
   it('IGNORES a project_discovery context whose context_id is not an engagement id', async () => {
     // `context_id` is POLYMORPHIC: a discovery call points at a `project_requests.id`.
     // Matching on the id alone would read the wrong table's key space.

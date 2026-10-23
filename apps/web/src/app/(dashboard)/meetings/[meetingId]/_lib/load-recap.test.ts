@@ -797,6 +797,18 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     expect(requestView?.header.eyebrow).toBe('Intro call');
   });
 
+  it('treats a project call as engagement-grain: action items on the engagement, fallback title "Call"', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      subject: { contextType: 'project_call', contextId: ENGAGEMENT_ID },
+    });
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.actionItems?.engagementId).toBe(ENGAGEMENT_ID);
+    expect(view?.header.title).toBe('Call');
+    expect(view?.header.eyebrow).toBe('Project call');
+    expect(view?.money).toBeNull();
+  });
+
   describe('the done toggle on a case recap', () => {
     const ITEM = {
       id: 'ai-1',

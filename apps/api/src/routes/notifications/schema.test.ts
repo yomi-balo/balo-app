@@ -1856,4 +1856,49 @@ describe('publishBodySchema', () => {
       expect(result.success).toBe(false);
     });
   });
+
+  describe('conversation.intro_call_booked callKind (BAL-616)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440000',
+      meetingId: '550e8400-e29b-41d4-a716-446655440001',
+      requestId: '550e8400-e29b-41d4-a716-446655440002',
+      requestTitle: 'Salesforce CPQ rollout',
+      relationshipId: '550e8400-e29b-41d4-a716-446655440003',
+      recipientId: '550e8400-e29b-41d4-a716-446655440004',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440005',
+      clientPersonName: 'Sam Reilly',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak',
+      scheduledStartIso: '2026-09-01T04:00:00.000Z',
+      durationMinutes: 30,
+      joinPath: '/meetings/550e8400-e29b-41d4-a716-446655440001/call',
+      provisioned: true,
+      guestCount: 0,
+    };
+
+    it('a payload WITHOUT callKind still parses (deploy skew)', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'conversation.intro_call_booked', payload: valid })
+          .success
+      ).toBe(true);
+    });
+
+    it.each(['intro', 'call'] as const)('accepts callKind %s', (callKind) => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'conversation.intro_call_booked',
+          payload: { ...valid, callKind },
+        }).success
+      ).toBe(true);
+    });
+
+    it('rejects an unknown callKind', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'conversation.intro_call_booked',
+          payload: { ...valid, callKind: 'other' },
+        }).success
+      ).toBe(false);
+    });
+  });
 });

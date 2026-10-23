@@ -110,6 +110,7 @@ const PIPELINE_GRACE_MS = 30 * 60 * 1000;
 const ENGAGEMENT_GRAIN: ReadonlySet<RecapContextType> = new Set([
   'case',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
 ]);
@@ -119,6 +120,7 @@ const FALLBACK_TITLE: Record<RecapContextType, string> = {
   case: 'Consultation',
   project_discovery: 'Discovery call',
   project_kickoff: 'Project kickoff',
+  project_call: 'Call',
   package_session: 'Package session',
   retainer_checkin: 'Retainer check-in',
   request_interaction: 'Intro call',

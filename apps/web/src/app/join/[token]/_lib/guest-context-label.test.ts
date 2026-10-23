@@ -6,6 +6,7 @@ import { guestContextLabel } from './guest-context-label';
 const ALL_CONTEXT_TYPES: readonly MeetingContextTypeLabel[] = [
   'case',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
   'request_interaction',
@@ -24,6 +25,7 @@ describe('guestContextLabel', () => {
     expect(guestContextLabel('case')).toBe('Consultation');
     expect(guestContextLabel('project_discovery')).toBe('Discovery call');
     expect(guestContextLabel('request_interaction')).toBe('Intro call');
+    expect(guestContextLabel('project_call')).toBe('Project call');
   });
 
   it('⚠ `null` resolves to the GENERIC label — the caller`s way of saying "no primary context"', () => {

@@ -25,6 +25,8 @@ export {
   CONVERSATION_EVENTS,
   /** BAL-283 — the canonical `['header','rail','nudge']` tuple the Zod enums derive from. */
   CONVERSATION_CALL_SURFACES,
+  /** BAL-616 — the client call route tuple (`in_place` | `profile`). */
+  CONVERSATION_CALL_ROUTES,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,
@@ -100,6 +102,11 @@ export {
    * `DASHBOARD_EVENTS` from this module too.
    */
   DASHBOARD_EVENTS,
+  /**
+   * BAL-616 — the Up next click's `surface` tuple (`dashboard` | `request_thread`), re-exported
+   * because the request page header's Join reports through this event too.
+   */
+  DASHBOARD_UP_NEXT_SURFACES,
   /** BAL-589 — the "Convert a case to a project" AI brief's event constant. */
   CASE_BRIEF_EVENTS,
 } from '@balo/analytics/client';
@@ -120,6 +127,7 @@ export type {
   ConversationThreadSelectMethod,
   ConversationFilesSurface,
   ConversationCallSurface,
+  ConversationCallRoute,
   ConversationProposalSurface,
   ConversationProposalCta,
   ProjectsInboxEventMap,
@@ -224,6 +232,7 @@ export type {
   DashboardUpNextMeetingType,
   DashboardUpNextTarget,
   DashboardUpNextRowState,
+  DashboardUpNextSurface,
   /** BAL-589 — the "Convert a case to a project" AI brief's event payload. */
   CaseBriefEventMap,
 } from '@balo/analytics/client';

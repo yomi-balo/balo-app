@@ -9,6 +9,7 @@ import {
   conversations,
   engagements,
   expertProfiles,
+  meetingContexts,
   projectEngagements,
   projectRequests,
   proposalMilestones,
@@ -22,6 +23,7 @@ import {
   engagementFactory,
   engagementMilestoneFactory,
   expertDraftFactory,
+  meetingFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
   proposalFactory,
@@ -45,6 +47,8 @@ import {
 import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
 import { conversationsRepository } from './conversations';
+import { meetingContextsRepository, MeetingReanchorOwnerMismatchError } from './meeting-contexts';
+import { meetingsRepository } from './meetings';
 // BAL-431 (Ruling 2) — award closure, asserted directly for the idempotence property that a
 // replayed kickoff cannot reach (the status guard rejects first).
 import { markNotSelectedByAward } from './request-expert-relationships';
@@ -693,23 +697,36 @@ describe('engagementsRepository.findById — the SUPERTYPE point read', () => {
   });
 });
 
-describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-link)', () => {
+describe('projectEngagementsRepository.findByProjectRequestId (BAL-331 deep-link, BAL-616 status)', () => {
   it('returns the live engagement id for a request that has one', async () => {
     const { engagement } = await engagementFactory({ withSourceProposal: true });
     const requestId = engagement.projectRequestId;
     if (requestId === null) throw new Error('expected a seeded projectRequestId');
 
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBe(
-      engagement.id
-    );
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toEqual({
+      id: engagement.id,
+      status: 'active',
+    });
+  });
+
+  it('reports the parent status, so a completed or cancelled project is distinguishable (BAL-616)', async () => {
+    const { engagement } = await engagementFactory({
+      withSourceProposal: true,
+      projectValues: { deliveryStatus: 'cancelled' },
+    });
+    const requestId = engagement.projectRequestId;
+    if (requestId === null) throw new Error('expected a seeded projectRequestId');
+
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toEqual({
+      id: engagement.id,
+      status: 'cancelled',
+    });
   });
 
   it('returns undefined for a request with no engagement (and for an unknown request id)', async () => {
     const request = await projectRequestFactory();
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(request.id)).toBeUndefined();
-    expect(
-      await projectEngagementsRepository.findIdByProjectRequestId(randomUUID())
-    ).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(request.id)).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(randomUUID())).toBeUndefined();
   });
 
   it('returns undefined when the only engagement for the request is soft-deleted', async () => {
@@ -719,7 +736,7 @@ describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-li
 
     await softDeleteEngagementFixture(engagement.id);
 
-    expect(await projectEngagementsRepository.findIdByProjectRequestId(requestId)).toBeUndefined();
+    expect(await projectEngagementsRepository.findByProjectRequestId(requestId)).toBeUndefined();
   });
 
   it('returns the LIVE id when a soft-deleted engagement co-exists for the same request', async () => {
@@ -740,9 +757,9 @@ describe('projectEngagementsRepository.findIdByProjectRequestId (BAL-331 deep-li
       priceCents: 2000,
     });
 
-    const found = await projectEngagementsRepository.findIdByProjectRequestId(requestId);
-    expect(found).toBe(replacement.id);
-    expect(found).not.toBe(engagement.id);
+    const found = await projectEngagementsRepository.findByProjectRequestId(requestId);
+    expect(found?.id).toBe(replacement.id);
+    expect(found?.id).not.toBe(engagement.id);
   });
 });
 
@@ -1058,7 +1075,7 @@ describe('projectEngagementsRepository.create — coherence guard (BAL-293)', ()
         priceCents: 250_000,
         // rateCents / cadence intentionally omitted → incoherent tm.
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((err as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');
 
@@ -1079,7 +1096,7 @@ describe('projectEngagementsRepository.create — coherence guard (BAL-293)', ()
         priceCents: 100_000,
         depositCents: -1,
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((err as EngagementTermsCoherenceError).rule).toBe('deposit_negative');
 
@@ -1119,7 +1136,7 @@ describe('projectEngagementsRepository.materializeFromKickoff — coherence guar
         baloFeeBps: 2500,
         // rateCents / cadence intentionally omitted → incoherent tm.
       })
-      .catch((e: unknown) => e);
+      .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(EngagementTermsCoherenceError);
     expect((err as EngagementTermsCoherenceError).rule).toBe('tm_missing_rate');
 
@@ -2861,5 +2878,155 @@ describe('projectEngagementsRepository.materializeFromKickoff — award closure 
     });
     expect(secondRun).toEqual([]);
     expect(await notSelectedAtFor(loser)).toEqual(first);
+  });
+});
+
+/**
+ * BAL-616 (AC6, ADR-1046 amendment 2026-10-23) — KICKOFF CARRY-OVER. The won thread's live
+ * `request_interaction` calls gain a `project_call` context in the kickoff's own transaction;
+ * ended and cancelled calls stay where they are. A refused re-anchor rolls the kickoff back.
+ */
+describe('projectEngagementsRepository.materializeFromKickoff — call carry-over (BAL-616)', () => {
+  const HOUR = 3_600_000;
+
+  function kickoffArgs(
+    source: ProposalFactoryResult,
+    companyId: string,
+    adminId: string
+  ): Parameters<typeof projectEngagementsRepository.materializeFromKickoff>[0] {
+    return {
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 250_000,
+      baloFeeBps: 2500,
+    };
+  }
+
+  /** A call on the relationship booked through the real writer (so it is projected). */
+  async function bookInteractionCall(relationshipId: string): Promise<string> {
+    const start = new Date(Date.now() + 24 * HOUR);
+    const created = await meetingsRepository.create({
+      scheduledStart: start,
+      scheduledEnd: new Date(start.getTime() + HOUR),
+      contexts: [{ contextType: 'request_interaction', contextId: relationshipId }],
+    });
+    return created.meeting.id;
+  }
+
+  async function projectCallRowsFor(meetingId: string) {
+    return db
+      .select({ id: meetingContexts.id })
+      .from(meetingContexts)
+      .where(
+        and(
+          eq(meetingContexts.meetingId, meetingId),
+          eq(meetingContexts.contextType, 'project_call'),
+          isNull(meetingContexts.deletedAt)
+        )
+      );
+  }
+
+  it('re-anchors ONLY the live call: upcoming → project_call; ended and cancelled stay put', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const upcomingId = await bookInteractionCall(source.relationshipId);
+    const onRelationship = [
+      { contextType: 'request_interaction' as const, contextId: source.relationshipId },
+    ];
+    const { meeting: ended } = await meetingFactory({
+      contexts: onRelationship,
+      values: { status: 'ended' },
+    });
+    const { meeting: cancelled } = await meetingFactory({
+      contexts: onRelationship,
+      values: { status: 'cancelled' },
+    });
+
+    const { engagement, reanchoredMeetingIds } =
+      await projectEngagementsRepository.materializeFromKickoff(
+        kickoffArgs(source, companyId, adminId)
+      );
+
+    expect(reanchoredMeetingIds).toEqual([upcomingId]);
+
+    const projectCalls = await meetingContextsRepository.listMeetingsForContext(
+      'project_call',
+      engagement.id
+    );
+    expect(projectCalls.map((meeting) => meeting.id)).toEqual([upcomingId]);
+
+    const active = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'project_call',
+      contextIds: [engagement.id],
+    });
+    expect(active.get(engagement.id)?.map((meeting) => meeting.meetingId)).toEqual([upcomingId]);
+
+    // The `request_interaction` row SURVIVES (multi-context) — all three calls still read from
+    // the relationship's side.
+    const onThread = await meetingContextsRepository.listMeetingsForContext(
+      'request_interaction',
+      source.relationshipId
+    );
+    expect(onThread.map((meeting) => meeting.id).sort()).toEqual(
+      [upcomingId, ended.id, cancelled.id].sort()
+    );
+    expect(await projectCallRowsFor(ended.id)).toHaveLength(0);
+    expect(await projectCallRowsFor(cancelled.id)).toHaveLength(0);
+
+    const reanchorEvents = (await auditEventsForEntity(engagement.id)).filter(
+      (event) => event.action === 'engagement.calls_reanchored'
+    );
+    expect(reanchorEvents).toHaveLength(1);
+    expect(reanchorEvents[0]?.entityType).toBe('engagement');
+    expect(reanchorEvents[0]?.actorUserId).toBe(adminId);
+    expect(reanchorEvents[0]?.metadata).toMatchObject({
+      meeting_ids: [upcomingId],
+      relationship_id: source.relationshipId,
+      engagementId: engagement.id,
+    });
+  });
+
+  it('a kickoff with NO calls on the thread succeeds and returns reanchoredMeetingIds = []', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+
+    const result = await projectEngagementsRepository.materializeFromKickoff(
+      kickoffArgs(source, companyId, adminId)
+    );
+
+    expect(result.reanchoredMeetingIds).toEqual([]);
+    expect(result.request.status).toBe('kickoff_approved');
+    expect(
+      (await auditEventsForEntity(result.engagement.id)).some(
+        (event) => event.action === 'engagement.calls_reanchored'
+      )
+    ).toBe(false);
+  });
+
+  it('SAME-TX ROLLBACK — an expert that differs from the call’s expert throws, and the kickoff leaves nothing behind', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const meetingId = await bookInteractionCall(source.relationshipId);
+    const otherExpert = await expertDraftFactory();
+
+    const refusal = projectEngagementsRepository.materializeFromKickoff({
+      ...kickoffArgs(source, companyId, adminId),
+      expertProfileId: otherExpert.id,
+    });
+
+    await expect(refusal).rejects.toBeInstanceOf(MeetingReanchorOwnerMismatchError);
+    await expect(refusal).rejects.toMatchObject({ meetingId, reason: 'expert_changed' });
+
+    const request = await projectRequestsRepository.findById(source.projectRequestId);
+    expect(request?.status).toBe('accepted');
+    const children = await db
+      .select({ engagementId: projectEngagements.engagementId })
+      .from(projectEngagements)
+      .where(eq(projectEngagements.projectRequestId, source.projectRequestId));
+    expect(children).toHaveLength(0);
+    expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
+    expect(await projectCallRowsFor(meetingId)).toHaveLength(0);
   });
 });

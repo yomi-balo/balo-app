@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 2
 published: false
-updated: 2026-10-19
+updated: 2026-10-23
 related: [turning-a-case-into-a-project, booking-a-consultation]
 ---
 
@@ -35,3 +35,17 @@ Experts can pause new work for a while. When they do, you'll see a note on their
 saying they aren't taking on new work right now. If they pause while you're writing, the note
 appears when you send. Either way, choose **Get matched instead** and we'll find someone with
 similar experience, keeping your brief as you wrote it.
+
+## Calls with your expert
+
+Calls with the expert on your project are free, so talk things through whenever it helps. Choose
+**Book a call** in the conversation header on your request page. You can book from the moment you
+start talking, right through kickoff and delivery.
+
+If your request has moved on from an expert (you went with someone else, or the request closed),
+**Book a call** opens that expert's profile instead. Calls booked there are paid consultations, not
+free project calls.
+
+Once a call is booked, the header shows **Next call** with the date and time, and **Join** when
+it's time. To book more, use the calendar button next to **Join**. You can have up to 3 calls booked
+at a time, and once one has happened you can book another.

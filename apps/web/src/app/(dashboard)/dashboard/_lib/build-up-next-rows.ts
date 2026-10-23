@@ -66,6 +66,7 @@ function titleRefsOf(rows: readonly UpNextEnrichableRow[]): TitleRefs {
         caseEngagementIds.push(row.contextId);
         break;
       case 'project_kickoff':
+      case 'project_call':
         kickoffEngagementIds.push(row.contextId);
         break;
       case 'project_discovery':
@@ -81,12 +82,12 @@ function titleRefsOf(rows: readonly UpNextEnrichableRow[]): TitleRefs {
   return { caseEngagementIds, kickoffEngagementIds, projectRequestIds };
 }
 
-/** `company`: every row's expert (client names the delivering expert). `expert`: kickoff rows
- *  only (the delivery-title fallback needs the expert party; the client company needs no name
+/** `company`: every row's expert (client names the delivering expert). `expert`: kickoff and project-call
+ *  rows only (the delivery-title fallback needs the expert party; the client company needs no name
  *  lookup). */
 const NEEDS_PARTY_NAMES: Record<UpNextWorkspaceType, (row: UpNextEnrichableRow) => boolean> = {
   company: () => true,
-  expert: (row) => row.contextType === 'project_kickoff',
+  expert: (row) => row.contextType === 'project_kickoff' || row.contextType === 'project_call',
 };
 
 function partyProfileIdsOf(
@@ -115,7 +116,8 @@ function resolveUpNextTitle(
       return row.contextId === null
         ? null
         : (lookups.titles.caseTitleByEngagementId.get(row.contextId) ?? null);
-    case 'project_kickoff': {
+    case 'project_kickoff':
+    case 'project_call': {
       if (row.contextId === null) return null;
       if (!lookups.titles.kickoffRequestTitleByEngagementId.has(row.contextId)) return null;
       const requestTitle =

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  formatNextCallWhen,
   formatUpNextWhen,
   resolveUpNextRowTiming,
   resolveRescheduleNote,
@@ -96,6 +97,72 @@ describe('formatUpNextWhen', () => {
     // Melbourne is already past midnight (next day, not "Today"); LA is still "Today".
     expect(melbourne.primary).not.toContain('Today');
     expect(losAngeles.primary).toContain('Today');
+  });
+});
+
+describe('formatNextCallWhen', () => {
+  it('phrases a later-today start as "today at {time}"', () => {
+    expect(formatNextCallWhen('2026-09-17T14:30:00.000Z', NOW, 'UTC')).toBe('today at 2:30 pm');
+  });
+
+  it('phrases a next-day start as "tomorrow at {time}"', () => {
+    expect(formatNextCallWhen('2026-09-18T09:00:00.000Z', NOW, 'UTC')).toBe('tomorrow at 9:00 am');
+  });
+
+  it('phrases a later day as "{Weekday d Mon} at {time}"', () => {
+    expect(formatNextCallWhen('2026-09-19T15:00:00.000Z', NOW, 'UTC')).toBe(
+      'Sat 19 Sep at 3:00 pm'
+    );
+  });
+
+  describe('Pacific/Auckland (UTC+12 on the NOW instant, so local today is Fri 18 Sep)', () => {
+    const zone = 'Pacific/Auckland';
+
+    it('treats the last minute of local today as today', () => {
+      expect(formatNextCallWhen('2026-09-18T11:59:00.000Z', NOW, zone)).toBe('today at 11:59 pm');
+    });
+
+    it('treats local midnight as tomorrow', () => {
+      expect(formatNextCallWhen('2026-09-18T12:00:00.000Z', NOW, zone)).toBe(
+        'tomorrow at 12:00 am'
+      );
+    });
+
+    it('names a start on the local previous day by date, not as today', () => {
+      expect(formatNextCallWhen('2026-09-17T11:59:00.000Z', NOW, zone)).toBe(
+        'Thu 17 Sep at 11:59 pm'
+      );
+    });
+  });
+
+  describe('America/Los_Angeles (UTC-7 on the NOW instant, so local today is Thu 17 Sep)', () => {
+    const zone = 'America/Los_Angeles';
+
+    it('treats the last minute of local today as today', () => {
+      expect(formatNextCallWhen('2026-09-18T06:59:00.000Z', NOW, zone)).toBe('today at 11:59 pm');
+    });
+
+    it('treats local midnight as tomorrow', () => {
+      expect(formatNextCallWhen('2026-09-18T07:00:00.000Z', NOW, zone)).toBe(
+        'tomorrow at 12:00 am'
+      );
+    });
+
+    it('names the day after tomorrow by date', () => {
+      expect(formatNextCallWhen('2026-09-19T07:00:00.000Z', NOW, zone)).toBe(
+        'Sat 19 Sep at 12:00 am'
+      );
+    });
+  });
+
+  it('shares its day rule with formatUpNextWhen across the same boundary', () => {
+    const zone = 'Pacific/Auckland';
+    const startIso = '2026-09-18T12:00:00.000Z';
+    const endIso = '2026-09-18T12:30:00.000Z';
+    expect(
+      formatUpNextWhen(row({ scheduledStart: startIso, scheduledEnd: endIso }), NOW, zone)
+    ).toEqual({ primary: 'Tomorrow, 12:00 am', secondary: '30 min' });
+    expect(formatNextCallWhen(startIso, NOW, zone)).toBe('tomorrow at 12:00 am');
   });
 });
 

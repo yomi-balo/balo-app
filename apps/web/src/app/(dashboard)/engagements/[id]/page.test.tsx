@@ -56,7 +56,7 @@ vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
   projectEngagementsRepository: {
     findWithMilestones: mockFindWithMilestones,
-    findIdByProjectRequestId: mockFindIdByProjectRequestId,
+    findByProjectRequestId: mockFindIdByProjectRequestId,
   },
   // BAL-391: the page loads live action items as a separate read and maps them
   // into the panel view (real, unmocked mapper) — default to an empty list.

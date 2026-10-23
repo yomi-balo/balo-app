@@ -25,18 +25,19 @@ import type { MeetingContextTypeWithHolder, MeetingViewerRole } from '@balo/shar
  * ⚠ PURE AND CLIENT-SAFE. No `server-only`, no `@balo/db`, no logging — it runs in the browser.
  */
 
-/** ⚠ THE SIX HOLDER-BEARING LABELS. `admin` is structurally unreachable on a member join. */
+/** ⚠ THE SEVEN HOLDER-BEARING LABELS. `admin` is structurally unreachable on a member join. */
 const CONTEXT_TYPES = [
   'case',
   'project_discovery',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
   'request_interaction',
 ] as const satisfies readonly MeetingContextTypeWithHolder[];
 
 /**
- * ⚠ THE COMPILE-TIME HALF OF THE SAME GUARD. A SEVENTH holder-bearing label added to the shared
+ * ⚠ THE COMPILE-TIME HALF OF THE SAME GUARD. An EIGHTH holder-bearing label added to the shared
  * union fails `tsc` HERE — the array above would no longer cover it — rather than silently
  * becoming an unparseable value that degrades the whole envelope to `null` in production.
  */
@@ -47,7 +48,7 @@ export type AssertEnvelopeContextTypesComplete = AssertNever<MissingContextType>
 const contextSchema = z.object({
   type: z.enum(CONTEXT_TYPES),
   id: z.string().uuid(),
-  /** ⚠ `null` IS A FIRST-CLASS ANSWER — three of the six shapes have no title column at all. */
+  /** ⚠ `null` IS A FIRST-CLASS ANSWER — four of the eight shapes have no title column at all. */
   title: z.string().nullable().optional(),
   /**
    * BAL-567 — the RESOLVED `project_requests.id`, non-null only on the two request-grain labels.

@@ -1,123 +1,181 @@
 import { describe, it, expect } from 'vitest';
 import { deriveThreadActions } from './thread-actions';
 import { thread } from '@/test/fixtures/conversation';
+import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 
-describe('deriveThreadActions — the callSlot state matrix (BAL-283)', () => {
-  it('client, nothing booked yet → book', () => {
-    const client = deriveThreadActions({
-      lens: 'client',
-      requestStatus: 'eoi_submitted',
-      thread: thread(),
-      nudgeIsProposal: false,
+const NEXT = {
+  meetingId: 'meeting-1',
+  scheduledStartIso: '2026-09-01T04:00:00.000Z',
+  contextType: 'request_interaction',
+} as const;
+const LATER = {
+  meetingId: 'meeting-2',
+  scheduledStartIso: '2026-09-02T04:00:00.000Z',
+  contextType: 'request_interaction',
+} as const;
+
+const REQUEST_STATUSES: readonly ProjectRequestStatus[] = [
+  'draft',
+  'requested',
+  'exploratory_meeting_requested',
+  'experts_invited',
+  'eoi_submitted',
+  'proposal_requested',
+  'proposal_submitted',
+  'accepted',
+  'kickoff_approved',
+  'closed',
+];
+
+function slotFor(
+  lens: 'client' | 'expert',
+  requestStatus: ProjectRequestStatus,
+  overrides: Parameters<typeof thread>[0] = {},
+  deliveryActive = true
+): ReturnType<typeof deriveThreadActions>['callSlot'] {
+  return deriveThreadActions({
+    lens,
+    requestStatus,
+    thread: thread(overrides),
+    nudgeIsProposal: false,
+    deliveryActive,
+  }).callSlot;
+}
+
+describe('deriveThreadActions — the callSlot state matrix (BAL-283, BAL-616)', () => {
+  it('client, active thread, nothing upcoming → book in place', () => {
+    expect(slotFor('client', 'eoi_submitted')).toEqual({ kind: 'book', route: 'in_place' });
+  });
+
+  it('client + EVERY request status: an active or won thread is always bookable in place', () => {
+    for (const status of REQUEST_STATUSES) {
+      for (const stage of ['active', 'won'] as const) {
+        expect(slotFor('client', status, { stage, expertUsername: 'priya' })).toEqual({
+          kind: 'book',
+          route: 'in_place',
+        });
+        expect(slotFor('client', status, { stage, upcomingCalls: [NEXT, LATER] })).toEqual({
+          kind: 'upcoming',
+          next: NEXT,
+          more: 1,
+          canBookAnother: true,
+        });
+      }
+    }
+  });
+
+  it('client at kickoff_approved on the won thread can still book another call (BAL-616)', () => {
+    expect(
+      slotFor('client', 'kickoff_approved', {
+        stage: 'won',
+        relationshipStatus: 'accepted',
+        upcomingCalls: [NEXT],
+      })
+    ).toEqual({ kind: 'upcoming', next: NEXT, more: 0, canBookAnother: true });
+  });
+
+  describe('a won thread at kickoff_approved whose delivery engagement is not active', () => {
+    const won = { stage: 'won', relationshipStatus: 'accepted', expertUsername: 'priya' } as const;
+
+    it('routes the client to the expert profile, never the in-place dialog', () => {
+      expect(slotFor('client', 'kickoff_approved', won, false)).toEqual({
+        kind: 'book',
+        route: 'profile',
+      });
     });
-    expect(client.callSlot).toEqual({ kind: 'book' });
+
+    it('has no call control when the expert has no public profile', () => {
+      expect(
+        slotFor('client', 'kickoff_approved', { ...won, expertUsername: null }, false)
+      ).toEqual({ kind: 'none' });
+    });
+
+    it('keeps an already-booked call visible but offers no further booking', () => {
+      expect(
+        slotFor('client', 'kickoff_approved', { ...won, upcomingCalls: [NEXT] }, false)
+      ).toEqual({ kind: 'upcoming', next: NEXT, more: 0, canBookAnother: false });
+    });
+
+    it('is a no-op before kickoff, where no engagement exists to be inactive', () => {
+      expect(slotFor('client', 'accepted', won, false)).toEqual({
+        kind: 'book',
+        route: 'in_place',
+      });
+    });
+
+    it('is still bookable in place while the engagement is active', () => {
+      expect(slotFor('client', 'kickoff_approved', won, true)).toEqual({
+        kind: 'book',
+        route: 'in_place',
+      });
+    });
+  });
+
+  it('client, thread the request moved on from → book via the expert profile', () => {
+    for (const stage of ['not_selected', 'request_closed'] as const) {
+      expect(slotFor('client', 'accepted', { stage, expertUsername: 'priya' })).toEqual({
+        kind: 'book',
+        route: 'profile',
+      });
+    }
+  });
+
+  it('a moved-on thread hides its upcoming calls and still routes to the profile', () => {
+    expect(
+      slotFor('client', 'accepted', {
+        stage: 'not_selected',
+        expertUsername: 'priya',
+        upcomingCalls: [NEXT],
+      })
+    ).toEqual({ kind: 'book', route: 'profile' });
+  });
+
+  it('client, moved-on thread, expert has no public profile → none', () => {
+    expect(slotFor('client', 'closed', { stage: 'request_closed', expertUsername: null })).toEqual({
+      kind: 'none',
+    });
   });
 
   it('expert, not yet shared → propose', () => {
-    const expert = deriveThreadActions({
-      lens: 'expert',
-      requestStatus: 'eoi_submitted',
-      thread: thread(),
-      nudgeIsProposal: false,
-    });
-    expect(expert.callSlot).toEqual({ kind: 'propose' });
+    expect(slotFor('expert', 'eoi_submitted')).toEqual({ kind: 'propose' });
   });
 
   it('expert, availability_shared_at set → shared', () => {
-    const expert = deriveThreadActions({
-      lens: 'expert',
-      requestStatus: 'eoi_submitted',
-      thread: thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
-      nudgeIsProposal: false,
-    });
-    expect(expert.callSlot).toEqual({ kind: 'shared' });
-  });
-
-  it('client lens is UNAFFECTED by availabilitySharedAtIso — it stays "book"', () => {
-    const client = deriveThreadActions({
-      lens: 'client',
-      requestStatus: 'eoi_submitted',
-      thread: thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
-      nudgeIsProposal: false,
-    });
-    expect(client.callSlot).toEqual({ kind: 'book' });
-  });
-
-  it('either lens, a live call is booked → booked, with the scheduled start — BEATS everything', () => {
-    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
-    const client = deriveThreadActions({
-      lens: 'client',
-      requestStatus: 'eoi_submitted',
-      thread: thread({ bookedCall }),
-      nudgeIsProposal: false,
-    });
-    expect(client.callSlot).toEqual({
-      kind: 'booked',
-      scheduledStartIso: bookedCall.scheduledStartIso,
-    });
-
-    const expert = deriveThreadActions({
-      lens: 'expert',
-      requestStatus: 'eoi_submitted',
-      thread: thread({ bookedCall, availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
-      nudgeIsProposal: false,
-    });
-    expect(expert.callSlot).toEqual({
-      kind: 'booked',
-      scheduledStartIso: bookedCall.scheduledStartIso,
-    });
-  });
-
-  it('blocks the call (kind: none) at kickoff_approved and on non-active threads', () => {
     expect(
-      deriveThreadActions({
-        lens: 'client',
-        requestStatus: 'kickoff_approved',
-        thread: thread({ stage: 'won', relationshipStatus: 'accepted' }),
-        nudgeIsProposal: false,
-      }).callSlot
-    ).toEqual({ kind: 'none' });
-    expect(
-      deriveThreadActions({
-        lens: 'client',
-        requestStatus: 'accepted',
-        thread: thread({ stage: 'not_selected' }),
-        nudgeIsProposal: false,
-      }).callSlot
-    ).toEqual({ kind: 'none' });
+      slotFor('expert', 'eoi_submitted', { availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' })
+    ).toEqual({ kind: 'shared' });
   });
 
-  it('blocks the call (kind: none) on a closed request (BAL-540 — was fail-open via rank -1)', () => {
+  it('client lens is UNAFFECTED by availabilitySharedAtIso', () => {
     expect(
-      deriveThreadActions({
-        lens: 'client',
-        requestStatus: 'closed',
-        thread: thread({ stage: 'request_closed' }),
-        nudgeIsProposal: false,
-      }).callSlot
-    ).toEqual({ kind: 'none' });
-    expect(
-      deriveThreadActions({
-        lens: 'expert',
-        requestStatus: 'closed',
-        thread: thread({ stage: 'request_closed', relationshipStatus: 'accepted' }),
-        nudgeIsProposal: false,
-      }).callSlot
-    ).toEqual({ kind: 'none' });
+      slotFor('client', 'eoi_submitted', { availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' })
+    ).toEqual({ kind: 'book', route: 'in_place' });
   });
 
-  it('a booked call still wins even past the call gate (nothing left to re-derive)', () => {
-    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
-    const actions = deriveThreadActions({
-      lens: 'client',
-      requestStatus: 'kickoff_approved',
-      thread: thread({ stage: 'won', relationshipStatus: 'accepted', bookedCall }),
-      nudgeIsProposal: false,
+  it('expert with an upcoming call sees it — never canBookAnother', () => {
+    const slot = slotFor('expert', 'eoi_submitted', {
+      upcomingCalls: [NEXT, LATER],
+      availabilitySharedAtIso: '2026-08-20T00:00:00.000Z',
     });
-    expect(actions.callSlot).toEqual({
-      kind: 'booked',
-      scheduledStartIso: bookedCall.scheduledStartIso,
-    });
+    expect(slot).toEqual({ kind: 'upcoming', next: NEXT, more: 1, canBookAnother: false });
+  });
+
+  it('the expert lens never yields book, across every status and stage', () => {
+    for (const status of REQUEST_STATUSES) {
+      for (const stage of ['active', 'won', 'not_selected', 'request_closed'] as const) {
+        const slot = slotFor('expert', status, { stage, expertUsername: 'priya' });
+        expect(slot.kind).not.toBe('book');
+        const withCalls = slotFor('expert', status, { stage, upcomingCalls: [NEXT] });
+        expect(withCalls).not.toMatchObject({ canBookAnother: true });
+      }
+    }
+  });
+
+  it('expert: propose / shared only before kickoff on an active thread', () => {
+    expect(slotFor('expert', 'kickoff_approved', { stage: 'won' })).toEqual({ kind: 'none' });
+    expect(slotFor('expert', 'accepted', { stage: 'not_selected' })).toEqual({ kind: 'none' });
+    expect(slotFor('expert', 'closed', { stage: 'request_closed' })).toEqual({ kind: 'none' });
+    expect(slotFor('expert', 'kickoff_approved', { stage: 'active' })).toEqual({ kind: 'none' });
   });
 });
 
@@ -260,7 +318,7 @@ describe('deriveThreadActions — mobile rail', () => {
       thread: thread({ stage: 'won', relationshipStatus: 'accepted' }),
       nudgeIsProposal: false,
     });
-    expect(actions.callSlot).toEqual({ kind: 'none' });
+    expect(actions.callSlot).toEqual({ kind: 'book', route: 'in_place' });
     expect(actions.railProposal).toBeNull();
   });
 

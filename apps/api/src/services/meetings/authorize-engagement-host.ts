@@ -361,15 +361,17 @@ export async function resolveHostContext(
   }
 
   switch (subject.contextType) {
-    // ── Arms 1–4: engagement grain. `engagements.expert_profile_id` is NOT NULL on the
-    // supertype for ALL engagement types (BAL-417), so the four labels share one branch —
+    // ── Arms 1–5: engagement grain. `engagements.expert_profile_id` is NOT NULL on the
+    // supertype for ALL engagement types (BAL-417), so the five labels share one branch —
     // there is no per-type difference to express, and writing them out separately would
-    // be four copies of the same three lines.
+    // be five copies of the same three lines. `project_call` (BAL-616) shares the kickoff
+    // holder set: the delivering expert plus their agency owner/admin.
     //
     // ⚠ `findById` filters `deleted_at` ONLY — `engagements.status` is deliberately not
     // read here. See the ENGAGEMENT LIFECYCLE obligation in the header block.
     case 'case':
     case 'project_kickoff':
+    case 'project_call':
     case 'package_session':
     case 'retainer_checkin': {
       const engagement = await engagementsRepository.findById(subject.contextId);
@@ -379,14 +381,14 @@ export async function resolveHostContext(
       return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject);
     }
 
-    // ── Arm 5: request grain — the EXPLORATORY call, split by route. Extracted whole
+    // ── Arm 6: request grain — the EXPLORATORY call, split by route. Extracted whole
     // into `hostContextForDiscoveryRequest` (see its docblock): it is the only arm with
     // two sequential reads and a gate, and inlining it pushed this switch past the
     // SonarCloud cognitive-complexity ceiling.
     case 'project_discovery':
       return hostContextForDiscoveryRequest(subject.contextId, actorId, subject);
 
-    // ── Arm 6: relationship grain — CLIENT↔CANDIDATE calls (BAL-413's new label).
+    // ── Arm 7: relationship grain — CLIENT↔CANDIDATE calls (BAL-413's new label).
     //
     // Sibling exclusion is STRUCTURAL, not filtered: each candidate has their own
     // `request_expert_relationships` row and therefore their own `contextId`, so a
@@ -425,7 +427,7 @@ export async function resolveHostContext(
       return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject);
     }
 
-    // ── Arm 7: NOT THIS AXIS. An admin meeting has no engagement and no delivering
+    // ── Arm 8: NOT THIS AXIS. An admin meeting has no engagement and no delivering
     // expert, so there is nothing to resolve — zero I/O, no holder. Balo staff are
     // authorized for these on the PLATFORM axis via `hasPlatformCapability`.
     case 'admin':

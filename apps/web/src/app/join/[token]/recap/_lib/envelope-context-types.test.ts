@@ -24,7 +24,7 @@ describe('meetingContextTypesForEnvelope', () => {
    * expectation from `conversationSubjectForMeetingContext` itself rather than restating it.
    */
   it('round-trips every MeetingContextTypeWithHolder label through the forward map', () => {
-    expect(HOLDER_LABELS).toHaveLength(6); // pairs the predicate below with a length assertion
+    expect(HOLDER_LABELS).toHaveLength(7); // pairs the predicate below with a length assertion
     let nullArmFired = 0;
 
     for (const contextType of HOLDER_LABELS) {
@@ -51,15 +51,16 @@ describe('meetingContextTypesForEnvelope', () => {
     expect(nullArmFired).toBe(1);
   });
 
-  it("'engagement' envelope returns exactly the four engagement-grain types, all on the one contextId", () => {
+  it("'engagement' envelope returns exactly the five engagement-grain types, all on the one contextId", () => {
     const result = meetingContextTypesForEnvelope({
       contextType: 'engagement',
       contextId: CONTEXT_ID,
     });
-    expect(result).toHaveLength(4);
+    expect(result).toHaveLength(5);
     expect([...result].sort((a, b) => a.contextType.localeCompare(b.contextType))).toEqual([
       { contextType: 'case', contextId: CONTEXT_ID },
       { contextType: 'package_session', contextId: CONTEXT_ID },
+      { contextType: 'project_call', contextId: CONTEXT_ID },
       { contextType: 'project_kickoff', contextId: CONTEXT_ID },
       { contextType: 'retainer_checkin', contextId: CONTEXT_ID },
     ]);

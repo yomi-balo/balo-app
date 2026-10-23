@@ -173,7 +173,7 @@ describe('loadConversationView', () => {
       relationship({ id: 'rel-2', status: 'invited' }),
       relationship({ id: 'rel-3', status: 'declined' }),
     ]);
-    const view = await loadConversationView(req as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(req as never, CLIENT_CTX, USER, null);
     expect(view.threads.map((t) => t.relationshipId)).toEqual(['rel-1']);
     // BAL-424: summaries are batched over CONVERSATION ids; the relationship→conversation
     // mapping is resolved once, up front, with an idempotent ensure.
@@ -204,7 +204,7 @@ describe('loadConversationView', () => {
       relationship({ id: 'rel-new', invitedAt: new Date('2026-06-05T00:00:00Z') }),
       relationship({ id: 'rel-old', invitedAt: new Date('2026-06-01T00:00:00Z') }),
     ]);
-    const view = await loadConversationView(req as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(req as never, CLIENT_CTX, USER, null);
     expect(view.threads.map((t) => t.relationshipId)).toEqual(['rel-old', 'rel-new']);
     // …but selection DOES react to activity.
     expect(view.defaultThreadId).toBe('rel-new');
@@ -212,9 +212,14 @@ describe('loadConversationView', () => {
 
   it('expert lens sees ONLY their own thread and never EOI html', async () => {
     const req = request([relationship(), relationship({ id: 'rel-2' })]);
-    const view = await loadConversationView(req as never, EXPERT_CTX, {
-      id: EXPERT_USER_ID,
-    } as never);
+    const view = await loadConversationView(
+      req as never,
+      EXPERT_CTX,
+      {
+        id: EXPERT_USER_ID,
+      } as never,
+      null
+    );
     expect(view.threads.map((t) => t.relationshipId)).toEqual(['rel-1']);
     const [thread] = view.threads;
     expect(thread?.eoiHtml).toBeNull();
@@ -224,27 +229,34 @@ describe('loadConversationView', () => {
   });
 
   it('client lens carries the EOI html + the hydrated expert username', async () => {
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     const [thread] = view.threads;
     expect(thread?.eoiHtml).toBe('<p>My pitch</p>');
     expect(thread?.eoiSubmittedAtIso).toBe('2026-06-02T00:00:00.000Z');
     expect(thread?.expertUsername).toBe('priya-nair');
   });
 
-  // ── BAL-283 — availabilitySharedAtIso + bookedCall ──────────────────────────────────────
+  // ── BAL-283 — availabilitySharedAtIso + upcomingCalls ──────────────────────────────────────
 
   it('maps availabilitySharedAt to an ISO string, and null when never shared', async () => {
     const sharedView = await loadConversationView(
       request([relationship({ availabilitySharedAt: new Date('2026-08-20T00:00:00Z') })]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
     expect(sharedView.threads[0]?.availabilitySharedAtIso).toBe('2026-08-20T00:00:00.000Z');
 
     const neverSharedView = await loadConversationView(
       request([relationship()]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
     expect(neverSharedView.threads[0]?.availabilitySharedAtIso).toBeNull();
   });
@@ -280,7 +292,8 @@ describe('loadConversationView', () => {
         relationship({ id: 'rel-2', expertProfileId: 'exp-2', status: 'proposal_submitted' }),
       ]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
 
     expect(mockListProposalsByRequest).toHaveBeenCalledWith('req-1');
@@ -310,7 +323,8 @@ describe('loadConversationView', () => {
     const view = await loadConversationView(
       request([relationship({ status: 'proposal_submitted' })]) as never,
       EXPERT_CTX,
-      USER
+      USER,
+      null
     );
     expect(mockFindCurrentProposalByRelationship).toHaveBeenCalledWith('rel-1');
     expect(mockListProposalsByRequest).not.toHaveBeenCalled();
@@ -336,7 +350,8 @@ describe('loadConversationView', () => {
     const view = await loadConversationView(
       request([relationship({ status: 'proposal_submitted' })]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
     expect(view.threads).toHaveLength(1);
     expect(view.threads[0]?.changeRequest).toBeNull();
@@ -348,7 +363,7 @@ describe('loadConversationView', () => {
       summary(),
       summary({ conversationId: convIdFor('rel-2') }),
     ]);
-    await loadConversationView(req as never, CLIENT_CTX, USER);
+    await loadConversationView(req as never, CLIENT_CTX, USER, null);
 
     expect(mockListActiveMeetingsForContexts).toHaveBeenCalledTimes(1);
     expect(mockListActiveMeetingsForContexts).toHaveBeenCalledWith({
@@ -378,32 +393,46 @@ describe('loadConversationView', () => {
     };
   }
 
-  it('bookedCall is null when no live meeting exists, and carries the upcoming one when it does', async () => {
+  it('upcomingCalls is empty when no live meeting exists, and carries the upcoming ones when they do', async () => {
     mockListActiveMeetingsForContexts.mockResolvedValue(new Map([['rel-1', [meetingRow()]]]));
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
-    expect(view.threads[0]?.bookedCall).toEqual({
-      meetingId: 'meeting-1',
-      scheduledStartIso: '2999-09-01T04:00:00.000Z',
-    });
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.upcomingCalls).toEqual([
+      {
+        meetingId: 'meeting-1',
+        scheduledStartIso: '2999-09-01T04:00:00.000Z',
+        contextType: 'request_interaction',
+      },
+    ]);
 
     mockListActiveMeetingsForContexts.mockResolvedValue(new Map([['rel-1', []]]));
     const emptyView = await loadConversationView(
       request([relationship()]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
-    expect(emptyView.threads[0]?.bookedCall).toBeNull();
+    expect(emptyView.threads[0]?.upcomingCalls).toEqual([]);
   });
 
-  it('an ENDED intro call is NOT the booked call — the CTA comes back (C2)', async () => {
+  it('an ENDED call is absent from upcomingCalls — the CTA comes back (C2)', async () => {
     mockListActiveMeetingsForContexts.mockResolvedValue(
       new Map([['rel-1', [meetingRow({ status: 'ended' })]]])
     );
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
-    expect(view.threads[0]?.bookedCall).toBeNull();
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.upcomingCalls).toEqual([]);
   });
 
-  it('a meeting whose window has already passed is NOT the booked call, even at status scheduled', async () => {
+  it('a meeting whose window has already passed is absent, even at status scheduled', async () => {
     mockListActiveMeetingsForContexts.mockResolvedValue(
       new Map([
         [
@@ -417,11 +446,16 @@ describe('loadConversationView', () => {
         ],
       ])
     );
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
-    expect(view.threads[0]?.bookedCall).toBeNull();
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.upcomingCalls).toEqual([]);
   });
 
-  it('with a past call AND an upcoming one, the UPCOMING one wins (repository order is start asc)', async () => {
+  it('with a past call AND an upcoming one, only the UPCOMING one is listed', async () => {
     mockListActiveMeetingsForContexts.mockResolvedValue(
       new Map([
         [
@@ -438,16 +472,159 @@ describe('loadConversationView', () => {
         ],
       ])
     );
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
-    expect(view.threads[0]?.bookedCall).toEqual({
-      meetingId: 'meeting-next',
-      scheduledStartIso: '2999-09-01T04:00:00.000Z',
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.upcomingCalls).toEqual([
+      {
+        meetingId: 'meeting-next',
+        scheduledStartIso: '2999-09-01T04:00:00.000Z',
+        contextType: 'request_interaction',
+      },
+    ]);
+  });
+
+  it('lists several upcoming calls soonest first', async () => {
+    mockListActiveMeetingsForContexts.mockResolvedValue(
+      new Map([
+        [
+          'rel-1',
+          [
+            meetingRow({
+              meetingId: 'meeting-late',
+              scheduledStart: new Date('2999-09-03T04:00:00Z'),
+              scheduledEnd: new Date('2999-09-03T04:30:00Z'),
+            }),
+            meetingRow({ meetingId: 'meeting-early' }),
+          ],
+        ],
+      ])
+    );
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.upcomingCalls.map((c) => c.meetingId)).toEqual([
+      'meeting-early',
+      'meeting-late',
+    ]);
+  });
+
+  describe('a won thread on a kickoff_approved request (project_call context)', () => {
+    const ENGAGEMENT_ID = 'eng-1';
+
+    function readByContext(byType: Record<string, Map<string, unknown[]>>): void {
+      mockListActiveMeetingsForContexts.mockImplementation(
+        async ({ contextType }: { contextType: string }) => byType[contextType] ?? new Map()
+      );
+    }
+
+    it('reads both contexts for the won thread and merges them, a carried-over call counting once', async () => {
+      readByContext({
+        request_interaction: new Map([['rel-1', [meetingRow({ meetingId: 'carried' })]]]),
+        project_call: new Map([
+          [
+            ENGAGEMENT_ID,
+            [
+              meetingRow({ meetingId: 'carried' }),
+              meetingRow({
+                meetingId: 'project-only',
+                scheduledStart: new Date('2999-09-05T04:00:00Z'),
+                scheduledEnd: new Date('2999-09-05T04:30:00Z'),
+              }),
+            ],
+          ],
+        ]),
+      });
+      const view = await loadConversationView(
+        request([relationship({ status: 'accepted' })]) as never,
+        CLIENT_CTX,
+        USER,
+        ENGAGEMENT_ID
+      );
+      expect(mockListActiveMeetingsForContexts).toHaveBeenCalledWith({
+        contextType: 'project_call',
+        contextIds: [ENGAGEMENT_ID],
+      });
+      expect(view.threads[0]?.upcomingCalls).toEqual([
+        {
+          meetingId: 'carried',
+          scheduledStartIso: '2999-09-01T04:00:00.000Z',
+          contextType: 'project_call',
+        },
+        {
+          meetingId: 'project-only',
+          scheduledStartIso: '2999-09-05T04:00:00.000Z',
+          contextType: 'project_call',
+        },
+      ]);
+    });
+
+    it('other threads read request_interaction only', async () => {
+      readByContext({
+        request_interaction: new Map([
+          ['rel-1', [meetingRow({ meetingId: 'won-call' })]],
+          ['rel-2', [meetingRow({ meetingId: 'other-call' })]],
+        ]),
+        project_call: new Map([[ENGAGEMENT_ID, [meetingRow({ meetingId: 'project-only' })]]]),
+      });
+      mockListThreadSummaries.mockResolvedValue([
+        summary(),
+        summary({ conversationId: convIdFor('rel-2') }),
+      ]);
+      const view = await loadConversationView(
+        request([
+          relationship({ status: 'accepted' }),
+          relationship({ id: 'rel-2', status: 'eoi_submitted' }),
+        ]) as never,
+        CLIENT_CTX,
+        USER,
+        ENGAGEMENT_ID
+      );
+      const wonCalls = view.threads.find((t) => t.relationshipId === 'rel-1')?.upcomingCalls;
+      const otherCalls = view.threads.find((t) => t.relationshipId === 'rel-2')?.upcomingCalls;
+      expect(wonCalls?.map((c) => c.meetingId).sort()).toEqual(['project-only', 'won-call']);
+      expect(otherCalls?.map((c) => c.meetingId)).toEqual(['other-call']);
+    });
+
+    it('reads no project_call context when the request has no engagement', async () => {
+      mockListActiveMeetingsForContexts.mockResolvedValue(new Map());
+      await loadConversationView(
+        request([relationship({ status: 'accepted' })]) as never,
+        CLIENT_CTX,
+        USER,
+        null
+      );
+      expect(mockListActiveMeetingsForContexts).toHaveBeenCalledTimes(1);
+    });
+
+    it('an ended project call is absent', async () => {
+      readByContext({
+        project_call: new Map([[ENGAGEMENT_ID, [meetingRow({ status: 'ended' })]]]),
+      });
+      const view = await loadConversationView(
+        request([relationship({ status: 'accepted' })]) as never,
+        CLIENT_CTX,
+        USER,
+        ENGAGEMENT_ID
+      );
+      expect(view.threads[0]?.upcomingCalls).toEqual([]);
     });
   });
 
   it('falls back to a null username when profile hydration fails', async () => {
     mockFindProfileById.mockRejectedValue(new Error('db down'));
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(view.threads[0]?.expertUsername).toBeNull();
   });
 
@@ -458,7 +635,12 @@ describe('loadConversationView', () => {
         lastReadAt: new Date('2026-06-09T09:00:00Z'),
       }),
     ]);
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(view.threads[0]?.unread).toBe(true);
   });
 
@@ -474,14 +656,24 @@ describe('loadConversationView', () => {
         latestInboundActivityAt: null,
       }),
     ]);
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(view.threads[0]?.unread).toBe(false);
     expect(view.threads[0]?.latestMessageFromViewer).toBe(true);
   });
 
   it('viewerHasSentMessage follows the viewer’s newest own message, whoever wrote last', async () => {
     mockListThreadSummaries.mockResolvedValue([summary()]);
-    const quiet = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const quiet = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(quiet.threads[0]?.viewerHasSentMessage).toBe(false);
 
     mockListThreadSummaries.mockResolvedValue([
@@ -495,7 +687,12 @@ describe('loadConversationView', () => {
         latestOutboundMessageAt: new Date('2026-06-09T10:00:00Z'),
       }),
     ]);
-    const wrote = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const wrote = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(wrote.threads[0]?.latestMessageFromViewer).toBe(false);
     expect(wrote.threads[0]?.viewerHasSentMessage).toBe(true);
   });
@@ -512,7 +709,12 @@ describe('loadConversationView', () => {
         },
       }),
     ]);
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     const preview = view.threads[0]?.latestMessagePreview ?? '';
     expect(preview.length).toBeLessThanOrEqual(140);
     expect(preview.endsWith('…')).toBe(true);
@@ -562,7 +764,12 @@ describe('loadConversationView', () => {
       },
     ]);
 
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(view.initialMessages).toEqual([
       expect.objectContaining({ id: 'm-1', bodyHtml: '<p>hello</p>', senderName: 'Priya Nair' }),
     ]);
@@ -586,7 +793,8 @@ describe('loadConversationView', () => {
     const view = await loadConversationView(
       request([relationship({ status: 'invited' })]) as never,
       CLIENT_CTX,
-      USER
+      USER,
+      null
     );
     expect(view.threads).toEqual([]);
     expect(view.defaultThreadId).toBeNull();
@@ -596,8 +804,45 @@ describe('loadConversationView', () => {
 
   it('reflects realtime availability', async () => {
     mockIsRealtimeConfigured.mockReturnValue(false);
-    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
     expect(view.realtimeEnabled).toBe(false);
+  });
+
+  describe('closed request (BAL-616)', () => {
+    const OPENED_AT = new Date('2026-06-02T00:00:00Z');
+    const closedRecord = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+      relationship({
+        status: 'declined',
+        declineReason: 'request_closed',
+        openedAt: OPENED_AT,
+        ...overrides,
+      });
+
+    it('lists the threads that were open at the close, and excludes pre-close declines', async () => {
+      const req = {
+        ...request([
+          closedRecord(),
+          closedRecord({ id: 'rel-2', declineReason: 'client_declined' }),
+          closedRecord({ id: 'rel-3', openedAt: null }),
+          relationship({ id: 'rel-4', status: 'invited' }),
+        ]),
+        status: 'closed',
+      };
+      const view = await loadConversationView(req as never, CLIENT_CTX, USER, null);
+      expect(view.threads.map((t) => t.relationshipId)).toEqual(['rel-1']);
+    });
+
+    it('reports realtime off even when it is configured, so no refused token is requested', async () => {
+      mockIsRealtimeConfigured.mockReturnValue(true);
+      const req = { ...request([closedRecord()]), status: 'closed' };
+      const view = await loadConversationView(req as never, CLIENT_CTX, USER, null);
+      expect(view.realtimeEnabled).toBe(false);
+    });
   });
 });
 

@@ -1,3 +1,5 @@
+import type { UpcomingCallContextType } from '@balo/shared/meetings';
+
 export const CONVERSATION_EVENTS = {
   CONVERSATION_MESSAGE_SENT: 'conversation_message_sent',
   CONVERSATION_FILE_SHARED: 'conversation_file_shared',
@@ -20,15 +22,35 @@ export type ConversationThreadSelectMethod = 'auto' | 'manual';
 export type ConversationFilesSurface = 'header' | 'tabstrip';
 /**
  * Where the call CTA was clicked — THE canonical surface list. `nudge` is the conversation
- * thread's own nudge; `page_nudge` is the request page's nudge bar above the stage.
+ * thread's own nudge; `page_nudge` is the request page's nudge bar above the stage;
+ * `kickoff_board` is the kickoff checklist's optional "Pick a time" call row (BAL-616).
  *
  * ⚠ THE TUPLE IS EXPORTED, NOT ONLY THE TYPE (round-1 W10). Four modules had re-declared the
  * literal union inline and two more had hand-written a matching `z.enum([...])`, so the wire
  * contract lived in six places and could drift silently in five of them. Server Actions derive
  * their Zod enum from THIS tuple; components import the type from here.
  */
-export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge', 'page_nudge'] as const;
+export const CONVERSATION_CALL_SURFACES = [
+  'header',
+  'rail',
+  'nudge',
+  'page_nudge',
+  'kickoff_board',
+] as const;
 export type ConversationCallSurface = (typeof CONVERSATION_CALL_SURFACES)[number];
+/**
+ * BAL-616 — where a CLIENT's call CTA sends them. `in_place` opens the booking dialog on the
+ * request page (an active or won thread); `profile` routes to the expert's profile booking
+ * (`/experts/{username}?book=1&src=request_thread`) for a not-selected thread or a closed
+ * request.
+ */
+export const CONVERSATION_CALL_ROUTES = ['in_place', 'profile'] as const;
+export type ConversationCallRoute = (typeof CONVERSATION_CALL_ROUTES)[number];
+/**
+ * BAL-616 — which meeting context a conversation booking was written under. `request_interaction`
+ * before kickoff (the relationship); `project_call` from kickoff on (the engagement).
+ */
+export type ConversationCallContextType = UpcomingCallContextType;
 /**
  * Where a proposal CTA was clicked. `nudge` is the conversation thread's own nudge, which
  * carries Build/Revise, View and Accept — never Request (A5: Request has no nudge surface).
@@ -119,6 +141,15 @@ export interface ConversationEventMap {
     relationship_id: string;
     lens: ConversationLens;
     surface: ConversationCallSurface;
+    /**
+     * BAL-616 — the request's `project_requests.status` at click time, so bookings can be split
+     * into before and after kickoff.
+     */
+    request_status: string;
+    /** BAL-616 — upcoming calls already on the thread at click time (`0` = the first call). */
+    upcoming_count: number;
+    /** BAL-616 — the client's route; `null` for the expert's "Propose times" (books nothing). */
+    route: ConversationCallRoute | null;
   };
   [CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED]: {
     request_id: string;
@@ -140,7 +171,8 @@ export interface ConversationEventMap {
   };
   /**
    * BAL-283 — `bookIntroCallAction` returned `ok`. Structurally client-only (the booking is
-   * the client's completion) — same `lens`-absence reasoning as the share event above.
+   * the client's completion) — same `lens`-absence reasoning as the share event above. Since
+   * BAL-616 it covers every call booked from the conversation, not only the intro call.
    */
   [CONVERSATION_EVENTS.CONVERSATION_INTRO_CALL_BOOKED]: {
     request_id: string;
@@ -150,5 +182,13 @@ export interface ConversationEventMap {
     duration_minutes: number;
     guest_count: number;
     provisioned: boolean;
+    /**
+     * BAL-616 — the context the call was booked under. The event NAME keeps "intro_call", but it
+     * fires for every conversation booking; this property separates intro and pre-kickoff calls
+     * (`request_interaction`) from project calls (`project_call`).
+     */
+    context_type: ConversationCallContextType;
+    /** BAL-616 — the request's `project_requests.status` at booking time. */
+    request_status: string;
   };
 }

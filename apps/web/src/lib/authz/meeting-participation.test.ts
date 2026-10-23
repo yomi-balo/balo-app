@@ -86,7 +86,13 @@ describe('authorizeMeetingParticipation (web) — the CLIENT side', () => {
 });
 
 describe('authorizeMeetingParticipation (web) — the EXPERT side, ENGAGEMENT-GRAIN labels', () => {
-  it.each(['case', 'project_kickoff', 'package_session', 'retainer_checkin'] as const)(
+  it.each([
+    'case',
+    'project_kickoff',
+    'project_call',
+    'package_session',
+    'retainer_checkin',
+  ] as const)(
     '%s delegates to hasEngagementCapability with manage_engagement and an engagement-grain subject',
     async (contextType) => {
       mockListByMeeting.mockResolvedValue([{ contextType, contextId: ENGAGEMENT_ID }]);

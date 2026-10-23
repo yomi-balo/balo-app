@@ -123,6 +123,7 @@ const CONTEXT_TYPES: Record<RecapContextType, true> = {
   package_session: true,
   retainer_checkin: true,
   request_interaction: true,
+  project_call: true,
 };
 
 describe('BAL-388 enum values', () => {
@@ -203,7 +204,7 @@ describe('BAL-388 enum values', () => {
     const fromShared: MeetingContextTypeWithHolder = 'case';
     const asRecap: RecapContextType = fromShared;
     expect(CONTEXT_TYPES).toHaveProperty(asRecap);
-    expect(Object.keys(CONTEXT_TYPES)).toHaveLength(6);
+    expect(Object.keys(CONTEXT_TYPES)).toHaveLength(7);
     expect(CONTEXT_TYPES).not.toHaveProperty('admin');
   });
 });

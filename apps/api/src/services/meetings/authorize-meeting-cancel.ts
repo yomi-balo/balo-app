@@ -239,7 +239,7 @@ export async function authorizeMeetingCancel(
   // `admin` guard — see the docblock on why such a guard would be dead code.
   //
   // ⚠ THIS ARM IS NOT NARROWED TO THE ENGAGEMENT-GRAIN LABELS. `authorize-engagement-host.ts`
-  // implements all seven arms, including the two REQUEST-grain ones and their shared
+  // implements all eight arms, including the two REQUEST-grain ones and their shared
   // `relationshipDeniesHosting` predicate — so a `request_interaction` consultation (live since
   // BAL-283) is correctly gated here today. Only the WEB affordance is case-scoped.
   if (

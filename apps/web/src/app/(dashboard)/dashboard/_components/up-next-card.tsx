@@ -73,7 +73,12 @@ export function UpNextCard({
   }, [data, workspaceType]);
 
   const handleFooterLinkClick = (target: UpNextFooterLink['target']): void => {
-    track(DASHBOARD_EVENTS.UP_NEXT_CLICKED, { target, meeting_type: null, row_state: null });
+    track(DASHBOARD_EVENTS.UP_NEXT_CLICKED, {
+      target,
+      meeting_type: null,
+      row_state: null,
+      surface: 'dashboard',
+    });
   };
 
   const handleFindExpertClick = (): void => {
@@ -81,6 +86,7 @@ export function UpNextCard({
       target: 'find_expert',
       meeting_type: null,
       row_state: null,
+      surface: 'dashboard',
     });
   };
 

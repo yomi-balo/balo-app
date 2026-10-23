@@ -1429,6 +1429,46 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('intro-call-booked callKind (BAL-616)', () => {
+    it('client: callKind "call" says "call", never "intro"', () => {
+      const result = getInAppTemplate('intro-call-booked-client', {
+        expertPartyLabel: 'CloudPeak',
+        requestId: 'request-123',
+        callKind: 'call',
+      });
+      expect(result).toEqual({
+        title: 'Call confirmed',
+        body: 'Your call with CloudPeak is confirmed.',
+        actionUrl: '/projects/request-123',
+      });
+      expect(`${result.title} ${result.body}`.toLowerCase()).not.toContain('intro');
+    });
+
+    it('expert: callKind "call" says "call", never "intro"', () => {
+      const result = getInAppTemplate('intro-call-booked-expert', {
+        clientPersonName: 'Sam Reilly',
+        clientCompanyName: 'Northwind Industrial',
+        requestId: 'request-123',
+        callKind: 'call',
+      });
+      expect(result).toEqual({
+        title: 'New call booked',
+        body: 'Sam Reilly @ Northwind Industrial booked a call with you.',
+        actionUrl: '/projects/request-123',
+      });
+      expect(`${result.title} ${result.body}`.toLowerCase()).not.toContain('intro');
+    });
+
+    it('an absent callKind keeps the intro copy', () => {
+      const client = getInAppTemplate('intro-call-booked-client', {
+        expertPartyLabel: 'CloudPeak',
+      });
+      const expert = getInAppTemplate('intro-call-booked-expert', { clientPersonName: 'Sam' });
+      expect(client.title).toBe('Intro call confirmed');
+      expect(expert.title).toBe('New intro call booked');
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

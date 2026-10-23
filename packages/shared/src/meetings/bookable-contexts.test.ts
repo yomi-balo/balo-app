@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { BOOKABLE_CONTEXT_TYPES, isBookableContextType } from './bookable-contexts';
 
 /**
- * BAL-129 / BAL-283 — the pin for the list `apps/api`'s Zod enum, its tenancy gate and
+ * BAL-129 / BAL-283 / BAL-616 — the pin for the list `apps/api`'s Zod enum, its tenancy gate and
  * `@balo/analytics`'s `MeetingBookingContextType` all read. Widening it silently admits a
  * label at every one of those layers at once.
  */
 describe('BOOKABLE_CONTEXT_TYPES', () => {
-  it('is exactly the five bookable labels, in order', () => {
+  it('is exactly the six bookable labels, in order', () => {
     expect(BOOKABLE_CONTEXT_TYPES).toEqual([
       'case',
       'project_kickoff',
       'package_session',
       'project_discovery',
       'request_interaction',
+      'project_call',
     ]);
   });
 

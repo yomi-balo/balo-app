@@ -28,7 +28,7 @@ import { hrefForMeeting, type MeetingHrefSubject } from './href-for-meeting';
  *      produce the wrong words.
  *   2. Its key type excludes `admin` for a RECAP-GATE reason; this one excludes it for a
  *      MEMBER-JOIN reason (an admin meeting has no holder, resolves on the PLATFORM axis, and
- *      never reaches a member join grant at all). Coincidentally the same six labels, for two
+ *      never reaches a member join grant at all). Coincidentally the same seven labels, for two
  *      independent causes — coupling them would let one ticket's gate silently rewrite the
  *      other's copy.
  *
@@ -52,7 +52,7 @@ export interface BackTo {
 export type BackToSubject = MeetingHrefSubject;
 
 /**
- * ⚠⚠ TOTAL OVER THE SIX HOLDER-BEARING LABELS, WITH **NO `default:` ARM**. A seventh label added
+ * ⚠⚠ TOTAL OVER THE SEVEN HOLDER-BEARING LABELS, WITH **NO `default:` ARM**. A ninth label added
  * to the enum fails `tsc` HERE rather than shipping a raw enum value to a person mid-call. Same
  * precedent as `resolve-eyebrow.ts`.
  *
@@ -63,6 +63,7 @@ const BACK_TO_LABEL: Record<MeetingContextTypeWithHolder, string> = {
   case: 'Back to the case',
   project_discovery: 'Back to the project request',
   project_kickoff: 'Back to the project',
+  project_call: 'Back to the project',
   package_session: 'Back to the package',
   retainer_checkin: 'Back to the retainer',
   // ⚠ MJ copy checkpoint (Q3, ACCEPTED): the recap's eyebrow calls this meeting kind an "Intro
@@ -80,6 +81,7 @@ const CONTEXT_NOUN: Record<MeetingContextTypeWithHolder, string> = {
   case: 'case',
   project_discovery: 'request',
   project_kickoff: 'project',
+  project_call: 'project',
   package_session: 'package',
   retainer_checkin: 'retainer',
   request_interaction: 'request',

@@ -9,7 +9,7 @@ import type { MeetingContextTypeLabel } from '@balo/shared/meetings';
  *
  * Human labels for the primary `meeting_contexts.context_type`.
  *
- * TOTAL BY CONSTRUCTION (`Record<MeetingContextTypeLabel, string>`): an eighth context type
+ * TOTAL BY CONSTRUCTION (`Record<MeetingContextTypeLabel, string>`): a ninth context type
  * added to the pgEnum fails `pnpm typecheck` here until it is given a guest-facing name, rather
  * than silently rendering the generic fallback.
  *
@@ -21,6 +21,7 @@ import type { MeetingContextTypeLabel } from '@balo/shared/meetings';
 const CONTEXT_LABELS: Record<MeetingContextTypeLabel, string> = {
   case: 'Consultation',
   project_kickoff: 'Project kickoff',
+  project_call: 'Project call',
   package_session: 'Package session',
   retainer_checkin: 'Check-in',
   request_interaction: 'Intro call',

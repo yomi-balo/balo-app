@@ -5,7 +5,7 @@ import {
   EXPERT_DECLINE_REASONS,
   EXPERT_APPLICATION_EDIT_SECTIONS,
 } from '@balo/shared/experts';
-import { MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
+import { CALL_KINDS, MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
 import {
   DECLINABLE_RELATIONSHIP_STATUSES,
   PASSABLE_RELATIONSHIP_STATUSES,
@@ -918,6 +918,8 @@ const conversationIntroCallBookedPayload = z.object({
   joinPath: transitionalJoinPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
+  // Optional so a web deploy that predates the field still parses; absent means 'intro'.
+  callKind: z.enum(CALL_KINDS).optional(),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [

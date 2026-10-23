@@ -66,12 +66,23 @@ interface RequestDetailShellProps {
    */
   kickoffUpfront?: KickoffUpfront | null;
   /**
+   * The start of the next upcoming call with the accepted expert, resolved by the page for every
+   * lens (the admin has no conversation thread). Forwarded to the KickoffBoard's optional
+   * kickoff-call row; `null` when none is booked or no kickoff board is active.
+   */
+  kickoffNextCallStartIso?: string | null;
+  /**
    * BAL-331 deep-link: the delivery engagement's id, resolved by the page ONLY
    * when the request is `kickoff_approved`. When set, every lens sees the "View
    * delivery workspace" entry in the kickoff region. Null before an engagement
    * exists.
    */
   deliveryEngagementId?: string | null;
+  /**
+   * BAL-616 — true when the delivery engagement is `active`. Forwarded to `ConversationStage`,
+   * where a completed or cancelled project stops offering the in-place call dialog.
+   */
+  deliveryActive?: boolean;
   /**
    * BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
    * engaged), resolved by the page from the session user's email. Threaded to
@@ -307,7 +318,9 @@ export function RequestDetailShell({
   adminBilling = null,
   billingCapture = null,
   kickoffUpfront = null,
+  kickoffNextCallStartIso = null,
   deliveryEngagementId = null,
+  deliveryActive = true,
   viewerEmailDomain = null,
   requestFilesView = null,
   canClose = false,
@@ -336,6 +349,9 @@ export function RequestDetailShell({
       liveTracks={view.liveTracksForClose}
     />
   ) : null;
+  // BAL-616 — a closed request's conversation, only when it has a thread to show.
+  const closedConversation =
+    isClosed && conversation !== null && conversation.threads.length > 0 ? conversation : null;
   const viewerThread =
     conversation?.threads.find((t) => t.relationshipId === ctx.relationshipId) ?? null;
   const nudge = shellNudge(view, ctx, isExpertGated, viewerThread);
@@ -451,7 +467,11 @@ export function RequestDetailShell({
         {/* BAL-540 — the closed state (design ref `ClosedBanner` + frozen `TrackCard`s). Only the
           client + admin lenses ever reach this: a closed-out expert is intercepted earlier by
           `page.tsx`'s ended-track branch (`resolveRequestLens` returns `null` for a declined
-          relationship, and every track is declined by the close cascade). */}
+          relationship, and every track is declined by the close cascade).
+          BAL-616 — the layout switches on DATA, never lens: when the client's view carries at
+          least one surviving thread, the conversation shows read-only beside the track list;
+          otherwise (admin, or closed before any EOI) the layouts below are unchanged and the
+          stage's "Once experts express interest…" empty state is never mounted. */}
         {isClosed && (
           <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both space-y-5 duration-500 motion-reduce:animate-none">
             {view.closed && (
@@ -460,17 +480,41 @@ export function RequestDetailShell({
                 viewerLens={ctx.lens === 'admin' ? 'admin' : 'client'}
               />
             )}
+            {closedConversation !== null && (
+              <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+                <div className="min-w-0">
+                  <ConversationStage
+                    key={view.id}
+                    requestId={view.id}
+                    lens={ctx.lens === 'expert' ? 'expert' : 'client'}
+                    requestStatus={view.status}
+                    view={closedConversation}
+                    requestTitle={view.title}
+                    clientCompanyName={view.companyName}
+                    viewerEmailDomain={viewerEmailDomain}
+                    canDecline={canDecline}
+                    deliveryEngagementId={deliveryEngagementId}
+                  />
+                </div>
+                <div className="space-y-5">
+                  {baloPanelNode}
+                  <ClosedTrackList tracks={view.closedTracks} />
+                  <RequestContext view={view} variant="compact" />
+                </div>
+              </div>
+            )}
             {/* BAL-541 (D5) — the design reference renders the Balo panel unconditionally inside
               the admin grid (`request-close.jsx:1604,1633-1644`), and the handover note matters
               MOST once a request has ended. Switches on `baloPanelNode`'s null-ness, never on
               `ctx.archetype` — an admin who cannot see the panel (no BAL-541 token, however
               unlikely today) still gets the plain single-column closed layout. */}
-            {baloPanelNode === null ? (
+            {closedConversation === null && baloPanelNode === null && (
               <>
                 <RequestContext view={view} variant="full" />
                 <ClosedTrackList tracks={view.closedTracks} />
               </>
-            ) : (
+            )}
+            {closedConversation === null && baloPanelNode !== null && (
               <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
                 <div className="space-y-5">
                   <RequestContext view={view} variant="full" />
@@ -512,6 +556,7 @@ export function RequestDetailShell({
                     expertName={view.kickoff.expertName}
                     clientCompanyName={view.companyName}
                     upfront={kickoffUpfront}
+                    nextCallStartIso={kickoffNextCallStartIso}
                     billing={billingCapture}
                   />
                 )}
@@ -596,6 +641,7 @@ export function RequestDetailShell({
                           expertName={view.kickoff.expertName}
                           clientCompanyName={view.companyName}
                           upfront={kickoffUpfront}
+                          nextCallStartIso={kickoffNextCallStartIso}
                           billing={billingCapture}
                           mobile
                         />
@@ -619,6 +665,7 @@ export function RequestDetailShell({
                   viewerEmailDomain={viewerEmailDomain}
                   canDecline={canDecline}
                   deliveryEngagementId={deliveryEngagementId}
+                  deliveryActive={deliveryActive}
                 />
               </div>
               <div className="hidden space-y-5 lg:block">
@@ -650,6 +697,7 @@ export function RequestDetailShell({
                     expertName={view.kickoff.expertName}
                     clientCompanyName={view.companyName}
                     upfront={kickoffUpfront}
+                    nextCallStartIso={kickoffNextCallStartIso}
                     billing={billingCapture}
                   />
                 )}

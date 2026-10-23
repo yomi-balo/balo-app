@@ -7,12 +7,12 @@ category:
   expert: getting-started
 order: 4
 published: false
-updated: 2026-10-17
+updated: 2026-10-23
 related: [your-cases]
 ---
 
 The Up next card on your dashboard lists up to four of your upcoming meetings, soonest
-first — across consultations, project kickoffs, discovery calls and intro calls. Times show
+first — across consultations, project kickoffs, project calls, discovery calls and intro calls. Times show
 in your device's timezone.
 
 ## For clients

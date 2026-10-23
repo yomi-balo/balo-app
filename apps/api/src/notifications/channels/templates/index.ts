@@ -158,6 +158,7 @@ import {
   IntroCallBookedClientEmail,
   IntroCallBookedExpertEmail,
   availabilitySharedSubject,
+  introCallBookedKind,
   introCallBookedSubject,
 } from './intro-call-emails.js';
 import {
@@ -403,6 +404,7 @@ function closeReasonOf(value: unknown): 'resolved' | 'auto_inactive' | undefined
 const CONTEXT_TYPE_LABELS: Readonly<Record<string, string>> = {
   case: 'Case consultation',
   project_kickoff: 'Project kickoff',
+  project_call: 'Project call',
   project_discovery: 'Project discovery call',
   package_session: 'Package session',
   retainer_checkin: 'Retainer check-in',
@@ -2329,8 +2331,10 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
     const requestId = (data.requestId as string) ?? '';
     const joinPath = (data.joinPath as string) ?? '';
+    const callKind = introCallBookedKind(data.callKind);
     return {
       component: React.createElement(IntroCallBookedClientEmail, {
+        callKind,
         firstName: (data.recipientName as string) ?? 'there',
         counterpartyLabel: expertParty,
         requestTitle: (data.requestTitle as string) ?? 'your request',
@@ -2342,7 +2346,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestUrl: `${BASE_URL}/projects/${requestId}`,
         baseUrl: BASE_URL,
       }),
-      subject: introCallBookedSubject('client', expertParty),
+      subject: introCallBookedSubject('client', expertParty, callKind),
     };
   },
 
@@ -2360,8 +2364,10 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     const clientCompany = personWithOrgLabel(clientPerson, data.clientCompanyName as string);
     const requestId = (data.requestId as string) ?? '';
     const joinPath = (data.joinPath as string) ?? '';
+    const callKind = introCallBookedKind(data.callKind);
     return {
       component: React.createElement(IntroCallBookedExpertEmail, {
+        callKind,
         firstName: (data.recipientName as string) ?? 'there',
         counterpartyLabel: clientCompany,
         requestTitle: (data.requestTitle as string) ?? 'the request',
@@ -2373,7 +2379,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestUrl: `${BASE_URL}/projects/${requestId}`,
         baseUrl: BASE_URL,
       }),
-      subject: introCallBookedSubject('expert', clientCompany),
+      subject: introCallBookedSubject('expert', clientCompany, callKind),
     };
   },
 

@@ -3,8 +3,8 @@
  * context label the expert calendar can render. PURE, client-safe, presentational only — no
  * authorization or data consequence (`plan-bal-498.md` § 18 ADR flags).
  *
- * ⚠ A TOTAL MAP over `MeetingContextTypeWithHolder` (all six holder-bearing labels), so an
- * eighth `meeting_context_type` label added to the shared union is a COMPILE ERROR here rather
+ * ⚠ A TOTAL MAP over `MeetingContextTypeWithHolder` (all seven holder-bearing labels), so a
+ * ninth `meeting_context_type` label added to the shared union is a COMPILE ERROR here rather
  * than a silently blank block. `import type` ONLY from `@balo/shared/meetings` — never a value
  * import of `@balo/db` (memory `reference_balo_db_client_bundle_footgun`).
  *
@@ -29,6 +29,7 @@ export const ENGAGEMENT_TYPE_INDICATOR: Record<
   // BAL-511 D5 — `--violet` is a semantic token (`globals.css:45`, dark `:113`, exported as
   // `--color-violet` at `:169`); `violet-500` is a raw Tailwind palette scale literal.
   project_kickoff: { icon: FolderKanban, borderClass: 'border-l-violet', label: 'Project' },
+  project_call: { icon: FolderKanban, borderClass: 'border-l-violet', label: 'Project call' },
   project_discovery: {
     icon: FolderKanban,
     borderClass: 'border-l-violet',

@@ -48,10 +48,10 @@ import { log } from '@/lib/logging';
  */
 
 /**
- * ⚠⚠ NARROWED ON PURPOSE — THE FOUR ENGAGEMENT-GRAIN LABELS ONLY.
+ * ⚠⚠ NARROWED ON PURPOSE — THE FIVE ENGAGEMENT-GRAIN LABELS ONLY.
  *
- * `apps/api`'s `EngagementHostSubject` spans all seven `meeting_context_type` labels because
- * it implements all seven arms. This seam implements ONE: `contextId` IS an `engagements.id`.
+ * `apps/api`'s `EngagementHostSubject` spans all eight `meeting_context_type` labels because
+ * it implements all eight arms. This seam implements ONE: `contextId` IS an `engagements.id`.
  * The request-grain arms (`project_discovery`, `request_interaction`) and `admin` are
  * UNREPRESENTABLE BY TYPE here, so this module CANNOT silently answer a question it has not
  * implemented — a caller that tried would fail `tsc`, not get a wrong `false` at runtime.
@@ -63,7 +63,7 @@ import { log } from '@/lib/logging';
  * `{ engagementId, meetingId }`, and `resolveBoundMeeting` REQUIRES a live `case` context whose
  * `contextId === engagementId` — so the narrow type is never a constraint for it. Its API
  * counterpart (`apps/api/src/services/meetings/authorize-engagement-host.ts`) implements ALL
- * SEVEN labels, including both request-grain arms, so a `request_interaction` cancel IS gated
+ * EIGHT labels, including both request-grain arms, so a `request_interaction` cancel IS gated
  * correctly today; only the web AFFORDANCE is case-scoped, which matches where it lives.
  *
  * THE REAL TRIGGER, stated so the next reader does not re-derive a settled decision: **the
@@ -72,7 +72,12 @@ import { log } from '@/lib/logging';
  * explicit that predicate must have exactly ONE definition, so PORT it, never restate it.
  */
 export type EngagementGrainHostSubject = {
-  readonly contextType: 'case' | 'project_kickoff' | 'package_session' | 'retainer_checkin';
+  readonly contextType:
+    | 'case'
+    | 'project_kickoff'
+    | 'project_call'
+    | 'package_session'
+    | 'retainer_checkin';
   readonly contextId: string;
 };
 
@@ -111,7 +116,7 @@ export async function hasEngagementCapability(
     actor,
     capability,
     // `engagements.expert_profile_id` is NOT NULL on the supertype for ALL engagement types
-    // (BAL-417), so the four labels share one path and there is nothing to defend here.
+    // (BAL-417), so the five labels share one path and there is nothing to defend here.
     engagement.expertProfileId,
     { contextType: subject.contextType, contextId: subject.contextId }
   );
@@ -130,7 +135,7 @@ export async function hasEngagementCapability(
  *
  * ⚠ WHY IT EXISTS AT ALL. `shareAvailabilityAction` gates a PRE-ENGAGEMENT act on a
  * `request_expert_relationships` row: there is no engagement, so `EngagementGrainHostSubject`
- * (deliberately narrowed to the four engagement-grain labels) cannot represent it, and
+ * (deliberately narrowed to the five engagement-grain labels) cannot represent it, and
  * widening that type belongs to the first web surface that ACTS on a request-grain meeting —
  * ⚠ NOT BAL-410 / BAL-411, both of which have shipped without widening (see the narrowing
  * note above). Before this, that action

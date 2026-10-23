@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@/test/utils';
+import { render, screen, fireEvent, waitFor, within, cleanup } from '@/test/utils';
 
 // The board calls two server actions — mock both so it renders + fires in JSDOM.
 const mockMarkInvoiceSent = vi.fn();
@@ -23,10 +23,15 @@ vi.mock('next/navigation', () => ({
 
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS, BILLING_EVENTS } from '@/lib/analytics';
+import { ExpertCallBridgeProvider, useRegisterClientBookCall } from '../expert-call-bridge';
+import type { ViewerClock } from '@/hooks/use-viewer-clock';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { KickoffBoard } from './kickoff-board';
 
 const mockToast = vi.mocked(toast);
+
+const { clockRef } = vi.hoisted(() => ({ clockRef: { value: null as ViewerClock | null } }));
+vi.mock('@/hooks/use-viewer-clock', () => ({ useViewerClock: () => clockRef.value }));
 
 const REQUEST_ID = 'req-1';
 const RELATIONSHIP_ID = 'rel-accepted-1';
@@ -60,14 +65,19 @@ function renderBoard(overrides: Partial<BoardProps> = {}): ReturnType<typeof ren
   return render(<KickoffBoard {...props} />);
 }
 
+/** The gating steps only — the optional kickoff-call row is not a step. */
+function stepRows(): HTMLElement[] {
+  return screen.getAllByRole('listitem').filter((li) => !li.hasAttribute('data-kickoff-call'));
+}
+
 /** The row labels, in order. */
 function rowLabels(): (string | null | undefined)[] {
-  return screen.getAllByRole('listitem').map((li) => li.querySelector('p')?.textContent);
+  return stepRows().map((li) => li.querySelector('p')?.textContent);
 }
 
 /** Each step's thread state, in order. */
 function stepStates(): (string | null)[] {
-  return screen.getAllByRole('listitem').map((li) => li.getAttribute('data-step-state'));
+  return stepRows().map((li) => li.getAttribute('data-step-state'));
 }
 
 /** The label of the single row marked `aria-current="step"`, or null when none is. */
@@ -428,5 +438,154 @@ describe('KickoffBoard — terminal (approved) state', () => {
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
     expect(screen.getByText('All done')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+});
+
+// ── BAL-616 — the optional kickoff-call row ───────────────────────────────────────────────
+
+function Registrar({ handler }: Readonly<{ handler: (() => void) | null }>): null {
+  useRegisterClientBookCall(handler);
+  return null;
+}
+
+function renderWithBridge(
+  overrides: Partial<BoardProps> = {},
+  handler: (() => void) | null = vi.fn()
+): ReturnType<typeof render> {
+  const props: BoardProps = {
+    requestId: REQUEST_ID,
+    acceptedRelationshipId: RELATIONSHIP_ID,
+    lens: 'client',
+    clientBillingConfirmed: false,
+    upfrontInvoiceRaised: false,
+    approved: false,
+    expertName: 'Priya Nair',
+    clientCompanyName: 'Northwind Industrial',
+    upfront: UPFRONT,
+    ...overrides,
+  };
+  return render(
+    <ExpertCallBridgeProvider>
+      <Registrar handler={handler} />
+      <KickoffBoard {...props} />
+    </ExpertCallBridgeProvider>
+  );
+}
+
+function callRow(): HTMLElement {
+  const row = document.querySelector<HTMLElement>('[data-kickoff-call]');
+  if (row === null) throw new Error('kickoff-call row not rendered');
+  return row;
+}
+
+describe('KickoffBoard — optional kickoff call row (BAL-616)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clockRef.value = null;
+  });
+
+  it('renders after the last gate, and the counter is identical with it present', () => {
+    renderBoard();
+    const items = screen.getAllByRole('listitem');
+    expect(items.at(-1)).toHaveAttribute('data-kickoff-call');
+    expect(items).toHaveLength(4);
+    expect(screen.getByText('0 of 3 done')).toBeInTheDocument();
+    expect(currentLabel()).toBe('Add billing details');
+    expect(stepStates()).toEqual(['current', 'future', 'future']);
+  });
+
+  it('never changes the current step or the tally as gates complete', () => {
+    renderBoard({ clientBillingConfirmed: true, upfrontInvoiceRaised: true });
+    expect(screen.getByText('2 of 3 done')).toBeInTheDocument();
+    expect(currentLabel()).toBe('Pay the upfront invoice');
+  });
+
+  it('joins the last gate with a dashed connector and carries a dashed hollow node', () => {
+    renderBoard();
+    const lastGate = stepRows().at(-1) as HTMLElement;
+    expect(lastGate.querySelector('span[aria-hidden="true"].border-dashed')).not.toBeNull();
+    expect(callRow().querySelector('span.border-dashed')).not.toBeNull();
+    // The node is a faint video glyph, not a done/current marker (no check).
+    expect(callRow().querySelector('svg.lucide-video')).not.toBeNull();
+    expect(callRow().querySelector('svg.lucide-check')).toBeNull();
+  });
+
+  it('is absent once kickoff is approved', () => {
+    renderBoard({ approved: true, clientBillingConfirmed: true, upfrontInvoiceRaised: true });
+    expect(document.querySelector('[data-kickoff-call]')).toBeNull();
+    expect(screen.getByText('All done')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['client', 'Kickoff call with Priya', "Book any time — it doesn't hold up kickoff."],
+    [
+      'expert',
+      'Kickoff call with Northwind Industrial',
+      'Northwind Industrial can book a time on your calendar.',
+    ],
+    ['admin', 'Kickoff call', "Optional — it doesn't hold up approval."],
+  ] as const)('%s lens: label and no-call sub-copy', (lens, label, sub) => {
+    renderBoard({ lens });
+    expect(within(callRow()).getByText(label)).toBeInTheDocument();
+    expect(within(callRow()).getByText(sub)).toBeInTheDocument();
+  });
+
+  it('with a call booked every lens reads "Booked for …" and no Pick a time button', () => {
+    clockRef.value = { now: new Date('2026-09-01T00:00:00.000Z'), timeZone: 'UTC' };
+    for (const lens of ['client', 'expert', 'admin'] as const) {
+      const { unmount } = renderWithBridge({ lens, nextCallStartIso: '2026-09-03T04:00:00.000Z' });
+      expect(within(callRow()).getByText('Booked for Thu 3 Sep at 4:00 am.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Pick a time' })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('shows an aria-hidden skeleton, not a time, until the viewer clock resolves', () => {
+    renderBoard({ nextCallStartIso: '2026-09-03T04:00:00.000Z' });
+    expect(callRow().textContent).not.toMatch(/Booked for/);
+    expect(callRow().querySelector('[aria-hidden="true"].animate-pulse')).not.toBeNull();
+  });
+
+  it('client with no call and a registered handler: Pick a time calls the bridge', () => {
+    const handler = vi.fn();
+    renderWithBridge({}, handler);
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a time' }));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders no button without a registered handler, and none for the expert or admin lens', () => {
+    renderWithBridge({}, null);
+    expect(screen.queryByRole('button', { name: 'Pick a time' })).not.toBeInTheDocument();
+    cleanup();
+    for (const lens of ['expert', 'admin'] as const) {
+      const { unmount } = renderWithBridge({ lens }, vi.fn());
+      expect(screen.queryByRole('button', { name: 'Pick a time' })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('admin Approve renders regardless of the call', () => {
+    renderWithBridge(
+      { lens: 'admin', upfront: null, clientBillingConfirmed: true, nextCallStartIso: null },
+      null
+    );
+    expect(screen.getByRole('button', { name: /^Approve/ })).toBeEnabled();
+    cleanup();
+    clockRef.value = { now: new Date('2026-09-01T00:00:00.000Z'), timeZone: 'UTC' };
+    renderWithBridge(
+      {
+        lens: 'admin',
+        upfront: null,
+        clientBillingConfirmed: true,
+        nextCallStartIso: '2026-09-03T04:00:00.000Z',
+      },
+      null
+    );
+    expect(screen.getByRole('button', { name: /^Approve/ })).toBeEnabled();
+  });
+
+  it('uses the mobile tap target on the mobile board', () => {
+    renderWithBridge({ mobile: true });
+    expect(screen.getByRole('button', { name: 'Pick a time' }).className).toContain('min-h-11');
   });
 });
