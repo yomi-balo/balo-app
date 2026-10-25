@@ -50,6 +50,7 @@ const {
   mockSetInstallments,
   mockPromote,
   mockFindRequestById,
+  mockHasSucceededDraft,
   mockInstallmentsSumTo100,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
@@ -81,6 +82,7 @@ const {
     mockSetInstallments: vi.fn(),
     mockPromote: vi.fn(),
     mockFindRequestById: vi.fn(),
+    mockHasSucceededDraft: vi.fn(),
     mockInstallmentsSumTo100: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
@@ -107,6 +109,9 @@ vi.mock('@balo/db', () => ({
     // BAL-295: the request rollup is derived inside promoteToSubmit; the action
     // re-reads the stored status via findById to source `transitioned`.
     findById: (...a: unknown[]) => mockFindRequestById(...a),
+  },
+  proposalDraftGenerationsRepository: {
+    hasSucceededForRelationship: (...a: unknown[]) => mockHasSucceededDraft(...a),
   },
   installmentsSumTo100: (...a: unknown[]) => mockInstallmentsSumTo100(...a),
   InvalidProposalTransitionError,
@@ -180,6 +185,7 @@ describe('submitProposalAction', () => {
     // (the access pre-op floor is `proposal_requested`), so `transitioned` is true.
     mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'proposal_submitted' });
     mockPublish.mockResolvedValue(undefined);
+    mockHasSucceededDraft.mockResolvedValue(false);
   });
 
   it('rejects when not signed in', async () => {
@@ -590,7 +596,33 @@ describe('submitProposalAction', () => {
       pricing_method: 'fixed',
       balo_fee_bps: 2500,
       client_price_cents: 625000, // applyBaloFee(500000, 2500)
+      used_ai_draft: false,
       distinct_id: 'user-expert',
     });
+  });
+
+  it('records used_ai_draft true when the relationship has a succeeded generation', async () => {
+    mockHasSucceededDraft.mockResolvedValue(true);
+    const result = await submitProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    expect(mockHasSucceededDraft).toHaveBeenCalledWith(REL_ID);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'project_proposal_submitted',
+      expect.objectContaining({ used_ai_draft: true })
+    );
+  });
+
+  it('records used_ai_draft false, warns, and still succeeds when the lookup throws', async () => {
+    mockHasSucceededDraft.mockRejectedValue(new Error('db down'));
+    const result = await submitProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'project_proposal_submitted',
+      expect.objectContaining({ used_ai_draft: false })
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Proposal draft lookup failed'),
+      expect.objectContaining({ relationshipId: REL_ID })
+    );
   });
 });

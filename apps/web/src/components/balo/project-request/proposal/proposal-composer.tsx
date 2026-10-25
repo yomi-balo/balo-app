@@ -28,9 +28,16 @@ import { useSendProposal } from './use-send-proposal';
 import { usePageFileDrop } from './use-page-file-drop';
 import { draftToReviewDoc } from './proposal-draft-preview';
 import { personAtCompany } from './proposal-format';
+import { useProposalDraft } from './use-proposal-draft';
+import type {
+  ProposalDraftGenerationView,
+  ProposalDraftPatch,
+} from '@/lib/project-request/proposal/proposal-draft-types';
 import type { ProposalExpertIdentity } from './proposal-review-types';
 import {
   COMPOSER_TARGET,
+  applyDraftPatch,
+  blankMilestone,
   computeTotalCents,
   seedInstallments,
   summaryReadiness,
@@ -83,6 +90,11 @@ export interface ProposalComposerProps {
   fromProposalId?: string;
   /** The current proposal version (revise mode) — the resubmit writes v{n+1}. */
   currentVersion?: number;
+  /**
+   * Where this relationship's one AI draft stands, loaded on the server. Null (or omitted)
+   * when the composer must not draft: revise mode, or a proposal already exists.
+   */
+  draftGeneration?: ProposalDraftGenerationView | null;
 }
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -107,6 +119,8 @@ interface SaveOutcome {
 
 const METHOD_TOAST_ID = 'proposal-method-switch';
 const MILESTONE_PRICING_TOAST_ID = 'proposal-milestone-pricing';
+const DRAFT_OVERVIEW_TOAST_ID = 'proposal-draft-overview-cleared';
+const DRAFT_MILESTONES_TOAST_ID = 'proposal-draft-milestones-cleared';
 const milestoneRemovedToastId = (key: string): string => `proposal-milestone-removed-${key}`;
 
 const METHOD_SWITCH_TOAST: Record<ProposalPricingMethod, string> = {
@@ -178,8 +192,13 @@ export function ProposalComposer({
   changeRequest,
   fromProposalId,
   currentVersion,
+  draftGeneration = null,
 }: Readonly<ProposalComposerProps>): React.JSX.Element {
-  const [state, setState] = useState<ProposalDraftState>(initialState);
+  const [state, setState] = useState<ProposalDraftState>(() =>
+    draftGeneration?.status === 'succeeded'
+      ? applyDraftPatch(initialState, draftGeneration.patch)
+      : initialState
+  );
   const [mode, setMode] = useState<ComposerMode>('edit');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [nudgeKey, setNudgeKey] = useState(0);
@@ -204,6 +223,27 @@ export function ProposalComposer({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Skip the autosave the very first render fires (hydrated state isn't dirty).
   const hydratedRef = useRef(false);
+  // Set just before an AI draft is applied so the autosave that state change triggers is
+  // skipped: with no proposal row yet, the draft is only saved once the expert's own first
+  // edit carries the full state. It is NOT set when a save is in flight or debounced, or a
+  // row already exists — the draft then autosaves like any edit.
+  const skipAutosaveRef = useRef(false);
+
+  const handleDraft = useCallback((patch: ProposalDraftPatch): void => {
+    skipAutosaveRef.current =
+      proposalIdRef.current === null &&
+      savePromiseRef.current === null &&
+      debounceRef.current === null;
+    setState((prev) => applyDraftPatch(prev, patch));
+  }, []);
+  const draft = useProposalDraft({
+    enabled: !reviseMode && initialState.proposalId === null && draftGeneration !== null,
+    requestId,
+    relationshipId,
+    initial: draftGeneration,
+    onDraft: handleDraft,
+  });
+  const { noteEdit, noteClear, noteRestore } = draft;
 
   const totalCents = useMemo(() => computeTotalCents(state), [state]);
   const readiness = useMemo(() => summaryReadiness(state), [state]);
@@ -280,14 +320,21 @@ export function ProposalComposer({
       hydratedRef.current = true;
       return;
     }
+    if (skipAutosaveRef.current) {
+      skipAutosaveRef.current = false;
+      return;
+    }
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    // `debounceRef` is non-null exactly while a debounced save is pending.
     debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
       runSave().catch((error: unknown) => {
         Sentry.captureException(error);
       });
     }, AUTOSAVE_DEBOUNCE_MS);
     return () => {
       if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     };
     // Re-run whenever any persisted slice changes (documents persist out-of-band).
   }, [
@@ -323,6 +370,7 @@ export function ProposalComposer({
    */
   const flushBeforeSubmit = useCallback(async (): Promise<string | null> => {
     if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    debounceRef.current = null;
     const pending = savePromiseRef.current;
     if (pending !== null) {
       const settled = await pending;
@@ -341,9 +389,46 @@ export function ProposalComposer({
   }, [flushBeforeSubmit]);
 
   // ── Slice setters threaded to the sections (no per-section form state) ──
-  const setOverview = useCallback((overview: string): void => {
-    setState((prev) => ({ ...prev, overview }));
-  }, []);
+  const setOverview = useCallback(
+    (overview: string): void => {
+      setState((prev) => ({ ...prev, overview }));
+      noteEdit('overview');
+    },
+    [noteEdit]
+  );
+
+  const clearDraftOverview = useCallback((): void => {
+    const previous = stateRef.current.overview;
+    setState((prev) => ({ ...prev, overview: '' }));
+    noteClear('overview');
+    toastWithUndo(
+      'Overview cleared.',
+      () => {
+        setState((prev) => ({ ...prev, overview: previous }));
+        noteRestore('overview');
+      },
+      DRAFT_OVERVIEW_TOAST_ID
+    );
+  }, [noteClear, noteRestore]);
+
+  const clearDraftMilestones = useCallback((): void => {
+    const previous = stateRef.current.milestones;
+    setState((prev) =>
+      syncPerMilestoneInstallments(prev, {
+        ...prev,
+        milestones: [blankMilestone(prev.pricingMethod)],
+      })
+    );
+    noteClear('milestones');
+    toastWithUndo(
+      'Suggested milestones cleared.',
+      () => {
+        setState((prev) => syncPerMilestoneInstallments(prev, { ...prev, milestones: previous }));
+        noteRestore('milestones');
+      },
+      DRAFT_MILESTONES_TOAST_ID
+    );
+  }, [noteClear, noteRestore]);
 
   /**
    * Fire `PROPOSAL_PRICING_METHOD_SWITCHED` for a method change. Uses the proposalId
@@ -461,6 +546,7 @@ export function ProposalComposer({
     (milestones: ProposalMilestoneDraft[]): void => {
       const previous = stateRef.current.milestones;
       setState((prev) => syncPerMilestoneInstallments(prev, { ...prev, milestones }));
+      noteEdit('milestones');
       if (milestones.length !== previous.length - 1) return;
       const keep = new Set(milestones.map((m) => m.key));
       const index = previous.findIndex((m) => !keep.has(m.key));
@@ -469,7 +555,7 @@ export function ProposalComposer({
         offerMilestoneRestore(removed, index);
       }
     },
-    [offerMilestoneRestore]
+    [offerMilestoneRestore, noteEdit]
   );
 
   const trackMilestonePricingToggled = useCallback((enabled: boolean): void => {
@@ -683,6 +769,8 @@ export function ProposalComposer({
   const dismissUndoToasts = useCallback((): void => {
     toast.dismiss(METHOD_TOAST_ID);
     toast.dismiss(MILESTONE_PRICING_TOAST_ID);
+    toast.dismiss(DRAFT_OVERVIEW_TOAST_ID);
+    toast.dismiss(DRAFT_MILESTONES_TOAST_ID);
     for (const id of removedToastIdsRef.current) toast.dismiss(id);
     removedToastIdsRef.current.clear();
   }, []);
@@ -819,6 +907,11 @@ export function ProposalComposer({
                   overview={state.overview}
                   onOverviewChange={setOverview}
                   companyName={companyName}
+                  drafting={draft.drafting}
+                  drafted={draft.overviewDrafted}
+                  failed={draft.failed}
+                  clientFirstName={clientFirstName}
+                  onClear={clearDraftOverview}
                 />
               </NotedSection>
 
@@ -833,6 +926,9 @@ export function ProposalComposer({
                   onChange={setMilestones}
                   onToggleMilestonePricing={toggleMilestonePricing}
                   onSetPrice={setFixedPrice}
+                  drafting={draft.drafting}
+                  suggested={draft.milestonesDrafted}
+                  onClear={clearDraftMilestones}
                 />
               </NotedSection>
 
@@ -877,6 +973,8 @@ export function ProposalComposer({
                 termsAttached={termsDocuments.length > 0}
                 reviseMode={reviseMode}
                 nudgeKey={nudgeKey}
+                drafting={draft.drafting}
+                clientFirstName={clientFirstName}
                 onJump={handleRailJump}
                 onPreview={handleRailPreview}
               />
@@ -888,6 +986,7 @@ export function ProposalComposer({
             totalCents={totalCents}
             readiness={readiness}
             reviseMode={reviseMode}
+            drafting={draft.drafting}
             onJumpFirst={handleMobileJumpFirst}
             onPreview={handleMobilePreview}
           />

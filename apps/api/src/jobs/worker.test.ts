@@ -47,6 +47,7 @@ const mockStartTranscriptCapture = vi.fn();
 const mockStartAdminAlertSweep = vi.fn();
 const mockRegisterAdminAlertSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartProjectBriefParse = vi.fn();
+const mockStartProposalDraftGenerate = vi.fn();
 const mockStartMeetingVenueRepairSweep = vi.fn();
 const mockRegisterMeetingVenueRepairSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingVenueProvision = vi.fn();
@@ -209,6 +210,12 @@ vi.mock('./admin-alert-sweep.js', () => ({
 vi.mock('./project-brief-parse.js', () => ({
   startProjectBriefParseWorker: () => mockStartProjectBriefParse(),
 }));
+// BAL-611: mocking this is MANDATORY for the same reason — the real module constructs a Worker on
+// a live Redis connection and hangs the REDIS_URL-set test. Must land in the SAME COMMIT as the
+// `worker.ts` registration.
+vi.mock('./proposal-draft-generate.js', () => ({
+  startProposalDraftGenerateWorker: () => mockStartProposalDraftGenerate(),
+}));
 // BAL-581: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
 // which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
 // GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
@@ -268,6 +275,7 @@ describe('startWorkers', () => {
     expect(mockStartAdminAlertSweep).not.toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).not.toHaveBeenCalled();
     expect(mockStartProjectBriefParse).not.toHaveBeenCalled();
+    expect(mockStartProposalDraftGenerate).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueRepairSweep).not.toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).not.toHaveBeenCalled();
@@ -327,6 +335,7 @@ describe('startWorkers', () => {
     expect(mockStartAdminAlertSweep).toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).toHaveBeenCalled();
     expect(mockStartProjectBriefParse).toHaveBeenCalled();
+    expect(mockStartProposalDraftGenerate).toHaveBeenCalled();
     expect(mockStartMeetingVenueRepairSweep).toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).toHaveBeenCalled();

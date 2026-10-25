@@ -11,10 +11,10 @@ import {
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
-import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { proposalDraftBaseFields } from '../proposal-schema';
 import { lockContentionFailure } from './deadlock';
+import { resolveProposalAuthorAccess } from './proposal-author-access';
 
 /**
  * Autosave payload (A6.2 / BAL-288). The composer sends its FULL current draft
@@ -33,7 +33,6 @@ export type SaveProposalDraftResult =
 
 export const NOT_SIGNED_IN = 'You are not signed in.';
 const INVALID_REQUEST = 'Invalid request.';
-const ONLY_EXPERT = 'Only the expert can build a proposal.';
 const STALE_DRAFT = 'This proposal can no longer be edited.';
 const GENERIC_FAILURE = "Couldn't save your draft. Please try again.";
 
@@ -100,12 +99,9 @@ export async function runSaveProposalDraft(
   const { requestId, relationshipId } = data;
 
   try {
-    const access = await resolveConversationAccess(user, requestId, relationshipId);
+    const access = await resolveProposalAuthorAccess(user, requestId, relationshipId);
     if (!access.ok) {
       return { success: false, error: access.error };
-    }
-    if (access.ctx.lens !== 'expert') {
-      return { success: false, error: ONLY_EXPERT };
     }
 
     const header: DraftHeader = {
