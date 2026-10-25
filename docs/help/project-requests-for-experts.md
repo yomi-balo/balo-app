@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 1
 published: false
-updated: 2026-10-21
+updated: 2026-10-26
 related: [pausing-new-work]
 ---
 
@@ -18,6 +18,10 @@ from, so you know there's message history and consultation records behind it bef
 A request a client sends straight to you opens with a choice: **Propose times** to take it on, or
 **Pass on this project**. Once you've proposed times or sent the client a message, the request
 carries on like any other.
+
+## Sharing files in the conversation
+
+A file you attach in the conversation goes to the client only. It isn't shared with other experts.
 
 ## Passing on a project
 

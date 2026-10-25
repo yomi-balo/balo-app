@@ -82,7 +82,7 @@ function getTypingAblyRest(): Ably.Rest | null {
  */
 export function publishConversationEvent(
   conversationId: string,
-  name: 'message' | 'file',
+  name: 'message' | 'file' | 'file_shared',
   data: unknown
 ): Promise<void> {
   return deferPublish(conversationChannelName(conversationId), name, data);

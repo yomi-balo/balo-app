@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { isThreadOpenStatus, type ThreadOpenRelationshipStatus } from '@balo/shared/conversations';
 import {
   requestFileVisibleToTrack,
   resolveRequestFileAudience,
@@ -15,12 +16,15 @@ import {
   requestSharedFiles,
 } from '../schema';
 import type {
+  ConversationMessage,
+  RequestExpertRelationship,
   RequestFileAudience,
   RequestFileGrant,
   RequestFileSide,
   RequestSharedFile,
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
+import { conversationsRepository } from './conversations';
 import {
   recordRequestFileAudit,
   type RequestFileAuditCommon,
@@ -44,9 +48,10 @@ import {
  * ⚠ TRANSACTION POSTURE — `exec?: DbExecutor` FROM THE FIRST LINE. Every mutating method
  * takes an optional executor and self-wraps `db.transaction(run)` when none is supplied (the
  * `conversationsRepository.ensureForContext` shape). That is what makes ADR-1048 §7's
- * same-transaction audit invariant satisfiable WITHOUT touching a single shipped signature —
- * `conversationsRepository.addFile` / `postMessage` are hard-bound to the module-level `db`,
- * and BAL-431 never calls them.
+ * same-transaction audit invariant satisfiable. `share()`'s thread cards enlist
+ * `conversationsRepository.ensureForContext` / `postMessage` in the same transaction through
+ * their `exec` parameter; `conversationsRepository.addFile` is never called — a request-grain
+ * file is not a conversation file.
  *
  * ⚠ NO METHOD HERE CATCHES A RAW `23505` / `23514`. A caught unique-violation aborts the
  * surrounding transaction (`25P02`) and makes the repository untestable — nine of ten
@@ -55,6 +60,20 @@ import {
  * JavaScript and lets the rest surface; the ACTION layer maps a thrown `23505` to copy,
  * exactly as `confirm-case-file-upload.ts` does today.
  */
+
+/**
+ * ONE-WAY DRIFT GUARD: every status `@balo/shared/conversations` calls thread-open must be a
+ * real `request_expert_relationship_status`. `packages/shared` cannot import the pgEnum, so this
+ * module — the one that reads the list against relationship rows — pins it. (The reverse
+ * direction is not a drift: a new enum value is closed until someone adds it to the list.)
+ */
+type StrayThreadOpenStatus = Exclude<
+  ThreadOpenRelationshipStatus,
+  RequestExpertRelationship['status']
+>;
+type AssertNoStrayStatus<T extends never> = T;
+export type AssertThreadOpenStatusesAreRelationshipStatuses =
+  AssertNoStrayStatus<StrayThreadOpenStatus>;
 
 /** The named file is not a LIVE file of the gate-supplied request (or does not exist). */
 export class RequestFileNotFoundError extends Error {
@@ -118,6 +137,19 @@ export interface ShareRequestFileInput {
   fileName: string;
   contentType: string;
   sizeBytes: number;
+  /**
+   * The share card's note — server-sanitised HTML, or `''` for no note. When SET, `share()`
+   * posts one card message carrying it into every receiving track whose thread is open (see
+   * `share()`). When UNSET, no message is written.
+   */
+  threadMessageBody?: string;
+}
+
+/** One share card message `share()` posted, and the track whose thread received it. */
+export interface ShareRequestFileThreadMessage {
+  relationshipId: string;
+  conversationId: string;
+  message: ConversationMessage;
 }
 
 export interface ShareRequestFileResult {
@@ -133,6 +165,11 @@ export interface ShareRequestFileResult {
    * exactly why the audit snapshot cannot drift from the read rule.
    */
   resolvedLiveTracks: ResolvedRequestFileAudienceEntry[];
+  /**
+   * The card messages posted, in `resolvedLiveTracks` order. Empty when `threadMessageBody`
+   * was unset, or when no receiving track's thread is open.
+   */
+  threadMessages: ShareRequestFileThreadMessage[];
 }
 
 export interface RevokeRequestFileGrantInput {
@@ -180,6 +217,15 @@ export const REQUEST_SHARED_FILE_LIST_LIMIT = 200;
 // ── Internal reads ─────────────────────────────────────────────────────
 
 /**
+ * A track plus its relationship `status` — internal only. `status` decides whether the
+ * track's thread is open (`isThreadOpenStatus`), which `share()` needs to place card
+ * messages; it is not part of the shared `RequestTrackRef` contract.
+ */
+interface RequestTrackRefWithStatus extends RequestTrackRef {
+  readonly status: RequestExpertRelationship['status'];
+}
+
+/**
  * Every LIVE track of a request, with its file-plane standing resolved through the ONE shared
  * predicate (`@balo/shared/authz`).
  *
@@ -193,7 +239,7 @@ async function loadTrackRefs(
   exec: DbExecutor,
   projectRequestId: string,
   opts?: { lockForShare?: boolean }
-): Promise<RequestTrackRef[]> {
+): Promise<RequestTrackRefWithStatus[]> {
   const base = exec
     .select({
       relationshipId: requestExpertRelationships.id,
@@ -240,6 +286,7 @@ async function loadTrackRefs(
   return rows.map((row) => ({
     relationshipId: row.relationshipId,
     expertProfileId: row.expertProfileId,
+    status: row.status,
     access: resolveRequestTrackFileAccess(row),
   }));
 }
@@ -334,6 +381,17 @@ export const requestSharedFilesRepository = {
    *   · `own_track`       → NONE, deliberately. An expert's own-track upload is not an
    *     access-boundary DECISION: the row itself is the complete record and the audience is
    *     structurally fixed by the CHECK. See `_shared/request-file-audit.ts`.
+   *
+   * THREAD CARDS (when `threadMessageBody` is set). For every entry of `resolvedLiveTracks`
+   * whose relationship status is thread-open (`isThreadOpenStatus` — so never `invited`), it
+   * gets-or-creates the track's `relationship` conversation and posts one card message
+   * (`request_shared_file_id = file.id`, `body = threadMessageBody`, sender = the uploader), in
+   * this same transaction. The relationship ids come from `loadTrackRefs` for the gate-validated
+   * request, never from the caller, which is what discharges `conversation_contexts`' no-FK
+   * tenancy obligation here. A track without an open thread gets no message and nothing is
+   * back-filled later: it sees the file through the Files list only. Each insert takes its own
+   * SAVEPOINT (`postMessage(…, tx)`), and a failure is not caught — it rolls the whole share
+   * back, so a file is never shared with its card half-posted.
    */
   async share(input: ShareRequestFileInput, exec?: DbExecutor): Promise<ShareRequestFileResult> {
     assertShareShape(input);
@@ -459,7 +517,34 @@ export const requestSharedFilesRepository = {
         });
       }
 
-      return { file, grants, resolvedLiveTracks };
+      const threadMessages: ShareRequestFileThreadMessage[] = [];
+      if (input.threadMessageBody !== undefined) {
+        for (const entry of resolvedLiveTracks) {
+          const track = trackById.get(entry.relationshipId);
+          if (track === undefined || !isThreadOpenStatus(track.status)) continue;
+
+          const { conversation } = await conversationsRepository.ensureForContext(
+            { contextType: 'relationship', contextId: entry.relationshipId },
+            tx
+          );
+          const message = await conversationsRepository.postMessage(
+            {
+              conversationId: conversation.id,
+              senderUserId: input.uploadedByUserId,
+              body: input.threadMessageBody,
+              requestSharedFileId: file.id,
+            },
+            tx
+          );
+          threadMessages.push({
+            relationshipId: entry.relationshipId,
+            conversationId: conversation.id,
+            message,
+          });
+        }
+      }
+
+      return { file, grants, resolvedLiveTracks, threadMessages };
     };
 
     return exec === undefined ? db.transaction(run) : run(exec);
@@ -542,6 +627,61 @@ export const requestSharedFilesRepository = {
 
     const grantsByFile = await loadLiveGrantsByFile(db, [file.id]);
     return { file, grants: grantsByFile.get(file.id) ?? [] };
+  },
+
+  /**
+   * The BATCH containment read — {@link findByIdInRequest} for many ids, each with its LIVE
+   * grants. `projectRequestId` MUST come from the GATE; it is a WHERE term, so an id on another
+   * request is simply absent from the result, exactly like a stale one. Duplicate ids collapse.
+   * Empty input ⇒ `[]`, NO QUERY.
+   *
+   * Feeds the per-viewer card resolution on the request thread: `includeDeleted` is set there
+   * so a soft-deleted file still resolves (the client's "Removed" tombstone). As with the
+   * single read, containment is only half the defence — the caller still applies the per-file
+   * audience rule for an expert viewer.
+   *
+   * Unordered by contract; callers key the result by `file.id`. Unbounded by design: the ids
+   * come from one thread page, never from a request-wide scan.
+   */
+  async listByIdsInRequest(
+    projectRequestId: string,
+    fileIds: readonly string[],
+    opts?: { includeDeleted?: boolean }
+  ): Promise<RequestFileWithGrants[]> {
+    const ids = [...new Set(fileIds)];
+    if (ids.length === 0) return [];
+
+    const files = await db
+      .select()
+      .from(requestSharedFiles)
+      .where(
+        and(
+          inArray(requestSharedFiles.id, ids),
+          eq(requestSharedFiles.projectRequestId, projectRequestId),
+          opts?.includeDeleted === true ? undefined : isNull(requestSharedFiles.deletedAt)
+        )
+      );
+
+    const grantsByFile = await loadLiveGrantsByFile(
+      db,
+      files.map((f) => f.id)
+    );
+    return files.map((file) => ({ file, grants: grantsByFile.get(file.id) ?? [] }));
+  },
+
+  /**
+   * Whether any row — LIVE OR SOFT-DELETED — claims this R2 key. The abandoned-upload discard
+   * refuses to delete the object when this is true: a confirmed file's bytes must never be
+   * removed by a discard, and a tombstone's bytes are the soft-delete path's business, not the
+   * discard's. Rides the NON-partial unique `request_shared_file_key_idx`.
+   */
+  async isR2KeyClaimed(r2Key: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: requestSharedFiles.id })
+      .from(requestSharedFiles)
+      .where(eq(requestSharedFiles.r2Key, r2Key))
+      .limit(1);
+    return row !== undefined;
   },
 
   /**

@@ -10,6 +10,7 @@ import {
   conversations,
   meetingContexts,
   meetings,
+  requestSharedFiles,
   type NewMeeting,
 } from '../schema';
 import {
@@ -25,7 +26,9 @@ import {
   meetingRecordingFactory,
   transcriptFactory,
 } from '../test/factories';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { conversationsRepository, ConversationContextTakenError } from './conversations';
+import { requestSharedFilesRepository } from './request-shared-files';
 
 /** Every party call site states the full scope explicitly — see `listMessages`'s docblock. */
 const FULL = { kind: 'full' } as const;
@@ -2094,5 +2097,269 @@ describe('conversationsRepository.countUnreadForViewer', () => {
     });
     expect(result.get(busy)?.unreadCount).toBe(1);
     expect(result.get(quiet)).toEqual({ unreadCount: 0, earliestUnreadAt: null });
+  });
+});
+
+// ── Request-share card messages (BAL-617) ──────────────────────────────
+
+/** One relationship thread plus a request-grain file on the same request to card into it. */
+async function seedThreadWithSharedFile(): Promise<{
+  conversationId: string;
+  senderUserId: string;
+  fileId: string;
+}> {
+  const { conversationId, projectRequestId } = await requestExpertRelationshipFactory({
+    values: { status: 'eoi_submitted' },
+  });
+  const sender = await userFactory();
+  const { file } = await requestSharedFilesRepository.share({
+    projectRequestId,
+    uploadedByUserId: sender.id,
+    side: 'client',
+    audience: 'all_live_tracks',
+    expertRelationshipId: null,
+    grantRelationshipIds: [],
+    r2Key: `request-files/${projectRequestId}/${sender.id}/${randomUUID()}`,
+    fileName: 'discovery-brief.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 24_576,
+  });
+  return { conversationId, senderUserId: sender.id, fileId: file.id };
+}
+
+describe('request-share card messages (BAL-617)', () => {
+  it('a message must have a body OR a shared file — `body = ""` alone violates the CHECK', async () => {
+    const { conversationId, senderUserId, fileId } = await seedThreadWithSharedFile();
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) => tx.insert(conversationMessages).values({ conversationId, senderUserId, body: '' }),
+      'conversation_message_body_or_file'
+    );
+
+    // A note-less share card is the one legitimate empty body.
+    const card = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '',
+      requestSharedFileId: fileId,
+    });
+    expect(card.body).toBe('');
+    expect(card.requestSharedFileId).toBe(fileId);
+
+    // And a written message needs no file.
+    const plain = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '<p>Written.</p>',
+    });
+    expect(plain.requestSharedFileId).toBeNull();
+  });
+
+  it('the shared-file FK index is NON-partial, so the ON DELETE CASCADE scan can use it', async () => {
+    const rows = await db.execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'conversation_messages'
+        AND indexname = 'conversation_message_shared_file_idx'
+    `);
+
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    if (row === undefined) throw new Error('expected conversation_message_shared_file_idx');
+    const indexdef = String(row.indexdef);
+    expect(indexdef).toContain('(request_shared_file_id)');
+    expect(indexdef).not.toContain('WHERE');
+  });
+
+  it('a SOFT delete of the file keeps its card; a HARD delete cascades the card away', async () => {
+    const { conversationId, senderUserId, fileId } = await seedThreadWithSharedFile();
+    const card = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '',
+      requestSharedFileId: fileId,
+    });
+
+    await db
+      .update(requestSharedFiles)
+      .set({ deletedAt: new Date(), deletedByUserId: senderUserId })
+      .where(eq(requestSharedFiles.id, fileId));
+    const afterSoft = await db
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.id, card.id));
+    expect(afterSoft).toHaveLength(1);
+
+    await db.delete(requestSharedFiles).where(eq(requestSharedFiles.id, fileId));
+    const afterHard = await db
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.id, card.id));
+    expect(afterHard).toEqual([]);
+  });
+
+  it('postMessage(…, tx) isolates a failed insert in a SAVEPOINT — the caller’s transaction stays usable', async () => {
+    const { conversationId, senderUserId } = await seedThreadWithSharedFile();
+
+    const posted = await db.transaction(async (tx) => {
+      await expect(
+        conversationsRepository.postMessage(
+          { conversationId: randomUUID(), senderUserId, body: '<p>No such thread.</p>' },
+          tx
+        )
+      ).rejects.toMatchObject({ code: '23503' });
+
+      // Without the savepoint this statement would fail `25P02`.
+      return conversationsRepository.postMessage(
+        { conversationId, senderUserId, body: '<p>Still writable.</p>' },
+        tx
+      );
+    });
+
+    const list = await conversationsRepository.listMessages(conversationId, FULL);
+    expect(list.map((m) => m.id)).toEqual([posted.id]);
+  });
+
+  it('postMessage(…, tx) propagates the error, so an uncaught failure rolls the caller back', async () => {
+    const { conversationId, senderUserId } = await seedThreadWithSharedFile();
+
+    await expect(
+      db.transaction(async (tx) => {
+        await conversationsRepository.postMessage(
+          { conversationId, senderUserId, body: '<p>Rolled back with its caller.</p>' },
+          tx
+        );
+        await conversationsRepository.postMessage(
+          { conversationId: randomUUID(), senderUserId, body: '<p>Fails.</p>' },
+          tx
+        );
+      })
+    ).rejects.toMatchObject({ code: '23503' });
+
+    expect(await conversationsRepository.listMessages(conversationId, FULL)).toEqual([]);
+  });
+
+  it('message reads EXCLUDE share cards by default and include them only on opt-in', async () => {
+    const { conversationId, senderUserId, fileId } = await seedThreadWithSharedFile();
+    const first = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '<p>First.</p>',
+    });
+    const second = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '<p>Second.</p>',
+    });
+    const card = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '<p>Here is the brief.</p>',
+      requestSharedFileId: fileId,
+    });
+
+    const byDefault = await conversationsRepository.listMessages(conversationId, FULL);
+    expect(byDefault.map((m) => m.id).sort()).toEqual([first.id, second.id].sort());
+    const optedIn = await conversationsRepository.listMessages(conversationId, FULL, {
+      includeRequestFileShares: true,
+    });
+    expect(optedIn.map((m) => m.id).sort()).toEqual([first.id, second.id, card.id].sort());
+
+    // The page read: the excluded card neither appears nor counts toward `hasEarlier`.
+    const page = await conversationsRepository.listMessagesPage({
+      conversationId,
+      scope: FULL,
+      limit: 2,
+    });
+    expect(page.messages.map((m) => m.id).sort()).toEqual([first.id, second.id].sort());
+    expect(page.hasEarlier).toBe(false);
+
+    const optedInPage = await conversationsRepository.listMessagesPage({
+      conversationId,
+      scope: FULL,
+      limit: 3,
+      includeRequestFileShares: true,
+    });
+    expect(optedInPage.messages.map((m) => m.id).sort()).toEqual(
+      [first.id, second.id, card.id].sort()
+    );
+    const card0 = optedInPage.messages.find((m) => m.id === card.id);
+    expect(card0?.requestSharedFileId).toBe(fileId);
+  });
+
+  it('unreadSummaryFor flags the newest inbound message as a share card only while it is newest', async () => {
+    const { conversationId, senderUserId, fileId } = await seedThreadWithSharedFile();
+    const viewer = await userFactory();
+    const base = Date.now() - 60_000;
+    const summarize = (): ReturnType<typeof conversationsRepository.unreadSummaryFor> =>
+      conversationsRepository.unreadSummaryFor({ conversationId, viewerUserId: viewer.id });
+
+    // Newest inbound is a plain message.
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId,
+      body: '<p>Plain.</p>',
+      createdAt: new Date(base),
+    });
+    const plain = await summarize();
+    expect(plain.latestInboundBody).toBe('<p>Plain.</p>');
+    expect(plain.latestInboundIsRequestFileShare).toBe(false);
+
+    // A note-less share card arrives after it — now the newest inbound.
+    await db.insert(conversationMessages).values({
+      conversationId,
+      senderUserId,
+      body: '',
+      requestSharedFileId: fileId,
+      createdAt: new Date(base + 1_000),
+    });
+    const shared = await summarize();
+    expect(shared.latestInboundBody).toBe('');
+    expect(shared.latestInboundIsRequestFileShare).toBe(true);
+    expect(shared.unreadMessageCount).toBe(2);
+
+    // A newer plain message follows the share — the flag clears.
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId,
+      body: '<p>Follow-up.</p>',
+      createdAt: new Date(base + 2_000),
+    });
+    const followedUp = await summarize();
+    expect(followedUp.latestInboundBody).toBe('<p>Follow-up.</p>');
+    expect(followedUp.latestInboundIsRequestFileShare).toBe(false);
+  });
+
+  it('listThreadSummaries carries the newest message’s requestSharedFileId (null for a written one)', async () => {
+    const { conversationId, senderUserId, fileId } = await seedThreadWithSharedFile();
+    const viewer = await userFactory();
+
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId,
+      body: '<p>Older written message.</p>',
+      createdAt: new Date(Date.now() - 60_000),
+    });
+    const [written] = await conversationsRepository.listThreadSummaries({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(written?.latestMessage?.requestSharedFileId).toBeNull();
+
+    const card = await conversationsRepository.postMessage({
+      conversationId,
+      senderUserId,
+      body: '',
+      requestSharedFileId: fileId,
+    });
+    const [shared] = await conversationsRepository.listThreadSummaries({
+      conversationIds: [conversationId],
+      viewerUserId: viewer.id,
+    });
+    expect(shared?.latestMessage).toMatchObject({
+      id: card.id,
+      body: '',
+      requestSharedFileId: fileId,
+    });
   });
 });

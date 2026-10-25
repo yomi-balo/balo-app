@@ -20,6 +20,8 @@
  * (memory `reference_balo_db_client_bundle_footgun`).
  */
 
+import type { RequestThreadFileCard } from '@/lib/request-files/request-file-audience-view';
+
 /**
  * ⚠ THIS IS THE ABLY WIRE PAYLOAD. It carries `conversationId`, NOT `relationshipId`
  * (BAL-424) — the channel is keyed on the conversation, and the client hook's structural
@@ -33,6 +35,13 @@ export interface ConversationMessageView {
   senderUserId: string;
   senderName: string;
   createdAtIso: string;
+  /**
+   * Set ONLY on the request surface, ONLY by the server, ONLY on a request-share message: the
+   * per-viewer file card (BAL-617). It is resolved on read and never published — the realtime
+   * wire carries the content-free `file_shared` ping instead — so the type-only import above
+   * does not make it a wire field. An engagement/case reader never sets it.
+   */
+  requestSharedFile?: RequestThreadFileCard;
 }
 
 /** Also an Ably wire payload — see {@link ConversationMessageView}. */

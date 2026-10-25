@@ -3,6 +3,7 @@ import {
   conversationChannelName,
   CONVERSATION_EVENT_MESSAGE,
   CONVERSATION_EVENT_FILE,
+  CONVERSATION_EVENT_FILE_SHARED,
   isTypingChannelName,
   typingChannelName,
   TYPING_EVENT_STARTED,
@@ -25,6 +26,14 @@ describe('conversation realtime channels', () => {
   it('exposes the two event names the publisher/subscriber agree on', () => {
     expect(CONVERSATION_EVENT_MESSAGE).toBe('message');
     expect(CONVERSATION_EVENT_FILE).toBe('file');
+  });
+
+  /** ⚠ A DISTINCT NAME: the case panel and in-call hook subscribe to `message`/`file` only. */
+  it('names the request-share ping distinctly from every name the case surfaces subscribe to', () => {
+    expect(CONVERSATION_EVENT_FILE_SHARED).toBe('file_shared');
+    expect([CONVERSATION_EVENT_MESSAGE, CONVERSATION_EVENT_FILE]).not.toContain(
+      CONVERSATION_EVENT_FILE_SHARED
+    );
   });
 });
 

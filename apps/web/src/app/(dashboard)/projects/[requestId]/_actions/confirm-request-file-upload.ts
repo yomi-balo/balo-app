@@ -8,14 +8,31 @@ import { requestSharedFilesRepository, RequestFileTrackNotLiveError } from '@bal
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { publishConversationEvent } from '@/lib/realtime/ably-server';
+import { CONVERSATION_EVENT_FILE_SHARED } from '@/lib/realtime/channels';
+import type { ConversationFileSharedPayload } from '@/lib/realtime/message-payload';
+import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
+import { plainMessageToHtml } from '@/lib/sanitize/plain-message-html';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
+import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
+import {
+  MESSAGE_MAX_TEXT,
+  previewOfPlainText,
+} from '@/lib/project-request/conversation-view-types';
+// ⚠ `@balo/analytics/events` — the PURE constants subpath, never `/client`.
+import {
+  REQUEST_FILE_SHARE_ENTRY_POINTS,
+  REQUEST_FILE_SHARE_AUDIENCE_CHOICES,
+} from '@balo/analytics/events';
 import { trackServerAndFlush, REQUEST_FILE_SERVER_EVENTS } from '@/lib/analytics/server';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
 import {
   REQUEST_FILE_ALLOWED_CONTENT_TYPES,
   MAX_REQUEST_FILE_BYTES,
-  REQUEST_FILE_PREFIX,
   deleteRequestFileFromR2,
 } from '@/lib/storage/request-file';
+import { validateRequestUploadKey } from '@/lib/request-files/request-upload-key';
 import {
   authorizeRequestFileScope,
   REQUEST_FILES_UNAVAILABLE_COPY,
@@ -33,6 +50,7 @@ import {
   toExpertRequestFileView,
   type ClientRequestFileView,
   type ExpertRequestFileView,
+  type RequestThreadFileCard,
 } from '@/lib/request-files/request-file-audience-view';
 import type { ShareRequestFileInput, ShareRequestFileResult } from '@balo/db';
 
@@ -52,33 +70,36 @@ const inputSchema = z.object({
     z.object({ mode: z.literal('all_live_tracks') }),
     z.object({ mode: z.literal('grants'), relationshipIds: z.array(z.uuid()).min(1).max(50) }),
   ]),
+  /**
+   * The optional note that travels with the file as the card message's body. Plain text; the
+   * server converts + sanitises it. 20000 is the coarse DoS bound — the UX limit is
+   * `MESSAGE_MAX_TEXT` plain characters, enforced after the strip.
+   */
+  note: z.string().max(20000).optional(),
+  /**
+   * ⚠ ANALYTICS ONLY — NEVER AN AUTHORIZATION INPUT. Where the share started and what the
+   * sharer picked, recorded as-claimed. The audience that is actually written comes from the
+   * gate and `share` above, never from here; on the expert arm `audienceChoice` is coerced to
+   * `this_thread` because an expert has no audience choice.
+   */
+  origin: z.object({
+    entryPoint: z.enum(REQUEST_FILE_SHARE_ENTRY_POINTS),
+    audienceChoice: z.enum(REQUEST_FILE_SHARE_AUDIENCE_CHOICES),
+  }),
 });
 
 export type ConfirmRequestFileUploadResult =
-  | { success: true; view: ClientRequestFileView | ExpertRequestFileView }
+  | {
+      success: true;
+      view: ClientRequestFileView | ExpertRequestFileView;
+      /**
+       * The card messages this share posted, one per receiving track whose thread is open, each
+       * carrying `requestSharedFile` built from the SENDER's own lens. Empty when no receiving
+       * track had an open thread.
+       */
+      threadMessages: Array<{ relationshipId: string; message: ConversationMessageView }>;
+    }
   | { success: false; error: string };
-
-const UUID_RE = /^[0-9a-f-]{36}$/;
-
-/**
- * Key shape + provenance (§7.5): request from the VALIDATED gate, user from the session.
- * Segment-split, NOT a regex over the whole key — avoids a ReDoS-shaped pattern (memory
- * `reference_sonarcloud_redos_tagstrip_regex`) and satisfies `noUncheckedIndexedAccess` by
- * destructure-and-guard rather than `!` (memory `reference_sonar_nonnull_false_positive`).
- */
-function validateRequestUploadKey(
-  key: string,
-  projectRequestId: string,
-  userId: string
-): string | null {
-  const [prefix, keyRequestId, keyUserId, leaf, ...extra] = key.split('/');
-  if (extra.length > 0) return 'Invalid upload key.';
-  if (`${prefix}/` !== REQUEST_FILE_PREFIX) return 'Invalid upload key.';
-  if (keyRequestId !== projectRequestId) return 'Invalid upload key.';
-  if (keyUserId !== userId) return 'Invalid upload key.';
-  if (leaf === undefined || !UUID_RE.test(leaf)) return 'Invalid upload key.';
-  return null;
-}
 
 type UploadedObjectCheck =
   | { ok: true; sizeBytes: number; contentType: string }
@@ -165,8 +186,12 @@ function publishShareNotifications(
   scope: NonAdminScope,
   shareResult: ShareRequestFileResult,
   uploaderPersonName: string,
-  clientCompanyName: string
+  clientCompanyName: string,
+  noteExcerpt: string | undefined
 ): void {
+  // An excerpt is NOT an audience field (ADR-1048 §3): it is the sharer's own note, shown to the
+  // recipient the share already reaches, so it is added only when there is one.
+  const excerpt = noteExcerpt === undefined ? {} : { noteExcerpt };
   if (scope.side === 'expert') {
     publishNotificationEvent('request_file.shared_with_client', {
       correlationId: shareResult.file.id,
@@ -180,6 +205,7 @@ function publishShareNotifications(
       expertPartyLabel: uploaderPersonName,
       expertPersonLabel: uploaderPersonName,
       fileName: shareResult.file.fileName,
+      ...excerpt,
     }).catch(() => {});
     return;
   }
@@ -194,6 +220,7 @@ function publishShareNotifications(
       clientCompanyName,
       sharedByPersonLabel: uploaderPersonName,
       fileName: shareResult.file.fileName,
+      ...excerpt,
     }).catch(() => {});
   }
 }
@@ -224,6 +251,33 @@ async function buildShareView(
     // SAME row on the next page load. Two forms for one file was a real inconsistency.
     clientUploaderLabel(uploaderPersonName, clientCompanyName)
   );
+}
+
+type ShareNote = { ok: true; html: string; plainText: string } | { ok: false; error: string };
+
+/**
+ * The note → the card message's body. SECURITY BOUNDARY, identical to the composer's: plain text
+ * → escaped minimal HTML → sanitiser, before persist. An empty (or markup-only) note is valid
+ * and yields `html: ''`, a note-less card. Runs BEFORE the R2 verification, because that step
+ * deletes the object on failure — a too-long note must leave the upload intact so the sharer
+ * can shorten it and retry.
+ */
+function prepareShareNote(note: string | undefined): ShareNote {
+  const trimmed = note?.trim() ?? '';
+  if (trimmed.length === 0) return { ok: true, html: '', plainText: '' };
+  const html = sanitizeProjectHtml(plainMessageToHtml(trimmed));
+  const plainText = htmlToPlainText(html);
+  if (plainText.length > MESSAGE_MAX_TEXT) {
+    return { ok: false, error: `Keep your note under ${MESSAGE_MAX_TEXT} characters.` };
+  }
+  return plainText.length === 0
+    ? { ok: true, html: '', plainText: '' }
+    : { ok: true, html, plainText };
+}
+
+/** The sender's own card: `audience` is present only on the client-lens view. */
+function senderCardOf(view: ClientRequestFileView | ExpertRequestFileView): RequestThreadFileCard {
+  return 'audience' in view ? { kind: 'client', file: view } : { kind: 'expert', file: view };
 }
 
 type ConfirmGate =
@@ -275,7 +329,13 @@ async function resolveConfirmGate(
  * shape + provenance, HEAD-checks the real size/type in R2, then calls
  * `requestSharedFilesRepository.share(...)` with `side` / `audience` / `expertRelationshipId`
  * taken from the GATE, never the request body. Publishes notifications + analytics AFTER the
- * transaction commits. No `revalidatePath` — the panel owns its own island state.
+ * transaction commits. No `revalidatePath` — the request island owns its own file state.
+ *
+ * ⚠ THE SHARE ALSO POSTS A CARD MESSAGE (BAL-617) into every receiving track whose thread is
+ * open, INSIDE the share transaction (`threadMessageBody`), carrying the optional note. It
+ * publishes the content-free `file_shared` ping per posted card — and NEVER
+ * `conversation.message_posted`: a share notifies through `request_file.shared_with_*` alone, so
+ * a recipient is never told twice.
  */
 export async function confirmRequestFileUploadAction(
   input: z.infer<typeof inputSchema>
@@ -291,7 +351,12 @@ export async function confirmRequestFileUploadAction(
   if (!parsed.success) {
     return { success: false, error: 'Invalid request.' };
   }
-  const { requestId, key, fileName, contentType, sizeBytes, share } = parsed.data;
+  const { requestId, key, fileName, contentType, sizeBytes, share, origin } = parsed.data;
+
+  const note = prepareShareNote(parsed.data.note);
+  if (!note.ok) {
+    return { success: false, error: note.error };
+  }
 
   try {
     const gate = await resolveConfirmGate(user, requestId, key, contentType);
@@ -309,18 +374,41 @@ export async function confirmRequestFileUploadAction(
       fileName,
       contentType: verified.contentType,
       sizeBytes: verified.sizeBytes,
+      threadMessageBody: note.html,
     });
 
+    const hasNote = note.plainText.length > 0;
     trackServerAndFlush(REQUEST_FILE_SERVER_EVENTS.UPLOADED, {
       uploader_side: target.side,
       audience_type: shareResult.file.audience,
       track_count: shareResult.resolvedLiveTracks.length,
+      entry_point: origin.entryPoint,
+      audience_choice: target.side === 'expert' ? 'this_thread' : origin.audienceChoice,
+      has_note: hasNote,
       distinct_id: user.id,
     });
 
     const uploaderPersonName = fullName(user.firstName, user.lastName, 'Someone');
     const clientCompanyName = scope.request.company?.name ?? 'the client';
-    publishShareNotifications(scope, shareResult, uploaderPersonName, clientCompanyName);
+    publishShareNotifications(
+      scope,
+      shareResult,
+      uploaderPersonName,
+      clientCompanyName,
+      hasNote ? previewOfPlainText(note.plainText) : undefined
+    );
+
+    // The content-free ping, once per posted card, after commit. Deferred inside the publisher;
+    // never throws. The receiving islands refetch through the lens-correct read.
+    for (const { conversationId, message } of shareResult.threadMessages) {
+      const ping: ConversationFileSharedPayload = {
+        conversationId,
+        messageId: message.id,
+        senderUserId: message.senderUserId,
+        createdAtIso: message.createdAt.toISOString(),
+      };
+      void publishConversationEvent(conversationId, CONVERSATION_EVENT_FILE_SHARED, ping);
+    }
 
     log.info('Request file shared', {
       requestId: scope.request.id,
@@ -329,10 +417,28 @@ export async function confirmRequestFileUploadAction(
       side: shareResult.file.side,
       audience: shareResult.file.audience,
       trackCount: shareResult.resolvedLiveTracks.length,
+      threadMessageCount: shareResult.threadMessages.length,
+      entryPoint: origin.entryPoint,
+      hasNote,
     });
 
     const view = await buildShareView(scope, shareResult, uploaderPersonName, clientCompanyName);
-    return { success: true, view };
+    const card = senderCardOf(view);
+    return {
+      success: true,
+      view,
+      threadMessages: shareResult.threadMessages.map(({ relationshipId, message }) => ({
+        relationshipId,
+        message: {
+          ...mapMessageRowToView({
+            ...message,
+            senderFirstName: user.firstName,
+            senderLastName: user.lastName,
+          }),
+          requestSharedFile: card,
+        },
+      })),
+    };
   } catch (error) {
     if (isUniqueViolation(error)) {
       log.warn('Duplicate request file confirm (expected double-click)', {

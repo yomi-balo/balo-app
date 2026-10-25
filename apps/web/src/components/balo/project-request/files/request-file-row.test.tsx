@@ -33,6 +33,7 @@ const CLIENT_FILE: ClientRequestFileView = {
   uploadedByName: 'Sarah Chen @ Acme Corp',
   createdAtIso: '2026-08-01T00:00:00.000Z',
   audience: { type: 'grants', grants: [{ relationshipId: REL_ID, trackName: 'Wei Zhang' }] },
+  visibleToLiveTrackIds: [REL_ID],
   canDelete: true,
 };
 
@@ -73,6 +74,24 @@ function renderExpert(
   return { onDownload, onDelete };
 }
 
+function renderExpertWithPreview(file: ExpertRequestFileView, previewingId: string): void {
+  render(
+    <ul>
+      <RequestFileRow
+        lens="expert"
+        file={file}
+        clientPartyName={CLIENT_PARTY}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+        onPreview={vi.fn()}
+        previewingId={previewingId}
+        downloadingId={null}
+        deletingId={null}
+      />
+    </ul>
+  );
+}
+
 describe('RequestFileRow', () => {
   describe('expert lens', () => {
     /**
@@ -103,6 +122,14 @@ describe('RequestFileRow', () => {
       renderExpert({ ...EXPERT_OWN, source: 'client', canDelete: false });
       expect(screen.getByRole('button', { name: /^Download/ })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Remove/ })).not.toBeInTheDocument();
+    });
+
+    it('sizes the Download button to its label, keeping the 44px touch height', () => {
+      renderExpert(EXPERT_OWN);
+      const button = screen.getByRole('button', { name: 'Download Proposal-draft.pdf' });
+      expect(button).toHaveTextContent('Download');
+      expect(button.className).toContain('min-h-11');
+      expect(button.className.split(' ')).not.toContain('w-11');
     });
 
     it('disables only the row whose download is in flight', () => {
@@ -214,6 +241,62 @@ describe('RequestFileRow', () => {
     });
   });
 
+  describe('preview', () => {
+    it('opens the preview for the row’s own file when the name is clicked', async () => {
+      const user = userEvent.setup();
+      const onPreview = vi.fn();
+      render(
+        <ul>
+          <RequestFileRow
+            lens="client"
+            file={CLIENT_FILE}
+            onDownload={vi.fn()}
+            onDelete={vi.fn()}
+            onRevoke={vi.fn()}
+            onPreview={onPreview}
+            previewingId={null}
+            downloadingId={null}
+            deletingId={null}
+            revokingRelationshipId={null}
+          />
+        </ul>
+      );
+      await user.click(screen.getByRole('button', { name: 'Open Requirements.pdf' }));
+      expect(onPreview).toHaveBeenCalledWith(FILE_ID);
+    });
+
+    it('disables only the row whose preview is being minted', () => {
+      renderExpertWithPreview(EXPERT_OWN, FILE_ID);
+      expect(screen.getByRole('button', { name: 'Open Proposal-draft.pdf' })).toBeDisabled();
+    });
+
+    it('leaves the name as plain text when the row cannot preview', () => {
+      renderExpert(EXPERT_OWN);
+      expect(screen.queryByRole('button', { name: /^Open/ })).not.toBeInTheDocument();
+      expect(screen.getByText('Proposal-draft.pdf')).toBeInTheDocument();
+    });
+
+    it('never nests one control inside another', () => {
+      const { container } = render(
+        <ul>
+          <RequestFileRow
+            lens="client"
+            file={CLIENT_FILE}
+            onDownload={vi.fn()}
+            onDelete={vi.fn()}
+            onRevoke={vi.fn()}
+            onPreview={vi.fn()}
+            previewingId={null}
+            downloadingId={null}
+            deletingId={null}
+            revokingRelationshipId={null}
+          />
+        </ul>
+      );
+      expect(container.querySelector('button button, button input')).toBeNull();
+    });
+  });
+
   describe('admin lens', () => {
     it('renders no mutation controls at all — the lens is read-only by construction', () => {
       render(
@@ -262,6 +345,21 @@ describe('RequestFileRow', () => {
         </ul>
       );
       expect(screen.getByText('Requirements.pdf').className).toContain('line-through');
+    });
+
+    it('labels a removed file as an audit record, and labels no live file', () => {
+      const { rerender } = render(
+        <ul>
+          <RequestFileRow lens="admin" file={{ ...ADMIN_FILE, deleted: true }} />
+        </ul>
+      );
+      expect(screen.getByText('Removed · audit record kept')).toBeInTheDocument();
+      rerender(
+        <ul>
+          <RequestFileRow lens="admin" file={ADMIN_FILE} />
+        </ul>
+      );
+      expect(screen.queryByText('Removed · audit record kept')).not.toBeInTheDocument();
     });
 
     it('does not strike through a live file', () => {

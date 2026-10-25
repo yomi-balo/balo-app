@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
+import { requestFileVisibleToTrack, resolveRequestTrackFileAccess } from '@balo/shared/authz';
 import { db } from '../client';
 import {
   auditEvents,
+  conversationMessages,
   requestExpertRelationships,
   requestFileGrants,
   requestSharedFiles,
@@ -15,6 +17,7 @@ import {
   engagementFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
+import { conversationsRepository } from './conversations';
 import {
   requestSharedFilesRepository,
   RequestFileAlreadyDeletedError,
@@ -1306,5 +1309,255 @@ describe('requestSharedFilesRepository.listForEngagement (§5 lineage — a read
         companyId: engagement.companyId,
       })
     ).resolves.toEqual([]);
+  });
+});
+
+// ── share() thread cards (BAL-617) ─────────────────────────────────────
+
+/** The live `relationship` conversation id for one track. */
+async function threadOf(relationshipId: string): Promise<string> {
+  const conversation = await conversationsRepository.findByContext({
+    contextType: 'relationship',
+    contextId: relationshipId,
+  });
+  if (conversation === undefined) throw new Error(`no thread for ${relationshipId}`);
+  return conversation.id;
+}
+
+/** Every card message (live or not) pointing at one file. */
+async function cardsFor(
+  fileId: string
+): Promise<{ conversationId: string; senderUserId: string; body: string }[]> {
+  return db
+    .select({
+      conversationId: conversationMessages.conversationId,
+      senderUserId: conversationMessages.senderUserId,
+      body: conversationMessages.body,
+    })
+    .from(conversationMessages)
+    .where(eq(conversationMessages.requestSharedFileId, fileId));
+}
+
+describe('requestSharedFilesRepository.share — thread cards', () => {
+  it('a grants share posts ONE card, into the granted track’s thread only', async () => {
+    const seed = await seedRequest(2);
+    const [granted, other] = seed.tracks;
+    if (granted === undefined || other === undefined) throw new Error('seed too small');
+
+    const result = await requestSharedFilesRepository.share(
+      shareInput(seed, {
+        audience: 'grants',
+        grantRelationshipIds: [granted.relationshipId],
+        threadMessageBody: '<p>Here is the brief.</p>',
+      })
+    );
+
+    const grantedThread = await threadOf(granted.relationshipId);
+    expect(result.threadMessages).toHaveLength(1);
+    const [entry] = result.threadMessages;
+    expect(entry?.relationshipId).toBe(granted.relationshipId);
+    expect(entry?.conversationId).toBe(grantedThread);
+    expect(entry?.message).toMatchObject({
+      conversationId: grantedThread,
+      senderUserId: seed.clientUserId,
+      body: '<p>Here is the brief.</p>',
+      requestSharedFileId: result.file.id,
+    });
+
+    expect(await cardsFor(result.file.id)).toEqual([
+      {
+        conversationId: grantedThread,
+        senderUserId: seed.clientUserId,
+        body: '<p>Here is the brief.</p>',
+      },
+    ]);
+  });
+
+  it('an all-tracks share posts into every OPEN thread; an invited track gets none, even after it opens', async () => {
+    const seed = await seedRequest(2);
+    const [t0, t1] = seed.tracks;
+    if (t0 === undefined || t1 === undefined) throw new Error('seed too small');
+    const invited = await requestExpertRelationshipFactory({
+      projectRequestId: seed.projectRequestId,
+      expertProfileId: (await expertDraftFactory()).id,
+    });
+
+    const result = await requestSharedFilesRepository.share(
+      shareInput(seed, { threadMessageBody: '' })
+    );
+
+    expect(result.threadMessages.map((m) => m.relationshipId).sort()).toEqual(
+      [t0.relationshipId, t1.relationshipId].sort()
+    );
+    const cards = await cardsFor(result.file.id);
+    expect(cards.map((c) => c.conversationId).sort()).toEqual(
+      [await threadOf(t0.relationshipId), await threadOf(t1.relationshipId)].sort()
+    );
+    expect(cards.every((c) => c.body === '' && c.senderUserId === seed.clientUserId)).toBe(true);
+
+    // The invited track opens AFTER the share: nothing is back-filled into its thread, but the
+    // file is visible to it through the Files list.
+    const [advanced] = await db
+      .update(requestExpertRelationships)
+      .set({ status: 'eoi_submitted', openedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, invited.relationship.id))
+      .returning();
+    if (advanced === undefined) throw new Error('advance failed');
+    expect((await cardsFor(result.file.id)).map((c) => c.conversationId)).not.toContain(
+      invited.conversationId
+    );
+    expect(
+      requestFileVisibleToTrack(
+        result.file,
+        {
+          relationshipId: advanced.id,
+          expertProfileId: advanced.expertProfileId,
+          access: resolveRequestTrackFileAccess(advanced),
+        },
+        new Set()
+      )
+    ).toBe(true);
+  });
+
+  it('a receiving track whose thread is NOT open gets no card, though it is in the audience', async () => {
+    const seed = await seedRequest(1);
+    const [own] = seed.tracks;
+    if (own === undefined) throw new Error('seed too small');
+    // Declined after opening: the own-track file stays in its audience, the thread is closed.
+    await closeTrack(own.relationshipId, 'declined');
+    const expertUser = await userFactory();
+
+    const result = await requestSharedFilesRepository.share(
+      shareInput(seed, {
+        uploadedByUserId: expertUser.id,
+        side: 'expert',
+        audience: 'own_track',
+        expertRelationshipId: own.relationshipId,
+        threadMessageBody: '<p>Late upload.</p>',
+      })
+    );
+
+    expect(result.resolvedLiveTracks.map((e) => e.relationshipId)).toEqual([own.relationshipId]);
+    expect(result.threadMessages).toEqual([]);
+    expect(await cardsFor(result.file.id)).toEqual([]);
+  });
+
+  it('an expert own-track share cards into that expert’s own thread', async () => {
+    const seed = await seedRequest(2);
+    const [own, sibling] = seed.tracks;
+    if (own === undefined || sibling === undefined) throw new Error('seed too small');
+    const expertUser = await userFactory();
+
+    const result = await requestSharedFilesRepository.share(
+      shareInput(seed, {
+        uploadedByUserId: expertUser.id,
+        side: 'expert',
+        audience: 'own_track',
+        expertRelationshipId: own.relationshipId,
+        threadMessageBody: '<p>My draft plan.</p>',
+      })
+    );
+
+    expect(await cardsFor(result.file.id)).toEqual([
+      {
+        conversationId: await threadOf(own.relationshipId),
+        senderUserId: expertUser.id,
+        body: '<p>My draft plan.</p>',
+      },
+    ]);
+  });
+
+  it('writes NO message when `threadMessageBody` is unset', async () => {
+    const seed = await seedRequest(2);
+
+    const result = await requestSharedFilesRepository.share(shareInput(seed));
+
+    expect(result.threadMessages).toEqual([]);
+    expect(await cardsFor(result.file.id)).toEqual([]);
+  });
+
+  it('a failed card insert rolls the WHOLE share back — no file, no audit row', async () => {
+    const seed = await seedRequest(2);
+    const spy = vi
+      .spyOn(conversationsRepository, 'postMessage')
+      .mockRejectedValueOnce(new Error('card insert failed'));
+
+    try {
+      await expect(
+        requestSharedFilesRepository.share(shareInput(seed, { threadMessageBody: '' }))
+      ).rejects.toThrow('card insert failed');
+    } finally {
+      spy.mockRestore();
+    }
+
+    const files = await db
+      .select({ id: requestSharedFiles.id })
+      .from(requestSharedFiles)
+      .where(eq(requestSharedFiles.projectRequestId, seed.projectRequestId));
+    expect(files).toEqual([]);
+  });
+});
+
+describe('requestSharedFilesRepository.listByIdsInRequest', () => {
+  it('returns [] for no ids', async () => {
+    const seed = await seedRequest(1);
+    expect(
+      await requestSharedFilesRepository.listByIdsInRequest(seed.projectRequestId, [])
+    ).toEqual([]);
+  });
+
+  it('contains to the request, collapses duplicates, attaches live grants, and hides tombstones unless asked', async () => {
+    const seed = await seedRequest(2);
+    const [t0] = seed.tracks;
+    if (t0 === undefined) throw new Error('seed too small');
+    const foreignSeed = await seedRequest(1);
+
+    const granted = await requestSharedFilesRepository.share(
+      shareInput(seed, { audience: 'grants', grantRelationshipIds: [t0.relationshipId] })
+    );
+    const removed = await requestSharedFilesRepository.share(shareInput(seed));
+    await requestSharedFilesRepository.softDelete({
+      fileId: removed.file.id,
+      projectRequestId: seed.projectRequestId,
+      actorUserId: seed.clientUserId,
+    });
+    const foreign = await requestSharedFilesRepository.share(shareInput(foreignSeed));
+
+    const ids = [granted.file.id, granted.file.id, removed.file.id, foreign.file.id];
+
+    const live = await requestSharedFilesRepository.listByIdsInRequest(seed.projectRequestId, ids);
+    expect(live.map((r) => r.file.id)).toEqual([granted.file.id]);
+    expect(live[0]?.grants.map((g) => g.relationshipId)).toEqual([t0.relationshipId]);
+
+    const withDeleted = await requestSharedFilesRepository.listByIdsInRequest(
+      seed.projectRequestId,
+      ids,
+      { includeDeleted: true }
+    );
+    expect(withDeleted.map((r) => r.file.id).sort()).toEqual(
+      [granted.file.id, removed.file.id].sort()
+    );
+    expect(withDeleted.find((r) => r.file.id === removed.file.id)?.file.deletedAt).not.toBeNull();
+  });
+});
+
+describe('requestSharedFilesRepository.isR2KeyClaimed', () => {
+  it('is false for an unclaimed key and true for a live OR soft-deleted file’s key', async () => {
+    const seed = await seedRequest(1);
+    const live = await requestSharedFilesRepository.share(shareInput(seed));
+    const removed = await requestSharedFilesRepository.share(shareInput(seed));
+    await requestSharedFilesRepository.softDelete({
+      fileId: removed.file.id,
+      projectRequestId: seed.projectRequestId,
+      actorUserId: seed.clientUserId,
+    });
+
+    expect(
+      await requestSharedFilesRepository.isR2KeyClaimed(
+        freshR2Key(seed.projectRequestId, seed.clientUserId)
+      )
+    ).toBe(false);
+    expect(await requestSharedFilesRepository.isR2KeyClaimed(live.file.r2Key)).toBe(true);
+    expect(await requestSharedFilesRepository.isR2KeyClaimed(removed.file.r2Key)).toBe(true);
   });
 });

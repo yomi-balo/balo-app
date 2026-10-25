@@ -18,16 +18,19 @@ import { resolveRouteDir, scanRouteSources, type ScannedFile } from './_source-s
  * "the resolver may not read the lens it was handed". Banning the token inside the resolver
  * itself would assert a rule the codebase's own shipped pattern already contradicts.
  *
- * ⚠⚠ `request-files-panel.tsx` AND `request-file-row.tsx` ARE ALSO EXEMPT, for the SAME
- * reasoning the meeting-call invariant already established for `DrawdownState.lens`
- * (`meeting-call-no-lens-gate.test.ts`): `RequestFilesView['lens']` / `RequestFileRowProps['lens']`
- * are NOT `ctx.lens` re-read in the browser — they are the LOADER's own view-shape discriminant
- * (`request-file-audience-view.ts`'s `RequestFileAudienceLens`), assigned from the GATE's
- * already-capability-checked `scope.side` inside `loadRequestFiles` (server-side, before any
- * props cross to the client). Branching a component's RENDER on it is PRESENTATIONAL COPY
- * SELECTION between three shapes the server already decided the viewer may see — never a
- * second authorization decision. No mutation in either file reads this field: every
- * `canDelete` / `canRevoke` affordance is a boolean the server already computed into the view
+ * ⚠⚠ `request-file-row.tsx`, `request-files-card.tsx`, `request-files-sheet.tsx` AND
+ * `request-files-provider.tsx` ARE ALSO EXEMPT, for the SAME reasoning the meeting-call
+ * invariant already established for `DrawdownState.lens` (`meeting-call-no-lens-gate.test.ts`):
+ * `RequestFilesView['lens']` / `RequestFileRowProps['lens']` are NOT `ctx.lens` re-read in the
+ * browser — they are the LOADER's own view-shape discriminant (`request-file-audience-view.ts`'s
+ * `RequestFileAudienceLens`), assigned from the GATE's already-capability-checked `scope.side`
+ * inside `loadRequestFiles` (server-side, before any props cross to the client). Branching a
+ * component's RENDER on it is PRESENTATIONAL COPY SELECTION between three shapes the server
+ * already decided the viewer may see — never a second authorization decision. The provider's
+ * `deriveThreadShare` reads it only to decide which control to OFFER; every share, revoke and
+ * delete is re-authorized server-side by `authorizeRequestFileScope`, and no mutation reads this
+ * field: every `canDelete` / `canRevoke` affordance is a boolean the server already computed into
+ * the view object.
  * object. **Avoid the token generally, exempt the file when it is proven safe — never widen the
  * ban to swallow a legitimate, already-verified label.**
  */
@@ -48,6 +51,7 @@ const REQUEST_FILE_ACTION_FILES: ReadonlySet<string> = new Set([
   'get-request-file-download.ts',
   'revoke-request-file-grant.ts',
   'delete-request-file.ts',
+  'discard-request-file-upload.ts',
 ]);
 
 /** The ONE file allowed to route on `lens` — see the module docblock. */
@@ -58,8 +62,10 @@ const RESOLVER_FILE = 'lib/request-files/authorize-request-file-scope.ts';
  * capability-checked label, never a second authorization decision. See the module docblock.
  */
 const VIEW_DISPATCH_EXEMPT: ReadonlySet<string> = new Set([
-  'components/request-files-panel.tsx',
   'components/request-file-row.tsx',
+  'components/request-files-card.tsx',
+  'components/request-files-sheet.tsx',
+  'components/request-files-provider.tsx',
 ]);
 
 function scanTree(): ScannedFile[] {
@@ -81,6 +87,7 @@ const PINNED_FILES: readonly string[] = [
   'actions/get-request-file-download.ts',
   'actions/revoke-request-file-grant.ts',
   'actions/delete-request-file.ts',
+  'actions/discard-request-file-upload.ts',
 ];
 
 const VIEW_GATE_TOKENS: readonly string[] = [

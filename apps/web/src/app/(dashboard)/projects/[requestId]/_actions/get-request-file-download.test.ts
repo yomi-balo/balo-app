@@ -32,8 +32,10 @@ vi.mock('@/lib/request-files/load-request-files', () => ({
 }));
 
 const mockPresignDownload = vi.fn();
+const mockPresignPreview = vi.fn();
 vi.mock('@/lib/storage/request-file', () => ({
   createPresignedRequestFileDownload: (...args: unknown[]) => mockPresignDownload(...args),
+  createPresignedRequestFilePreview: (...args: unknown[]) => mockPresignPreview(...args),
 }));
 
 const mockTrack = vi.fn();
@@ -52,6 +54,7 @@ const LIVE_FILE = {
     id: FILE_ID,
     r2Key: 'request-files/a/b/c',
     fileName: 'file.pdf',
+    contentType: 'application/pdf',
     side: 'client',
     audience: 'all_live_tracks',
     expertRelationshipId: null,
@@ -73,6 +76,7 @@ describe('getRequestFileDownloadAction', () => {
     vi.clearAllMocks();
     mockRequireUser.mockResolvedValue(USER);
     mockPresignDownload.mockResolvedValue('https://signed-download');
+    mockPresignPreview.mockResolvedValue('https://signed-preview');
   });
 
   it('denies when not signed in', async () => {
@@ -114,7 +118,11 @@ describe('getRequestFileDownloadAction', () => {
       grants: [],
     });
     const result = await getRequestFileDownloadAction(VALID_INPUT);
-    expect(result).toEqual({ success: true, url: 'https://signed-download' });
+    expect(result).toEqual({
+      success: true,
+      url: 'https://signed-download',
+      contentType: 'application/pdf',
+    });
   });
 
   it('refuses a client an upload from a track it cannot see, as if the file did not exist', async () => {
@@ -156,7 +164,11 @@ describe('getRequestFileDownloadAction', () => {
     });
     mockFindByIdInRequest.mockResolvedValue(LIVE_FILE);
     const result = await getRequestFileDownloadAction(VALID_INPUT);
-    expect(result).toEqual({ success: true, url: 'https://signed-download' });
+    expect(result).toEqual({
+      success: true,
+      url: 'https://signed-download',
+      contentType: 'application/pdf',
+    });
     expect(mockTrack).toHaveBeenCalledWith(
       'request_file_downloaded',
       expect.objectContaining({ viewer_side: 'client' })
@@ -210,7 +222,11 @@ describe('getRequestFileDownloadAction', () => {
     mockAuthorizeScope.mockResolvedValue(ADMIN_SCOPE);
     mockFindByIdInRequest.mockResolvedValue(LIVE_FILE);
     const result = await getRequestFileDownloadAction(VALID_INPUT);
-    expect(result).toEqual({ success: true, url: 'https://signed-download' });
+    expect(result).toEqual({
+      success: true,
+      url: 'https://signed-download',
+      contentType: 'application/pdf',
+    });
   });
 
   /**
@@ -235,6 +251,103 @@ describe('getRequestFileDownloadAction', () => {
     expect(mockFindByIdInRequest).toHaveBeenCalledWith(FILE_ID, REQUEST_ID);
     const [, , opts] = mockFindByIdInRequest.mock.calls[0] ?? [];
     expect(opts).toBeUndefined();
+  });
+
+  describe('purpose: preview', () => {
+    const CLIENT_SCOPE = {
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID },
+      companyId: 'c1',
+      tracks: [],
+    };
+
+    it('defaults to the attachment URL when no purpose is given', async () => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockFindByIdInRequest.mockResolvedValue(LIVE_FILE);
+
+      await getRequestFileDownloadAction(VALID_INPUT);
+
+      expect(mockPresignDownload).toHaveBeenCalledWith('request-files/a/b/c', 'file.pdf');
+      expect(mockPresignPreview).not.toHaveBeenCalled();
+    });
+
+    it('signs the inline preview URL for a stored PDF', async () => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockFindByIdInRequest.mockResolvedValue(LIVE_FILE);
+
+      const result = await getRequestFileDownloadAction({ ...VALID_INPUT, purpose: 'preview' });
+
+      expect(result).toEqual({
+        success: true,
+        url: 'https://signed-preview',
+        contentType: 'application/pdf',
+      });
+      expect(mockPresignPreview).toHaveBeenCalledWith(
+        'request-files/a/b/c',
+        'file.pdf',
+        'application/pdf'
+      );
+      expect(mockPresignDownload).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'image/png',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ])('returns the attachment URL for a %s preview, never an inline one', async (contentType) => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockFindByIdInRequest.mockResolvedValue({
+        ...LIVE_FILE,
+        file: { ...LIVE_FILE.file, contentType },
+      });
+
+      const result = await getRequestFileDownloadAction({ ...VALID_INPUT, purpose: 'preview' });
+
+      expect(result).toEqual({ success: true, url: 'https://signed-download', contentType });
+      expect(mockPresignPreview).not.toHaveBeenCalled();
+    });
+
+    /** ⚠ A preview authorizes EXACTLY like a download: a revoked/deleted file is gone for both. */
+    it('denies a preview for an expert whose track cannot see the file', async () => {
+      mockAuthorizeScope.mockResolvedValue({
+        ok: true,
+        side: 'expert',
+        request: { id: REQUEST_ID },
+        viewer: {
+          relationshipId: OTHER_REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+        },
+      });
+      mockFindByIdInRequest.mockResolvedValue({
+        file: { ...LIVE_FILE.file, side: 'client', audience: 'grants' },
+        grants: [{ relationshipId: REL_ID }],
+      });
+
+      const result = await getRequestFileDownloadAction({ ...VALID_INPUT, purpose: 'preview' });
+
+      expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+      expect(mockPresignPreview).not.toHaveBeenCalled();
+    });
+
+    it('denies a preview of a deleted file', async () => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockFindByIdInRequest.mockResolvedValue(undefined);
+
+      const result = await getRequestFileDownloadAction({ ...VALID_INPUT, purpose: 'preview' });
+
+      expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+      expect(mockPresignPreview).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown purpose as invalid input', async () => {
+      const result = await getRequestFileDownloadAction({
+        ...VALID_INPUT,
+        purpose: 'inline' as never,
+      });
+
+      expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    });
   });
 
   it('rejects structurally invalid input before authorizing anything', async () => {

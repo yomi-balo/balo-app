@@ -12,6 +12,7 @@ import {
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { loadExpertPortfolio, summaryIsUnread } from '@/lib/projects-inbox/portfolio-view';
+import { messagePreviewText } from '@/lib/project-request/conversation-view-types';
 import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import {
   buildYourMoveCards,
@@ -104,7 +105,14 @@ export async function loadMessageThreads(
       earliestUnreadAt: count.earliestUnreadAt,
       latestInbound:
         latest !== null && latest.senderUserId !== viewerUserId
-          ? { body: latest.body, at: latest.createdAt, senderFirstName: latest.senderFirstName }
+          ? {
+              body:
+                latest.requestSharedFileId === null
+                  ? latest.body
+                  : (messagePreviewText(latest.body, latest.requestSharedFileId) ?? latest.body),
+              at: latest.createdAt,
+              senderFirstName: latest.senderFirstName,
+            }
           : null,
       latestActivityAt,
     });

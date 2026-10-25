@@ -8,17 +8,34 @@ import { requestFileVisibleToClient, requestFileVisibleToTrack } from '@balo/sha
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, REQUEST_FILE_SERVER_EVENTS } from '@/lib/analytics/server';
-import { createPresignedRequestFileDownload } from '@/lib/storage/request-file';
+import {
+  createPresignedRequestFileDownload,
+  createPresignedRequestFilePreview,
+} from '@/lib/storage/request-file';
 import { authorizeRequestFileScope } from '@/lib/request-files/authorize-request-file-scope';
 import { toSerializerFile } from '@/lib/request-files/load-request-files';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
   fileId: z.uuid(),
+  /**
+   * `preview` asks for a URL the browser may RENDER in-app (a PDF in an iframe). It authorizes
+   * exactly like `download`: the gate below is the same code path, so a revoked or deleted file
+   * is `FILE_GONE` for both. Defaults to `download`, so every existing caller is unchanged.
+   */
+  purpose: z.enum(['download', 'preview']).default('download'),
 });
 
 export type GetRequestFileDownloadResult =
-  | { success: true; url: string }
+  | {
+      success: true;
+      url: string;
+      /**
+       * The STORED content type, so the caller picks a viewer without a second lookup. Not an
+       * authorization input and not audience data.
+       */
+      contentType: string;
+    }
   | { success: false; error: string };
 
 const FILE_GONE = 'This file is no longer available.';
@@ -38,7 +55,7 @@ const FILE_GONE = 'This file is no longer available.';
  * BAL-423 meeting-file entries.
  */
 export async function getRequestFileDownloadAction(
-  input: z.infer<typeof inputSchema>
+  input: z.input<typeof inputSchema>
 ): Promise<GetRequestFileDownloadResult> {
   let user;
   try {
@@ -51,7 +68,7 @@ export async function getRequestFileDownloadAction(
   if (!parsed.success) {
     return { success: false, error: 'Invalid request.' };
   }
-  const { requestId, fileId } = parsed.data;
+  const { requestId, fileId, purpose } = parsed.data;
 
   try {
     const scope = await authorizeRequestFileScope(user, requestId);
@@ -91,7 +108,17 @@ export async function getRequestFileDownloadAction(
     // list view (`loadRequestFiles` still passes `includeDeleted: true`), but cannot download
     // one, because the bytes are gone (Ruling 1).
 
-    const url = await createPresignedRequestFileDownload(found.file.r2Key, found.file.fileName);
+    // ⚠ ONLY A STORED PDF IS EVER SIGNED INLINE. Every other `preview` (images render through
+    // `<img>`; anything else is not previewable) gets the attachment URL, so the browser never
+    // renders a caller-influenced type from the R2 origin.
+    const url =
+      purpose === 'preview' && found.file.contentType === 'application/pdf'
+        ? await createPresignedRequestFilePreview(
+            found.file.r2Key,
+            found.file.fileName,
+            found.file.contentType
+          )
+        : await createPresignedRequestFileDownload(found.file.r2Key, found.file.fileName);
 
     trackServerAndFlush(REQUEST_FILE_SERVER_EVENTS.DOWNLOADED, {
       viewer_side: scope.side,
@@ -99,7 +126,7 @@ export async function getRequestFileDownloadAction(
       distinct_id: user.id,
     });
 
-    return { success: true, url };
+    return { success: true, url, contentType: found.file.contentType };
   } catch (error) {
     log.error('Failed to presign request file download', {
       requestId,

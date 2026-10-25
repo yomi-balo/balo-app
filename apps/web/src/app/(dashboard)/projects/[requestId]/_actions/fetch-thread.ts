@@ -7,11 +7,8 @@ import { conversationsRepository } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { readConversationAccess } from '@/lib/project-request/resolve-conversation-access';
-import {
-  mapMessageRowToView,
-  mapFileRowToView,
-  participantNames,
-} from '@/lib/project-request/conversation-view';
+import { attachRequestFileCards } from '@/lib/request-files/thread-file-cards';
+import { mapFileRowToView, participantNames } from '@/lib/project-request/conversation-view';
 import type {
   ConversationFileView,
   ConversationMessageView,
@@ -99,6 +96,8 @@ export async function fetchThreadAction(
             ? undefined
             : { createdAt: new Date(before.createdAtIso), id: before.id },
         limit: PAGE_SIZE,
+        // Request-surface reader: opts in to share cards, resolved per viewer just below.
+        includeRequestFileShares: true,
       }),
       includeFiles
         ? conversationsRepository.listFiles(conversationId, { kind: 'full' })
@@ -107,7 +106,7 @@ export async function fetchThreadAction(
 
     const result: FetchThreadResult = {
       success: true,
-      messages: page.messages.map(mapMessageRowToView),
+      messages: await attachRequestFileCards(user, requestId, page.messages),
       hasEarlier: page.hasEarlier,
     };
     if (files !== null) {

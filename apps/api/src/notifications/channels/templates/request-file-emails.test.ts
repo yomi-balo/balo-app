@@ -95,3 +95,37 @@ describe('getInAppTemplate — request-file-shared-expert / -client', () => {
     expect(clientOut.actionUrl).toBe('/projects/request-123');
   });
 });
+
+describe('request-file notes — noteExcerpt', () => {
+  it('renders the excerpt in both emails and in-app bodies when present', async () => {
+    const expertData = { ...EXPERT_DATA, noteExcerpt: 'Here is the latest scope' };
+    const clientData = { ...CLIENT_DATA, noteExcerpt: 'Draft attached' };
+    const expertHtml = clean(
+      await render(getEmailTemplate('request-file-shared-expert', expertData).component)
+    );
+    const clientHtml = clean(
+      await render(getEmailTemplate('request-file-shared-client', clientData).component)
+    );
+    expect(expertHtml).toContain('“Here is the latest scope”');
+    expect(clientHtml).toContain('“Draft attached”');
+    expect(getInAppTemplate('request-file-shared-expert', expertData).body).toBe(
+      'Acme Corp shared Requirements-pack-v2.pdf: “Here is the latest scope”'
+    );
+    expect(getInAppTemplate('request-file-shared-client', clientData).body).toBe(
+      'CloudPeak shared Dan-proposal-draft.pdf: “Draft attached”'
+    );
+  });
+
+  it('keeps the existing copy when there is no excerpt', async () => {
+    const html = clean(
+      await render(getEmailTemplate('request-file-shared-expert', EXPERT_DATA).component)
+    );
+    expect(html).not.toContain('Their note');
+    expect(getInAppTemplate('request-file-shared-expert', EXPERT_DATA).body).toBe(
+      'Acme Corp shared a file on this request.'
+    );
+    expect(getInAppTemplate('request-file-shared-client', CLIENT_DATA).body).toBe(
+      'CloudPeak shared a file on this request.'
+    );
+  });
+});

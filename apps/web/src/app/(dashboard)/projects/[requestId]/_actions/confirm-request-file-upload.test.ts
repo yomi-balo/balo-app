@@ -68,6 +68,14 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+const mockPublishConversationEvent = vi.fn();
+vi.mock('@/lib/realtime/ably-server', () => ({
+  publishConversationEvent: (...args: unknown[]) => {
+    mockPublishConversationEvent(...args);
+    return Promise.resolve();
+  },
+}));
+
 const mockSend = vi.fn();
 vi.mock('@/lib/storage/r2', () => ({
   r2Client: { send: (...args: unknown[]) => mockSend(...args) },
@@ -141,7 +149,58 @@ const VALID_CLIENT_INPUT = {
   contentType: 'application/pdf',
   sizeBytes: 1234,
   share: { mode: 'all_live_tracks' as const },
+  origin: { entryPoint: 'composer' as const, audienceChoice: 'this_thread' as const },
 };
+
+const CONVERSATION_ID = 'd0000000-0000-4000-8000-000000000004';
+const MESSAGE_ID = 'd0000000-0000-4000-8000-000000000009';
+
+function postedMessage(body: string): Record<string, unknown> {
+  return {
+    id: MESSAGE_ID,
+    conversationId: CONVERSATION_ID,
+    senderUserId: USER_ID,
+    body,
+    sentDuringMeetingId: null,
+    requestSharedFileId: 'file-1',
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+    deletedAt: null,
+  };
+}
+
+const CLIENT_FILE_ROW = {
+  id: 'file-1',
+  fileName: 'requirements.pdf',
+  contentType: 'application/pdf',
+  sizeBytes: 1234,
+  side: 'client',
+  audience: 'all_live_tracks',
+  expertRelationshipId: null,
+  createdAt: CREATED_AT,
+  deletedAt: null,
+  deletedByUserId: null,
+};
+
+function clientShareResult(threadBody: string | null): Record<string, unknown> {
+  return {
+    file: CLIENT_FILE_ROW,
+    grants: [],
+    resolvedLiveTracks: [
+      { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'all_live_tracks' },
+    ],
+    threadMessages:
+      threadBody === null
+        ? []
+        : [
+            {
+              relationshipId: REL_ID,
+              conversationId: CONVERSATION_ID,
+              message: postedMessage(threadBody),
+            },
+          ],
+  };
+}
 
 describe('confirmRequestFileUploadAction', () => {
   beforeEach(() => {
@@ -189,6 +248,7 @@ describe('confirmRequestFileUploadAction', () => {
         deletedByUserId: null,
       },
       grants: [],
+      threadMessages: [],
       resolvedLiveTracks: [
         { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'all_live_tracks' },
       ],
@@ -240,6 +300,7 @@ describe('confirmRequestFileUploadAction', () => {
         deletedByUserId: null,
       },
       grants: [{ relationshipId: REL_ID }],
+      threadMessages: [],
       resolvedLiveTracks: [
         { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'grant' },
       ],
@@ -274,6 +335,7 @@ describe('confirmRequestFileUploadAction', () => {
         deletedByUserId: null,
       },
       grants: [],
+      threadMessages: [],
       resolvedLiveTracks: [
         { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'own_track' },
       ],
@@ -449,5 +511,239 @@ describe('confirmRequestFileUploadAction', () => {
 
     expect(result.success).toBe(false);
     expect(result.success === false && result.error).not.toContain('deadlock');
+  });
+
+  // ── BAL-617: the note, the card messages, the realtime ping ──
+
+  describe('share note and card messages', () => {
+    beforeEach(() => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+    });
+
+    it('passes a sanitised note as threadMessageBody on every share', async () => {
+      mockShare.mockResolvedValue(clientShareResult('<p>Here you go</p>'));
+
+      await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: '  Here you go  ',
+      });
+
+      expect(mockShare).toHaveBeenCalledWith(
+        expect.objectContaining({ threadMessageBody: '<p>Here you go</p>' })
+      );
+    });
+
+    it('escapes markup in the note before it reaches the repository', async () => {
+      mockShare.mockResolvedValue(clientShareResult(''));
+
+      await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: '<script>alert(1)</script>hi',
+      });
+
+      const body = (mockShare.mock.calls[0]?.[0] as { threadMessageBody: string })
+        .threadMessageBody;
+      expect(body).not.toContain('<script');
+    });
+
+    it.each([undefined, '', '   \n  '])('passes an empty body for the note %j', async (note) => {
+      mockShare.mockResolvedValue(clientShareResult(null));
+
+      await confirmRequestFileUploadAction({ ...VALID_CLIENT_INPUT, note });
+
+      expect(mockShare).toHaveBeenCalledWith(expect.objectContaining({ threadMessageBody: '' }));
+    });
+
+    it('rejects an over-long note BEFORE touching R2, so the upload survives for a retry', async () => {
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: 'x'.repeat(4001),
+      });
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Keep your note under 4000 characters.',
+      });
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(mockDelete).not.toHaveBeenCalled();
+      expect(mockShare).not.toHaveBeenCalled();
+    });
+
+    it('returns one sender-lens card message per posted thread message', async () => {
+      mockLoadTrackDisplays.mockResolvedValue([
+        { relationshipId: REL_ID, trackName: 'Wei', access: { kind: 'live' } },
+      ]);
+      mockShare.mockResolvedValue(clientShareResult('<p>Here you go</p>'));
+
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: 'Here you go',
+      });
+
+      if (!result.success) throw new Error('expected success');
+      expect(result.threadMessages).toHaveLength(1);
+      const [entry] = result.threadMessages;
+      expect(entry?.relationshipId).toBe(REL_ID);
+      expect(entry?.message).toMatchObject({
+        id: MESSAGE_ID,
+        conversationId: CONVERSATION_ID,
+        bodyHtml: '<p>Here you go</p>',
+        senderUserId: USER_ID,
+        senderName: 'Sarah Chen',
+      });
+      expect(entry?.message.requestSharedFile).toEqual({ kind: 'client', file: result.view });
+    });
+
+    it('returns no card messages when no receiving track has an open thread', async () => {
+      mockShare.mockResolvedValue(clientShareResult(null));
+
+      const result = await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+
+      expect(result.success && result.threadMessages).toEqual([]);
+      expect(mockPublishConversationEvent).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠ AC6. A share notifies through `request_file.shared_with_*` ALONE. A `file_shared` ping is
+     * published once per posted card, content-free, and `conversation.message_posted` is never
+     * published — the recipient must not be told twice.
+     */
+    it('publishes the content-free file_shared ping once per posted card, and never message_posted', async () => {
+      mockShare.mockResolvedValue({
+        ...clientShareResult('<p>Here you go</p>'),
+        threadMessages: [
+          {
+            relationshipId: REL_ID,
+            conversationId: CONVERSATION_ID,
+            message: postedMessage('<p>Here you go</p>'),
+          },
+          {
+            relationshipId: 'b0000000-0000-4000-8000-000000000099',
+            conversationId: 'd0000000-0000-4000-8000-000000000098',
+            message: {
+              ...postedMessage('<p>Here you go</p>'),
+              id: 'd0000000-0000-4000-8000-000000000097',
+              conversationId: 'd0000000-0000-4000-8000-000000000098',
+            },
+          },
+        ],
+      });
+
+      await confirmRequestFileUploadAction({ ...VALID_CLIENT_INPUT, note: 'Here you go' });
+
+      expect(mockPublishConversationEvent).toHaveBeenCalledTimes(2);
+      expect(mockPublishConversationEvent).toHaveBeenNthCalledWith(
+        1,
+        CONVERSATION_ID,
+        'file_shared',
+        {
+          conversationId: CONVERSATION_ID,
+          messageId: MESSAGE_ID,
+          senderUserId: USER_ID,
+          createdAtIso: CREATED_AT.toISOString(),
+        }
+      );
+      for (const [, name, payload] of mockPublishConversationEvent.mock.calls) {
+        expect(name).not.toBe('message');
+        expect(Object.keys(payload as object).sort()).toEqual([
+          'conversationId',
+          'createdAtIso',
+          'messageId',
+          'senderUserId',
+        ]);
+      }
+      const events = mockPublish.mock.calls.map(([event]) => event);
+      expect(events).not.toContain('conversation.message_posted');
+      expect(events).toEqual(['request_file.shared_with_expert']);
+    });
+
+    it('adds a truncated plain-text noteExcerpt to the notification when there is a note', async () => {
+      mockShare.mockResolvedValue(clientShareResult(null));
+
+      await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: 'y'.repeat(300),
+      });
+
+      const payload = mockPublish.mock.calls[0]?.[1] as { noteExcerpt?: string };
+      expect(typeof payload.noteExcerpt).toBe('string');
+      expect((payload.noteExcerpt ?? '').length).toBeLessThanOrEqual(200);
+      expect(payload.noteExcerpt).not.toContain('<');
+    });
+
+    it('omits noteExcerpt from the notification when there is no note', async () => {
+      mockShare.mockResolvedValue(clientShareResult(null));
+
+      await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+
+      expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('noteExcerpt');
+    });
+
+    it('records the entry point, audience choice and has_note on the uploaded event', async () => {
+      mockShare.mockResolvedValue(clientShareResult(null));
+
+      await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        note: 'hello',
+        origin: { entryPoint: 'drop', audienceChoice: 'specific' },
+      });
+
+      expect(mockTrack).toHaveBeenCalledWith(
+        'request_file_uploaded',
+        expect.objectContaining({
+          entry_point: 'drop',
+          audience_choice: 'specific',
+          has_note: true,
+        })
+      );
+    });
+
+    it('rejects an unknown origin value as invalid input', async () => {
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        origin: { entryPoint: 'bogus' as never, audienceChoice: 'this_thread' },
+      });
+
+      expect(result).toEqual({ success: false, error: 'Invalid request.' });
+      expect(mockShare).not.toHaveBeenCalled();
+    });
+
+    it('expert arm: coerces audience_choice to this_thread and returns an audience-free card', async () => {
+      mockAuthorizeScope.mockResolvedValue(EXPERT_SCOPE);
+      mockShare.mockResolvedValue({
+        file: {
+          ...CLIENT_FILE_ROW,
+          side: 'expert',
+          audience: 'own_track',
+          expertRelationshipId: REL_ID,
+        },
+        grants: [],
+        resolvedLiveTracks: [
+          { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'own_track' },
+        ],
+        threadMessages: [
+          {
+            relationshipId: REL_ID,
+            conversationId: CONVERSATION_ID,
+            message: postedMessage(''),
+          },
+        ],
+      });
+
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        origin: { entryPoint: 'composer', audienceChoice: 'all_live_tracks' },
+      });
+
+      expect(mockTrack).toHaveBeenCalledWith(
+        'request_file_uploaded',
+        expect.objectContaining({ audience_choice: 'this_thread' })
+      );
+      if (!result.success) throw new Error('expected success');
+      const card = result.threadMessages[0]?.message.requestSharedFile;
+      expect(card?.kind).toBe('expert');
+      expect(JSON.stringify(result)).not.toContain('audience');
+      expect(JSON.stringify(result)).not.toContain('visibleToLiveTrackIds');
+    });
   });
 });

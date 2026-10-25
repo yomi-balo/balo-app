@@ -5,6 +5,28 @@ import type { RequestDetailView } from '@/lib/project-request/request-detail-vie
 vi.mock('server-only', () => ({}));
 
 import { RequestContext } from './request-context';
+import { RequestFilesProvider } from './files/request-files-provider';
+import type { RequestFilesView } from '@/lib/request-files/load-request-files';
+
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-request-file-download', () => ({
+  getRequestFileDownloadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/revoke-request-file-grant', () => ({
+  revokeRequestFileGrantAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/delete-request-file', () => ({
+  deleteRequestFileAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-shared-file-upload', () => ({
+  requestSharedFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-request-file-upload', () => ({
+  confirmRequestFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/discard-request-file-upload', () => ({
+  discardRequestFileUploadAction: vi.fn(),
+}));
+vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
   return {
@@ -130,5 +152,40 @@ describe('RequestContext (compact / 3-card)', () => {
   it('shows a neutral note when there are no documents', () => {
     render(<RequestContext view={view({ documents: [] })} variant="compact" />);
     expect(screen.getByText(/No documents attached/i)).toBeInTheDocument();
+  });
+});
+
+describe('RequestContext — Files card (BAL-617)', () => {
+  const FILES_VIEW: RequestFilesView = {
+    lens: 'client',
+    files: [],
+    liveTracks: [],
+    requestKind: 'matched',
+  };
+
+  function withFiles(variant: 'full' | 'compact'): void {
+    render(
+      <RequestFilesProvider requestId="req-1" initialView={FILES_VIEW} brief={null}>
+        <RequestContext view={view()} variant={variant} />
+      </RequestFilesProvider>
+    );
+  }
+
+  it.each(['full', 'compact'] as const)(
+    'replaces the documents heading with "Files" in the %s variant',
+    (variant) => {
+      withFiles(variant);
+      expect(screen.getByText('Files')).toBeInTheDocument();
+      expect(screen.queryByText('Request documents')).not.toBeInTheDocument();
+      expect(screen.queryByText('Attached documents')).not.toBeInTheDocument();
+      expect(screen.getByText('brief.pdf')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'All files · 1' })).toBeInTheDocument();
+    }
+  );
+
+  it('keeps the "Attached documents" block in the full variant without a file lens', () => {
+    render(<RequestContext view={view()} variant="full" />);
+    expect(screen.getByText('Attached documents')).toBeInTheDocument();
+    expect(screen.queryByText('Files')).not.toBeInTheDocument();
   });
 });

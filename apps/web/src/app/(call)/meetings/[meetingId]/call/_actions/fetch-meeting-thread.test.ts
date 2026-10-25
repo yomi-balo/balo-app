@@ -81,6 +81,18 @@ describe('fetchMeetingThreadAction — ⚠⚠ the read scope', () => {
     const [call] = mockListMessagesPage.mock.calls;
     expect((call?.[0] as { scope: { kind: string } }).scope.kind).not.toBe('meeting');
   });
+
+  /**
+   * ⚠ Request-share card messages are request-surface only. The in-call
+   * panel must NOT opt in: the repository excludes them by default (fail-closed), so a share
+   * never renders as a blank bubble during a call.
+   */
+  it('does not opt in to request-share cards', async () => {
+    await fetchMeetingThreadAction({ meetingId: MEETING_ID });
+
+    const [call] = mockListMessagesPage.mock.calls;
+    expect(call?.[0]).not.toHaveProperty('includeRequestFileShares');
+  });
 });
 
 describe('fetchMeetingThreadAction — the page', () => {

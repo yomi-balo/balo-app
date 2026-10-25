@@ -93,9 +93,13 @@ export const conversationUnreadRecheck: ScheduledRecheck = async (row) => {
    * leg seeded at SCHEDULE time survive when the OTHER leg wins at fire time: a message
    * preview rendered under a "1 new file" headline, contradicting the payload's own
    * "absent on a file-only exchange" contract. Explicit `undefined` clears the stale leg.
+   * A request-file share card never previews its note: the file's access can be revoked or
+   * closed after the share, and a lingering note would outlive it.
    */
   const preview =
-    summary.latestInboundBody === null ? undefined : previewOfHtmlBody(summary.latestInboundBody);
+    summary.latestInboundBody === null || summary.latestInboundIsRequestFileShare
+      ? undefined
+      : previewOfHtmlBody(summary.latestInboundBody) || undefined;
   const fileName = summary.latestInboundFileName ?? undefined;
 
   return {

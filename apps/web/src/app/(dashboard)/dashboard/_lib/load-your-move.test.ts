@@ -170,6 +170,37 @@ describe('loadExpertYourMove', () => {
     expect(JSON.stringify(cards)).not.toContain('Dana');
   });
 
+  it('snippets a note-less request-share card as "Shared a file", never blank', async () => {
+    m.loadExpertPortfolio.mockResolvedValue({ rows: [portfolioRow('quiet')], closedRows: [] });
+    m.conversationIdsForContexts.mockResolvedValue(new Map([['relationship:rel-quiet', 'conv-1']]));
+    m.listThreadSummaries.mockResolvedValue([
+      {
+        conversationId: 'conv-1',
+        unread: true,
+        latestMessage: {
+          body: '',
+          createdAt: NOW,
+          senderUserId: 'client-1',
+          senderFirstName: 'Dana',
+          requestSharedFileId: 'file-1',
+        },
+        latestInboundActivityAt: NOW,
+      },
+    ]);
+    m.countUnreadForViewer.mockResolvedValue(
+      new Map([['conv-1', { unreadCount: 1, earliestUnreadAt: NOW }]])
+    );
+
+    const { cards } = await loadExpertYourMove({
+      user: USER,
+      calendarNeedsReconnect: false,
+      now: NOW,
+    });
+
+    const messages = cards.find((c) => c.kind === 'messages');
+    expect(JSON.stringify(messages)).toContain('Shared a file');
+  });
+
   it('warns when the open-case scan was capped', async () => {
     m.loadExpertPortfolio.mockResolvedValue({ rows: [], closedRows: [] });
     m.listOpenCases.mockResolvedValue({ rows: [], hasMore: true });

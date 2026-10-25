@@ -61,6 +61,7 @@ function summary(overrides: Record<string, unknown> = {}): Record<string, unknow
     latestInboundAt: null,
     latestInboundSenderUserId: null,
     latestInboundBody: null,
+    latestInboundIsRequestFileShare: false,
     latestInboundFileName: null,
     ...overrides,
   };
@@ -193,6 +194,42 @@ describe('conversationUnreadRecheck', () => {
     if (result.publish) {
       expect(result.payload.preview).toBe('and one more thing');
       expect(result.payload.fileName).toBeUndefined();
+    }
+  });
+
+  it('never previews the note of a request-file share card', async () => {
+    mockUnreadSummaryFor.mockResolvedValue(
+      summary({
+        unreadMessageCount: 1,
+        distinctInboundSenderCount: 1,
+        latestInboundSenderUserId: 'user-priya',
+        latestInboundAt: LATEST_AT,
+        latestInboundBody: '<p>private pricing note</p>',
+        latestInboundIsRequestFileShare: true,
+      })
+    );
+    const result = await conversationUnreadRecheck(row({ preview: 'stale' }));
+    expect(result.publish).toBe(true);
+    if (result.publish) {
+      expect(result.payload.preview).toBeUndefined();
+    }
+  });
+
+  it('turns an empty message preview (note-less share) into undefined, never an empty string', async () => {
+    mockUnreadSummaryFor.mockResolvedValue(
+      summary({
+        unreadMessageCount: 1,
+        unreadFileCount: 0,
+        distinctInboundSenderCount: 1,
+        latestInboundSenderUserId: 'user-priya',
+        latestInboundAt: LATEST_AT,
+        latestInboundBody: '',
+      })
+    );
+    const result = await conversationUnreadRecheck(row({ preview: 'stale' }));
+    expect(result.publish).toBe(true);
+    if (result.publish) {
+      expect(result.payload.preview).toBeUndefined();
     }
   });
 

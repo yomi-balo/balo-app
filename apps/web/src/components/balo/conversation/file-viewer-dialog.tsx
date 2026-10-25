@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Download, ImageOff } from 'lucide-react';
+import { Download, ExternalLink, ImageOff } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,12 +12,18 @@ import {
 import { Button } from '@/components/ui/button';
 
 /**
- * In-app image viewer for an exchanged conversation file.
+ * In-app viewer for an exchanged file: an image (`kind="image"`, the default) or a PDF
+ * (`kind="pdf"`).
  *
- * ⚠ An `<img>` fetches a SUBRESOURCE, which ignores `Content-Disposition` — so this renders
+ * ⚠ An `<img>` fetches a SUBRESOURCE, which ignores `Content-Disposition` — so an image renders
  * from the existing presigned URL with its `attachment` header untouched, and no storage change
- * is needed. Images only: a PDF would need the header flipped to `inline`, which is a
- * security-bearing change because the presigned PUT does not sign `content-type`.
+ * is needed.
+ *
+ * ⚠⚠ A PDF IS A DOCUMENT, so an `<iframe>` honours the header and `attachment` would download it
+ * instead. A `kind="pdf"` caller must therefore pass a URL minted by the PREVIEW presign, which
+ * signs BOTH `inline` and a forced `application/pdf` content type (the PUT does not sign
+ * `content-type`, so the stored type is never trusted). Only request files have that presign; the
+ * conversation-file callers stay on images.
  *
  * ⚠ Mobile full-screen takeover follows `RecordingPlayerDialog`: a bottom Sheet would crop the
  * one piece of content this surface exists to show.
@@ -30,12 +36,14 @@ import { Button } from '@/components/ui/button';
 export function FileViewerDialog({
   open,
   onOpenChange,
+  kind = 'image',
   fileName,
   url,
   onDownload,
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  kind?: 'image' | 'pdf';
   fileName: string;
   url: string;
   onDownload: () => void;
@@ -83,27 +91,48 @@ export function FileViewerDialog({
                   <span className="sr-only">Loading preview…</span>
                 </output>
               )}
-              {/*
-               * ⚠ Plain `<img>`, never `next/image`: the source is a short-lived presigned URL
-               * on a third-party host, and the optimizer would cache private bytes under a
-               * key whose signature expires.
-               */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                key={url}
-                src={url}
-                alt={fileName}
-                onLoad={() => setStatus('ready')}
-                onError={() => setStatus('failed')}
-                className={`max-h-[60vh] w-auto max-w-full object-contain transition-opacity duration-200 ${
-                  status === 'ready' ? 'opacity-100' : 'opacity-0'
-                }`}
-              />
+              {kind === 'pdf' ? (
+                <iframe
+                  key={url}
+                  src={url}
+                  title={fileName}
+                  onLoad={() => setStatus('ready')}
+                  className={`h-[60vh] w-full transition-opacity duration-200 ${
+                    status === 'ready' ? 'opacity-100' : 'opacity-0'
+                  }`}
+                />
+              ) : (
+                <>
+                  {/*
+                   * ⚠ Plain `<img>`, never `next/image`: the source is a short-lived presigned URL
+                   * on a third-party host, and the optimizer would cache private bytes under a
+                   * key whose signature expires.
+                   */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    key={url}
+                    src={url}
+                    alt={fileName}
+                    onLoad={() => setStatus('ready')}
+                    onError={() => setStatus('failed')}
+                    className={`max-h-[60vh] w-auto max-w-full object-contain transition-opacity duration-200 ${
+                      status === 'ready' ? 'opacity-100' : 'opacity-0'
+                    }`}
+                  />
+                </>
+              )}
             </>
           )}
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex flex-wrap justify-end gap-2">
+          {kind === 'pdf' && (
+            <Button asChild variant="outline" className="min-h-11">
+              <a href={url} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open in new tab
+              </a>
+            </Button>
+          )}
           <Button variant="outline" className="min-h-11" onClick={onDownload}>
             <Download className="h-4 w-4" aria-hidden="true" /> Download
           </Button>
