@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveMigrationDatabaseUrl } from './migration-database-url';
+import { dotEnvDefinesMigrationUrl, resolveMigrationDatabaseUrl } from './migration-database-url';
 
 const PASSWORD = 'pw-must-never-be-logged';
 const SESSION_POOLER = `postgresql://postgres.ref:${PASSWORD}@aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres`;
@@ -82,10 +82,11 @@ describe('resolveMigrationDatabaseUrl', () => {
       '--config',
       'drizzle.config.ts',
     ];
+    const LOCAL_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/postgres';
 
     it('refuses a remote DATABASE_URL for migrate, offering the hotfix override only from main', () => {
       const error = thrownBy(() =>
-        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor('migrate'))
+        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, { argv: argvFor('migrate') })
       );
 
       expect(error.message).toContain(
@@ -98,41 +99,77 @@ describe('resolveMigrationDatabaseUrl', () => {
       expect(error.message).not.toContain(PASSWORD);
     });
 
-    it('refuses a remote DATABASE_URL for push, with no remote override', () => {
-      const error = thrownBy(() =>
-        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor('push'))
-      );
+    it.each([
+      ['DATABASE_URL', { DATABASE_URL: SESSION_POOLER }],
+      [
+        'MIGRATION_DATABASE_URL',
+        { MIGRATION_DATABASE_URL: SESSION_POOLER, DATABASE_URL: LOCAL_URL },
+      ],
+    ])('refuses push to a remote database from %s, with no remote override', (name, env) => {
+      const error = thrownBy(() => resolveMigrationDatabaseUrl(env, { argv: argvFor('push') }));
 
       expect(error.message).toContain(
-        'drizzle-kit push falls back to DATABASE_URL only for a local database'
+        `drizzle-kit push runs only against a local database (localhost or 127.0.0.1), and ${name} is not one`
       );
-      expect(error.message).toContain('push is for a local database only');
-      expect(error.message).not.toContain('MIGRATION_DATABASE_URL');
+      expect(error.message).not.toContain('MIGRATION_DATABASE_URL on the command line');
       expect(error.message).not.toContain(PASSWORD);
+    });
+
+    it('lets push use a local MIGRATION_DATABASE_URL', () => {
+      expect(
+        resolveMigrationDatabaseUrl(
+          { MIGRATION_DATABASE_URL: LOCAL_URL, DATABASE_URL: SESSION_POOLER },
+          { argv: argvFor('push') }
+        )
+      ).toBe(LOCAL_URL);
     });
 
     it.each([
       ['localhost (CI)', CI_EPHEMERAL],
-      ['127.0.0.1', 'postgresql://postgres:postgres@127.0.0.1:5432/postgres'],
+      ['127.0.0.1', LOCAL_URL],
       ['LOCALHOST', 'postgresql://postgres:postgres@LOCALHOST:5432/postgres'],
     ])('falls back to a local DATABASE_URL on %s', (_host, url) => {
-      expect(resolveMigrationDatabaseUrl({ DATABASE_URL: url }, argvFor('migrate'))).toBe(url);
+      expect(resolveMigrationDatabaseUrl({ DATABASE_URL: url }, { argv: argvFor('migrate') })).toBe(
+        url
+      );
     });
 
     it('accepts a remote database named explicitly in MIGRATION_DATABASE_URL (Railway, a hotfix)', () => {
       expect(
         resolveMigrationDatabaseUrl(
           { MIGRATION_DATABASE_URL: SESSION_POOLER, DATABASE_URL: TRANSACTION_POOLER },
-          argvFor('migrate')
+          { argv: argvFor('migrate') }
         )
       ).toBe(SESSION_POOLER);
+    });
+
+    it('refuses a remote MIGRATION_DATABASE_URL for migrate when .env assigns it', () => {
+      const error = thrownBy(() =>
+        resolveMigrationDatabaseUrl(
+          { MIGRATION_DATABASE_URL: SESSION_POOLER },
+          { argv: argvFor('migrate'), dotEnvDefinesMigrationUrl: true }
+        )
+      );
+
+      expect(error.message).toContain('MIGRATION_DATABASE_URL is assigned in .env');
+      expect(error.message).toContain('Remove it from .env');
+      expect(error.message).not.toContain(PASSWORD);
+    });
+
+    it('lets a local MIGRATION_DATABASE_URL from .env through for migrate', () => {
+      expect(
+        resolveMigrationDatabaseUrl(
+          { MIGRATION_DATABASE_URL: LOCAL_URL },
+          { argv: argvFor('migrate'), dotEnvDefinesMigrationUrl: true }
+        )
+      ).toBe(LOCAL_URL);
     });
 
     it.each(['generate', 'studio', 'check'])(
       'still lets %s use a remote DATABASE_URL',
       (command) => {
         expect(
-          resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor(command))
+          resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, { argv: argvFor(command) })
         ).toBe(SESSION_POOLER);
       }
     );
@@ -140,23 +177,38 @@ describe('resolveMigrationDatabaseUrl', () => {
     // drizzle-kit accepts `--config <path>` before the command; the path must not pass for it.
     it.each(['migrate', 'push'])('finds %s after a leading --config <path>', (command) => {
       expect(() =>
-        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, [
-          'node',
-          'bin.cjs',
-          '--config',
-          'drizzle.config.ts',
-          command,
-        ])
-      ).toThrow(`drizzle-kit ${command} falls back`);
+        resolveMigrationDatabaseUrl(
+          { DATABASE_URL: SESSION_POOLER },
+          { argv: ['node', 'bin.cjs', '--config', 'drizzle.config.ts', command] }
+        )
+      ).toThrow(`drizzle-kit ${command}`);
     });
 
     it('treats [::1] as remote, since drizzle-kit cannot connect to it', () => {
       expect(() =>
         resolveMigrationDatabaseUrl(
           { DATABASE_URL: 'postgresql://postgres:postgres@[::1]:5432/postgres' },
-          argvFor('migrate')
+          { argv: argvFor('migrate') }
         )
       ).toThrow(/migrate falls back/);
     });
+  });
+});
+
+describe('dotEnvDefinesMigrationUrl', () => {
+  it.each([
+    ['a plain assignment', 'DATABASE_URL=x\nMIGRATION_DATABASE_URL=postgresql://h/db\n'],
+    ['an export', 'export MIGRATION_DATABASE_URL="postgresql://h/db"'],
+    ['indentation and spaces', '  MIGRATION_DATABASE_URL = postgresql://h/db'],
+  ])('detects %s', (_shape, text) => {
+    expect(dotEnvDefinesMigrationUrl(text)).toBe(true);
+  });
+
+  it.each([
+    ['a comment', '# MIGRATION_DATABASE_URL=postgresql://h/db'],
+    ['a longer name', 'OLD_MIGRATION_DATABASE_URL=postgresql://h/db'],
+    ['only DATABASE_URL', 'DATABASE_URL=postgresql://h/db'],
+  ])('ignores %s', (_shape, text) => {
+    expect(dotEnvDefinesMigrationUrl(text)).toBe(false);
   });
 });

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /**
  * drizzle-kit (Railway's pre-deploy `db:migrate`) must never connect through Supabase's
@@ -9,8 +12,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  *
  * `migration-database-url.test.ts` covers the resolver. This test is the wiring half: it loads
  * the real `drizzle.config.ts`, so pointing `dbCredentials` back at `process.env.DATABASE_URL`, or
- * dropping the `process.argv` that lets `migrate` refuse a remote fallback, fails here even though
- * the resolver suite stays green.
+ * dropping the `process.argv` that lets `migrate` refuse a remote fallback, or the `<cwd>/.env`
+ * check that stops a `MIGRATION_DATABASE_URL` kept in `.env`, fails here even though the resolver
+ * suite stays green.
  */
 
 const SESSION_POOLER =
@@ -29,6 +33,7 @@ describe('invariant: drizzle-kit never migrates through the transaction pooler',
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     process.argv = originalArgv;
   });
 
@@ -54,5 +59,21 @@ describe('invariant: drizzle-kit never migrates through the transaction pooler',
     await expect(loadDrizzleConfig()).rejects.toThrow(
       /migrate falls back to DATABASE_URL only for a local database/
     );
+  });
+
+  it('refuses a remote MIGRATION_DATABASE_URL for migrate when <cwd>/.env assigns it', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'drizzle-config-'));
+    try {
+      writeFileSync(join(cwd, '.env'), `MIGRATION_DATABASE_URL=${SESSION_POOLER}\n`);
+      vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+      vi.stubEnv('MIGRATION_DATABASE_URL', SESSION_POOLER);
+      process.argv = ['node', 'drizzle-kit/bin.cjs', 'migrate'];
+
+      await expect(loadDrizzleConfig()).rejects.toThrow(
+        /MIGRATION_DATABASE_URL is assigned in \.env/
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

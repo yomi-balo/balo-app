@@ -21,11 +21,18 @@
  * `migrate` and `push` write schema, and Railway's pre-deploy owns the deployed database's
  * migrations. drizzle-kit loads `<cwd>/.env` by itself, and a developer's `packages/db/.env`
  * points `DATABASE_URL` at balo-dev, so a bare `pnpm db:migrate` on a branch would apply unmerged
- * migrations there. Those two commands therefore fall back to `DATABASE_URL` only for a local
- * database (`localhost` or `127.0.0.1`: CI, or Docker with its port published there). A remote
- * database for `migrate` must be named in `MIGRATION_DATABASE_URL`, which Railway sets and which
- * is the explicit override for a hotfix run from a checkout of main only. `push` never has a
- * remote use: it leaves schema the migration tracker doesn't know about.
+ * migrations there. So:
+ *
+ * - `push` runs only against a local database (`localhost` or `127.0.0.1`: CI, or Docker with its
+ *   port published there), whichever variable supplies the URL. It has no remote use: it leaves
+ *   schema the migration tracker doesn't know about.
+ * - `migrate` falls back to `DATABASE_URL` only for a local database. A remote database must be
+ *   named in `MIGRATION_DATABASE_URL`, which Railway sets and which is the explicit override for
+ *   a hotfix run from a checkout of main only. That override has to come from the command line:
+ *   drizzle-kit loads `.env` before the config runs, so a `MIGRATION_DATABASE_URL` kept in
+ *   `packages/db/.env` would make every bare `pnpm db:migrate` reach that database again.
+ *   `drizzle.config.ts` reports whether `<cwd>/.env` defines it, and a remote one is then refused.
+ *   Railway builds from git, where `.env` is ignored, so the pre-deploy step never has one.
  *
  * Returns `undefined` when neither variable is set, so `db:generate` keeps working without a
  * database. Errors never include the URL: it carries the password, and the pre-deploy log is
@@ -54,34 +61,46 @@ const DRIZZLE_KIT_COMMANDS: ReadonlySet<string> = new Set([
   'export',
 ]);
 
-const SCHEMA_WRITING_COMMANDS: ReadonlySet<string> = new Set(['migrate', 'push']);
-
 // No `[::1]`: drizzle-kit's postgres-js driver can't connect to a bracketed IPv6 host.
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
 
+// A line assigning MIGRATION_DATABASE_URL in dotenv syntax, optionally `export`-prefixed.
+const DOTENV_MIGRATION_URL_LINE = /^[ \t]*(?:export[ \t]+)?MIGRATION_DATABASE_URL[ \t]*=/m;
+
 type UrlVariable = (typeof URL_VARIABLES)[number];
 
-/**
- * @param argv `process.argv` of the drizzle-kit process, which carries the command (`migrate`,
- *   `push`, `generate`, …).
- */
+export interface MigrationUrlContext {
+  /** `process.argv` of the drizzle-kit process, which carries the command (`migrate`, …). */
+  readonly argv?: readonly string[];
+  /** Whether the `.env` drizzle-kit loaded (`<cwd>/.env`) assigns `MIGRATION_DATABASE_URL`. */
+  readonly dotEnvDefinesMigrationUrl?: boolean;
+}
+
 export function resolveMigrationDatabaseUrl(
   env: Readonly<Record<string, string | undefined>>,
-  argv: readonly string[] = []
+  { argv = [], dotEnvDefinesMigrationUrl = false }: MigrationUrlContext = {}
 ): string | undefined {
   const command = argv.slice(2).find((arg) => DRIZZLE_KIT_COMMANDS.has(arg));
   for (const name of URL_VARIABLES) {
     const url = env[name]?.trim();
-    if (url) return checkMigrationUrl(name, url, env.PGPORT?.trim(), command);
+    if (url) {
+      return checkMigrationUrl(name, url, env.PGPORT?.trim(), command, dotEnvDefinesMigrationUrl);
+    }
   }
   return undefined;
+}
+
+/** Whether dotenv text assigns `MIGRATION_DATABASE_URL`. */
+export function dotEnvDefinesMigrationUrl(dotEnvText: string): boolean {
+  return DOTENV_MIGRATION_URL_LINE.test(dotEnvText);
 }
 
 function checkMigrationUrl(
   name: UrlVariable,
   url: string,
   pgPort: string | undefined,
-  command: string | undefined
+  command: string | undefined,
+  migrationUrlFromDotEnv: boolean
 ): string {
   let port: string;
   let hostname: string;
@@ -101,26 +120,32 @@ function checkMigrationUrl(
     );
   }
   // WHATWG URL leaves a postgresql: hostname's case alone.
-  if (
-    name === 'DATABASE_URL' &&
-    command !== undefined &&
-    SCHEMA_WRITING_COMMANDS.has(command) &&
-    !LOCAL_HOSTS.has(hostname.toLowerCase())
-  ) {
-    throw new Error(command === 'push' ? PUSH_REFUSAL : MIGRATE_REFUSAL);
+  const isLocal = LOCAL_HOSTS.has(hostname.toLowerCase());
+  if (command === 'push' && !isLocal) {
+    throw new Error(
+      `drizzle-kit push runs only against a local database (localhost or 127.0.0.1), and ${name} ` +
+        "is not one. push leaves schema the migration tracker doesn't know about, and the next " +
+        "deploy's migrate fails on it. Why: packages/db/src/migration-database-url.ts."
+    );
+  }
+  if (command === 'migrate' && !isLocal && name === 'DATABASE_URL') {
+    throw new Error(MIGRATE_FALLBACK_REFUSAL);
+  }
+  if (command === 'migrate' && !isLocal && migrationUrlFromDotEnv) {
+    throw new Error(MIGRATE_DOTENV_REFUSAL);
   }
   return url;
 }
 
-const MIGRATE_REFUSAL =
+const MIGRATE_FALLBACK_REFUSAL =
   'drizzle-kit migrate falls back to DATABASE_URL only for a local database (localhost or ' +
   '127.0.0.1), and this one is not. Railway applies merged migrations on deploy. Run db:migrate ' +
   "yourself only against a local database, and never apply a branch's migrations to balo-dev. " +
-  'Only for a hotfix from a checkout of main, name the remote database in MIGRATION_DATABASE_URL. ' +
-  'Why: packages/db/src/migration-database-url.ts.';
+  'Only for a hotfix from a checkout of main, name the remote database in MIGRATION_DATABASE_URL ' +
+  'on the command line. Why: packages/db/src/migration-database-url.ts.';
 
-const PUSH_REFUSAL =
-  'drizzle-kit push falls back to DATABASE_URL only for a local database (localhost or ' +
-  '127.0.0.1), and this one is not. push is for a local database only: it leaves schema the ' +
-  "migration tracker doesn't know about, and the next deploy's migrate fails on it. Why: " +
+const MIGRATE_DOTENV_REFUSAL =
+  'MIGRATION_DATABASE_URL is assigned in .env, which drizzle-kit loads by itself, so every bare ' +
+  'db:migrate would reach that remote database. Remove it from .env; for a hotfix from a ' +
+  'checkout of main, pass it on the command line instead. Why: ' +
   'packages/db/src/migration-database-url.ts.';
