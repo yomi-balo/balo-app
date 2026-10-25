@@ -7,6 +7,7 @@ import {
   engagementChangeOrders,
   engagementMilestones,
   projectEngagements,
+  proposalMilestones,
   type AuditEvent,
   type EngagementMilestone,
 } from '../schema';
@@ -14,6 +15,7 @@ import {
   engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
+  proposalFactory,
   proposalPaymentInstallmentFactory,
   userFactory,
 } from '../test/factories';
@@ -27,6 +29,7 @@ import {
 } from './engagement-change-orders';
 import { ChangeOrderCoherenceError } from './change-order-coherence';
 import { EngagementNotActiveError } from './_shared/engagement-lock';
+import { engagementMilestonesRepository } from './engagement-milestones';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 
 async function auditFor(entityId: string): Promise<AuditEvent[]> {
@@ -1061,5 +1064,106 @@ describe('engagementChangeOrdersRepository.listStaleSentForAlerts', () => {
       projectTitle: null,
       agencyName: null,
     });
+  });
+});
+
+describe('engagementChangeOrdersRepository.approve — not bound by the plain-write scope guards (BAL-623)', () => {
+  async function proposalMilestoneId(): Promise<string> {
+    const source = await proposalFactory();
+    const [row] = await db
+      .insert(proposalMilestones)
+      .values({ proposalId: source.proposal.id, sortOrder: 0, title: 'From the proposal' })
+      .returning({ id: proposalMilestones.id });
+    if (row === undefined) throw new Error('proposal milestone insert failed');
+    return row.id;
+  }
+
+  async function milestone(id: string): Promise<EngagementMilestone | undefined> {
+    const [row] = await db
+      .select()
+      .from(engagementMilestones)
+      .where(eq(engagementMilestones.id, id));
+    return row;
+  }
+
+  it('on T&M applies an add line and an estimate edit, and never stamps content_edited_at', async () => {
+    const { engagementId, userId, first } = await seedProject({
+      projectValues: { pricingMethod: 'tm', priceCents: 0, rateCents: 20_000, cadence: 'monthly' },
+    });
+    await db
+      .update(engagementMilestones)
+      .set({
+        valueCents: null,
+        estimatedMinutes: 600,
+        sourceProposalMilestoneId: await proposalMilestoneId(),
+      })
+      .where(eq(engagementMilestones.id, first.id));
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'More discovery, plus a migration.',
+      newTotalCents: null,
+      lines: [
+        line({ op: 'edit', engagementMilestoneId: first.id, title: 'D', estimatedMinutes: 900 }),
+        line({ op: 'add', title: 'Data migration', estimatedMinutes: 120 }),
+      ],
+    });
+    await repo.send({ engagementId, orderId: draft.id, userId });
+
+    await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    const edited = await milestone(first.id);
+    expect(edited?.title).toBe('D');
+    expect(edited?.estimatedMinutes).toBe(900);
+    expect(edited?.contentEditedAt).toBeNull();
+    const live = await liveMilestones(engagementId);
+    expect(live.find((m) => m.title === 'Data migration')?.estimatedMinutes).toBe(120);
+  });
+
+  it('on a fixed price applies a remove line on a proposal-origin milestone', async () => {
+    const { engagementId, userId, first } = await seedProject();
+    await db
+      .update(engagementMilestones)
+      .set({ sourceProposalMilestoneId: await proposalMilestoneId() })
+      .where(eq(engagementMilestones.id, first.id));
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Drop discovery.',
+      newTotalCents: 300_000,
+      lines: [line({ op: 'remove', engagementMilestoneId: first.id, title: 'Discovery' })],
+    });
+    await repo.send({ engagementId, orderId: draft.id, userId });
+
+    await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    expect((await milestone(first.id))?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('the approved edit appears in listProposalContentEdits as a change_order row after the direct edit', async () => {
+    const { engagementId, userId, first } = await seedProject();
+    await db
+      .update(engagementMilestones)
+      .set({ sourceProposalMilestoneId: await proposalMilestoneId() })
+      .where(eq(engagementMilestones.id, first.id));
+    await engagementMilestonesRepository.editDescriptive({
+      milestoneId: first.id,
+      userId,
+      title: 'Discovery, revised',
+    });
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Agree the wording.',
+      newTotalCents: 500_000,
+      lines: [line({ op: 'edit', engagementMilestoneId: first.id, title: 'Discovery, agreed' })],
+    });
+    await repo.send({ engagementId, orderId: draft.id, userId });
+    await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    expect(await engagementMilestonesRepository.listProposalContentEdits([first.id])).toEqual([
+      { milestoneId: first.id, kind: 'direct', before: { title: 'Discovery' } },
+      { milestoneId: first.id, kind: 'change_order', before: {} },
+    ]);
   });
 });

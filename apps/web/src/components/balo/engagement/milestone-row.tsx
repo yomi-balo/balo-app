@@ -1,4 +1,4 @@
-import { Check, Lock, RotateCcw, Target } from 'lucide-react';
+import { Check, Lock, PencilLine, RotateCcw, Target } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { RICH_TEXT_CONTENT_CLASS } from '@/components/balo/rich-text/types';
@@ -44,6 +44,11 @@ export function MilestoneRailNode({
     );
   }
   return <div className="border-border bg-card size-[26px] shrink-0 rounded-full border-2" />;
+}
+
+/** A before/after value in quotes, or the unquoted word "empty" when the field was blank. */
+function ChangeSide({ text }: Readonly<{ text: string }>): React.JSX.Element {
+  return text === '' ? <>empty</> : <>“{text}”</>;
 }
 
 interface MilestoneRowProps {
@@ -146,6 +151,12 @@ export function MilestoneRow({
               Change pending
             </Badge>
           )}
+          {node.proposalChanges.length > 0 && (
+            <Badge variant="outline" className="border-info/25 bg-info/10 text-info shrink-0">
+              <PencilLine className="size-3" aria-hidden />
+              Changed since proposal
+            </Badge>
+          )}
           {node.valueLabel !== null && (
             <Badge
               variant="outline"
@@ -178,6 +189,22 @@ export function MilestoneRow({
               {node.acceptanceCriteria}
             </span>
           </p>
+        )}
+
+        {node.proposalChanges.length > 0 && (
+          <details className="group mt-2">
+            <summary className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex min-h-11 cursor-pointer items-center text-xs font-medium focus-visible:ring-2 focus-visible:outline-none">
+              What changed
+            </summary>
+            <ul className="border-border bg-card mt-1 space-y-1.5 rounded-lg border px-3 py-2">
+              {node.proposalChanges.map((change) => (
+                <li key={change.field} className="text-muted-foreground text-xs leading-relaxed">
+                  <strong className="text-foreground font-semibold">{change.label}:</strong> was{' '}
+                  <ChangeSide text={change.before} />, now <ChangeSide text={change.after} />
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
 
         {timing.length > 0 && (

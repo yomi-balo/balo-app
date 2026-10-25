@@ -35,6 +35,7 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/reorder-milestones', () => 
 
 import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-rail';
 import { toast } from 'sonner';
+import { track, ENGAGEMENT_EVENTS } from '@/lib/analytics';
 import { startMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/start-milestone';
 import { completeMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/complete-milestone';
 import { revertMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/revert-milestone';
@@ -75,6 +76,8 @@ function node(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView {
     feedback: null,
     changePending: false,
     changeProvenance: null,
+    proposalChanges: [],
+    removalNeedsChangeOrder: false,
     ...overrides,
   };
 }
@@ -82,7 +85,8 @@ function node(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView {
 function renderRail(
   milestones: MilestoneNodeView[],
   emptyState: EmptyStateView | null = EMPTY_STATE,
-  proposeChange?: ProposeChangeLink
+  proposeChange?: ProposeChangeLink,
+  addNeedsChangeOrder = false
 ) {
   return render(
     <ExpertMilestoneRail
@@ -92,6 +96,7 @@ function renderRail(
       expertPersonShort="Priya"
       clientCompanyName="Northwind Industrial"
       proposeChange={proposeChange}
+      addNeedsChangeOrder={addNeedsChangeOrder}
     />
   );
 }
@@ -453,5 +458,186 @@ describe('ExpertMilestoneRail — change orders', () => {
     expect(screen.getByRole('button', { name: 'Move First down' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit Second' })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /start milestone/i })).toHaveLength(2);
+  });
+});
+
+describe('ExpertMilestoneRail — scope changes that need approval (BAL-623)', () => {
+  const link: ProposeChangeLink = {
+    href: '/engagements/eng-1/change-order',
+    label: 'Propose a change',
+    disabledReason: null,
+  };
+  const REFUSAL =
+    "Adding a milestone on a time-and-materials project needs Northwind Industrial's approval first. Propose it as a change.";
+
+  it('hides "Add milestone" on time and materials', () => {
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, true);
+    expect(screen.queryByRole('button', { name: /add milestone/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit First' })).toBeInTheDocument();
+  });
+
+  it('keeps "Add milestone" on fixed price', () => {
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, false);
+    expect(screen.getByRole('button', { name: /add milestone/i })).toBeInTheDocument();
+  });
+
+  it('offers to propose the first milestone, pre-filled, on an empty time-and-materials plan', () => {
+    renderRail([], EMPTY_STATE, link, true);
+    expect(
+      screen.queryByRole('button', { name: /add the first milestone/i })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /propose the first milestone/i })).toHaveAttribute(
+      'href',
+      '/engagements/eng-1/change-order?prefill=add'
+    );
+  });
+
+  it('shows the reason on an empty time-and-materials plan while a change is with the client', () => {
+    renderRail(
+      [],
+      EMPTY_STATE,
+      { ...link, disabledReason: 'Waiting on Northwind Industrial.' },
+      true
+    );
+    expect(screen.getByText('Waiting on Northwind Industrial.')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /propose the first milestone/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('explains a refused add with a pre-filled link, tracks it, and shows no error toast', async () => {
+    addMock.mockResolvedValue({
+      success: false,
+      error: REFUSAL,
+      scopeChange: { reason: 'add_on_tm', pricingMethod: 'tm' },
+    });
+    const user = userEvent.setup();
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, false);
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/title/i), 'Data migration');
+    await user.click(within(dialog).getByRole('button', { name: /add milestone/i }));
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(REFUSAL);
+    expect(within(notice).getByRole('link', { name: 'Propose a change' })).toHaveAttribute(
+      'href',
+      '/engagements/eng-1/change-order?prefill=add&title=Data+migration'
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED, {
+      engagement_id: 'eng-1',
+      reason: 'add_on_tm',
+      pricing_method: 'tm',
+      trigger: 'refused',
+    });
+  });
+
+  it('shows the disabled reason in the notice while a change is already with the client', async () => {
+    addMock.mockResolvedValue({
+      success: false,
+      error: REFUSAL,
+      scopeChange: { reason: 'add_on_tm', pricingMethod: 'tm' },
+    });
+    const user = userEvent.setup();
+    renderRail(
+      [node({ id: 'a', title: 'First' })],
+      EMPTY_STATE,
+      { ...link, disabledReason: 'Waiting on Northwind Industrial.' },
+      false
+    );
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/title/i), 'Data migration');
+    await user.click(within(dialog).getByRole('button', { name: /add milestone/i }));
+    const notice = await screen.findByRole('status');
+    expect(within(notice).getByText('Waiting on Northwind Industrial.')).toBeInTheDocument();
+    expect(within(notice).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('dismisses the notice', async () => {
+    addMock.mockResolvedValue({
+      success: false,
+      error: REFUSAL,
+      scopeChange: { reason: 'add_on_tm', pricingMethod: 'tm' },
+    });
+    const user = userEvent.setup();
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, false);
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/title/i), 'Data migration');
+    await user.click(within(dialog).getByRole('button', { name: /add milestone/i }));
+    await screen.findByRole('status');
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('clears the notice after the next successful change', async () => {
+    addMock.mockResolvedValueOnce({
+      success: false,
+      error: REFUSAL,
+      scopeChange: { reason: 'add_on_tm', pricingMethod: 'tm' },
+    });
+    const user = userEvent.setup();
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, false);
+    for (const attempt of [1, 2]) {
+      await user.click(screen.getByRole('button', { name: /add milestone/i }));
+      const dialog = await screen.findByRole('dialog');
+      await user.type(within(dialog).getByLabelText(/title/i), `Data migration ${attempt}`);
+      await user.click(within(dialog).getByRole('button', { name: /add milestone/i }));
+      if (attempt === 1) await screen.findByRole('status');
+    }
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Milestone added'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('still toasts an ordinary failure', async () => {
+    addMock.mockResolvedValue({ success: false, error: 'Something went wrong. Please try again.' });
+    const user = userEvent.setup();
+    renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link, false);
+    await user.click(screen.getByRole('button', { name: /add milestone/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/title/i), 'Data migration');
+    await user.click(within(dialog).getByRole('button', { name: /add milestone/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Something went wrong. Please try again.')
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  describe('removing agreed scope on a fixed-price project', () => {
+    const contracted = node({ id: 'a', title: 'First', removalNeedsChangeOrder: true });
+
+    it('pre-empts with the approval explanation and no destructive button', async () => {
+      const user = userEvent.setup();
+      renderRail([contracted], EMPTY_STATE, link);
+      await user.click(screen.getByRole('button', { name: /remove First/i }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveTextContent(/part of the scope Northwind Industrial agreed to/);
+      expect(within(dialog).getByRole('link', { name: 'Propose a change' })).toHaveAttribute(
+        'href',
+        '/engagements/eng-1/change-order?prefill=remove&milestone=a'
+      );
+      expect(
+        within(dialog).queryByRole('button', { name: /remove milestone/i })
+      ).not.toBeInTheDocument();
+      expect(removeMock).not.toHaveBeenCalled();
+      expect(track).toHaveBeenCalledWith(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED, {
+        engagement_id: 'eng-1',
+        reason: 'remove_contracted',
+        pricing_method: 'fixed',
+        trigger: 'pre_empted',
+      });
+    });
+
+    it('keeps the ordinary confirm for a milestone the expert added', async () => {
+      const user = userEvent.setup();
+      renderRail([node({ id: 'a', title: 'First' })], EMPTY_STATE, link);
+      await user.click(screen.getByRole('button', { name: /remove First/i }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('button', { name: /remove milestone/i })).toBeInTheDocument();
+      expect(track).not.toHaveBeenCalled();
+    });
   });
 });

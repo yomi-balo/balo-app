@@ -4,9 +4,11 @@ import {
   AUTO_ACCEPT_DAYS,
   blocksMarkReady,
   type ChangeOrderWithLines,
+  type MilestoneContentEditRow,
   type ProjectDeliveryStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
+import { isContractedMilestone } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
@@ -24,6 +26,7 @@ import {
   type ChangeRequestState,
 } from './change-request-view';
 import { effectiveExpertPriceCents, findOpenOrder } from './change-order-view';
+import { deriveProposalChanges, type ProposalContentChange } from './proposal-content-changes';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -192,6 +195,10 @@ export interface MilestoneNodeView {
   changePending: boolean;
   /** An approved change order added (`added`) or edited (`updated`) this milestone. */
   changeProvenance: 'added' | 'updated' | null;
+  /** Wording the expert revised after the proposal was accepted; empty means no chip. */
+  proposalChanges: ProposalContentChange[];
+  /** Fixed price only: removing this milestone needs the client's approval, so Remove explains that up front. */
+  removalNeedsChangeOrder: boolean;
 }
 
 export interface CountdownView {
@@ -231,6 +238,14 @@ export interface ReviewBannerView {
   clientDecision: ReviewClientDecisionView | null;
   /** Client lens, after a change request: the previous round's note. Null otherwise. */
   lastRequest: { heading: string; note: string } | null;
+  /** Client lens only: milestones whose wording changed since the proposal; null when none. */
+  changedSinceProposal: ChangedSinceProposalView | null;
+}
+
+export interface ChangedSinceProposalView {
+  heading: string;
+  intro: string;
+  items: { milestoneId: string; milestoneTitle: string; fieldsLabel: string }[];
 }
 
 /**
@@ -331,6 +346,8 @@ export interface EngagementWorkspaceView {
   adminOversight: AdminOversightView | null;
   /** Expert-lens + active only: the "Finish the project" card (D4); null otherwise. */
   completionCard: CompletionCardView | null;
+  /** Time-and-materials: new milestones need the client's approval, so "Add milestone" is hidden. */
+  addMilestoneNeedsChangeOrder: boolean;
 }
 
 // ── Date / relative helpers (deterministic under TZ=UTC) ─────────────────────
@@ -486,15 +503,29 @@ function milestoneProvenance(
   return provenance;
 }
 
+function groupContentEdits(
+  rows: readonly MilestoneContentEditRow[]
+): Map<string, MilestoneContentEditRow[]> {
+  const grouped = new Map<string, MilestoneContentEditRow[]>();
+  for (const row of rows) {
+    const list = grouped.get(row.milestoneId);
+    if (list === undefined) grouped.set(row.milestoneId, [row]);
+    else list.push(row);
+  }
+  return grouped;
+}
+
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
   lens: EngagementLens,
   crState: ChangeRequestState,
-  changeOrders: readonly ChangeOrderWithLines[]
+  changeOrders: readonly ChangeOrderWithLines[],
+  contentEdits: readonly MilestoneContentEditRow[]
 ): MilestoneNodeView[] {
   const pending = pendingMilestoneIds(changeOrders);
   const provenance = milestoneProvenance(changeOrders);
+  const editsByMilestone = groupContentEdits(contentEdits);
   const statusLabels: Record<MilestoneNodeVariant, string> = {
     pending: 'Not started',
     in_progress: 'In progress',
@@ -550,6 +581,13 @@ function deriveMilestones(
       feedback: deriveMilestoneFeedback(engagement, crState, m.id, lens),
       changePending: pending.has(m.id),
       changeProvenance: provenance.get(m.id) ?? null,
+      proposalChanges:
+        m.contentEditedAt === null
+          ? []
+          : deriveProposalChanges(m, editsByMilestone.get(m.id) ?? []),
+      removalNeedsChangeOrder:
+        engagement.pricingMethod === 'fixed' &&
+        isContractedMilestone(m, provenance.get(m.id) === 'added'),
     };
   });
 }
@@ -583,11 +621,31 @@ function deriveProgress(
   };
 }
 
+/** The review card's list of revised milestones, or null when nothing changed. */
+function deriveChangedSinceProposal(
+  milestones: readonly MilestoneNodeView[],
+  parties: EngagementParties
+): ChangedSinceProposalView | null {
+  const changed = milestones.filter((m) => m.proposalChanges.length > 0);
+  if (changed.length === 0) return null;
+  const noun = changed.length === 1 ? 'milestone' : 'milestones';
+  return {
+    heading: 'Changed since proposal',
+    intro: `${parties.expertRetroFirstMention} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
+    items: changed.map((m) => ({
+      milestoneId: m.id,
+      milestoneTitle: m.title,
+      fieldsLabel: m.proposalChanges.map((change) => change.label).join(', '),
+    })),
+  };
+}
+
 function deriveReviewBanner(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
-  now: Date
+  now: Date,
+  milestones: readonly MilestoneNodeView[]
 ): ReviewBannerView | null {
   if (engagement.status !== 'pending_acceptance') return null;
 
@@ -614,6 +672,7 @@ function deriveReviewBanner(
       body: `Have a look through the milestones below, then accept the project or request changes. If there's nothing to change, the project will be marked accepted on ${autoOnLabel}.`,
       countdown,
       lastRequest: deriveLastRequest(engagement),
+      changedSinceProposal: deriveChangedSinceProposal(milestones, parties),
       clientDecision: {
         acceptModalBody: `Accepting confirms ${expertShort} delivered the project as agreed — it can't be un-accepted afterwards, and Balo raises the final invoice from here. If something's not right, request changes instead. ${expertShort} and the Balo team are notified.`,
         requestChangesIntro: `The project goes back to active with your note attached — ${expertShort} and the Balo team are notified, and the project is marked ready again once it's fixed. The ${AUTO_ACCEPT_DAYS}-day review window restarts then.`,
@@ -630,6 +689,7 @@ function deriveReviewBanner(
       countdown,
       clientDecision: null,
       lastRequest: null,
+      changedSinceProposal: null,
     };
   }
   return {
@@ -638,6 +698,7 @@ function deriveReviewBanner(
     countdown,
     clientDecision: null,
     lastRequest: null,
+    changedSinceProposal: null,
   };
 }
 
@@ -864,7 +925,8 @@ export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
   now: Date = new Date(),
-  changeOrders: readonly ChangeOrderWithLines[] = []
+  changeOrders: readonly ChangeOrderWithLines[] = [],
+  contentEdits: readonly MilestoneContentEditRow[] = []
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -882,6 +944,14 @@ export function mapEngagementToWorkspaceView(
         };
 
   const crState = deriveChangeRequestState(engagement, parties);
+  const milestones = deriveMilestones(
+    engagement,
+    parties,
+    ctx.lens,
+    crState,
+    changeOrders,
+    contentEdits
+  );
 
   const header: EngagementHeaderView = {
     engagementTitle,
@@ -902,14 +972,15 @@ export function mapEngagementToWorkspaceView(
     header,
     parties,
     progress: deriveProgress(engagement, ctx.lens, parties, crState),
-    milestones: deriveMilestones(engagement, parties, ctx.lens, crState, changeOrders),
+    milestones,
     hasMilestones: engagement.milestones.length > 0,
-    reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now),
+    reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now, milestones),
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
     completedBanner: deriveCompletedBanner(engagement, ctx.lens, parties),
     cancelledBanner: deriveCancelledBanner(engagement),
     emptyState: deriveEmptyState(engagement, ctx.lens, parties),
     adminOversight: deriveAdminOversight(engagement, ctx.lens, parties, now),
     completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
+    addMilestoneNeedsChangeOrder: engagement.pricingMethod === 'tm',
   };
 }

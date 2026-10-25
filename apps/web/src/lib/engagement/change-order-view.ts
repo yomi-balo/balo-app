@@ -7,8 +7,8 @@ import type {
 } from '@balo/db';
 import {
   changeOrderMinutesDelta,
-  CHANGE_ORDER_STALE_BUSINESS_DAYS,
   clientPriceChangeCents,
+  isChangeOrderStale,
 } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { businessDaysBetween } from '@balo/shared/timezone';
@@ -536,7 +536,7 @@ function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): 
   if (open.status === 'sent' && open.sentAt !== null) {
     const days = businessDaysBetween(open.sentAt, vc.now);
     const base = `Waiting on ${clientCompanyName} since ${formatShortUtc(open.sentAt)} (${days} business days).`;
-    return days >= CHANGE_ORDER_STALE_BUSINESS_DAYS
+    return isChangeOrderStale(open.sentAt, vc.now)
       ? `${base} It's in the pending-actions queue.`
       : base;
   }

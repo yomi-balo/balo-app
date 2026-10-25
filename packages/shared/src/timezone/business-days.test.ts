@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addBusinessDays, businessDaysBetween } from './business-days';
+import { addBusinessDays, businessDaysBetween, lastWeekdayOnOrBefore } from './business-days';
 
 // 2026-10-26 is a Monday.
 const MON = new Date('2026-10-26T10:00:00Z');
@@ -52,5 +52,17 @@ describe('addBusinessDays', () => {
     for (let n = 0; n <= 12; n += 1) {
       expect(businessDaysBetween(addBusinessDays(FRI, -n), FRI)).toBe(n);
     }
+  });
+});
+
+describe('lastWeekdayOnOrBefore', () => {
+  it('returns a weekday unchanged', () => {
+    expect(lastWeekdayOnOrBefore(MON)).toEqual(MON);
+    expect(lastWeekdayOnOrBefore(FRI)).toEqual(FRI);
+  });
+
+  it('anchors Saturday and Sunday to the Friday before, keeping the time of day', () => {
+    expect(lastWeekdayOnOrBefore(SAT)).toEqual(FRI);
+    expect(lastWeekdayOnOrBefore(SUN)).toEqual(FRI);
   });
 });

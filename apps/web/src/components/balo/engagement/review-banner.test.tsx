@@ -31,6 +31,7 @@ const banner: ReviewBannerView = {
     milestoneHelper: 'Milestones you pick go back to CloudPeak with your feedback.',
   },
   lastRequest: null,
+  changedSinceProposal: null,
 };
 
 const baseProps = {
@@ -89,5 +90,38 @@ describe('ReviewBanner', () => {
   it('renders NO action buttons for the admin lens', () => {
     render(<ReviewBanner {...baseProps} lens="admin" />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  describe('changed since the proposal', () => {
+    const changed = {
+      heading: 'Changed since proposal',
+      intro:
+        'Priya @ CloudPeak revised the wording of 1 milestone after the proposal was accepted.',
+      items: [
+        {
+          milestoneId: 'm-1',
+          milestoneTitle: 'Discovery & design',
+          fieldsLabel: 'Title, Done when',
+        },
+      ],
+    };
+
+    it('lists the revised milestones on the client lens', () => {
+      render(
+        <ReviewBanner
+          {...baseProps}
+          lens="client"
+          banner={{ ...banner, changedSinceProposal: changed }}
+        />
+      );
+      expect(screen.getByText('Changed since proposal')).toBeInTheDocument();
+      expect(screen.getByText(/revised the wording of 1 milestone/)).toBeInTheDocument();
+      expect(screen.getByText('Discovery & design — Title, Done when')).toBeInTheDocument();
+    });
+
+    it('renders nothing when there are no changes', () => {
+      render(<ReviewBanner {...baseProps} lens="client" />);
+      expect(screen.queryByText('Changed since proposal')).not.toBeInTheDocument();
+    });
   });
 });

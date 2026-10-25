@@ -164,6 +164,29 @@ describe('getEmailTemplate — engagement-scope-changed-client', () => {
     expect(result.subject).toBe('The delivery plan for CPQ implementation was updated');
     expect(result.component).toBeDefined();
   });
+
+  it('renders the what-changed line only when changeDetail is present', async () => {
+    const { render } = await import('@react-email/components');
+    const base = {
+      recipientName: 'Dana',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      changeSummary: "revised 'Data migration'",
+      projectTitle: 'CPQ implementation',
+      engagementId: 'eng-1',
+    };
+    const withDetail = await render(
+      getEmailTemplate('engagement-scope-changed-client', {
+        ...base,
+        changeDetail: 'Title: “Old” → “New”',
+      }).component
+    );
+    const without = await render(
+      getEmailTemplate('engagement-scope-changed-client', base).component
+    );
+    expect(withDetail).toContain('What changed:');
+    expect(withDetail).toContain('Old');
+    expect(without).not.toContain('What changed:');
+  });
 });
 
 describe('getInAppTemplate — BAL-333 scope-changed factories', () => {
@@ -176,6 +199,22 @@ describe('getInAppTemplate — BAL-333 scope-changed factories', () => {
     expect(out.title).toBe('Delivery plan updated');
     expect(out.body).toBe("Priya updated the delivery plan: added 'Data migration dry-run'.");
     expect(out.actionUrl).toBe('/engagements/eng-1');
+  });
+
+  it('scope-changed-client appends changeDetail; the admin body ignores it', () => {
+    const data = {
+      actorExpertLabel: 'Priya',
+      changeSummary: "revised 'Data migration'",
+      changeDetail: 'Title: “Old” → “New”',
+      projectTitle: 'CPQ implementation',
+      engagementId: 'eng-1',
+    };
+    expect(getInAppTemplate('engagement-scope-changed-client', data).body).toBe(
+      "Priya updated the delivery plan: revised 'Data migration'. What changed: Title: “Old” → “New”"
+    );
+    expect(getInAppTemplate('engagement-scope-changed-admin', data).body).toBe(
+      "CPQ implementation: Priya revised 'Data migration'."
+    );
   });
 
   it('scope-changed-admin → project-scoped body with the same summary format', () => {

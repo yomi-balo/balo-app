@@ -16,6 +16,7 @@ const EXPECTED_FILES = [
   'dashboard-up-next.md',
   'dashboard-your-move-for-clients.md',
   'dashboard-your-move.md',
+  'editing-milestones-after-acceptance.md',
   'handling-a-change-request.md',
   'joining-a-call.md',
   'pausing-new-work.md',

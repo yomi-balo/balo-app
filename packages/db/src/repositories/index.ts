@@ -331,6 +331,8 @@ export {
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
   type EngagementMilestoneStatus,
+  type MilestoneEditBefore,
+  type MilestoneContentEditRow,
 } from './engagement-milestones';
 // ── Change orders on a live project (BAL-622) ──────────────────────────────
 export {
@@ -355,6 +357,7 @@ export {
   blocksMarkReady,
   ChangeOrderPendingError,
   MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 } from './_shared/change-order-guards';
 export type { EngagementChangeOrder, EngagementChangeOrderLine } from '../schema';
 export {

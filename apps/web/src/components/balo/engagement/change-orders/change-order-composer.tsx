@@ -41,6 +41,7 @@ import {
   linesFrom,
   rowState,
   rowsFor,
+  withPrefillLine,
   type ComposerMilestone,
   type ComposerMilestoneStatus,
   type ComposerPricing,
@@ -72,6 +73,8 @@ interface ChangeOrderComposerProps {
   hourlyRateCents?: number | null;
   milestones: ComposerMilestone[];
   order: ChangeOrderComposerOrder | null;
+  /** An attempted change to open with as an extra line, from the redirect link. */
+  prefillLine?: ComposerSavedLine | null;
 }
 
 /** The hourly rate in whole currency units, or with cents when it is not a whole amount. */
@@ -250,6 +253,7 @@ export function ChangeOrderComposer({
   hourlyRateCents = null,
   milestones,
   order,
+  prefillLine,
 }: Readonly<ChangeOrderComposerProps>): React.JSX.Element {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -260,7 +264,7 @@ export function ChangeOrderComposer({
   }, []);
 
   const [rows, setRows] = useState<ComposerRow[]>(() =>
-    rowsFor(milestones, order?.lines ?? [], newKey)
+    rowsFor(milestones, withPrefillLine(order?.lines ?? [], prefillLine ?? null), newKey)
   );
   const [note, setNote] = useState(order?.note ?? '');
   const [totalInput, setTotalInput] = useState(() =>

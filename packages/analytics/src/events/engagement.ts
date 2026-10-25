@@ -12,6 +12,9 @@
  * engagement status, milestone id, milestone timing metrics, and the `distinct_id`
  * (user UUID) — never a party name/email or the completion-note body.
  */
+
+import type { ScopeChangeRedirectReason } from '@balo/shared/engagements';
+
 export const ENGAGEMENT_SERVER_EVENTS = {
   WORKSPACE_VIEWED: 'engagement_workspace_viewed',
   MILESTONE_STARTED: 'engagement_milestone_started',
@@ -55,6 +58,8 @@ export type EngagementAcceptanceMethod = 'client' | 'auto';
  */
 export const ENGAGEMENT_EVENTS = {
   COMPLETION_BLOCKED_VIEW: 'engagement_completion_blocked_view',
+  /** A plain milestone write needed the client's approval, so the expert was pointed at a change order. */
+  SCOPE_CHANGE_REDIRECTED: 'engagement_scope_change_redirected',
 } as const;
 
 export interface EngagementEventMap {
@@ -62,6 +67,13 @@ export interface EngagementEventMap {
     engagement_id: string;
     /** Live milestones still to complete before the project can be sent for review. */
     milestones_remaining: number;
+  };
+  [ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED]: {
+    engagement_id: string;
+    reason: ScopeChangeRedirectReason;
+    pricing_method: 'fixed' | 'tm';
+    /** `refused` = the write was attempted and declined; `pre_empted` = the UI explained it up front. */
+    trigger: 'refused' | 'pre_empted';
   };
 }
 

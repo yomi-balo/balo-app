@@ -56,6 +56,23 @@ export function ReviewBanner({
             </p>
           </blockquote>
         )}
+        {banner.changedSinceProposal !== null && (
+          <div className="border-border bg-card mt-3 rounded-lg border px-3 py-2">
+            <p className="text-foreground text-xs font-medium">
+              {banner.changedSinceProposal.heading}
+            </p>
+            <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+              {banner.changedSinceProposal.intro}
+            </p>
+            <ul className="text-foreground mt-1.5 space-y-0.5 text-sm">
+              {banner.changedSinceProposal.items.map((item) => (
+                <li key={item.milestoneId}>
+                  {item.milestoneTitle} — {item.fieldsLabel}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <ReviewBannerActions
           lens={lens}
           engagementId={engagementId}

@@ -14,6 +14,7 @@ export interface EngagementScopeChangedClientEmailProps {
   readonly firstName: string;
   readonly actorExpertLabel: string;
   readonly changeSummary: string;
+  readonly changeDetail?: string;
   readonly projectTitle: string;
   readonly engagementId: string;
   readonly baseUrl: string;
@@ -30,6 +31,7 @@ export function EngagementScopeChangedClientEmail({
   firstName = 'there',
   actorExpertLabel = 'Your expert',
   changeSummary = 'updated a milestone',
+  changeDetail,
   projectTitle = 'your project',
   engagementId,
   baseUrl,
@@ -50,6 +52,9 @@ export function EngagementScopeChangedClientEmail({
         <Text style={shared.bodyText}>
           {`${actorExpertLabel} updated the delivery plan: ${changeSummary}. The project price is unchanged.`}
         </Text>
+        {changeDetail !== undefined && (
+          <Text style={shared.bodyText}>{`What changed: ${changeDetail}`}</Text>
+        )}
 
         <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
           <Button style={shared.smallCtaButton} href={`${baseUrl}/engagements/${engagementId}`}>

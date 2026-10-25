@@ -1,0 +1,1 @@
+ALTER TABLE "engagement_milestones" ADD COLUMN "content_edited_at" timestamp with time zone;

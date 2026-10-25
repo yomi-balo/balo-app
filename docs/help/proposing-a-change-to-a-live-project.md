@@ -7,7 +7,7 @@ category:
 order: 4
 published: false
 updated: 2026-10-26
-related: [handling-a-change-request]
+related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---
 
 When the scope of a live project shifts, you propose a change and the client approves it. This

@@ -23,6 +23,8 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     feedback: null,
     changePending: false,
     changeProvenance: null,
+    proposalChanges: [],
+    removalNeedsChangeOrder: false,
     ...overrides,
   };
 }

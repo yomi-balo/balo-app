@@ -25,10 +25,21 @@ const {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
+  MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
+  class MilestoneChangePendingError extends Error {}
+  class ScopeChangeRequiresChangeOrderError extends Error {
+    constructor(
+      public readonly reason: string,
+      public readonly pricingMethod: string
+    ) {
+      super(reason);
+    }
+  }
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
@@ -36,6 +47,8 @@ const {
     EngagementNotActiveError,
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
+    MilestoneChangePendingError,
+    ScopeChangeRequiresChangeOrderError,
   };
 });
 
@@ -48,6 +61,8 @@ vi.mock('@balo/db', () => ({
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
+  MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 }));
 
 const mockTrack = vi.fn();
@@ -189,5 +204,25 @@ describe('removeMilestoneAction', () => {
     await removeMilestoneAction(INPUT);
     const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
     expect(payload.recipientId).toBeUndefined();
+  });
+});
+
+describe('removeMilestoneAction · scope-change refusal', () => {
+  it('returns the typed scopeChange and client-naming copy when the repo needs a change order', async () => {
+    mockSoftDelete.mockRejectedValue(
+      new ScopeChangeRequiresChangeOrderError('remove_contracted', 'fixed')
+    );
+    const res = await removeMilestoneAction({
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+    });
+    expect(res).toEqual({
+      success: false,
+      error: expect.stringContaining('Northwind Industrial'),
+      scopeChange: { reason: 'remove_contracted', pricingMethod: 'fixed' },
+    });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

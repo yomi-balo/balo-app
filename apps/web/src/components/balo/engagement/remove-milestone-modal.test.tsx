@@ -69,4 +69,41 @@ describe('RemoveMilestoneModal', () => {
     );
     expect(await axe(baseElement)).toHaveNoViolations();
   });
+
+  describe('redirect variant', () => {
+    const redirect = {
+      message: 'This milestone is part of the scope Northwind Industrial agreed to.',
+      cta: { href: '/engagements/eng-1/change-order?prefill=remove&milestone=m-1' },
+    };
+
+    it('explains the approval and links to the composer with no destructive button', () => {
+      renderModal({ redirect });
+      expect(
+        screen.getByText(/part of the scope Northwind Industrial agreed to/)
+      ).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Propose a change' })).toHaveAttribute(
+        'href',
+        redirect.cta.href
+      );
+      expect(screen.queryByRole('button', { name: /remove milestone/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /keep it/i })).toBeInTheDocument();
+    });
+
+    it('shows the milestone title apart from the message, with no run-on dash', () => {
+      renderModal({ redirect });
+      const title = screen.getByText('Data migration dry-run');
+      expect(title.tagName).toBe('STRONG');
+      expect(title.parentElement).toHaveTextContent(/^Data migration dry-run\s*This milestone/);
+      expect(title.parentElement).not.toHaveTextContent('—');
+    });
+
+    it('shows the reason instead of a link while a change is already with the client', () => {
+      renderModal({
+        redirect: { message: redirect.message, cta: { disabledReason: 'Waiting on a decision.' } },
+      });
+      expect(screen.getByText('Waiting on a decision.')).toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /remove milestone/i })).not.toBeInTheDocument();
+    });
+  });
 });

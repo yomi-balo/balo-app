@@ -64,6 +64,12 @@ export const engagementMilestones = pgTable(
     valueCents: integer('value_cents'), // Fixed-only; nullable; post-snapshot only via an approved change order.
     estimatedMinutes: integer('estimated_minutes'), // T&M-only; nullable.
 
+    // When the expert last changed the wording (title / description / acceptance criteria)
+    // of a milestone that came from the accepted proposal. Stamped only by
+    // `editDescriptive`; a change-order approval never stamps it (the client approved that
+    // wording). Null on a milestone with no proposal origin. Never filtered on, so unindexed.
+    contentEditedAt: timestamp('content_edited_at', { withTimezone: true }),
+
     // ── Delivery state ──
     status: engagementMilestoneStatusEnum('status').notNull().default('pending'),
     startedByUserId: uuid('started_by_user_id').references(() => users.id, {

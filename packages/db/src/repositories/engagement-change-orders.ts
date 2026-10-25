@@ -18,7 +18,7 @@ import {
 } from '../schema';
 import { recordDeliveryAudit } from './_shared/delivery-audit';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
-import { openChangeOrderPredicate } from './_shared/change-order-guards';
+import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
 import { isUniqueViolation } from './experts';
@@ -327,32 +327,6 @@ async function softDeleteLinesTx(tx: DbTx, orderId: string): Promise<void> {
 
 async function withLinesTx(tx: DbTx, order: EngagementChangeOrder): Promise<ChangeOrderRecord> {
   return { ...order, lines: await liveLinesTx(tx, order.id) };
-}
-
-async function readProjectTermsTx(
-  exec: DbExecutor,
-  engagementId: string
-): Promise<{
-  pricingMethod: PricingMethod;
-  priceCents: number;
-  depositCents: number | null;
-  sourceProposalId: string | null;
-}> {
-  const [child] = await exec
-    .select({
-      pricingMethod: projectEngagements.pricingMethod,
-      priceCents: projectEngagements.priceCents,
-      depositCents: projectEngagements.depositCents,
-      sourceProposalId: projectEngagements.sourceProposalId,
-    })
-    .from(projectEngagements)
-    .where(
-      and(eq(projectEngagements.engagementId, engagementId), isNull(projectEngagements.deletedAt))
-    );
-  if (child === undefined) {
-    throw new Error(`Project engagement not found: ${engagementId}`);
-  }
-  return child;
 }
 
 async function effectivePriceCentsTx(exec: DbExecutor, engagementId: string): Promise<number> {

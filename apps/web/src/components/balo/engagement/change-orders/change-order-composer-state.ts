@@ -137,6 +137,27 @@ export function rowsFor(
   return rows;
 }
 
+/**
+ * The saved lines with an attempted change appended. The draft is never overwritten: a
+ * remove already targeting that milestone, or an add with the same title, is left as it is.
+ */
+export function withPrefillLine(
+  saved: readonly ComposerSavedLine[],
+  prefill: ComposerSavedLine | null
+): ComposerSavedLine[] {
+  if (prefill === null) return [...saved];
+  const duplicate =
+    prefill.op === 'remove'
+      ? saved.some((line) => line.op === 'remove' && line.milestoneId === prefill.milestoneId)
+      : saved.some((line) => line.op === 'add' && sameTitle(line.title, prefill.title));
+  return duplicate ? [...saved] : [...saved, prefill];
+}
+
+function sameTitle(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase();
+  return left !== '' && left === b.trim().toLowerCase();
+}
+
 function rowChanged(row: ComposerRow, orig: ComposerOriginal, pricing: ComposerPricing): boolean {
   if (row.title.trim() !== orig.title) return true;
   if (row.description.trim() !== orig.description) return true;

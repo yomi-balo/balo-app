@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ScopeChangeCtaAction, type ScopeChangeCta } from './scope-change-notice';
 
 interface RemoveMilestoneModalProps {
   open: boolean;
@@ -22,6 +23,11 @@ interface RemoveMilestoneModalProps {
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * Set when removing this milestone needs the client's approval: the dialog explains that
+   * and links to the change-order composer instead of offering a destructive confirm.
+   */
+  redirect?: { message: string; cta: ScopeChangeCta };
 }
 
 /**
@@ -41,6 +47,7 @@ export function RemoveMilestoneModal({
   pending,
   onConfirm,
   onCancel,
+  redirect,
 }: Readonly<RemoveMilestoneModalProps>): React.JSX.Element {
   const handleOpenChange = useCallback(
     (next: boolean): void => {
@@ -54,9 +61,18 @@ export function RemoveMilestoneModal({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent showCloseButton={!pending}>
         <DialogHeader>
-          <DialogTitle>Remove milestone</DialogTitle>
+          <DialogTitle>
+            {redirect === undefined ? 'Remove milestone' : 'Needs approval first'}
+          </DialogTitle>
           <DialogDescription>
-            {isCompleted ? (
+            {redirect !== undefined ? (
+              <>
+                <strong className="text-foreground mb-1 block font-semibold">
+                  {milestoneTitle}
+                </strong>
+                {redirect.message}
+              </>
+            ) : isCompleted ? (
               <>
                 <strong className="text-destructive font-semibold">
                   {milestoneTitle} is already complete
@@ -77,14 +93,18 @@ export function RemoveMilestoneModal({
           <Button variant="ghost" type="button" onClick={onCancel} disabled={pending}>
             Keep it
           </Button>
-          <Button variant="destructive" type="button" onClick={onConfirm} disabled={pending}>
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <Trash2 className="size-4" aria-hidden />
-            )}
-            Remove milestone
-          </Button>
+          {redirect !== undefined ? (
+            <ScopeChangeCtaAction cta={redirect.cta} />
+          ) : (
+            <Button variant="destructive" type="button" onClick={onConfirm} disabled={pending}>
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Trash2 className="size-4" aria-hidden />
+              )}
+              Remove milestone
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

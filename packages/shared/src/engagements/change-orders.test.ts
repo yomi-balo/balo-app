@@ -2,9 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { applyBaloFee } from '../pricing';
 import {
   CHANGE_ORDER_STALE_BUSINESS_DAYS,
+  SCOPE_CHANGE_REDIRECT_REASONS,
   changeOrderMinutesDelta,
+  changeOrderStaleCutoff,
   clientPriceChangeCents,
   deriveProjectSettlement,
+  isChangeOrderStale,
+  isContractedMilestone,
 } from './change-orders';
 
 describe('CHANGE_ORDER_STALE_BUSINESS_DAYS', () => {
@@ -105,4 +109,79 @@ describe('changeOrderMinutesDelta', () => {
       changeOrderMinutesDelta([{ op: 'edit', estimatedMinutes: null, beforeEstimatedMinutes: 45 }])
     ).toBe(-45);
   });
+});
+
+describe('changeOrderStaleCutoff / isChangeOrderStale', () => {
+  // 2026-10-26 is a Monday.
+  const SENT_MON_1500 = new Date('2026-10-26T15:00:00Z');
+
+  it('is five business days back on a weekday, keeping the time of day', () => {
+    expect(changeOrderStaleCutoff(new Date('2026-11-02T09:00:00Z'))).toEqual(
+      new Date('2026-10-26T09:00:00Z')
+    );
+  });
+
+  it('is not stale the next Monday before the sent time, and stale after it', () => {
+    expect(isChangeOrderStale(SENT_MON_1500, new Date('2026-11-02T09:00:00Z'))).toBe(false);
+    expect(isChangeOrderStale(SENT_MON_1500, new Date('2026-11-02T16:00:00Z'))).toBe(true);
+  });
+
+  it('is stale exactly at the cutoff (sent on or before it)', () => {
+    expect(isChangeOrderStale(SENT_MON_1500, new Date('2026-11-02T15:00:00Z'))).toBe(true);
+  });
+
+  it('anchors a weekend now to the Friday before, so it never fires on the fourth business day', () => {
+    const saturday = new Date('2026-10-31T16:00:00Z');
+    expect(changeOrderStaleCutoff(saturday)).toEqual(new Date('2026-10-23T16:00:00Z'));
+    expect(isChangeOrderStale(SENT_MON_1500, saturday)).toBe(false);
+    expect(isChangeOrderStale(new Date('2026-10-23T15:00:00Z'), saturday)).toBe(true);
+  });
+});
+
+describe('SCOPE_CHANGE_REDIRECT_REASONS', () => {
+  it('lists the three refusals', () => {
+    expect(SCOPE_CHANGE_REDIRECT_REASONS).toEqual([
+      'estimate_change',
+      'add_on_tm',
+      'remove_contracted',
+    ]);
+  });
+});
+
+describe('isContractedMilestone', () => {
+  const cases: {
+    name: string;
+    source: string | null;
+    value: number | null;
+    coAdded: boolean;
+    expected: boolean;
+  }[] = [
+    {
+      name: 'expert-added (no origin, no value, no order)',
+      source: null,
+      value: null,
+      coAdded: false,
+      expected: false,
+    },
+    { name: 'proposal-origin', source: 'pm-1', value: null, coAdded: false, expected: true },
+    { name: 'carries a value', source: null, value: 0, coAdded: false, expected: true },
+    {
+      name: 'added by an approved change order',
+      source: null,
+      value: null,
+      coAdded: true,
+      expected: true,
+    },
+    { name: 'all three', source: 'pm-1', value: 10_000, coAdded: true, expected: true },
+  ];
+  for (const c of cases) {
+    it(`${c.name} → ${String(c.expected)}`, () => {
+      expect(
+        isContractedMilestone(
+          { sourceProposalMilestoneId: c.source, valueCents: c.value },
+          c.coAdded
+        )
+      ).toBe(c.expected);
+    });
+  }
 });

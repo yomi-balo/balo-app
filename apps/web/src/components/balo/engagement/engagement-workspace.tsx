@@ -96,6 +96,7 @@ export function EngagementWorkspace({
           expertPersonShort={view.parties.expertPersonShort}
           clientCompanyName={view.parties.clientCompanyName}
           proposeChange={proposeChangeFor(changeOrders)}
+          addNeedsChangeOrder={view.addMilestoneNeedsChangeOrder}
         />
       </Reveal>
     );
