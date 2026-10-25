@@ -110,7 +110,10 @@ beforeEach(() => {
     isClientOwner: false,
     isDeliveringExpert: true,
   });
-  mockRequestCompletion.mockResolvedValue({ completionRequestedAt: REQUESTED_AT, roundNumber: 0 });
+  mockRequestCompletion.mockResolvedValue({
+    completionRequestedAt: REQUESTED_AT,
+    priorChangeRounds: 0,
+  });
   mockCountByEntityAndAction.mockResolvedValue(1);
   mockProposalFindById.mockResolvedValue({ timeframeWeeks: 10 });
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
@@ -198,7 +201,7 @@ describe('requestCompletionAction', () => {
         milestones_total: 2,
         review_cycle: 1,
         is_resubmission: false,
-        round_number: 0,
+        prior_change_rounds: 0,
         distinct_id: 'user-1',
         days_since_kickoff: expect.any(Number),
       })
@@ -217,26 +220,26 @@ describe('requestCompletionAction', () => {
       autoDate: '11 Jul',
       reviewDays: 7,
       isResubmission: false,
-      roundNumber: 0,
+      priorChangeRounds: 0,
     });
 
     expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
   });
 
-  it('flags a resubmission after a change request: round_number from the locked write, is_resubmission true', async () => {
+  it('flags a resubmission after a change request: prior_change_rounds from the locked write, is_resubmission true', async () => {
     mockRequestCompletion.mockResolvedValue({
       completionRequestedAt: REQUESTED_AT,
-      roundNumber: 2,
+      priorChangeRounds: 2,
     });
     const result = await requestCompletionAction(INPUT);
     expect(result).toEqual({ success: true });
     expect(mockTrack).toHaveBeenCalledWith(
       'engagement_completion_requested',
-      expect.objectContaining({ is_resubmission: true, round_number: 2 })
+      expect.objectContaining({ is_resubmission: true, prior_change_rounds: 2 })
     );
     expect(mockPublish).toHaveBeenCalledWith(
       'engagement.completion_requested',
-      expect.objectContaining({ isResubmission: true, roundNumber: 2 })
+      expect.objectContaining({ isResubmission: true, priorChangeRounds: 2 })
     );
   });
 

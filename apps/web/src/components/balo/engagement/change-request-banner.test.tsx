@@ -70,8 +70,8 @@ describe('ChangeRequestBanner — work_outstanding', () => {
   });
 });
 
-describe('ChangeRequestBanner — status role', () => {
-  it('announces every variant as a status region', () => {
+describe('ChangeRequestBanner — landmark', () => {
+  it('renders every variant as a labelled region, never a live region', () => {
     const variants: ChangeRequestBannerView[] = [
       outstanding,
       changesMade,
@@ -85,7 +85,8 @@ describe('ChangeRequestBanner — status role', () => {
           clientCompanyName="Northwind Industrial"
         />
       );
-      expect(screen.getByRole('status')).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Change request' })).toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
       unmount();
     }
   });

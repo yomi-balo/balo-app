@@ -120,7 +120,7 @@ const expertApplicationEditedPayload = z.object({
 // apps/web/src/lib/notifications/types.ts.
 const expertReferralInvitedPayload = z.object({
   correlationId: z.uuid(),
-  recipientEmail: z.string().email().max(254),
+  recipientEmail: z.email().max(254),
   inviterName: z.string().min(1).max(120),
 });
 
@@ -331,7 +331,7 @@ const projectBillingReminderPayload = z.object({
 // recipient. Mirrors packages/shared/src/notifications/index.ts.
 const proposalSharedPayload = z.object({
   correlationId: z.uuid(),
-  recipientEmail: z.string().email().max(254),
+  recipientEmail: z.email().max(254),
   shareToken: z.string().min(20).max(200),
   sharerName: z.string().min(1).max(160),
   sharerOrgLabel: z.string().min(1).max(200),
@@ -425,7 +425,7 @@ const engagementCompletionRequestedPayload = z.object({
   autoDate: z.string().min(1).max(40),
   reviewDays: z.number().int().nonnegative(),
   isResubmission: z.boolean().optional(),
-  roundNumber: z.number().int().nonnegative().optional(),
+  priorChangeRounds: z.number().int().nonnegative().optional(),
 });
 
 // BAL-334 (D4) expert withdrew the completion request (expert → client owner + admins).
@@ -657,7 +657,7 @@ const bookingConfirmedPayload = z.object({
   caseTitle: z.string().min(1).max(200),
   isNewCase: z.boolean(),
   priorConsultationCount: z.number().int().nonnegative(),
-  scheduledStartIso: z.string().datetime(),
+  scheduledStartIso: z.iso.datetime(),
   durationMinutes: z.number().int().positive(),
   joinPath: transitionalJoinPathSchema,
   provisioned: z.boolean(),
@@ -678,8 +678,8 @@ const bookingRescheduledPayload = z.object({
   clientCompanyName: z.string().min(1).max(200),
   expertPartyLabel: z.string().min(1).max(200),
   caseTitle: z.string().min(1).max(200),
-  previousScheduledStartIso: z.string().datetime(),
-  scheduledStartIso: z.string().datetime(),
+  previousScheduledStartIso: z.iso.datetime(),
+  scheduledStartIso: z.iso.datetime(),
   durationMinutes: z.number().int().positive(),
   // No `joinPath` — a reschedule reuses the same room, so the link is unchanged and neither
   // template renders one. See `BookingRescheduledPayload`. `booking.confirmed` keeps its own.
@@ -773,11 +773,11 @@ const rescheduleProposalSentPayload = z.object({
   expertPersonLabel: z.string().min(1).max(200),
   clientCompanyName: z.string().min(1).max(200),
   caseTitle: z.string().min(1).max(200),
-  originalScheduledStartIso: z.string().datetime(),
-  optionStartIsos: z.array(z.string().datetime()).min(1).max(3),
+  originalScheduledStartIso: z.iso.datetime(),
+  optionStartIsos: z.array(z.iso.datetime()).min(1).max(3),
   durationMinutes: z.number().int().positive(),
   hoursToStart: z.number(),
-  expiresAtIso: z.string().datetime(),
+  expiresAtIso: z.iso.datetime(),
 });
 
 // BAL-411 — the client declined every option. `correlationId` = proposalId — one decline per
@@ -791,7 +791,7 @@ const rescheduleProposalDeclinedPayload = z.object({
   clientCompanyName: z.string().min(1).max(200),
   caseTitle: z.string().min(1).max(200),
   declinedByLabel: z.string().min(1).max(200),
-  originalScheduledStartIso: z.string().datetime(),
+  originalScheduledStartIso: z.iso.datetime(),
   durationMinutes: z.number().int().positive(),
 });
 
@@ -809,8 +809,8 @@ const conversationAvailabilitySharedPayload = z.object({
   expertProfileId: z.uuid(),
   expertPersonName: z.string().min(1).max(200),
   expertPartyLabel: z.string().min(1).max(200),
-  sharedAtIso: z.string().datetime(),
-  previousSharedAtIso: z.string().datetime().nullable(),
+  sharedAtIso: z.iso.datetime(),
+  previousSharedAtIso: z.iso.datetime().nullable(),
 });
 
 // BAL-283 — a free intro call was booked on a project-request thread (web-published, AFTER
@@ -917,7 +917,7 @@ const conversationIntroCallBookedPayload = z.object({
   clientPersonName: z.string().min(1).max(200),
   clientCompanyName: z.string().min(1).max(200),
   expertPartyLabel: z.string().min(1).max(200),
-  scheduledStartIso: z.string().datetime(),
+  scheduledStartIso: z.iso.datetime(),
   durationMinutes: z.number().int().positive(),
   joinPath: transitionalJoinPathSchema,
   provisioned: z.boolean(),

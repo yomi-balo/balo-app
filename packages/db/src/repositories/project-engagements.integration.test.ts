@@ -1286,7 +1286,7 @@ describe('projectEngagementsRepository.requestCompletion', () => {
     expect(advanced.status).toBe('pending_acceptance');
     expect(advanced.completionRequestedByUserId).toBe(userId);
     expect(advanced.completionRequestedAt).toBeInstanceOf(Date);
-    expect(advanced.roundNumber).toBe(0);
+    expect(advanced.priorChangeRounds).toBe(0);
 
     const events = await auditEventsForEntity(engagementId);
     expect(events).toHaveLength(1);
@@ -1797,7 +1797,7 @@ describe('projectEngagementsRepository.findWithMilestones — change-request rou
       engagementId,
       userId,
     });
-    expect(resubmission.roundNumber).toBe(1);
+    expect(resubmission.priorChangeRounds).toBe(1);
     const resubmitted = await projectEngagementsRepository.findWithMilestones(engagementId);
     expect(resubmitted?.changeRequestNote).toBeNull();
     expect(resubmitted?.changeRequestRounds.map((r) => r.note)).toEqual(['Round one.']);

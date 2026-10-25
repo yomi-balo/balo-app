@@ -1573,15 +1573,15 @@ export const projectEngagementsRepository = {
    * `InvalidEngagementTransitionError`) AND every LIVE milestone is `completed`. A
    * ZERO-milestone project passes vacuously (the retainer/embedded seam) — this is
    * DELIBERATE. Any incomplete live milestone → `MilestonesIncompleteError` (nothing
-   * mutated). Clears any prior `change_request_note`. Returns the row plus `roundNumber`,
-   * the live change-request rounds so far (0 on a first submission), read under the lock.
+   * mutated). Clears any prior `change_request_note`. Returns the row plus
+   * `priorChangeRounds`, the live change-request rounds before this request (0 on a first submission), read under the lock.
    *
    * NOTE the parent does NOT change: `pending_acceptance` projects to `'active'`.
    */
   async requestCompletion(input: {
     engagementId: string;
     userId: string;
-  }): Promise<ProjectEngagementRow & { roundNumber: number }> {
+  }): Promise<ProjectEngagementRow & { priorChangeRounds: number }> {
     return db.transaction(async (tx) => {
       await lockProjectForTransition(tx, input.engagementId, 'pending_acceptance');
 
@@ -1620,8 +1620,8 @@ export const projectEngagementsRepository = {
         engagementId: input.engagementId,
         metadata: { from: 'active', to: 'pending_acceptance' },
       });
-      const roundNumber = await countLiveChangeRequestsTx(tx, input.engagementId);
-      return { ...advanced, roundNumber };
+      const priorChangeRounds = await countLiveChangeRequestsTx(tx, input.engagementId);
+      return { ...advanced, priorChangeRounds };
     });
   },
 

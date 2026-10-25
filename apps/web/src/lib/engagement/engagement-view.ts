@@ -229,7 +229,8 @@ export interface ReviewBannerView {
 /**
  * The open change request, as a status banner on an `active` project. Derived from the
  * LATEST round (never the legacy `change_request_note`, which `requestCompletion` nulls).
- *  - `work_outstanding` — the expert (or admin) still has work to do; carries no CTA.
+ *  - `work_outstanding` — the expert still has work to do; carries no CTA. Admins always
+ *    get this variant, with a guidance line saying so once the changes are made.
  *  - `changes_made`     — every tagged milestone is done again; carries the one CTA.
  *  - `client_waiting`   — the client's own view of the same state.
  */

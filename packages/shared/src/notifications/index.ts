@@ -266,7 +266,7 @@ export interface EngagementCompletionRequestedPayload {
   reviewDays: number; // AUTO_ACCEPT_DAYS — the review window length
   // Optional on both the TS and Zod sides so a Vercel-ahead or Railway-ahead deploy still validates.
   isResubmission?: boolean; // true when at least one change-request round precedes this request
-  roundNumber?: number; // count of live change-request rounds so far (0 on a first submission)
+  priorChangeRounds?: number; // live change-request rounds before this request (0 on a first submission)
 }
 
 // BAL-334 (D4) expert withdrew the completion request (pending_acceptance → active).

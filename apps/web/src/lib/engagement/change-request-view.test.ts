@@ -223,12 +223,21 @@ describe('deriveChangeRequestBanner', () => {
     });
   });
 
-  it('admin · outstanding: same facts, no guidance, never the CTA variant', () => {
-    expect(banner(CHANGES_MADE, 'admin')).toMatchObject({
+  it('admin · changes made: never the CTA variant, but says the expert has finished', () => {
+    expect(banner(CHANGES_MADE, 'admin')).toEqual({
+      variant: 'work_outstanding',
+      headline: 'Dana @ Northwind Industrial requested changes on Build.',
+      quote: 'The export is missing Q3.',
+      guidance: 'Changes made. Waiting on Priya to send the project back to Northwind Industrial.',
+    });
+  });
+
+  it('admin · work still outstanding: no guidance', () => {
+    expect(banner(TAGGED_REOPENED, 'admin')).toMatchObject({
       variant: 'work_outstanding',
       guidance: null,
     });
-    expect(banner(TAGGED_REOPENED, 'admin')).toMatchObject({ guidance: null });
+    expect(banner(UNTAGGED_ALL_DONE, 'admin')).toMatchObject({ guidance: null });
   });
 
   it('client · names the expert party: the agency when there is one, else the person', () => {

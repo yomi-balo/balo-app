@@ -135,8 +135,8 @@ export interface EngagementServerEventMap {
     review_cycle: number;
     /** True when at least one change-request round precedes this request. */
     is_resubmission: boolean;
-    /** Live change-request rounds so far (0 on a first submission). */
-    round_number: number;
+    /** Live change-request rounds before this request (0 on a first submission). */
+    prior_change_rounds: number;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN]: {

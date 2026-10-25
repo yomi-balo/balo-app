@@ -10,8 +10,9 @@ interface ChangeRequestBannerProps {
 }
 
 /**
- * The open change request, as a status banner on an `active` project (no dismiss: it
- * clears when the project is sent back). Three variants, all pre-derived on the view:
+ * The open change request, as a banner on an `active` project (no dismiss: it clears
+ * when the project is sent back). A labelled region, not a live region: it is page-load
+ * state, and the `changes_made` variant holds a button. Three variants, all pre-derived on the view:
  *  - `work_outstanding` (expert / admin) — amber; who asked, the quote, and what is left.
  *  - `client_waiting` (client) — amber; the client's own acknowledgement.
  *  - `changes_made` (expert) — violet; every tagged milestone is done again, so the banner
@@ -24,7 +25,10 @@ export function ChangeRequestBanner({
 }: Readonly<ChangeRequestBannerProps>): React.JSX.Element {
   if (banner.variant === 'changes_made') {
     return (
-      <output className="border-violet/25 bg-violet/10 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border px-4 py-4">
+      <section
+        aria-label="Change request"
+        className="border-violet/25 bg-violet/10 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border px-4 py-4"
+      >
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <div className="bg-violet flex size-6 shrink-0 items-center justify-center rounded-full text-white">
             <Check className="size-3.5" strokeWidth={3} aria-hidden="true" />
@@ -40,12 +44,15 @@ export function ChangeRequestBanner({
           modalBody={banner.modalBody}
           clientCompanyName={clientCompanyName}
         />
-      </output>
+      </section>
     );
   }
 
   return (
-    <output className="border-warning/20 bg-warning/10 flex items-start gap-2.5 rounded-xl border px-4 py-3">
+    <section
+      aria-label="Change request"
+      className="border-warning/20 bg-warning/10 flex items-start gap-2.5 rounded-xl border px-4 py-3"
+    >
       <MessageSquare className="text-warning mt-0.5 size-4 shrink-0" aria-hidden="true" />
       {banner.variant === 'client_waiting' ? (
         <p className="text-foreground text-sm leading-relaxed">{banner.body}</p>
@@ -56,6 +63,6 @@ export function ChangeRequestBanner({
           {banner.guidance !== null && <p>{banner.guidance}</p>}
         </div>
       )}
-    </output>
+    </section>
   );
 }

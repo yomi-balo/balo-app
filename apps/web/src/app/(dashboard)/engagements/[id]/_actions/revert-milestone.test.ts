@@ -79,6 +79,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     createdAt: new Date('2026-05-01T00:00:00Z'),
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
+    latestChangeRequest: null,
     expertProfile: {
       user: { firstName: 'Priya', lastName: 'Sharma' },
       agency: null,
@@ -178,6 +179,29 @@ describe('revertMilestoneAction', () => {
       milestoneTitle: 'Discovery',
     });
     expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
+  });
+
+  it('does not notify while a change request is outstanding, but still reverts and tracks', async () => {
+    mockFindEngagement.mockResolvedValue(
+      engagement({
+        latestChangeRequest: {
+          id: 'cr-1',
+          note: 'The export is missing Q3.',
+          requestedAt: new Date('2026-07-01T00:00:00Z'),
+          requestedBy: { id: 'client-1', firstName: 'Dana', lastName: 'Lee' },
+          taggedMilestoneIds: [],
+        },
+      })
+    );
+    const result = await revertMilestoneAction(INPUT);
+    expect(result).toEqual({ success: true, milestoneId: MILESTONE_ID, status: 'in_progress' });
+    expect(mockRevert).toHaveBeenCalledWith({ milestoneId: MILESTONE_ID, userId: 'user-1' });
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_milestone_reverted',
+      expect.objectContaining({ milestone_id: MILESTONE_ID })
+    );
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockFindOwner).not.toHaveBeenCalled();
   });
 
   it('uses hours_since_completed 0 when the pre-loaded completedAt is null', async () => {

@@ -63,12 +63,23 @@ function personShort(
 /** The label on the control that sends a project back for review after a change request. */
 export const MARK_READY_AGAIN_LABEL = 'Mark project ready again';
 
+/**
+ * The client's latest change request is still unanswered: the project is `active` with a
+ * round on record. Rounds are only written on `pending_acceptance → active`, so an active
+ * project with any round is working through the latest one.
+ */
+export function hasOutstandingChangeRequest(
+  engagement: Pick<ProjectEngagementWithMilestones, 'status' | 'latestChangeRequest'>
+): boolean {
+  return engagement.status === 'active' && engagement.latestChangeRequest !== null;
+}
+
 export function deriveChangeRequestState(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties
 ): ChangeRequestState {
   const latest = engagement.latestChangeRequest;
-  const outstanding = engagement.status === 'active' && latest !== null;
+  const outstanding = hasOutstandingChangeRequest(engagement);
   const taggedIds = new Set(latest?.taggedMilestoneIds ?? []);
   const taggedLive = engagement.milestones.filter((m) => taggedIds.has(m.id));
   const reopened = taggedLive.filter((m) => m.status !== 'completed');
@@ -150,11 +161,17 @@ export function deriveChangeRequestBanner(
       modalBody: completionModalBody(engagement.milestones.length, parties.clientCompanyName),
     };
   }
+  let guidance: string | null = null;
+  if (lens === 'expert') {
+    guidance = expertGuidance(state);
+  } else if (state.changesMade) {
+    guidance = `Changes made. Waiting on ${parties.expertPartyShort} to send the project back to ${parties.clientCompanyName}.`;
+  }
   return {
     variant: 'work_outstanding',
     headline: `${state.attribution} requested changes${tagged}.`,
     quote: latest.note,
-    guidance: lens === 'expert' ? expertGuidance(state) : null,
+    guidance,
   };
 }
 

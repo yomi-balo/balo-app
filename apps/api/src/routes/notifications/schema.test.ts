@@ -1100,15 +1100,15 @@ describe('publishBodySchema', () => {
     const parse = (payload: Record<string, unknown>) =>
       publishBodySchema.safeParse({ event: 'engagement.completion_requested', payload }).success;
 
-    it('accepts the payload with and without isResubmission / roundNumber', () => {
+    it('accepts the payload with and without isResubmission / priorChangeRounds', () => {
       expect(parse(base)).toBe(true);
-      expect(parse({ ...base, isResubmission: true, roundNumber: 2 })).toBe(true);
-      expect(parse({ ...base, isResubmission: false, roundNumber: 0 })).toBe(true);
+      expect(parse({ ...base, isResubmission: true, priorChangeRounds: 2 })).toBe(true);
+      expect(parse({ ...base, isResubmission: false, priorChangeRounds: 0 })).toBe(true);
     });
 
-    it('rejects a non-boolean isResubmission and a negative roundNumber', () => {
+    it('rejects a non-boolean isResubmission and a negative priorChangeRounds', () => {
       expect(parse({ ...base, isResubmission: 'yes' })).toBe(false);
-      expect(parse({ ...base, roundNumber: -1 })).toBe(false);
+      expect(parse({ ...base, priorChangeRounds: -1 })).toBe(false);
     });
   });
 

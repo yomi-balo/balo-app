@@ -96,17 +96,16 @@ export function EngagementProgress({
       {/* Native <progress> carries the semantics/accessible value (visually hidden);
           the segmented bar below is the visual. */}
       <progress className="sr-only" value={pct} max={100} aria-label="Milestones completed" />
-      <div role="list" aria-label="Milestone progress" className="mt-4 flex gap-1.5">
+      <ul aria-label="Milestone progress" className="mt-4 flex gap-1.5">
         {segments.map((segment) => (
-          <div
+          <li
             key={segment.id}
-            role="listitem"
             aria-label={segment.label}
             title={segment.label}
             className={cn('h-2 flex-1 rounded-full transition-colors', SEGMENT_CLASS[segment.tone])}
           />
         ))}
-      </div>
+      </ul>
       {reviewCopy !== null && (
         <p className="text-muted-foreground mt-3 text-xs leading-relaxed">{reviewCopy}</p>
       )}
