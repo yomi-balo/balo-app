@@ -21,6 +21,8 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     completedLabel: null,
     completionNote: null,
     feedback: null,
+    changePending: false,
+    changeProvenance: null,
     ...overrides,
   };
 }
@@ -155,6 +157,29 @@ describe('MilestoneRow', () => {
       render(<MilestoneRow node={makeNode()} isLast />);
       expect(screen.queryByText('Changes requested')).not.toBeInTheDocument();
       expect(screen.queryByText('Feedback addressed')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('approved-change markers', () => {
+    it('marks a milestone added or updated by an approved change', () => {
+      const { rerender } = render(
+        <MilestoneRow node={makeNode({ changeProvenance: 'added' })} isLast />
+      );
+      expect(screen.getByText('Added by approved change')).toBeInTheDocument();
+      rerender(<MilestoneRow node={makeNode({ changeProvenance: 'updated' })} isLast />);
+      expect(screen.getByText('Updated by approved change')).toBeInTheDocument();
+      expect(screen.queryByText('Added by approved change')).not.toBeInTheDocument();
+    });
+
+    it('shows the "Change pending" chip while a sent change touches the milestone', () => {
+      render(<MilestoneRow node={makeNode({ changePending: true })} isLast />);
+      expect(screen.getByText('Change pending')).toBeInTheDocument();
+    });
+
+    it('shows neither marker on an untouched milestone', () => {
+      render(<MilestoneRow node={makeNode()} isLast />);
+      expect(screen.queryByText('Change pending')).not.toBeInTheDocument();
+      expect(screen.queryByText(/approved change/)).not.toBeInTheDocument();
     });
   });
 });

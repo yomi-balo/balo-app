@@ -897,6 +897,55 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-622 change orders. Admin rules carry NO amounts (fee concealment): the figures live on
+  // the project page behind the platform capability. Client-addressed events gate on
+  // `recipientId` so a no-owner project skips rather than dead-lettering.
+  'change_order.requested': [
+    ...emailAndInApp('expert', 'change-order-requested-expert'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'change-order-requested-admin',
+      timing: 'immediate',
+    },
+  ],
+  'change_order.sent': [
+    ...emailAndInApp('client', 'change-order-sent-client', hasRecipientId),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'change-order-sent-admin',
+      timing: 'immediate',
+    },
+  ],
+  'change_order.approved': [
+    ...emailAndInApp('expert', 'change-order-approved-expert'),
+    {
+      channel: 'email',
+      recipient: 'admin_users',
+      template: 'change-order-approved-admin',
+      timing: 'immediate',
+    },
+  ],
+  'change_order.declined': [
+    ...emailAndInApp('expert', 'change-order-declined-expert'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'change-order-declined-admin',
+      timing: 'immediate',
+    },
+  ],
+  'change_order.answered': emailAndInApp('client', 'change-order-answered-client', hasRecipientId),
+  'change_order.withdrawn': [
+    {
+      channel: 'in-app',
+      recipient: 'client',
+      template: 'change-order-withdrawn-client',
+      timing: 'immediate',
+      condition: hasRecipientId,
+    },
+  ],
   // BAL-338 (D7): the review window elapsed with no client decision — the D7 sweep
   // auto-accepted (server-published). Fans out to the CLIENT company owner
   // (recipient:'client' via payload.recipientId; email = VARIANT 3 AutoAcceptedEmail

@@ -1822,3 +1822,74 @@ describe('notificationRules', () => {
     });
   });
 });
+
+describe('change order rules (BAL-622)', () => {
+  function rulesFor(event: string): NotificationRule[] {
+    const rules = notificationRules[event];
+    if (rules === undefined) throw new Error(`no rules registered for ${event}`);
+    return rules;
+  }
+
+  const summarise = (event: string): string[] =>
+    rulesFor(event)
+      .map((r) => `${r.recipient}:${r.channel}:${r.template}`)
+      .sort((a, b) => a.localeCompare(b));
+
+  it('change_order.requested: expert email + in-app, admin in-app', () => {
+    expect(summarise('change_order.requested')).toEqual([
+      'admin_users:in-app:change-order-requested-admin',
+      'expert:email:change-order-requested-expert',
+      'expert:in-app:change-order-requested-expert',
+    ]);
+  });
+
+  it('change_order.sent: client email + in-app, admin in-app', () => {
+    expect(summarise('change_order.sent')).toEqual([
+      'admin_users:in-app:change-order-sent-admin',
+      'client:email:change-order-sent-client',
+      'client:in-app:change-order-sent-client',
+    ]);
+  });
+
+  it('change_order.approved: expert email + in-app, admin EMAIL only', () => {
+    expect(summarise('change_order.approved')).toEqual([
+      'admin_users:email:change-order-approved-admin',
+      'expert:email:change-order-approved-expert',
+      'expert:in-app:change-order-approved-expert',
+    ]);
+  });
+
+  it('change_order.declined: expert email + in-app, admin in-app', () => {
+    expect(summarise('change_order.declined')).toEqual([
+      'admin_users:in-app:change-order-declined-admin',
+      'expert:email:change-order-declined-expert',
+      'expert:in-app:change-order-declined-expert',
+    ]);
+  });
+
+  it('change_order.answered: client email + in-app, no admin', () => {
+    expect(summarise('change_order.answered')).toEqual([
+      'client:email:change-order-answered-client',
+      'client:in-app:change-order-answered-client',
+    ]);
+  });
+
+  it('change_order.withdrawn: client in-app only', () => {
+    expect(summarise('change_order.withdrawn')).toEqual([
+      'client:in-app:change-order-withdrawn-client',
+    ]);
+  });
+
+  it.each(['change_order.sent', 'change_order.answered', 'change_order.withdrawn'])(
+    '%s client rules are gated on payload.recipientId',
+    (event) => {
+      const clientRules = rulesFor(event).filter((r) => r.recipient === 'client');
+      expect(clientRules.length).toBeGreaterThan(0);
+      for (const rule of clientRules) {
+        const base = { event, data: {} };
+        expect(rule.condition?.({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
+        expect(rule.condition?.({ ...base, payload: {} })).toBe(false);
+      }
+    }
+  );
+});

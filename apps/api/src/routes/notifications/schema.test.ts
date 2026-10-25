@@ -1960,3 +1960,106 @@ describe('publishBodySchema', () => {
     });
   });
 });
+
+describe('publishBodySchema — BAL-622 change orders', () => {
+  const ids = {
+    engagementId: '550e8400-e29b-41d4-a716-446655440001',
+    changeOrderId: '550e8400-e29b-41d4-a716-446655440005',
+    expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+  };
+  const base = (event: string): Record<string, unknown> => ({
+    correlationId: `${ids.changeOrderId}:${event}`,
+    engagementId: ids.engagementId,
+    changeOrderId: ids.changeOrderId,
+    projectTitle: 'CPQ implementation',
+  });
+
+  const minimal: Record<string, Record<string, unknown>> = {
+    'change_order.requested': {
+      expertProfileId: ids.expertProfileId,
+      actorClientLabel: 'Dana @ Northwind',
+      note: 'Can we add a Q4 report?',
+    },
+    'change_order.sent': {
+      actorExpertLabel: 'Charles @ CloudPeak',
+      clientCompanyName: 'Northwind',
+      summary: 'Adds a Q4 report',
+      pricingMethod: 'fixed',
+      linesAdded: 1,
+      linesEdited: 0,
+      linesRemoved: 0,
+    },
+    'change_order.approved': {
+      expertProfileId: ids.expertProfileId,
+      actorClientLabel: 'Dana @ Northwind',
+      clientCompanyName: 'Northwind',
+      pricingMethod: 'tm',
+      approvedOn: '15 Oct',
+    },
+    'change_order.declined': {
+      expertProfileId: ids.expertProfileId,
+      actorClientLabel: 'Dana @ Northwind',
+      reason: 'Out of budget this quarter.',
+    },
+    'change_order.answered': {
+      actorExpertLabel: 'Charles @ CloudPeak',
+      answer: 'Already covered in milestone two.',
+    },
+    'change_order.withdrawn': { actorExpertLabel: 'Charles @ CloudPeak' },
+  };
+
+  const parse = (event: string, extra: Record<string, unknown> = {}): boolean =>
+    publishBodySchema.safeParse({
+      event,
+      payload: { ...base(event), ...minimal[event], ...extra },
+    }).success;
+
+  it.each(Object.keys(minimal))('%s parses a minimal payload', (event) => {
+    expect(parse(event)).toBe(true);
+  });
+
+  it('accepts the optional recipient and label keys', () => {
+    const recipientId = '550e8400-e29b-41d4-a716-446655440003';
+    expect(
+      parse('change_order.sent', {
+        recipientId,
+        clientPriceChangeLabel: 'A$15,625 → A$18,125 (+A$2,500)',
+        estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+      })
+    ).toBe(true);
+    expect(parse('change_order.answered', { recipientId })).toBe(true);
+    expect(parse('change_order.approved', { expertPriceChangeLabel: 'A$12,500 → A$14,000' })).toBe(
+      true
+    );
+  });
+
+  it('rejects an empty note, reason and answer, a negative line count and a bad pricing method', () => {
+    expect(parse('change_order.requested', { note: '' })).toBe(false);
+    expect(parse('change_order.declined', { reason: '' })).toBe(false);
+    expect(parse('change_order.answered', { answer: '' })).toBe(false);
+    expect(parse('change_order.sent', { linesAdded: -1 })).toBe(false);
+    expect(parse('change_order.sent', { pricingMethod: 'hourly' })).toBe(false);
+    expect(parse('change_order.withdrawn', { changeOrderId: 'not-a-uuid' })).toBe(false);
+  });
+
+  describe('fee concealment', () => {
+    const shapeKeys = (event: string): string[] => {
+      const arm = publishBodySchema.options.find((option) => option.shape.event.value === event);
+      if (arm === undefined) throw new Error(`no schema arm for ${event}`);
+      const payload = arm.shape.payload;
+      return 'shape' in payload ? Object.keys(payload.shape as Record<string, unknown>) : [];
+    };
+
+    it('the sent payload (read by the client) has no expert-price key', () => {
+      const keys = shapeKeys('change_order.sent');
+      expect(keys).toContain('clientPriceChangeLabel');
+      expect(keys.filter((k) => /^expert/i.test(k) && /price/i.test(k))).toEqual([]);
+    });
+
+    it('the approved payload (read by the expert) has no client-price key', () => {
+      const keys = shapeKeys('change_order.approved');
+      expect(keys).toContain('expertPriceChangeLabel');
+      expect(keys.filter((k) => /^client/i.test(k) && /price/i.test(k))).toEqual([]);
+    });
+  });
+});

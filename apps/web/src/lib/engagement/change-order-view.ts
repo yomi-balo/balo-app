@@ -1,0 +1,537 @@
+import 'server-only';
+
+import type {
+  ChangeOrderStatus,
+  ChangeOrderWithLines,
+  ProjectEngagementWithMilestones,
+} from '@balo/db';
+import {
+  changeOrderMinutesDelta,
+  CHANGE_ORDER_STALE_BUSINESS_DAYS,
+  clientPriceChangeCents,
+} from '@balo/shared/engagements';
+import { applyBaloFee } from '@balo/shared/pricing';
+import { businessDaysBetween } from '@balo/shared/timezone';
+import { formatShortUtc } from '@/lib/format/utc-date';
+import { formatWholeCurrency } from '@/lib/utils/currency';
+import { formatHours, signedHours, signedMoney } from './change-order-format';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import { personAtCompany, type EngagementParties } from './engagement-parties';
+import type { EngagementViewerContext } from './resolve-engagement-lens';
+
+/**
+ * The change-order panel's serializable contract (BAL-622). `mapChangeOrdersToView` is the
+ * ONE place a change order becomes copy and money for a viewer; components read the derived
+ * strings and never touch `@balo/db`.
+ *
+ * FEE CONCEALMENT. Amounts are lens-scoped: the client lens shows client figures (the expert
+ * price grossed up with `applyBaloFee`, deltas through `clientPriceChangeCents`), the expert
+ * and admin lenses show the raw expert-side figures. Both sides of an amount appear together
+ * only in `change-order-admin-view.ts`. Affordances key on the lens for PRESENTATION; every
+ * action re-gates on a capability.
+ */
+
+export type ChangeOrderPillTone = 'amber' | 'slate' | 'violet' | 'emerald';
+
+/**
+ * One milestone amendment. `estimateLabel` is the bare hours figure ("10 hrs"), set on
+ * time-and-materials projects only; the component adds any "Estimate" prefix.
+ */
+export interface ChangeOrderLineView {
+  op: 'add' | 'edit' | 'remove';
+  title: string;
+  descriptionText: string | null;
+  estimateLabel: string | null;
+  /** The milestone as it was when the change was sent (edit lines); null when not stamped. */
+  before: {
+    title: string;
+    descriptionText: string | null;
+    estimateLabel: string | null;
+  } | null;
+}
+
+export interface ChangeOrderItemView {
+  id: string;
+  status: ChangeOrderStatus;
+  /** The project's pricing method (the repository enum's literals). */
+  pricingMethod: 'fixed' | 'tm';
+  /** "19 Oct" when the order was sent, else null. */
+  sentOnLabel: string | null;
+  /** Who sent it, retrospective ("Charles @ CloudPeak"); null until sent. */
+  sentByLabel: string | null;
+  pill: { label: string; tone: ChangeOrderPillTone };
+  /** The expert's "what's changing and why"; null until written or when not visible. */
+  summary: string | null;
+  /** The client's request note; null when the expert opened the order. */
+  requestNote: string | null;
+  /** Who asked and when, lens-worded ("Dana @ Northwind asked for a change on 15 Oct"). */
+  requestedHeading: string | null;
+  /** The dates line, e.g. "Requested 15 Oct · Sent 18 Oct · Approved 20 Oct". */
+  datesLabel: string;
+  lines: ChangeOrderLineView[];
+  priceEffect: { text: string; hint: string | null } | null;
+  /** The compact price or estimate change shown on a history row; null when there are no lines. */
+  deltaChip: string | null;
+  /** The expert's answer to a request, set when the order was answered without a change. */
+  answerText: string | null;
+  /** The client's reason for declining a sent change. */
+  declineText: string | null;
+}
+
+export interface ChangeOrderAffordances {
+  /** The client may open a request now (client lens, active project, nothing open). */
+  requestChange: boolean;
+  /** The expert may open the composer for a fresh change or from the open request. */
+  propose: boolean;
+  /** The expert may answer the open request without a change order. */
+  answer: boolean;
+  /** The expert has a draft to continue. */
+  continueDraft: boolean;
+  discardDraft: boolean;
+  /** The expert may withdraw the sent change. */
+  withdraw: boolean;
+  /** The client may approve or decline the sent change. */
+  decide: boolean;
+  proposeDisabledReason: string | null;
+}
+
+export interface ChangeOrderPanelView {
+  open: ChangeOrderItemView | null;
+  affordances: ChangeOrderAffordances;
+  /** The latest decided order's banner, shown only while nothing is open. */
+  outcome: { tone: 'emerald' | 'slate'; text: string } | null;
+  /** Closed orders, newest first. */
+  history: ChangeOrderItemView[];
+  composerHref: string;
+  footnote: string;
+  /** Admin lens only: where the open order stands. */
+  adminStateLine: string | null;
+}
+
+type LensName = EngagementViewerContext['lens'];
+
+export { formatHours, signedHours, signedMoney };
+
+/** An order that has left the expert's desk: a client asked for it, or it was sent. */
+function isVisibleOrder(order: ChangeOrderWithLines): boolean {
+  return order.requestedAt !== null || order.sentAt !== null;
+}
+
+function isOpenOrder(order: ChangeOrderWithLines): boolean {
+  return order.decidedAt === null && order.withdrawnAt === null;
+}
+
+/** The engagement's open order, or null. At most one can be open. */
+export function findOpenOrder(
+  orders: readonly ChangeOrderWithLines[]
+): ChangeOrderWithLines | null {
+  return orders.find(isOpenOrder) ?? null;
+}
+
+/** Expert-side effective price: the accepted price plus every approved delta. */
+export function effectiveExpertPriceCents(
+  acceptedPriceCents: number,
+  orders: readonly ChangeOrderWithLines[]
+): number {
+  return orders.reduce(
+    (sum, order) => (order.status === 'approved' ? sum + (order.priceDeltaCents ?? 0) : sum),
+    acceptedPriceCents
+  );
+}
+
+function nameOf(person: { firstName: string | null; lastName: string | null } | null): string {
+  if (person === null) return '';
+  return (person.firstName ?? '').trim() || (person.lastName ?? '').trim();
+}
+
+/** The expert-side person who acted, "Charles @ CloudPeak" for an agency, bare for independents. */
+function expertActorLabel(
+  person: { firstName: string | null; lastName: string | null } | null,
+  parties: EngagementParties
+): string {
+  const name = nameOf(person);
+  if (name === '') return parties.expertRetroFirstMention;
+  return parties.isAgencyExpert ? `${name} @ ${parties.expertParty}` : name;
+}
+
+function plainOrNull(html: string | null): string | null {
+  if (html === null || html.trim() === '') return null;
+  return htmlToPlainText(html) || null;
+}
+
+function mapLines(
+  order: ChangeOrderWithLines,
+  pricingMethod: ProjectEngagementWithMilestones['pricingMethod']
+): ChangeOrderLineView[] {
+  const isTm = pricingMethod === 'tm';
+  const estimate = (minutes: number | null): string | null =>
+    isTm && minutes !== null ? formatHours(minutes) : null;
+  return order.lines.map((line) => ({
+    op: line.op,
+    title: line.title,
+    descriptionText: plainOrNull(line.descriptionHtml),
+    estimateLabel: estimate(line.estimatedMinutes),
+    before:
+      line.beforeTitle === null
+        ? null
+        : {
+            title: line.beforeTitle,
+            descriptionText: plainOrNull(line.beforeDescriptionHtml),
+            estimateLabel: estimate(line.beforeEstimatedMinutes),
+          },
+  }));
+}
+
+function minutesDelta(order: ChangeOrderWithLines): number {
+  return changeOrderMinutesDelta(
+    order.lines.map((line) => ({
+      op: line.op,
+      estimatedMinutes: line.estimatedMinutes,
+      beforeEstimatedMinutes: line.beforeEstimatedMinutes,
+    }))
+  );
+}
+
+interface ViewContext {
+  engagement: ProjectEngagementWithMilestones;
+  lens: LensName;
+  parties: EngagementParties;
+  orders: readonly ChangeOrderWithLines[];
+  now: Date;
+}
+
+/** Σ approved deltas of the orders strictly before / after `index`, by the chosen measure. */
+function approvedSum(
+  orders: readonly ChangeOrderWithLines[],
+  measure: (order: ChangeOrderWithLines) => number,
+  range: { from: number; to: number }
+): number {
+  return orders
+    .slice(range.from, range.to)
+    .reduce((sum, order) => (order.status === 'approved' ? sum + measure(order) : sum), 0);
+}
+
+function currentEstimateMinutes(engagement: ProjectEngagementWithMilestones): number {
+  return engagement.milestones.reduce((sum, m) => sum + (m.estimatedMinutes ?? 0), 0);
+}
+
+function tmPriceEffect(
+  order: ChangeOrderWithLines,
+  index: number,
+  settled: boolean,
+  vc: ViewContext
+): { text: string; hint: string | null } {
+  const delta = minutesDelta(order);
+  const later = approvedSum(vc.orders, minutesDelta, { from: index + 1, to: vc.orders.length });
+  const base = currentEstimateMinutes(vc.engagement) - later;
+  const isApproved = order.status === 'approved';
+  const from = isApproved ? base - delta : base;
+  const to = isApproved ? base : base + delta;
+  return {
+    text: `Estimate ${formatHours(from)} → ${formatHours(to)} (${signedHours(delta)})`,
+    hint: !settled && vc.lens === 'client' ? "You're billed for the time logged, as now." : null,
+  };
+}
+
+function fixedPriceEffect(
+  order: ChangeOrderWithLines,
+  index: number,
+  settled: boolean,
+  vc: ViewContext
+): { text: string; hint: string | null } {
+  const { engagement, lens, parties } = vc;
+  const { currency } = engagement;
+  const delta = order.priceDeltaCents ?? 0;
+  const earlier = approvedSum(vc.orders, (o) => o.priceDeltaCents ?? 0, { from: 0, to: index });
+  const fromExpert = engagement.priceCents + earlier;
+  const toExpert = fromExpert + delta;
+  const isClient = lens === 'client';
+  const from = isClient ? applyBaloFee(fromExpert, engagement.baloFeeBps) : fromExpert;
+  const to = isClient ? applyBaloFee(toExpert, engagement.baloFeeBps) : toExpert;
+  const shown = isClient
+    ? clientPriceChangeCents(fromExpert, toExpert, engagement.baloFeeBps)
+    : delta;
+  if (shown === 0) return { text: "The price doesn't change.", hint: null };
+
+  const text = `Project price ${formatWholeCurrency(from, currency)} → ${formatWholeCurrency(to, currency)} (${signedMoney(shown, currency)})`;
+  if (settled) return { text, hint: null };
+  if (isClient) {
+    const amount = formatWholeCurrency(Math.abs(shown), currency);
+    return {
+      text,
+      hint:
+        shown > 0
+          ? `If you approve, ${amount} is added to your final invoice.`
+          : `If you approve, ${amount} comes off your final invoice.`,
+    };
+  }
+  return {
+    text,
+    hint: `If ${parties.clientCompanyName} approves, the difference is settled at the end of the project.`,
+  };
+}
+
+function priceEffectFor(
+  order: ChangeOrderWithLines,
+  index: number,
+  settled: boolean,
+  vc: ViewContext
+): { text: string; hint: string | null } | null {
+  // A request carries no change yet, and an answered request never will.
+  if (order.status === 'requested' || (order.status === 'declined' && order.sentAt === null)) {
+    return null;
+  }
+  return vc.engagement.pricingMethod === 'tm'
+    ? tmPriceEffect(order, index, settled, vc)
+    : fixedPriceEffect(order, index, settled, vc);
+}
+
+function deltaChipFor(order: ChangeOrderWithLines, index: number, vc: ViewContext): string | null {
+  if (order.sentAt === null) return null;
+  const { engagement, lens } = vc;
+  if (engagement.pricingMethod === 'tm') return signedHours(minutesDelta(order));
+  const delta = order.priceDeltaCents ?? 0;
+  if (lens !== 'client') return signedMoney(delta, engagement.currency);
+  const earlier = approvedSum(vc.orders, (o) => o.priceDeltaCents ?? 0, { from: 0, to: index });
+  const fromExpert = engagement.priceCents + earlier;
+  return signedMoney(
+    clientPriceChangeCents(fromExpert, fromExpert + delta, engagement.baloFeeBps),
+    engagement.currency
+  );
+}
+
+function pillFor(
+  order: ChangeOrderWithLines,
+  lens: LensName,
+  parties: EngagementParties
+): { label: string; tone: ChangeOrderPillTone } {
+  const client = parties.clientCompanyName;
+  const isClient = lens === 'client';
+  switch (order.status) {
+    case 'requested':
+      return { tone: 'amber', label: isClient ? 'Requested' : `Request from ${client}` };
+    case 'draft':
+      return isClient ? { tone: 'amber', label: 'Requested' } : { tone: 'slate', label: 'Draft' };
+    case 'sent':
+      return {
+        tone: 'violet',
+        label: isClient ? 'Waiting on you' : `Waiting on ${client}`,
+      };
+    case 'approved':
+      return { tone: 'emerald', label: 'Approved' };
+    case 'declined':
+      return { tone: 'slate', label: order.sentAt === null ? 'Answered' : 'Declined' };
+    case 'withdrawn':
+      return { tone: 'slate', label: 'Withdrawn' };
+  }
+}
+
+function requestedHeadingFor(order: ChangeOrderWithLines, vc: ViewContext): string | null {
+  if (order.requestedAt === null) return null;
+  const date = formatShortUtc(order.requestedAt);
+  if (vc.lens === 'client') return `You asked for a change on ${date}`;
+  const who = personAtCompany(order.requestedBy, vc.parties.clientCompanyName);
+  return `${who} asked for a change on ${date}`;
+}
+
+function decisionVerb(order: ChangeOrderWithLines): string {
+  if (order.status === 'approved') return 'Approved';
+  return order.sentAt === null ? 'Answered' : 'Declined';
+}
+
+function datesLabelFor(order: ChangeOrderWithLines): string {
+  const parts: string[] = [];
+  if (order.requestedAt !== null) parts.push(`Requested ${formatShortUtc(order.requestedAt)}`);
+  if (order.sentAt !== null) parts.push(`Sent ${formatShortUtc(order.sentAt)}`);
+  if (order.decidedAt !== null) {
+    parts.push(`${decisionVerb(order)} ${formatShortUtc(order.decidedAt)}`);
+  }
+  if (order.withdrawnAt !== null) parts.push(`Withdrawn ${formatShortUtc(order.withdrawnAt)}`);
+  return parts.length > 0 ? parts.join(' · ') : 'Draft';
+}
+
+function answerTextFor(order: ChangeOrderWithLines, vc: ViewContext): string | null {
+  if (order.status !== 'declined' || order.sentAt !== null || order.declineReason === null) {
+    return null;
+  }
+  const who = vc.lens === 'expert' ? 'You' : expertActorLabel(order.decidedBy, vc.parties);
+  return `${who} answered: “${order.declineReason}”`;
+}
+
+function declineTextFor(order: ChangeOrderWithLines, vc: ViewContext): string | null {
+  if (order.status !== 'declined' || order.sentAt === null || order.declineReason === null) {
+    return null;
+  }
+  const who =
+    vc.lens === 'client'
+      ? 'You declined'
+      : `${personAtCompany(order.decidedBy, vc.parties.clientCompanyName)} declined`;
+  return `${who}: “${order.declineReason}”`;
+}
+
+function mapItem(order: ChangeOrderWithLines, index: number, vc: ViewContext): ChangeOrderItemView {
+  const settled = !isOpenOrder(order);
+  const showsDetail = order.sentAt !== null || vc.lens !== 'client';
+  return {
+    id: order.id,
+    status: order.status,
+    pricingMethod: vc.engagement.pricingMethod,
+    sentOnLabel: order.sentAt === null ? null : formatShortUtc(order.sentAt),
+    sentByLabel: order.sentAt === null ? null : expertActorLabel(order.sentBy, vc.parties),
+    pill: pillFor(order, vc.lens, vc.parties),
+    summary: showsDetail ? order.note : null,
+    requestNote: order.requestNote,
+    requestedHeading: requestedHeadingFor(order, vc),
+    datesLabel: datesLabelFor(order),
+    lines: showsDetail ? mapLines(order, vc.engagement.pricingMethod) : [],
+    priceEffect: showsDetail ? priceEffectFor(order, index, settled, vc) : null,
+    deltaChip: showsDetail ? deltaChipFor(order, index, vc) : null,
+    answerText: answerTextFor(order, vc),
+    declineText: declineTextFor(order, vc),
+  };
+}
+
+type PanelOutcome = ChangeOrderPanelView['outcome'];
+
+function planUpdatedText(vc: ViewContext): string {
+  return vc.engagement.pricingMethod === 'fixed'
+    ? 'The plan and price are updated.'
+    : 'The plan and estimate are updated.';
+}
+
+function expertOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelOutcome {
+  const decidedOn = latest.decidedAt === null ? '' : formatShortUtc(latest.decidedAt);
+  if (latest.status === 'approved') {
+    return {
+      tone: 'emerald',
+      text: `${vc.parties.clientCompanyName} approved the change on ${decidedOn}. ${planUpdatedText(vc)}`,
+    };
+  }
+  if (latest.status === 'declined' && latest.sentAt !== null) {
+    const who = personAtCompany(latest.decidedBy, vc.parties.clientCompanyName);
+    return {
+      tone: 'slate',
+      text: `${who} declined the change on ${decidedOn}: “${latest.declineReason ?? ''}”`,
+    };
+  }
+  return null;
+}
+
+function withdrawnSuffix(latest: ChangeOrderWithLines): string {
+  if (latest.withdrawnAt === null) return '';
+  return ` on ${formatShortUtc(latest.withdrawnAt)}`;
+}
+
+function clientOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelOutcome {
+  if (latest.status === 'approved') {
+    const decidedOn = latest.decidedAt === null ? '' : formatShortUtc(latest.decidedAt);
+    return {
+      tone: 'emerald',
+      text: `You approved the change on ${decidedOn}. ${planUpdatedText(vc)}`,
+    };
+  }
+  if (latest.status === 'declined' && latest.sentAt === null) {
+    const who = expertActorLabel(latest.decidedBy, vc.parties);
+    return { tone: 'slate', text: `${who} answered your request: “${latest.declineReason ?? ''}”` };
+  }
+  if (latest.status === 'withdrawn' && latest.sentAt !== null) {
+    const who = expertActorLabel(latest.withdrawnBy, vc.parties);
+    return {
+      tone: 'slate',
+      text: `${who} withdrew the proposed change${withdrawnSuffix(latest)}. Nothing changed.`,
+    };
+  }
+  return null;
+}
+
+function outcomeFor(latest: ChangeOrderWithLines | undefined, vc: ViewContext): PanelOutcome {
+  if (latest === undefined || vc.lens === 'admin') return null;
+  return vc.lens === 'expert' ? expertOutcomeFor(latest, vc) : clientOutcomeFor(latest, vc);
+}
+
+function affordancesFor(
+  open: ChangeOrderWithLines | null,
+  vc: ViewContext
+): ChangeOrderAffordances {
+  const active = vc.engagement.status === 'active';
+  const isExpert = vc.lens === 'expert' && active;
+  const isClient = vc.lens === 'client' && active;
+  const status = open?.status ?? null;
+  return {
+    requestChange: isClient && open === null,
+    propose: isExpert && (open === null || status === 'requested'),
+    answer: isExpert && status === 'requested',
+    continueDraft: isExpert && status === 'draft',
+    discardDraft: isExpert && status === 'draft',
+    withdraw: isExpert && status === 'sent',
+    decide: isClient && status === 'sent',
+    proposeDisabledReason:
+      isExpert && status === 'sent'
+        ? `A change is already waiting on ${vc.parties.clientCompanyName}`
+        : null,
+  };
+}
+
+function footnoteFor(vc: ViewContext): string {
+  const { lens, parties, engagement } = vc;
+  if (lens === 'admin') return 'Amounts on the panel above are visible to Balo staff only.';
+  const isFixed = engagement.pricingMethod === 'fixed';
+  if (lens === 'client') {
+    const lead = `${parties.expertPartyShort} can tidy the wording of a milestone at any time, and you'll be told.`;
+    return isFixed
+      ? `${lead} Anything that changes scope or price comes to you to approve first. Approved price changes are settled on your final invoice.`
+      : `${lead} Anything that adds scope or raises an estimate comes to you to approve first. You're billed for the time logged, as now.`;
+  }
+  const client = parties.clientCompanyName;
+  return `Wording edits apply straight away and ${client} is told. Changes to scope or price go to ${client} as a change, and nothing changes until they approve. One change can be open at a time.`;
+}
+
+function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): string | null {
+  if (vc.lens !== 'admin' || open === null) return null;
+  const { clientCompanyName, expertPartyShort } = vc.parties;
+  if (open.status === 'sent' && open.sentAt !== null) {
+    const days = businessDaysBetween(open.sentAt, vc.now);
+    const base = `Waiting on ${clientCompanyName} since ${formatShortUtc(open.sentAt)} (${days} business days).`;
+    return days >= CHANGE_ORDER_STALE_BUSINESS_DAYS
+      ? `${base} It's in the pending-actions queue.`
+      : base;
+  }
+  if (open.status === 'draft') return `${expertPartyShort} is drafting a change.`;
+  if (open.status === 'requested') {
+    return `${clientCompanyName} asked for a change. Waiting on ${expertPartyShort}.`;
+  }
+  return null;
+}
+
+/**
+ * Map the engagement's change orders (oldest first, as the repository lists them) into the
+ * panel view for one viewer. `now` is injectable for deterministic tests.
+ */
+export function mapChangeOrdersToView(
+  orders: readonly ChangeOrderWithLines[],
+  engagement: ProjectEngagementWithMilestones,
+  ctx: EngagementViewerContext,
+  parties: EngagementParties,
+  now: Date = new Date()
+): ChangeOrderPanelView {
+  const vc: ViewContext = { engagement, lens: ctx.lens, parties, orders, now };
+  const open = findOpenOrder(orders);
+  const indexed = orders.map((order, index) => ({ order, index }));
+  const openItem = indexed.find(
+    ({ order }) => order === open && (ctx.lens !== 'client' || isVisibleOrder(order))
+  );
+  const closed = indexed
+    .filter(({ order }) => !isOpenOrder(order) && isVisibleOrder(order))
+    .reverse();
+
+  const latestClosed = open === null ? closed[0]?.order : undefined;
+  return {
+    open: openItem === undefined ? null : mapItem(openItem.order, openItem.index, vc),
+    affordances: affordancesFor(open, vc),
+    outcome: outcomeFor(latestClosed, vc),
+    history: closed.map(({ order, index }) => mapItem(order, index, vc)),
+    composerHref: `/engagements/${engagement.id}/change-order`,
+    footnote: footnoteFor(vc),
+    adminStateLine: adminStateLineFor(open, vc),
+  };
+}

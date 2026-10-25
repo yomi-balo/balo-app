@@ -363,6 +363,83 @@ export interface EngagementChangesRequestedPayload {
   taggedMilestoneTitles?: string[]; // titles in sort order the client tagged; empty = untagged round
 }
 
+// BAL-622 change orders on a live project. Six events share one base: the order, its
+// engagement and the project title. `correlationId = `${changeOrderId}:<event>`` so each
+// transition is deduped by jobId and a retry of the same transition cannot double-notify.
+// Payloads carry PRE-FORMATTED labels (the web publisher formats with the engagement
+// currency), never raw cents. FEE CONCEALMENT: `sent` is read by the CLIENT and carries
+// client figures only; `approved` is read by the EXPERT and carries expert figures only. No
+// admin template reads either label. Retrospective copy names the PERSON "@ org" first
+// mention; prospective copy names the party. Keys beyond the minimum are optional so a
+// Vercel-ahead or Railway-ahead deploy still validates.
+interface ChangeOrderPayloadBase {
+  correlationId: string; // `${changeOrderId}:<event>`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  changeOrderId: string;
+  projectTitle: string;
+}
+
+// The client asked for a change. Fans out to the delivering EXPERT (recipient:'expert' via
+// `expertProfileId`; email + in-app — the client's note verbatim) and the Balo ADMINS
+// (recipient:'admin_users' fan-out; in-app only).
+export interface ChangeOrderRequestedPayload extends ChangeOrderPayloadBase {
+  expertProfileId: string; // → resolver hydrates data.expert → recipient:'expert' (+ admin fan-out)
+  actorClientLabel: string; // retrospective person ("Dana @ Northwind")
+  note: string; // the client's request note, verbatim — email body
+  expertPartyLabel?: string; // prospective party the request is addressed to — admin in-app body
+}
+
+// The expert sent a proposed change. Fans out to the CLIENT owner (recipient:'client' via
+// `recipientId`; email + in-app) and the Balo ADMINS (in-app only; no amounts).
+export interface ChangeOrderSentPayload extends ChangeOrderPayloadBase {
+  recipientId?: string; // client owner; absent ⇒ the client rules skip
+  actorExpertLabel: string; // retrospective person ("Charles @ CloudPeak"; independent: bare name)
+  clientCompanyName: string; // prospective party — "waiting on {Northwind}"
+  summary: string; // the expert's "what's changing and why", verbatim
+  pricingMethod: 'fixed' | 'tm';
+  linesAdded: number;
+  linesEdited: number;
+  linesRemoved: number;
+  clientPriceChangeLabel?: string; // fixed: "A$15,625 → A$18,125 (+A$2,500)" — CLIENT figures
+  estimateChangeLabel?: string; // tm: "56 hrs → 66 hrs (+10 hrs)"
+}
+
+// The client approved. Fans out to the delivering EXPERT (email + in-app) and the Balo ADMINS
+// (EMAIL only; the email carries no amounts — the figures live on the project page).
+export interface ChangeOrderApprovedPayload extends ChangeOrderPayloadBase {
+  expertProfileId: string;
+  actorClientLabel: string;
+  clientCompanyName: string;
+  pricingMethod: 'fixed' | 'tm';
+  approvedOn: string; // pre-formatted UTC date
+  expertPriceChangeLabel?: string; // fixed — EXPERT figures
+  estimateChangeLabel?: string; // tm
+  expertPartyLabel?: string; // admin email body — "a change from {expertParty}"
+}
+
+// The client declined a sent change. Fans out to the delivering EXPERT (email + in-app — the
+// reason verbatim) and the Balo ADMINS (in-app only).
+export interface ChangeOrderDeclinedPayload extends ChangeOrderPayloadBase {
+  expertProfileId: string;
+  actorClientLabel: string;
+  reason: string; // verbatim
+  clientCompanyName?: string; // prospective party — admin in-app body
+}
+
+// The expert answered a client request without a change order. Notifies the CLIENT owner only
+// (recipient:'client' via `recipientId`; email + in-app).
+export interface ChangeOrderAnsweredPayload extends ChangeOrderPayloadBase {
+  recipientId?: string;
+  actorExpertLabel: string;
+  answer: string; // verbatim
+}
+
+// The expert withdrew a sent change. Notifies the CLIENT owner only (in-app).
+export interface ChangeOrderWithdrawnPayload extends ChangeOrderPayloadBase {
+  recipientId?: string;
+  actorExpertLabel: string;
+}
+
 // BAL-338 (D7) auto-accept: the review window elapsed with no client decision, so the
 // D7 sweep closed the project out as delivered (pending_acceptance → completed, method
 // 'auto', `accepted_by` NULL). SERVER-ONLY (published from the API sweep, never the web

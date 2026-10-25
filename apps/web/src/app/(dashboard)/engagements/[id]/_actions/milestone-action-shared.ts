@@ -6,6 +6,7 @@ import {
   companiesRepository,
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
+  MilestoneChangePendingError,
   type EngagementMilestoneStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
@@ -49,6 +50,8 @@ export const STALE_TRANSITION =
   'This milestone changed since you loaded the page. Refresh and try again.';
 export const PLAN_CHANGED =
   'The delivery plan changed since you loaded the page. Refresh and try again.';
+export const MILESTONE_CHANGE_PENDING =
+  'This milestone is locked while a proposed change to it is reviewed.';
 export const GENERIC_FAILURE = 'Something went wrong. Please try again.';
 
 /**
@@ -258,6 +261,9 @@ export async function runMilestoneTransition<T>(
     }
     if (error instanceof InvalidMilestoneTransitionError) {
       return { ok: false, error: STALE_TRANSITION };
+    }
+    if (error instanceof MilestoneChangePendingError) {
+      return { ok: false, error: MILESTONE_CHANGE_PENDING };
     }
     throw error;
   }

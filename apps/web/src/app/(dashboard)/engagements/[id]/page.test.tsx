@@ -32,6 +32,8 @@ const {
   mockLogError,
   mockTrackServerAndFlush,
   mockReadRatingCard,
+  mockListChangeOrders,
+  mockLoadProjectSettlement,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -48,12 +50,16 @@ const {
   mockLogError: vi.fn(),
   mockTrackServerAndFlush: vi.fn(),
   mockReadRatingCard: vi.fn(),
+  mockListChangeOrders: vi.fn(),
+  mockLoadProjectSettlement: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
 // so the real view mapper (unmocked) derives copy without a NaN/undefined leak.
 vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
+  blocksMarkReady: () => false,
+  engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
   projectEngagementsRepository: {
     findWithMilestones: mockFindWithMilestones,
     findByProjectRequestId: mockFindIdByProjectRequestId,
@@ -80,7 +86,11 @@ vi.mock('@/lib/analytics/server', () => ({
   ENGAGEMENT_SERVER_EVENTS: { WORKSPACE_VIEWED: 'engagement_workspace_viewed' },
 }));
 vi.mock('@/lib/reviews/read-rating-card', () => ({ readRatingCard: mockReadRatingCard }));
+vi.mock('@/lib/engagement/change-order-settlement', () => ({
+  loadProjectSettlement: mockLoadProjectSettlement,
+}));
 
+import { deriveProjectSettlement } from '@balo/shared/engagements';
 import EngagementWorkspacePage, { generateMetadata } from './page';
 
 const ENGAGEMENT_ID = 'eng-1';
@@ -174,6 +184,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListActionItems.mockResolvedValue([]);
   mockReadRatingCard.mockResolvedValue(null);
+  mockListChangeOrders.mockResolvedValue([]);
+  mockLoadProjectSettlement.mockResolvedValue(
+    deriveProjectSettlement({
+      acceptedPriceCents: 5_800_000,
+      approvedDeltasInOrder: [],
+      baloFeeBps: 2500,
+      upfrontDueClientCents: 2_900_000,
+    })
+  );
 });
 
 describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
@@ -414,5 +433,44 @@ describe('EngagementWorkspacePage (RSC) — readRatingCard wiring', () => {
     await renderPage();
 
     expect(mockReadRatingCard).not.toHaveBeenCalled();
+  });
+});
+
+describe('EngagementWorkspacePage (RSC) — change orders and the staff money view', () => {
+  it('loads the engagement change orders alongside the other reads', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+
+    expect(mockListChangeOrders).toHaveBeenCalledWith(ENGAGEMENT_ID);
+  });
+
+  it.each([
+    ['client owner', user({ companyId: COMPANY_ID })],
+    [
+      'delivering expert',
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+    ],
+  ])('never loads the settlement or renders the staff panel for the %s', async (_name, viewer) => {
+    mockGetCurrentUser.mockResolvedValue(viewer);
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+
+    expect(mockLoadProjectSettlement).not.toHaveBeenCalled();
+    expect(screen.queryByText('Balo staff only')).not.toBeInTheDocument();
+  });
+
+  it('loads the settlement and renders the staff panel for a platform admin', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+
+    expect(mockLoadProjectSettlement).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(screen.getByText('Balo staff only')).toBeInTheDocument();
   });
 });

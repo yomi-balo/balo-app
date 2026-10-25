@@ -1,4 +1,4 @@
-import { Check, RotateCcw, Target } from 'lucide-react';
+import { Check, Lock, RotateCcw, Target } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { RICH_TEXT_CONTENT_CLASS } from '@/components/balo/rich-text/types';
@@ -62,7 +62,9 @@ interface MilestoneRowProps {
  * One milestone row on the delivery rail: node + gradient-fillable connector, title,
  * status pill, optional value pill, description, acceptance criteria ("Done when:"),
  * timing labels, and the success-tinted "Delivered:" completion note — plus an
- * optional `actions` slot at the foot. When the latest change request tagged the milestone
+ * optional `actions` slot at the foot. Approved change orders mark a milestone "Added by
+ * approved change" / "Updated by approved change", and a milestone a sent change touches
+ * carries a "Change pending" chip. When the latest change request tagged the milestone
  * (`node.feedback`), it carries a "Changes requested" chip and the client's note until the
  * milestone is completed again, then an "addressed" chip. Both read `node.status`, so an
  * optimistic transition on the expert rail updates them without a refresh.
@@ -123,6 +125,25 @@ export function MilestoneRow({
             <Badge variant="outline" className="border-info/25 bg-info/10 shrink-0">
               <Check className="size-3" aria-hidden />
               {node.feedback.addressedLabel}
+            </Badge>
+          )}
+          {node.changeProvenance !== null && (
+            <Badge
+              variant="outline"
+              className="border-success/20 bg-success/10 text-success shrink-0"
+            >
+              {node.changeProvenance === 'added'
+                ? 'Added by approved change'
+                : 'Updated by approved change'}
+            </Badge>
+          )}
+          {node.changePending && (
+            <Badge
+              variant="outline"
+              className="border-primary/20 bg-primary/10 text-primary shrink-0"
+            >
+              <Lock className="size-3" aria-hidden />
+              Change pending
             </Badge>
           )}
           {node.valueLabel !== null && (

@@ -648,3 +648,8 @@ export function isWallClockInSpringForwardGap(
 //
 // `formatShortUtc` / `formatLongUtc` — see `./utc-date` for the full docblock.
 export * from './utc-date';
+
+// ── UTC business-day arithmetic (BAL-622) ────────────────────────
+//
+// `addBusinessDays` / `businessDaysBetween` — see `./business-days`.
+export * from './business-days';

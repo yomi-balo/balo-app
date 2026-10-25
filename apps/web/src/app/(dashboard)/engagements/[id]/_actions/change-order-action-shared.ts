@@ -1,0 +1,263 @@
+import 'server-only';
+
+import { z } from 'zod';
+import {
+  projectEngagementsRepository,
+  type ChangeOrderLineInput,
+  type ChangeOrderRecord,
+  type ProjectEngagementWithMilestones,
+} from '@balo/db';
+import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import { hasCapability, CAPABILITIES } from '@/lib/authz';
+import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import type { EngagementParties } from '@/lib/engagement/engagement-parties';
+import type { SessionUser } from '@/lib/auth/session';
+import { log } from '@/lib/logging';
+import {
+  NOT_ACTIVE,
+  ONLY_CLIENT,
+  ONLY_EXPERT,
+  loadEngagementLens,
+  wholeDaysSince,
+  deriveEngagementTitle,
+  type GateResult,
+} from './engagement-lifecycle-shared';
+import {
+  INVALID_REQUEST,
+  NOT_FOUND,
+  PLAN_CHANGED,
+  descriptionTextToSafeHtml,
+} from './milestone-action-shared';
+
+export {
+  CHANGE_ALREADY_OPEN,
+  CHANGE_ORDER_PENDING,
+  REASON_REQUIRED,
+  coherenceMessage,
+} from './engagement-lifecycle-shared';
+export { MILESTONE_CHANGE_PENDING } from './milestone-action-shared';
+
+type ClientChangeOrderCapability =
+  | typeof CAPABILITIES.PARTICIPATE
+  | typeof CAPABILITIES.APPROVE_OWN_PROPOSALS;
+
+function deny(engagementId: string, userId: string, reason: string): void {
+  log.warn('Engagement lifecycle denied', { engagementId, userId, reason });
+}
+
+/**
+ * The CLIENT-side gate for a change-order act: the actor holds `capability` on the
+ * engagement's company (membership axis, read live), and the project is `active`. A stranger
+ * and a missing row share one `NOT_FOUND`. Requesting uses `PARTICIPATE`; approving and
+ * declining use `APPROVE_OWN_PROPOSALS`.
+ */
+export async function gateChangeOrderClient(
+  user: SessionUser,
+  engagementId: string,
+  capability: ClientChangeOrderCapability
+): Promise<GateResult> {
+  const loaded = await loadEngagementLens(user, engagementId);
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (loaded.engagement.status !== 'active') {
+    deny(engagementId, user.id, 'wrong_status');
+    return { ok: false, error: NOT_ACTIVE };
+  }
+  const allowed = await hasCapability(user, capability, {
+    companyId: loaded.engagement.companyId,
+  });
+  if (!allowed) {
+    deny(engagementId, user.id, 'no_capability');
+    return { ok: false, error: ONLY_CLIENT };
+  }
+  return { ok: true, engagement: loaded.engagement };
+}
+
+/**
+ * The EXPERT-side gate for a change-order act: the actor holds `manage_engagement` on the
+ * engagement axis (the delivering expert, or an owner or admin of their agency), and the
+ * project is `active`. The engagement is loaded directly rather than through the lens
+ * resolver, which would turn away an agency owner who is not the delivering expert. A
+ * non-holder who is not a party at all sees the same `NOT_FOUND` as a missing row.
+ */
+export async function gateChangeOrderExpert(
+  user: SessionUser,
+  engagementId: string
+): Promise<GateResult> {
+  const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
+  if (engagement === undefined) {
+    deny(engagementId, user.id, 'engagement_not_found');
+    return { ok: false, error: NOT_FOUND };
+  }
+  const allowed = await hasExpertDeliveryCapability(
+    user,
+    ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+    engagement.expertProfileId,
+    { contextType: 'project', contextId: engagementId }
+  );
+  if (!allowed) {
+    const isParty = resolveEngagementLens(user, engagement) !== null;
+    deny(engagementId, user.id, isParty ? 'no_capability' : 'not_a_party');
+    return { ok: false, error: isParty ? ONLY_EXPERT : NOT_FOUND };
+  }
+  if (engagement.status !== 'active') {
+    deny(engagementId, user.id, 'wrong_status');
+    return { ok: false, error: NOT_ACTIVE };
+  }
+  return { ok: true, engagement };
+}
+
+/** The most lines one change order may carry. */
+export const MAX_CHANGE_ORDER_LINES = 100;
+
+/** One milestone amendment as the composer submits it (plain text, minutes). */
+export const lineDraftSchema = z
+  .object({
+    op: z.enum(['add', 'edit', 'remove']),
+    milestoneId: z.uuid().optional(),
+    title: z.string().trim().min(1).max(200),
+    descriptionText: z.string().max(10_000).nullable().optional(),
+    estimatedMinutes: z.number().int().min(1).max(100000).nullable().optional(),
+  })
+  .strict();
+
+export type LineDraft = z.infer<typeof lineDraftSchema>;
+
+export type LineInputsResult =
+  | { ok: true; lines: ChangeOrderLineInput[] }
+  | { ok: false; error: string };
+
+/**
+ * An edit line keeps the live (possibly rich) description when its plain text is unchanged,
+ * so a title-only edit never flattens the milestone's formatting; changed text is rebuilt
+ * through the project-HTML sanitiser.
+ */
+function editedDescriptionHtml(
+  draft: LineDraft,
+  live: ProjectEngagementWithMilestones['milestones'][number] | undefined
+): string | null {
+  if (live !== undefined) {
+    const currentPlain = htmlToPlainText(live.descriptionHtml ?? '');
+    if (currentPlain === (draft.descriptionText ?? '').trim()) return live.descriptionHtml;
+  }
+  return descriptionTextToSafeHtml(draft.descriptionText);
+}
+
+type LiveMilestone = ProjectEngagementWithMilestones['milestones'][number];
+
+function lineDescriptionHtml(draft: LineDraft, live: LiveMilestone | undefined): string | null {
+  if (draft.op === 'remove') return null;
+  if (draft.op === 'edit') return editedDescriptionHtml(draft, live);
+  return descriptionTextToSafeHtml(draft.descriptionText);
+}
+
+/** One draft as a repository line input, or the refusal message when its milestone id is wrong. */
+function lineInputFor(
+  draft: LineDraft,
+  liveById: ReadonlyMap<string, LiveMilestone>
+): { ok: true; line: ChangeOrderLineInput } | { ok: false; error: string } {
+  const { op, milestoneId } = draft;
+  if ((op === 'add') !== (milestoneId === undefined)) {
+    return { ok: false, error: INVALID_REQUEST };
+  }
+  const live = milestoneId === undefined ? undefined : liveById.get(milestoneId);
+  if (op !== 'add' && live === undefined) {
+    return { ok: false, error: PLAN_CHANGED };
+  }
+  return {
+    ok: true,
+    line: {
+      op,
+      engagementMilestoneId: milestoneId ?? null,
+      title: op === 'remove' ? (live?.title ?? draft.title) : draft.title,
+      descriptionHtml: lineDescriptionHtml(draft, live),
+      acceptanceCriteria: null,
+      valueCents: null,
+      estimatedMinutes: op === 'remove' ? null : (draft.estimatedMinutes ?? null),
+    },
+  };
+}
+
+/**
+ * The repository's line inputs for the composer's drafts. An `add` names no milestone; an
+ * `edit` or `remove` must name a live milestone of THIS engagement (an unknown id is
+ * `PLAN_CHANGED`, before any write). A `remove` keeps the live title; descriptions pass
+ * through the project-HTML sanitiser. Per-milestone values are never sent (`valueCents`
+ * stays null): the composer edits the project total.
+ */
+export function toLineInputs(
+  drafts: readonly LineDraft[],
+  engagement: ProjectEngagementWithMilestones
+): LineInputsResult {
+  const liveById = new Map(engagement.milestones.map((m) => [m.id, m]));
+  const lines: ChangeOrderLineInput[] = [];
+  for (const draft of drafts) {
+    const built = lineInputFor(draft, liveById);
+    if (!built.ok) return built;
+    lines.push(built.line);
+  }
+  return { ok: true, lines };
+}
+
+/**
+ * The analytics properties every change-order event past `requested` carries. No amounts:
+ * `has_price_change` records only whether the price moves.
+ */
+export function changeOrderLinesProps(
+  order: ChangeOrderRecord,
+  pricingMethod: string,
+  userId: string
+): {
+  engagement_id: string;
+  change_order_id: string;
+  pricing_method: string;
+  lines_added: number;
+  lines_edited: number;
+  lines_removed: number;
+  has_price_change: boolean;
+  initiated_by: 'client' | 'expert';
+  distinct_id: string;
+} {
+  const count = (op: 'add' | 'edit' | 'remove'): number =>
+    order.lines.filter((line) => line.op === op).length;
+  return {
+    engagement_id: order.engagementId,
+    change_order_id: order.id,
+    pricing_method: pricingMethod,
+    lines_added: count('add'),
+    lines_edited: count('edit'),
+    lines_removed: count('remove'),
+    has_price_change: (order.priceDeltaCents ?? 0) !== 0,
+    initiated_by: order.requestedAt === null ? 'expert' : 'client',
+    distinct_id: userId,
+  };
+}
+
+/** Whole days from the send (or, for an answered request, the request) to `now`. */
+export function daysToDecision(order: ChangeOrderRecord, now: Date): number {
+  const from = order.sentAt ?? order.requestedAt ?? order.createdAt;
+  return wholeDaysSince(from, now);
+}
+
+/** The fields every change-order notification payload shares. */
+export function payloadBase(
+  event: string,
+  order: Pick<ChangeOrderRecord, 'id'>,
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): {
+  correlationId: string;
+  engagementId: string;
+  changeOrderId: string;
+  projectTitle: string;
+} {
+  return {
+    correlationId: `${order.id}:${event}`,
+    engagementId: engagement.id,
+    changeOrderId: order.id,
+    projectTitle: deriveEngagementTitle(engagement, parties),
+  };
+}

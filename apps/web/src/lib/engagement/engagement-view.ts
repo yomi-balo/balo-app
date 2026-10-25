@@ -2,6 +2,8 @@ import 'server-only';
 
 import {
   AUTO_ACCEPT_DAYS,
+  blocksMarkReady,
+  type ChangeOrderWithLines,
   type ProjectDeliveryStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
@@ -21,6 +23,7 @@ import {
   deriveSegments,
   type ChangeRequestState,
 } from './change-request-view';
+import { effectiveExpertPriceCents, findOpenOrder } from './change-order-view';
 import {
   deriveEngagementParties,
   engagementHeaderLine,
@@ -185,6 +188,10 @@ export interface MilestoneNodeView {
   completionNote: string | null;
   /** Set when the latest change-request round tagged this milestone; null otherwise. */
   feedback: MilestoneFeedbackView | null;
+  /** An edit or remove line of the open SENT change order targets it, so plain edits are locked. */
+  changePending: boolean;
+  /** An approved change order added (`added`) or edited (`updated`) this milestone. */
+  changeProvenance: 'added' | 'updated' | null;
 }
 
 export interface CountdownView {
@@ -416,14 +423,15 @@ function deriveTimeframeItem(engagement: ProjectEngagementWithMilestones): Terms
 
 function deriveTermsStrip(
   engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens
+  lens: EngagementLens,
+  changeOrders: readonly ChangeOrderWithLines[]
 ): TermsStripItem[] {
-  // Client sees the marked-up (grossed-up) figure, derived on read from the
-  // snapshotted `baloFeeBps`; expert & admin see the RAW payout quote (`priceCents`).
+  // The EFFECTIVE price: the accepted price plus every approved change order's delta.
+  // Client sees the marked-up (grossed-up) figure, derived on read from the snapshotted
+  // `baloFeeBps`; expert & admin see the RAW payout quote.
+  const effectiveCents = effectiveExpertPriceCents(engagement.priceCents, changeOrders);
   const priceCents =
-    lens === 'client'
-      ? applyBaloFee(engagement.priceCents, engagement.baloFeeBps)
-      : engagement.priceCents;
+    lens === 'client' ? applyBaloFee(effectiveCents, engagement.baloFeeBps) : effectiveCents;
   const items: TermsStripItem[] = [
     {
       icon: 'DollarSign',
@@ -449,12 +457,44 @@ function deriveTermsStrip(
   return items;
 }
 
+/** The milestone ids the open SENT change order edits or removes (locked while it is decided). */
+function pendingMilestoneIds(changeOrders: readonly ChangeOrderWithLines[]): Set<string> {
+  const open = findOpenOrder(changeOrders);
+  const ids = new Set<string>();
+  if (open?.status !== 'sent') return ids;
+  for (const line of open.lines) {
+    if (line.op !== 'add' && line.engagementMilestoneId !== null)
+      ids.add(line.engagementMilestoneId);
+  }
+  return ids;
+}
+
+/** Which approved change order added or edited each milestone ('added' wins over 'updated'). */
+function milestoneProvenance(
+  changeOrders: readonly ChangeOrderWithLines[]
+): Map<string, 'added' | 'updated'> {
+  const provenance = new Map<string, 'added' | 'updated'>();
+  for (const order of changeOrders) {
+    if (order.status !== 'approved') continue;
+    for (const line of order.lines) {
+      if (line.op === 'remove' || line.engagementMilestoneId === null) continue;
+      if (line.op === 'add' || !provenance.has(line.engagementMilestoneId)) {
+        provenance.set(line.engagementMilestoneId, line.op === 'add' ? 'added' : 'updated');
+      }
+    }
+  }
+  return provenance;
+}
+
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
   lens: EngagementLens,
-  crState: ChangeRequestState
+  crState: ChangeRequestState,
+  changeOrders: readonly ChangeOrderWithLines[]
 ): MilestoneNodeView[] {
+  const pending = pendingMilestoneIds(changeOrders);
+  const provenance = milestoneProvenance(changeOrders);
   const statusLabels: Record<MilestoneNodeVariant, string> = {
     pending: 'Not started',
     in_progress: 'In progress',
@@ -508,6 +548,8 @@ function deriveMilestones(
           ? m.completionNote
           : null,
       feedback: deriveMilestoneFeedback(engagement, crState, m.id, lens),
+      changePending: pending.has(m.id),
+      changeProvenance: provenance.get(m.id) ?? null,
     };
   });
 }
@@ -764,7 +806,8 @@ function deriveCompletionCard(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
-  crState: ChangeRequestState
+  crState: ChangeRequestState,
+  changeOrders: readonly ChangeOrderWithLines[]
 ): CompletionCardView | null {
   if (lens !== 'expert') return null;
   if (engagement.status !== 'active') return null;
@@ -777,11 +820,18 @@ function deriveCompletionCard(
   const remaining = Math.max(0, total - done);
   const hasMilestones = total > 0;
   const allDone = remaining === 0;
-  const canRequest = total === 0 || allDone;
+  const open = findOpenOrder(changeOrders);
+  const blocker = open !== null && blocksMarkReady(open) ? open : null;
+  const canRequest = (total === 0 || allDone) && blocker === null;
   const client = parties.clientCompanyName;
 
   let bodyCopy: string;
-  if (total === 0) {
+  if (blocker !== null) {
+    bodyCopy =
+      blocker.status === 'sent'
+        ? `A change is waiting on ${client}. You can mark the project ready once it's decided.`
+        : `Answer ${client}'s change request first. The project can't be marked ready while it's open.`;
+  } else if (total === 0) {
     bodyCopy = `This project has no milestones — you can still send it for ${client}'s review, but a visible plan builds trust.`;
   } else if (allDone) {
     bodyCopy = `Every milestone is delivered. Marking it ready sends the project to ${client} for review — ${client} can accept or request changes within ${AUTO_ACCEPT_DAYS} days, after which it's accepted automatically.`;
@@ -806,12 +856,15 @@ function deriveCompletionCard(
  * Map the hydrated engagement + resolved viewer context into the single
  * serializable workspace view. SERVER-ONLY (value-imports `AUTO_ACCEPT_DAYS` from
  * `@balo/db`) — the returned object is plain data safe to pass to any component.
- * `now` is injectable for deterministic tests (default `new Date()`).
+ * `now` is injectable for deterministic tests (default `new Date()`). `changeOrders` are the
+ * engagement's live change orders, oldest first: they move the terms strip to the effective
+ * price, lock and badge milestones, and block the completion card while one is open.
  */
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
-  now: Date = new Date()
+  now: Date = new Date(),
+  changeOrders: readonly ChangeOrderWithLines[] = []
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -835,7 +888,7 @@ export function mapEngagementToWorkspaceView(
     headerLine: engagementHeaderLine(ctx.lens, parties),
     statusChip: deriveStatusChip(status),
     provenance,
-    terms: deriveTermsStrip(engagement, ctx.lens),
+    terms: deriveTermsStrip(engagement, ctx.lens, changeOrders),
     backHref: '/projects',
   };
 
@@ -849,7 +902,7 @@ export function mapEngagementToWorkspaceView(
     header,
     parties,
     progress: deriveProgress(engagement, ctx.lens, parties, crState),
-    milestones: deriveMilestones(engagement, parties, ctx.lens, crState),
+    milestones: deriveMilestones(engagement, parties, ctx.lens, crState, changeOrders),
     hasMilestones: engagement.milestones.length > 0,
     reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now),
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
@@ -857,6 +910,6 @@ export function mapEngagementToWorkspaceView(
     cancelledBanner: deriveCancelledBanner(engagement),
     emptyState: deriveEmptyState(engagement, ctx.lens, parties),
     adminOversight: deriveAdminOversight(engagement, ctx.lens, parties, now),
-    completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState),
+    completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
   };
 }

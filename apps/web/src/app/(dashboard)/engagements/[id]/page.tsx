@@ -1,12 +1,21 @@
 import { cache } from 'react';
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { projectEngagementsRepository, actionItemsRepository } from '@balo/db';
+import {
+  projectEngagementsRepository,
+  actionItemsRepository,
+  engagementChangeOrdersRepository,
+} from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
+import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { mapChangeOrdersToView } from '@/lib/engagement/change-order-view';
+import { mapChangeOrderAdminView } from '@/lib/engagement/change-order-admin-view';
+import { loadProjectSettlement } from '@/lib/engagement/change-order-settlement';
 import { readRatingCard } from '@/lib/reviews/read-rating-card';
 import {
   trackServerAndFlush,
@@ -137,14 +146,12 @@ export default async function EngagementWorkspacePage({
     notFound();
   }
 
-  const view = mapEngagementToWorkspaceView(engagement, ctx);
-
   // The in-app rating card. `offersRatingCard` is the VIEW decision (completed + client
   // lens only); the read degrades to `null` on its own, so a fault here never blocks an
   // otherwise-successful workspace render. No consultation is required for a project
   // (unlike the case surface / recap): a project can complete with zero consultation calls.
   // Runs alongside the action-items read below — two independent reads, one round trip.
-  const [rating, actionItems] = await Promise.all([
+  const [rating, actionItems, changeOrderRows] = await Promise.all([
     offersRatingCard(engagement.status, ctx.lens)
       ? readRatingCard({
           engagementId: engagement.id,
@@ -156,7 +163,23 @@ export default async function EngagementWorkspacePage({
     // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
     // engagement graph, so the workspace loader stays a single query.
     actionItemsRepository.listByEngagement(engagement.id),
+    // The engagement's change orders (BAL-622), oldest first — they move the effective price,
+    // lock milestones and feed the change-order panel.
+    engagementChangeOrdersRepository.listForEngagement(engagement.id),
   ]);
+  const view = mapEngagementToWorkspaceView(engagement, ctx, new Date(), changeOrderRows);
+  const parties = deriveEngagementParties(engagement);
+  const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties);
+  // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
+  // settlement is not even loaded for anyone else.
+  const adminMoney = hasPlatformCapability(user, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+    ? mapChangeOrderAdminView(
+        await loadProjectSettlement(engagement.id),
+        changeOrderRows,
+        engagement,
+        parties
+      )
+    : null;
   const actionItemsView = mapActionItemsToView(engagement, actionItems, ctx);
 
   // Fire the server-side view event on the authorised path. `after()` is
@@ -181,6 +204,8 @@ export default async function EngagementWorkspacePage({
         initialAction={resolveInitialAction(action)}
         actionItems={actionItemsView}
         rating={rating}
+        changeOrders={changeOrders}
+        adminMoney={adminMoney}
       />
     </>
   );

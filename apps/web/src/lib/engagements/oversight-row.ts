@@ -178,13 +178,18 @@ function deriveExpertLabel(item: AdminProjectEngagementListItem): string {
   });
 }
 
-/** "Fixed · A$40,000" or "T&M · A$220/hr · cap A$40,000". */
+/**
+ * "Fixed · A$40,000" or "T&M · A$220/hr · cap A$40,000", from the effective price
+ * (`price_cents` plus approved change orders). On T&M that is the cap, which no change
+ * order moves.
+ */
 function derivePricingLabel(item: AdminProjectEngagementListItem): string {
+  const effective = money(item.effectivePriceCents, item.currency);
   if (item.pricingMethod === 'fixed') {
-    return `Fixed · ${money(item.priceCents, item.currency)}`;
+    return `Fixed · ${effective}`;
   }
   const rateCents = item.rateCents ?? 0;
-  return `T&M · ${money(rateCents, item.currency)}/hr · cap ${money(item.priceCents, item.currency)}`;
+  return `T&M · ${money(rateCents, item.currency)}/hr · cap ${effective}`;
 }
 
 /** The accept/cancel actor as projected by the repo (name + role, PII-safe). */

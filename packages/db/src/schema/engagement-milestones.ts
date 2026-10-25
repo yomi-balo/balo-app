@@ -22,8 +22,10 @@ import { timestamps, softDelete } from './helpers';
  *
  * `value_cents` (Fixed-only) and `estimated_minutes` (T&M-only) mirror
  * `proposal_milestones` exactly and are mutually exclusive by pricing method.
- * `value_cents` is immutable AFTER the snapshot — the repo's `editDescriptive`/
- * `add` signatures type-level EXCLUDE it (the money axis is fixed at materialize).
+ * After the snapshot, `value_cents` has exactly one writer: an approved change order
+ * (`engagementChangeOrdersRepository.approve`). The plain `editDescriptive`/`add`
+ * signatures type-level EXCLUDE it, and the invariant
+ * `milestone-value-cents-has-one-post-snapshot-writer.test.ts` fences the source.
  *
  * Circular table import (engagements ↔ engagement_milestones) is fine — Drizzle
  * `references()` / `relations()` are lazy thunks (the codebase already cycles
@@ -59,7 +61,7 @@ export const engagementMilestones = pgTable(
     title: text('title').notNull(),
     descriptionHtml: text('description_html'),
     acceptanceCriteria: text('acceptance_criteria'),
-    valueCents: integer('value_cents'), // Fixed-only; nullable; NOT writable post-snapshot.
+    valueCents: integer('value_cents'), // Fixed-only; nullable; post-snapshot only via an approved change order.
     estimatedMinutes: integer('estimated_minutes'), // T&M-only; nullable.
 
     // ── Delivery state ──

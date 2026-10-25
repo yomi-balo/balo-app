@@ -24,14 +24,17 @@ const {
   mockFindOwner,
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
+  MilestoneChangePendingError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
+  class MilestoneChangePendingError extends Error {}
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
     EngagementNotActiveError,
     InvalidMilestoneTransitionError,
+    MilestoneChangePendingError,
   };
 });
 
@@ -42,6 +45,7 @@ vi.mock('@balo/db', () => ({
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
+  MilestoneChangePendingError,
 }));
 
 const mockPublish = vi.fn();
@@ -213,6 +217,16 @@ describe('runMilestoneTransition', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/changed since you loaded the page/);
+  });
+
+  it('maps MilestoneChangePendingError → MILESTONE_CHANGE_PENDING', async () => {
+    const res = await runMilestoneTransition(() => {
+      throw new MilestoneChangePendingError('x');
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: 'This milestone is locked while a proposed change to it is reviewed.',
+    });
   });
 
   it('rethrows any other error to the caller boundary', async () => {

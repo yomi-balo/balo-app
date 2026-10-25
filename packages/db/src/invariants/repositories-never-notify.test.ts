@@ -143,6 +143,13 @@ const PINNED_REPOSITORIES: readonly string[] = [
    * regression this pin catches.
    */
   'upcoming-meetings.ts',
+  /**
+   * BAL-622 — every change-order transition is followed, at its web call site, by a
+   * `change_order.*` publish after commit. A publish smuggled into the repository would fire
+   * from inside `db.transaction` — a "your change was approved" email for an approval that
+   * then rolled back on a stale milestone.
+   */
+  'engagement-change-orders.ts',
 ];
 
 /**

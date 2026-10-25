@@ -12,6 +12,12 @@ import {
 } from '@/lib/engagement/engagement-view';
 import type { EngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
+import type {
+  ChangeOrderAffordances,
+  ChangeOrderItemView,
+  ChangeOrderPanelView,
+} from '@/lib/engagement/change-order-view';
+import type { ChangeOrderAdminMoneyView } from './change-orders/change-order-admin-panel';
 
 // The rating card's `RatingBlock` swaps its own content via `StateSwap`
 // (`motion/react`, `mode="wait"`) — stubbed the same way `engagement-rating-card.test.tsx`
@@ -29,7 +35,38 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', 
 // server-action module graph (@balo/db); its behaviour is covered in
 // expert-milestone-rail.test.tsx.
 vi.mock('./expert-milestone-rail', () => ({
-  ExpertMilestoneRail: () => <div data-testid="expert-milestone-rail">Interactive rail</div>,
+  ExpertMilestoneRail: ({
+    proposeChange,
+  }: {
+    proposeChange?: { label: string; disabledReason: string | null; href: string };
+  }) => (
+    <div data-testid="expert-milestone-rail">
+      Interactive rail
+      {proposeChange !== undefined && (
+        <span data-testid="propose-change">
+          {proposeChange.label}|{proposeChange.href}|{proposeChange.disabledReason ?? 'enabled'}
+        </span>
+      )}
+    </div>
+  ),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/request-change-order', () => ({
+  requestChangeOrderAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/answer-change-request', () => ({
+  answerChangeRequestAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/discard-change-order-draft', () => ({
+  discardChangeOrderDraftAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/withdraw-change-order', () => ({
+  withdrawChangeOrderAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/approve-change-order', () => ({
+  approveChangeOrderAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/decline-change-order', () => ({
+  declineChangeOrderAction: vi.fn(),
 }));
 
 // The D4 lifecycle islands (review-banner-actions, admin-cancel-button,
@@ -89,6 +126,8 @@ function milestone(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeVie
     completedLabel: 'Completed 30 Jun by Priya',
     completionNote: 'Delivered the discovery deck.',
     feedback: null,
+    changePending: false,
+    changeProvenance: null,
     ...overrides,
   };
 }
@@ -554,5 +593,223 @@ describe('EngagementWorkspace — the in-app rating card', () => {
     render(<EngagementWorkspace view={view({ status: 'completed' })} />);
     expect(screen.queryByText(/How was working with/)).not.toBeInTheDocument();
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
+  });
+});
+
+describe('EngagementWorkspace — change orders', () => {
+  const NO_AFFORDANCES: ChangeOrderAffordances = {
+    requestChange: false,
+    propose: false,
+    answer: false,
+    continueDraft: false,
+    discardDraft: false,
+    withdraw: false,
+    decide: false,
+    proposeDisabledReason: null,
+  };
+
+  function orderItem(overrides: Partial<ChangeOrderItemView> = {}): ChangeOrderItemView {
+    return {
+      id: 'o1',
+      status: 'sent',
+      pricingMethod: 'fixed',
+      sentOnLabel: '18 Oct',
+      sentByLabel: 'Charles @ CloudPeak',
+      pill: { label: 'Waiting on you', tone: 'violet' },
+      summary: 'Adds a dashboard.',
+      requestNote: null,
+      requestedHeading: null,
+      datesLabel: 'Sent 18 Oct',
+      lines: [],
+      priceEffect: null,
+      deltaChip: null,
+      answerText: null,
+      declineText: null,
+      ...overrides,
+    };
+  }
+
+  function changeOrders(overrides: Partial<ChangeOrderPanelView> = {}): ChangeOrderPanelView {
+    return {
+      open: null,
+      affordances: NO_AFFORDANCES,
+      outcome: null,
+      history: [],
+      composerHref: '/engagements/eng-1/change-order',
+      footnote: 'Wording edits apply straight away.',
+      adminStateLine: null,
+      ...overrides,
+    };
+  }
+
+  const EXPERT: Partial<EngagementWorkspaceView> = {
+    lens: 'expert',
+    isClientOwner: false,
+    isDeliveringExpert: true,
+  };
+
+  it('renders no change-order surface when the page supplies none', () => {
+    render(<EngagementWorkspace view={view()} />);
+    expect(screen.queryByText('Need something different from the plan?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Changes to this project')).not.toBeInTheDocument();
+  });
+
+  it('client · active: invites a request and shows the lens footnote', () => {
+    render(
+      <EngagementWorkspace
+        view={view()}
+        changeOrders={changeOrders({ affordances: { ...NO_AFFORDANCES, requestChange: true } })}
+      />
+    );
+    expect(screen.getByText('Need something different from the plan?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Request a change/ })).toBeInTheDocument();
+    expect(screen.getByText('Wording edits apply straight away.')).toBeInTheDocument();
+  });
+
+  it('client · active with an open change: explains instead of inviting', () => {
+    render(
+      <EngagementWorkspace
+        view={view()}
+        changeOrders={changeOrders({
+          open: orderItem(),
+          affordances: { ...NO_AFFORDANCES, decide: true },
+        })}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Approve change' })).toBeInTheDocument();
+    expect(screen.getByText(/You have a change in progress/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request a change/ })).not.toBeInTheDocument();
+  });
+
+  it('client · not active: no request card and no footnote', () => {
+    render(
+      <EngagementWorkspace
+        view={view({ status: 'completed' })}
+        changeOrders={changeOrders({ affordances: { ...NO_AFFORDANCES, requestChange: true } })}
+      />
+    );
+    expect(screen.queryByText('Need something different from the plan?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Wording edits apply straight away.')).not.toBeInTheDocument();
+  });
+
+  it('lists the history only when there is some', () => {
+    const { rerender } = render(
+      <EngagementWorkspace view={view()} changeOrders={changeOrders()} />
+    );
+    expect(screen.queryByText('Changes to this project')).not.toBeInTheDocument();
+    rerender(
+      <EngagementWorkspace
+        view={view()}
+        changeOrders={changeOrders({
+          history: [
+            orderItem({ status: 'approved', pill: { label: 'Approved', tone: 'emerald' } }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText('Changes to this project')).toBeInTheDocument();
+  });
+
+  it('expert · active: passes the composer entry to the rail', () => {
+    render(
+      <EngagementWorkspace
+        view={view(EXPERT)}
+        changeOrders={changeOrders({ affordances: { ...NO_AFFORDANCES, propose: true } })}
+      />
+    );
+    expect(screen.getByTestId('propose-change')).toHaveTextContent(
+      'Propose a change|/engagements/eng-1/change-order|enabled'
+    );
+  });
+
+  it('expert · draft open: relabels the entry', () => {
+    render(
+      <EngagementWorkspace
+        view={view(EXPERT)}
+        changeOrders={changeOrders({
+          open: orderItem({ status: 'draft' }),
+          affordances: { ...NO_AFFORDANCES, continueDraft: true, discardDraft: true },
+        })}
+      />
+    );
+    expect(screen.getByTestId('propose-change')).toHaveTextContent('Continue draft change');
+    expect(screen.getByText("You have a draft change that hasn't been sent.")).toBeInTheDocument();
+  });
+
+  it('expert · change sent: disables the entry with the reason and offers withdraw', () => {
+    render(
+      <EngagementWorkspace
+        view={view(EXPERT)}
+        changeOrders={changeOrders({
+          open: orderItem(),
+          affordances: {
+            ...NO_AFFORDANCES,
+            withdraw: true,
+            proposeDisabledReason: 'A change is already waiting on Northwind Industrial',
+          },
+        })}
+      />
+    );
+    expect(screen.getByTestId('propose-change')).toHaveTextContent(
+      'A change is already waiting on Northwind Industrial'
+    );
+    expect(screen.getByRole('button', { name: 'Withdraw' })).toBeInTheDocument();
+  });
+
+  it('expert · nothing to propose or explain: passes no entry', () => {
+    render(<EngagementWorkspace view={view(EXPERT)} changeOrders={changeOrders()} />);
+    expect(screen.queryByTestId('propose-change')).not.toBeInTheDocument();
+  });
+
+  describe('admin money', () => {
+    const MONEY: ChangeOrderAdminMoneyView = {
+      kind: 'tm',
+      rows: [{ label: 'Current estimate', value: '66 hrs', strong: true }],
+      pendingNote: null,
+      footnote: 'Billed each period from logged time.',
+    };
+    const ADMIN: Partial<EngagementWorkspaceView> = {
+      lens: 'admin',
+      archetype: 'observer',
+      isClientOwner: false,
+      isDeliveringExpert: false,
+    };
+
+    it('renders the Balo-staff panel and the admin footnote beside it', () => {
+      render(
+        <EngagementWorkspace
+          view={view(ADMIN)}
+          changeOrders={changeOrders({
+            footnote: 'Amounts on the panel above are visible to Balo staff only.',
+            adminStateLine: 'Northwind asked for a change. Waiting on Priya.',
+          })}
+          adminMoney={MONEY}
+        />
+      );
+      expect(screen.getByText('Balo staff only')).toBeInTheDocument();
+      expect(screen.getByText('Current estimate')).toBeInTheDocument();
+      expect(
+        screen.getByText('Northwind asked for a change. Waiting on Priya.')
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('Amounts on the panel above are visible to Balo staff only.')
+      ).toBeInTheDocument();
+    });
+
+    it('renders no money panel without one, and no admin footnote either', () => {
+      render(
+        <EngagementWorkspace
+          view={view(ADMIN)}
+          changeOrders={changeOrders({
+            footnote: 'Amounts on the panel above are visible to Balo staff only.',
+          })}
+          adminMoney={null}
+        />
+      );
+      expect(screen.queryByText('Balo staff only')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('Amounts on the panel above are visible to Balo staff only.')
+      ).not.toBeInTheDocument();
+    });
   });
 });

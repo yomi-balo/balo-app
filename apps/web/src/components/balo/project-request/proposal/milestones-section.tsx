@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { RichTextEditor } from '@/components/balo/rich-text-editor';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
-import { centsToDollars, dollarsToCents, formatWholeCurrency } from '@/lib/utils/currency';
+import { centsToDollars, formatWholeCurrency, parseDollarsToCents } from '@/lib/utils/currency';
 import { ComposerSection } from './composer-section';
 import { formatProposalAmount, minutesToHoursLabel } from './proposal-format';
 import {
@@ -34,14 +34,7 @@ interface MilestonesSectionProps {
   onSetPrice: (cents: number) => void;
 }
 
-/** Parse a dollar string to integer cents, or null when blank/invalid. */
-export function parseDollarsToCents(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (trimmed === '') return null;
-  const parsed = Number.parseFloat(trimmed);
-  if (Number.isNaN(parsed) || parsed < 0) return null;
-  return dollarsToCents(parsed);
-}
+export { parseDollarsToCents };
 
 /** Parse an HOURS string (the effort input is hours-facing) to integer MINUTES, or
  *  null when blank/invalid/negative. E.g. "1.5" → 90, "" → null, "-1" → null. */

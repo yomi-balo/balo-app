@@ -26,16 +26,41 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
-const { mockFindEngagement, MilestonesIncompleteError, InvalidEngagementTransitionError } =
-  vi.hoisted(() => {
-    class MilestonesIncompleteError extends Error {}
-    class InvalidEngagementTransitionError extends Error {}
-    return {
-      mockFindEngagement: vi.fn(),
-      MilestonesIncompleteError,
-      InvalidEngagementTransitionError,
-    };
-  });
+const {
+  mockFindEngagement,
+  MilestonesIncompleteError,
+  InvalidEngagementTransitionError,
+  EngagementNotActiveError,
+  ChangeOrderAlreadyOpenError,
+  ChangeOrderCoherenceError,
+  ChangeOrderNotFoundError,
+  ChangeOrderPendingError,
+  InvalidChangeOrderTransitionError,
+} = vi.hoisted(() => {
+  class MilestonesIncompleteError extends Error {}
+  class InvalidEngagementTransitionError extends Error {}
+  class EngagementNotActiveError extends Error {}
+  class ChangeOrderAlreadyOpenError extends Error {}
+  class ChangeOrderNotFoundError extends Error {}
+  class ChangeOrderPendingError extends Error {}
+  class InvalidChangeOrderTransitionError extends Error {}
+  class ChangeOrderCoherenceError extends Error {
+    constructor(public readonly rule: string) {
+      super(rule);
+    }
+  }
+  return {
+    mockFindEngagement: vi.fn(),
+    MilestonesIncompleteError,
+    InvalidEngagementTransitionError,
+    EngagementNotActiveError,
+    ChangeOrderAlreadyOpenError,
+    ChangeOrderCoherenceError,
+    ChangeOrderNotFoundError,
+    ChangeOrderPendingError,
+    InvalidChangeOrderTransitionError,
+  };
+});
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
@@ -44,8 +69,13 @@ vi.mock('@balo/db', () => ({
   companiesRepository: { findOwnerByCompanyId: vi.fn() },
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
-  EngagementNotActiveError: class extends Error {},
+  EngagementNotActiveError,
   InvalidMilestoneTransitionError: class extends Error {},
+  ChangeOrderAlreadyOpenError,
+  ChangeOrderCoherenceError,
+  ChangeOrderNotFoundError,
+  ChangeOrderPendingError,
+  InvalidChangeOrderTransitionError,
 }));
 
 import {
@@ -227,6 +257,83 @@ describe('runEngagementLifecycleAction', () => {
       success: false,
       error: "This project's status changed. Refresh and try again.",
     });
+  });
+
+  it.each([
+    [
+      'ChangeOrderAlreadyOpenError',
+      () => new ChangeOrderAlreadyOpenError('x'),
+      "There's already a change open on this project. You can start another once it's decided.",
+    ],
+    [
+      'InvalidChangeOrderTransitionError',
+      () => new InvalidChangeOrderTransitionError('x'),
+      "This project's status changed. Refresh and try again.",
+    ],
+    [
+      'ChangeOrderNotFoundError',
+      () => new ChangeOrderNotFoundError('x'),
+      "This project's status changed. Refresh and try again.",
+    ],
+    [
+      'ChangeOrderCoherenceError (note_missing)',
+      () => new ChangeOrderCoherenceError('note_missing'),
+      "Add a short summary of what's changing and why.",
+    ],
+    [
+      'ChangeOrderCoherenceError (tm_add_missing_estimate)',
+      () => new ChangeOrderCoherenceError('tm_add_missing_estimate'),
+      'Add an estimate in hours for each new milestone.',
+    ],
+    [
+      'ChangeOrderCoherenceError (effective_price_negative)',
+      () => new ChangeOrderCoherenceError('effective_price_negative'),
+      'Enter a project price of A$0 or more.',
+    ],
+    [
+      'ChangeOrderCoherenceError (empty_change)',
+      () => new ChangeOrderCoherenceError('empty_change'),
+      'Change at least one milestone or the price.',
+    ],
+    [
+      'ChangeOrderCoherenceError (line_target_not_live)',
+      () => new ChangeOrderCoherenceError('line_target_not_live'),
+      'The delivery plan changed since you loaded the page. Refresh and try again.',
+    ],
+    [
+      'EngagementNotActiveError',
+      () => new EngagementNotActiveError('x'),
+      "This project isn't active.",
+    ],
+    [
+      'ChangeOrderPendingError',
+      () => new ChangeOrderPendingError('x'),
+      "A change to this project is still open. You can mark it ready once it's decided.",
+    ],
+  ])('maps a thrown %s to its friendly copy without logging', async (_name, make, copy) => {
+    const res = await runEngagementLifecycleAction(
+      ENGAGEMENT_ID,
+      {},
+      'fail',
+      () => Promise.resolve(ok),
+      () => {
+        throw make();
+      }
+    );
+    expect(res).toEqual({ success: false, error: copy });
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the composer route as well as the workspace on success', async () => {
+    await runEngagementLifecycleAction(
+      ENGAGEMENT_ID,
+      {},
+      'fail',
+      () => Promise.resolve(ok),
+      () => Promise.resolve({ success: true })
+    );
+    expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
+    expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}/change-order`);
   });
 
   it('maps an unexpected throw to GENERIC_FAILURE and logs it under failLabel', async () => {

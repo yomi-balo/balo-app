@@ -29,6 +29,12 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   ACCEPTED: 'engagement_accepted',
   CHANGES_REQUESTED: 'engagement_changes_requested',
   REVIEW_REMINDER_SENT: 'engagement_review_reminder_sent',
+  // BAL-622 change orders on a live project (no amounts on any of them).
+  CHANGE_ORDER_REQUESTED: 'engagement_change_order_requested',
+  CHANGE_ORDER_SENT: 'engagement_change_order_sent',
+  CHANGE_ORDER_APPROVED: 'engagement_change_order_approved',
+  CHANGE_ORDER_DECLINED: 'engagement_change_order_declined',
+  CHANGE_ORDER_WITHDRAWN: 'engagement_change_order_withdrawn',
 } as const;
 
 /**
@@ -69,6 +75,33 @@ export type EngagementWorkspaceLens = 'client' | 'expert' | 'admin';
  * fallback when `?from` is absent or not whitelisted).
  */
 export type EngagementWorkspaceEntry = 'request_detail' | 'inbox' | 'direct';
+
+/** Who started a change order: a client request, or the expert proposing one unprompted. */
+export type ChangeOrderInitiator = 'client' | 'expert';
+
+/** The properties every change-order event carries. */
+interface ChangeOrderEventBase {
+  engagement_id: string;
+  change_order_id: string;
+  pricing_method: string;
+  distinct_id: string;
+}
+
+/** The properties carried once a change order has lines. */
+interface ChangeOrderLinesProps extends ChangeOrderEventBase {
+  lines_added: number;
+  lines_edited: number;
+  lines_removed: number;
+  has_price_change: boolean;
+  /** `'client'` when `requested_at` is set on the order, otherwise `'expert'`. */
+  initiated_by: ChangeOrderInitiator;
+}
+
+/** A change-order event that closes the order, so it records the time taken to decide. */
+interface ChangeOrderDecidedProps extends ChangeOrderLinesProps {
+  /** Whole days since `sent_at`, int >=0. */
+  days_to_decision: number;
+}
 
 export interface EngagementServerEventMap {
   [ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED]: {
@@ -188,4 +221,14 @@ export interface EngagementServerEventMap {
     /** The reminder recipient (client-company owner) UUID. */
     distinct_id: string;
   };
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_REQUESTED]: ChangeOrderEventBase & {
+    initiated_by: 'client';
+  };
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT]: ChangeOrderLinesProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED]: ChangeOrderDecidedProps & {
+    /** True when the expert answered a request without proposing a change order. */
+    answered_without_change_order: boolean;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps;
 }

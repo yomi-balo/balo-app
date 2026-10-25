@@ -8,6 +8,7 @@ import {
 } from '../schema';
 import { recordDeliveryAudit, type DeliveryAuditAction } from './_shared/delivery-audit';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
+import { assertMilestoneNotPendingChangeTx } from './_shared/change-order-guards';
 
 // Re-export so the established public path `import { EngagementNotActiveError } from '@balo/db'`
 // (via repositories/index.ts) stays intact after the lock helper moved to _shared.
@@ -296,9 +297,10 @@ export const engagementMilestonesRepository = {
 
   /**
    * Edit a milestone's DESCRIPTIVE fields (no status change). `valueCents` is
-   * DELIBERATELY absent from the signature — the money axis is fixed at snapshot
-   * (type-level immutability). Only provided keys are written (an explicit `null`
-   * clears; `undefined`/omitted skips). Audits `engagement_milestone.edited`.
+   * DELIBERATELY absent from the signature — after the snapshot only an approved
+   * change order writes it. Only provided keys are written (an explicit `null`
+   * clears; `undefined`/omitted skips). Refuses a milestone targeted by a sent change
+   * order (`MilestoneChangePendingError`). Audits `engagement_milestone.edited`.
    */
   async editDescriptive(input: {
     milestoneId: string;
@@ -310,6 +312,7 @@ export const engagementMilestonesRepository = {
   }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
+      await assertMilestoneNotPendingChangeTx(tx, milestone.engagementId, milestone.id);
 
       const set: Partial<typeof engagementMilestones.$inferInsert> = { updatedAt: new Date() };
       const fields: string[] = [];
@@ -420,11 +423,13 @@ export const engagementMilestonesRepository = {
    * Soft-delete a milestone (`deleted_at = now`) under a live, active engagement.
    * The row then disappears from `listByEngagement`. Audits
    * `engagement_milestone.removed`. (D0 permits removing a completed milestone; D3
-   * may tighten that policy.)
+   * may tighten that policy.) Refuses a milestone targeted by a sent change order
+   * (`MilestoneChangePendingError`).
    */
   async softDelete(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
+      await assertMilestoneNotPendingChangeTx(tx, milestone.engagementId, milestone.id);
 
       const now = new Date();
       const [updated] = await tx

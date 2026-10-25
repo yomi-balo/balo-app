@@ -24,9 +24,11 @@ const {
   mockProposalFindById,
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
+  ChangeOrderPendingError,
 } = vi.hoisted(() => {
   class MilestonesIncompleteError extends Error {}
   class InvalidEngagementTransitionError extends Error {}
+  class ChangeOrderPendingError extends Error {}
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
@@ -35,6 +37,7 @@ const {
     mockProposalFindById: vi.fn(),
     MilestonesIncompleteError,
     InvalidEngagementTransitionError,
+    ChangeOrderPendingError,
   };
 });
 
@@ -51,9 +54,15 @@ vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
+  ChangeOrderPendingError,
+  ChangeOrderAlreadyOpenError: class extends Error {},
+  ChangeOrderCoherenceError: class extends Error {},
+  ChangeOrderNotFoundError: class extends Error {},
+  InvalidChangeOrderTransitionError: class extends Error {},
   // Consumed by milestone-action-shared at module load.
   EngagementNotActiveError: class extends Error {},
   InvalidMilestoneTransitionError: class extends Error {},
+  MilestoneChangePendingError: class extends Error {},
 }));
 
 const mockTrack = vi.fn();
@@ -183,6 +192,16 @@ describe('requestCompletionAction', () => {
       success: false,
       error: "This project's status changed. Refresh and try again.",
     });
+  });
+
+  it('maps ChangeOrderPendingError from the repo to CHANGE_ORDER_PENDING and publishes nothing', async () => {
+    mockRequestCompletion.mockRejectedValue(new ChangeOrderPendingError('open change order'));
+    expect(await requestCompletionAction(INPUT)).toEqual({
+      success: false,
+      error: "A change to this project is still open. You can mark it ready once it's decided.",
+    });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
   });
 
   it('requests completion, tracks the metrics, publishes, and revalidates', async () => {

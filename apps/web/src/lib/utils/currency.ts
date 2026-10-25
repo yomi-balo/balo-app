@@ -17,6 +17,15 @@ export function formatCurrency(cents: number): string {
   return `${PLATFORM_PRICING.CURRENCY_SYMBOL}${dollars.toFixed(2)}`;
 }
 
+/** Parse a dollar string to integer cents, or null when blank/invalid/negative. */
+export function parseDollarsToCents(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const parsed = Number.parseFloat(trimmed);
+  if (Number.isNaN(parsed) || parsed < 0) return null;
+  return dollarsToCents(parsed);
+}
+
 /**
  * Format integer minor units as a grouped WHOLE-dollar string, e.g.
  * `A$78,000` (thousands separators, no cents). Use for displayed proposal

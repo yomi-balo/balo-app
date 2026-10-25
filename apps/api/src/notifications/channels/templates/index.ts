@@ -56,6 +56,14 @@ import {
   readMilestoneTitles,
 } from './engagement-review-decision-emails.js';
 import {
+  ChangeOrderRequestedExpertEmail,
+  ChangeOrderSentClientEmail,
+  ChangeOrderApprovedExpertEmail,
+  ChangeOrderApprovedAdminEmail,
+  ChangeOrderDeclinedExpertEmail,
+  ChangeOrderAnsweredClientEmail,
+} from './change-order-emails.js';
+import {
   PartyMemberJoinedViaDomainEmail,
   PartyJoinRequestCreatedEmail,
   PartyJoinRequestApprovedEmail,
@@ -1077,6 +1085,115 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(actorClientLabel)} requested changes on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-622 change orders. The subject names the person (retrospective) or the party
+  // (prospective); verbatim note/reason/answer ride in the body callout. Fee concealment: the
+  // client email reads only the CLIENT price label, the expert email only the EXPERT label, and
+  // the admin email reads neither.
+  'change-order-requested-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorClientLabel = (data.actorClientLabel as string) ?? 'The client';
+    return {
+      component: React.createElement(ChangeOrderRequestedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel,
+        projectTitle,
+        note: (data.note as string) ?? '',
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorClientLabel)} asked for a change to ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  'change-order-sent-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorExpertLabel = (data.actorExpertLabel as string) ?? 'Your expert';
+    return {
+      component: React.createElement(ChangeOrderSentClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel,
+        projectTitle,
+        summary: (data.summary as string) ?? '',
+        linesAdded: numberCount(data.linesAdded),
+        linesEdited: numberCount(data.linesEdited),
+        linesRemoved: numberCount(data.linesRemoved),
+        changeLabel: (data.clientPriceChangeLabel ?? data.estimateChangeLabel) as
+          | string
+          | undefined,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorExpertLabel)} proposed a change to ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  'change-order-approved-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const clientCompanyName = (data.clientCompanyName as string) ?? 'The client';
+    const actorClientLabel = (data.actorClientLabel as string) ?? clientCompanyName;
+    return {
+      component: React.createElement(ChangeOrderApprovedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel,
+        projectTitle,
+        approvedOn: (data.approvedOn as string) ?? '',
+        changeLabel: (data.expertPriceChangeLabel ?? data.estimateChangeLabel) as
+          | string
+          | undefined,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorClientLabel)} approved your change to ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  'change-order-approved-admin': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'the project';
+    return {
+      component: React.createElement(ChangeOrderApprovedAdminEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel: (data.actorClientLabel as string) ?? 'The client',
+        expertParty: (data.expertPartyLabel as string) ?? 'the expert',
+        projectTitle,
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `Change approved on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  'change-order-declined-expert': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorClientLabel = (data.actorClientLabel as string) ?? 'The client';
+    return {
+      component: React.createElement(ChangeOrderDeclinedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorClientLabel,
+        projectTitle,
+        reason: (data.reason as string) ?? '',
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorClientLabel)} declined the change to ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  'change-order-answered-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const actorExpertLabel = (data.actorExpertLabel as string) ?? 'Your expert';
+    return {
+      component: React.createElement(ChangeOrderAnsweredClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel,
+        projectTitle,
+        answer: (data.answer as string) ?? '',
+        engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actorExpertLabel)} answered your change request`,
     };
   },
 

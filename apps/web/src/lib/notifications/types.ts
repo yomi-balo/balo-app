@@ -14,6 +14,12 @@ import type {
   EngagementCancelledPayload,
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
+  ChangeOrderRequestedPayload,
+  ChangeOrderSentPayload,
+  ChangeOrderApprovedPayload,
+  ChangeOrderDeclinedPayload,
+  ChangeOrderAnsweredPayload,
+  ChangeOrderWithdrawnPayload,
   EngagementCaseClosedPayload,
   CompanyProvisionedPayload,
   PartyDomainAddedPayload,
@@ -255,6 +261,12 @@ export type NotificationEvent =
   // ABSENT from this web union (they have no `/notifications/publish` route arm).
   | 'engagement.accepted'
   | 'engagement.changes_requested'
+  | 'change_order.requested'
+  | 'change_order.sent'
+  | 'change_order.approved'
+  | 'change_order.declined'
+  | 'change_order.answered'
+  | 'change_order.withdrawn'
   // BAL-390 (D4) — a case was closed (the fused close + rating email). PUBLISHED FROM
   // apps/web as of BAL-388: `resolveCaseAction` on the recap is the platform's first
   // publisher of this key, with the `resolved` reason. BAL-572's hourly inactivity sweep
@@ -356,6 +368,12 @@ export interface EventPayloadMap {
   'engagement.cancelled': EngagementCancelledPayload;
   'engagement.accepted': EngagementAcceptedPayload;
   'engagement.changes_requested': EngagementChangesRequestedPayload;
+  'change_order.requested': ChangeOrderRequestedPayload;
+  'change_order.sent': ChangeOrderSentPayload;
+  'change_order.approved': ChangeOrderApprovedPayload;
+  'change_order.declined': ChangeOrderDeclinedPayload;
+  'change_order.answered': ChangeOrderAnsweredPayload;
+  'change_order.withdrawn': ChangeOrderWithdrawnPayload;
   'engagement.case_closed': EngagementCaseClosedPayload;
   'party.member_joined_via_domain': PartyMemberJoinedViaDomainPayload;
   'party.join_request_created': PartyJoinRequestCreatedPayload;
