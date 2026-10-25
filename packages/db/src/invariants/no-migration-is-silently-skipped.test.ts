@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * Railway's pre-deploy `db:migrate` applies whatever drizzle's migrator considers pending, and
- * nobody watches it. Three journal shapes make the migrator skip a migration WITHOUT an error:
+ * nobody watches it. Four journal shapes make the migrator skip a migration WITHOUT an error:
  *
  * 1. It reads only `meta/_journal.json`, in array order, and applies an entry only when its
  *    `when` is greater than the newest `created_at` in `drizzle.__drizzle_migrations`. An entry
@@ -15,9 +15,12 @@ import { fileURLToPath } from 'node:url';
  *    both" in the wrong order) keeps `when` increasing, but is skipped for the same reason once
  *    the merged one has been applied. Each entry's number must equal its position.
  * 3. An `.sql` file with no journal entry is never read at all.
+ * 4. A `when` in the future, once applied, puts the tracker's newest `created_at` ahead of the
+ *    clock: every migration generated before that moment is skipped unless its `when` is raised
+ *    past it by hand.
  *
- * Renumbering a migration during a rebase keeps its old `when`; regenerate it (or raise `when`)
- * so it sorts after everything already on main.
+ * Renumbering a migration during a rebase keeps its old `when`; regenerate it, or raise `when` to
+ * a time after everything already on main but not in the future.
  */
 
 interface JournalEntry {
@@ -49,6 +52,13 @@ describe('invariant: no migration is silently skipped', () => {
     });
 
     expect(outOfOrder).toEqual([]);
+  });
+
+  it('dates no journal entry in the future', () => {
+    // The clock only moves forward, so this can turn green on its own but never red.
+    const now = Date.now();
+
+    expect(entries.filter((entry) => entry.when > now).map((entry) => entry.tag)).toEqual([]);
   });
 
   it('numbers every journal entry by its position', () => {

@@ -9,8 +9,8 @@
  * gets there, but nothing pins that: a drizzle-kit or drizzle-orm upgrade that commits per
  * migration would lose migrations while the step still exits 0. Supabase also recommends a direct
  * or session-pooler connection for DDL. So the deployed API keeps `DATABASE_URL` on the
- * transaction pooler (:6543), and migrations get their own URL: the session pooler (same host,
- * port 5432) or a direct connection.
+ * transaction pooler (:6543), and migrations get their own URL: the session pooler (the shared
+ * `*.pooler.supabase.com` host on port 5432) or a direct connection.
  *
  * Port 6543 is transaction-only on both Supabase poolers (shared Supavisor and dedicated
  * PgBouncer), so the port postgres-js will use (the URL's, else `PGPORT`) identifies it.
@@ -18,6 +18,9 @@
  * `push`, `studio` and `generate` refuse a :6543 URL too. Returns `undefined` when neither variable
  * is set, so `db:generate` keeps working without a database. Errors never include the URL: it
  * carries the password, and the pre-deploy log is readable by everyone on the Railway project.
+ *
+ * drizzle-kit compiles this module to CommonJS when it loads `drizzle.config.ts`, so it must not
+ * use top-level `await` or `import.meta`. Vitest loads it as ESM and would not notice.
  */
 
 const TRANSACTION_POOLER_PORT = '6543';
@@ -46,8 +49,9 @@ function refuseTransactionPooler(name: string, url: string, pgPort: string | und
   if ((port || pgPort) === TRANSACTION_POOLER_PORT) {
     throw new Error(
       `${name} points at Supabase's transaction pooler (:${TRANSACTION_POOLER_PORT}), which drizzle-kit ` +
-        'must not migrate through. Set MIGRATION_DATABASE_URL to the session pooler (same host, ' +
-        'port 5432) or a direct connection. Why: packages/db/src/migration-database-url.ts.'
+        'must not migrate through. Set MIGRATION_DATABASE_URL to the session pooler (the shared ' +
+        '*.pooler.supabase.com host on port 5432) or a direct connection. Why: ' +
+        'packages/db/src/migration-database-url.ts.'
     );
   }
   return url;
