@@ -179,13 +179,14 @@ export const selectUserSchema = createSelectSchema(users);
 ```typescript
 // packages/db/drizzle.config.ts
 import { defineConfig } from 'drizzle-kit';
+import { resolveMigrationDatabaseUrl } from './src/migration-database-url';
 
 export default defineConfig({
   schema: './src/schema/index.ts',
   out: './drizzle',
   dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DATABASE_URL!,
+    url: resolveMigrationDatabaseUrl(process.env)!,
   },
 });
 ```
@@ -307,37 +308,42 @@ For full relation patterns and the `.query` API → see [references/relations-qu
 
 ## Migration Workflow
 
-**Always use `generate` + `migrate`, never `push` for production.**
+**Always use `generate` + `migrate`. Use `push` only against a local database, never balo-dev or any shared one: it leaves schema the migration tracker doesn't know about, and the next deploy's migrate fails on it.**
 
-### DATABASE_URL Format
+### Which database URL drizzle-kit uses
 
-`postgres-js` requires the standard Postgres connection string format:
+`drizzle.config.ts` takes `MIGRATION_DATABASE_URL`, else `DATABASE_URL` (`src/migration-database-url.ts`), and refuses Supabase's transaction pooler (port 6543). drizzle-kit builds its own postgres-js client with prepared statements on. Through the transaction pooler, a named `COMMIT` in a socket's second transaction is the silent-rollback path `src/client.ts` documents; today's one-transaction migrator doesn't reach it, but an upgrade that commits per migration would. Point `MIGRATION_DATABASE_URL` at the session pooler (same host, port 5432) or a direct connection, in the standard form:
 
 ```
 postgresql://user:password@host:port/database
 ```
 
-Railway sometimes generates a `postgres://` URL (vs `postgresql://`) — these are equivalent and both work. However, Railway may also generate a **pooled** connection string that includes `?pgbouncer=true&connection_limit=1` — strip those parameters for the Drizzle migration client, which needs a direct connection.
+`postgres://` works too. Don't add parameters postgres-js doesn't know, such as `?pgbouncer=true`: it forwards them as startup settings, and Postgres refuses unrecognised ones. `sslmode` is fine. drizzle-kit also loads `.env` from the working directory without overriding variables that are already set, so `MIGRATION_DATABASE_URL=… pnpm db:migrate` targets that database even when `.env` points elsewhere.
 
-### If a Migration Fails Mid-Way on Railway
+### Migrations run on every API deploy
 
-Drizzle migrations are transactional — if the SQL errors, the transaction is rolled back automatically. However if a migration partially succeeds outside a transaction:
+Railway's pre-deploy step runs `pnpm --filter @balo/db db:migrate` before the new API build takes traffic. Every pending migration applies in ONE transaction:
 
-1. Fix the schema error in the migration file (or delete and regenerate)
-2. Connect to the DB directly and manually roll back the partial change
-3. Re-run `pnpm drizzle-kit migrate`
+- If any statement fails, the whole batch rolls back, the deploy fails, and the previous build keeps serving. drizzle-kit prints only the Postgres error, which names the relation, column or constraint: grep the pending `.sql` files for it. Failures that depend on existing rows only reproduce against a copy of the data.
+- A migration that succeeds is never undone, even if the new build then fails its healthcheck. **Every migration must work with the build it replaces (expand/contract):** add first, with new columns nullable or defaulted; drop, rename or tighten (NOT NULL, CHECK, UNIQUE) only in a later PR, once no live build (Railway or Vercel) declares the old shape. Drizzle names every declared column in its SELECTs and INSERTs, so dropping a column the old build declares breaks its reads and its writes.
+- Retiring a column takes two PRs. PR 1 deletes it from the Drizzle schema without running `db:generate` afterwards; if it is NOT NULL with no default, relax it first (drop `.notNull()` or add a default) and generate that, or the new build's INSERTs fail with `23502`. The snapshot still lists the column, so the next `db:generate` emits the `DROP`: that is PR 2, once PR 1's build is live on Railway and Vercel. A `DROP` that `db:generate` emits unasked is a stop-and-check. BAL-473 deferred `transcripts.recording_ref`'s DROP to BAL-479, but BAL-433's next generate shipped it unasked as 0076.
+- The opposite window is open too: Vercel can serve a new web build before the migrate commits. That build's full-row queries name every column it declares, so a column it adds fails its table's queries with `42703` until the migration lands. Where that matters (say, a column on `users`, read on every signed-in request), merge the migration ahead of the web code that declares it.
+- A value added by `ALTER TYPE … ADD VALUE` can't be used in the same transaction (`55P04 unsafe use of new value`). CI applies every migration in one Postgres 16 transaction, so a later migration that uses the value fails CI however production split the deploys. A column default is safe through a text cast in the generated SQL: `SET DEFAULT 'x'::text::"public"."your_enum"` (as in 0030). For any other use (backfills, CHECKs, `ADD COLUMN … DEFAULT`, `WHERE`), prove it with `pnpm test:integration` or make the data change outside migrations.
+- The migrator silently skips any journal entry whose `when` isn't newer than the last applied migration. `src/invariants/no-migration-is-silently-skipped.test.ts` keeps the journal ordered and numbered. After renumbering a migration in a rebase, regenerate it so its `when` is current, then re-apply any hand edits it carried (a text-cast enum default, a withheld `DROP`): `db:generate` emits neither.
 
-Do not edit generated migration files for new changes — always regenerate.
+Hand-edit generated SQL only for the cases above, with a comment in the file saying why; otherwise regenerate.
 
 RLS policies have known issues with `drizzle-kit push`. Use the generate/migrate flow:
 
 ```bash
-# After schema changes
-pnpm drizzle-kit generate
+# After schema changes, from packages/db
+pnpm db:generate
 
-# Review the generated SQL in drizzle/ folder
-# Then apply
-pnpm drizzle-kit migrate
+# Review the generated SQL in the drizzle/ folder, then verify it:
+# `pnpm test:integration` applies every migration to a throwaway Postgres 16.
+# Railway applies merged migrations on deploy. Run `db:migrate` yourself only
+# against a local database:
+MIGRATION_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres pnpm db:migrate
 ```
 
 ## New Repository File Checklist
@@ -366,5 +372,5 @@ See `.claude/skills/testing/SKILL.md` → "Database Integration Tests" for the f
 - ❌ Forgetting RLS on new tables
 - ❌ Forgetting indexes on foreign keys
 - ❌ Hardcoding Salesforce-specific concepts in generic tables
-- ❌ Using `drizzle-kit push` in production
+- ❌ Using `drizzle-kit push` against any shared database (balo-dev included)
 - ❌ Editing generated migration files

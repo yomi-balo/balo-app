@@ -88,7 +88,7 @@ Every DBA task must produce:
 - [ ] Migration generated and reviewed
 - [ ] Types exported
 - [ ] Foreign keys and constraints verified
-- [ ] No breaking changes to existing queries (or breaking changes documented)
+- [ ] Expand/contract (CLAUDE.md → Database): new columns are nullable or defaulted; nothing dropped or renamed is still declared in the live build's Drizzle schema (Railway and Vercel); nothing tightened is violated by what the live build writes
 - [ ] Integration test file (`*.integration.test.ts`) created for every new repository file
 - [ ] All exported repository methods covered (happy path + key error cases)
 - [ ] `pnpm test:integration` passes locally
