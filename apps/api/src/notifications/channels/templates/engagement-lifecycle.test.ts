@@ -128,7 +128,43 @@ describe('EngagementCancelledEmail (BAL-334)', () => {
   });
 });
 
+describe('CompletionRequestEmail resubmission', () => {
+  it('renders the ready-again heading, pill and body lead', async () => {
+    const html = await render(
+      CompletionRequestEmail({ ...completionProps(4), isResubmission: true })
+    );
+    expect(html).toContain('Ready for another look');
+    expect(html).toContain('Ready again');
+    expect(html).toContain('worked through your feedback');
+    expect(html).toContain('ready again on');
+    expect(html).not.toContain('Your project is complete!');
+  });
+});
+
 describe('getEmailTemplate — BAL-334 lifecycle emails', () => {
+  it('completion-requested-client switches to the ready-again subject on a resubmission', () => {
+    const data = {
+      recipientName: 'Dana',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestonesTotal: 4,
+      requestedDate: '4 Jul',
+      autoDate: '11 Jul',
+      reviewDays: 7,
+      engagementId: 'eng-1',
+    };
+    expect(
+      getEmailTemplate('engagement-completion-requested-client', { ...data, isResubmission: true })
+        .subject
+    ).toBe('CPQ implementation is ready for your review again');
+    expect(
+      getEmailTemplate('engagement-completion-requested-client', { ...data, isResubmission: false })
+        .subject
+    ).toBe('Great news — CPQ implementation is complete 🎉');
+  });
+
   it('completion-requested-client builds the celebratory subject naming the project', () => {
     const result = getEmailTemplate('engagement-completion-requested-client', {
       recipientName: 'Dana',
@@ -169,6 +205,21 @@ describe('getInAppTemplate — BAL-334 lifecycle factories', () => {
     expect(out.title).toBe('Project complete — review it');
     expect(out.body).toBe(
       "Priya marked 'CPQ implementation' complete 🎉 — take a look and make it official. Closes out as delivered on 11 Jul if no one responds."
+    );
+    expect(out.actionUrl).toBe('/engagements/eng-1');
+  });
+
+  it('completion-requested-client → ready-again copy on a resubmission', () => {
+    const out = getInAppTemplate('engagement-completion-requested-client', {
+      actorExpertLabel: 'Priya',
+      projectTitle: 'CPQ implementation',
+      autoDate: '11 Jul',
+      isResubmission: true,
+      engagementId: 'eng-1',
+    });
+    expect(out.title).toBe('Ready for your review again');
+    expect(out.body).toBe(
+      "Priya marked 'CPQ implementation' ready again after your feedback — take a look. If there's nothing to change, it's marked accepted on 11 Jul."
     );
     expect(out.actionUrl).toBe('/engagements/eng-1');
   });

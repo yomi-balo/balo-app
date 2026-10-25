@@ -4,6 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
+import { hasOutstandingChangeRequest } from '@/lib/engagement/change-request-view';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -24,9 +25,11 @@ const revertInputSchema = z.object({ engagementId: z.uuid(), milestoneId: z.uuid
  * Expert reverts a completed milestone (completed → in_progress) — the repo CLEARS
  * the completion record. Auth/IDOR/status via the shared chain, then
  * `engagementMilestonesRepository.revert`. Fires `MILESTONE_REVERTED` and publishes
- * `engagement.milestone_reverted` (client owner + admins, in-app — reverts are never
- * silent). CRITICAL: reads `completedAt` from the PRE-LOADED milestone before
- * delegating (`revert()` nulls it) for the `hours_since_completed` metric.
+ * `engagement.milestone_reverted` (client owner + admins, in-app) — except while the
+ * client's change request is outstanding: the client asked for that rework, so reopening
+ * a milestone for it is not news to them. CRITICAL: reads `completedAt` from the
+ * PRE-LOADED milestone before delegating (`revert()` nulls it) for the
+ * `hours_since_completed` metric.
  */
 export async function revertMilestoneAction(input: {
   engagementId: string;
@@ -70,23 +73,27 @@ export async function revertMilestoneAction(input: {
       });
 
       // ── Notify (fire-and-forget) — client company owner + admins, in-app ──
-      const parties = deriveEngagementParties(engagement);
-      const recipientId = await resolveClientRecipientId(engagement.company.id);
-      publishNotificationEvent('engagement.milestone_reverted', {
-        correlationId: `${updated.id}:reverted:${updated.updatedAt.getTime()}`,
-        engagementId: engagement.id,
-        milestoneId: updated.id,
-        recipientId,
-        actorExpertLabel: parties.expertRetroFirstMention,
-        milestoneTitle: updated.title,
-      }).catch(() => {
-        // publishNotificationEvent logs internally.
-      });
+      const duringChangeRequest = hasOutstandingChangeRequest(engagement);
+      if (!duringChangeRequest) {
+        const parties = deriveEngagementParties(engagement);
+        const recipientId = await resolveClientRecipientId(engagement.company.id);
+        publishNotificationEvent('engagement.milestone_reverted', {
+          correlationId: `${updated.id}:reverted:${updated.updatedAt.getTime()}`,
+          engagementId: engagement.id,
+          milestoneId: updated.id,
+          recipientId,
+          actorExpertLabel: parties.expertRetroFirstMention,
+          milestoneTitle: updated.title,
+        }).catch(() => {
+          // publishNotificationEvent logs internally.
+        });
+      }
 
       log.info('Milestone reverted', {
         engagementId: engagement.id,
         milestoneId: updated.id,
         userId: user.id,
+        duringChangeRequest,
       });
       return { success: true, milestoneId: updated.id, status: updated.status };
     }

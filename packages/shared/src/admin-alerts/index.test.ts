@@ -26,9 +26,9 @@ const ALL_GROUPS: readonly AdminAlertGroup[] = [...ADMIN_ALERT_GROUP_ORDER, 'pla
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 describe('ADMIN_ALERT_KINDS — the registry', () => {
-  it('has exactly the seventeen kinds (ten finder + six event-driven + sweep.failed)', () => {
-    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(17);
-    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(17);
+  it('has exactly the eighteen kinds (ten finder + seven event-driven + sweep.failed)', () => {
+    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(18);
+    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(18);
   });
 
   it('has exactly ten finder kinds', () => {

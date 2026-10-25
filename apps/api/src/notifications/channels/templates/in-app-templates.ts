@@ -20,7 +20,8 @@ import {
   type TopUpFigure,
 } from './top-up-figure.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
-import { CASE_INACTIVITY_DAYS } from '@balo/shared/engagements';
+import { CASE_INACTIVITY_DAYS, joinTitles } from '@balo/shared/engagements';
+import { readMilestoneTitles } from './engagement-review-decision-emails.js';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
 
@@ -280,6 +281,12 @@ function milestoneProgress(data: Record<string, unknown>): string {
   const done = data.completedCount;
   const total = data.totalCount;
   return typeof done === 'number' && typeof total === 'number' ? `${done}/${total}` : '';
+}
+
+/** Admin changes-requested suffix: the round ordinal when present, else the legacy review cycle. */
+function changeRoundLabel(round: number | undefined, cycle: number | undefined): string {
+  if (round) return ` (round ${round} of changes)`;
+  return cycle ? ` (review cycle ${cycle})` : '';
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
@@ -875,6 +882,13 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
     const title = (data.projectTitle as string) ?? 'your project';
     const autoDate = (data.autoDate as string) ?? 'the review deadline';
+    if (data.isResubmission === true) {
+      return engagementNotice(
+        'Ready for your review again',
+        `${actor} marked '${title}' ready again after your feedback — take a look. If there's nothing to change, it's marked accepted on ${autoDate}.`,
+        data
+      );
+    }
     return engagementNotice(
       'Project complete — review it',
       `${actor} marked '${title}' complete 🎉 — take a look and make it official. Closes out as delivered on ${autoDate} if no one responds.`,
@@ -942,9 +956,13 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'engagement-changes-requested-expert': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
     const title = (data.projectTitle as string) ?? 'the project';
+    const tagged = readMilestoneTitles(data.taggedMilestoneTitles);
+    const verb = tagged.length === 1 ? 'is' : 'are';
+    const taggedClause =
+      tagged.length > 0 ? ` — ${joinTitles(tagged)} ${verb} back in progress` : '';
     return engagementNotice(
       'Changes requested',
-      `${actor} requested changes on '${title}' — the project is active again. Mark it complete when it's fixed.`,
+      `${actor} requested changes on '${title}'${taggedClause}. Mark it ready again when it's fixed.`,
       data
     );
   },
@@ -953,8 +971,9 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'engagement-changes-requested-admin': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
     const title = (data.projectTitle as string) ?? 'A project';
+    const round = typeof data.roundNumber === 'number' ? data.roundNumber : undefined;
     const cycle = typeof data.reviewCycle === 'number' ? data.reviewCycle : undefined;
-    const cycleLabel = cycle ? ` (review cycle ${cycle})` : '';
+    const cycleLabel = changeRoundLabel(round, cycle);
     return engagementNotice(
       'Changes requested',
       `${actor} requested changes on '${title}'${cycleLabel}.`,

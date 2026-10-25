@@ -138,6 +138,9 @@ function engagement(
     projectRequest: { id: 'req-1', title: ENGAGEMENT_TITLE },
     acceptedBy: null,
     changeRequestedBy: null,
+    changeRequestRounds: [],
+    latestChangeRequest: null,
+    changeRequestRoundCount: 0,
     ...overrides,
   } as ProjectEngagementWithMilestones;
 }

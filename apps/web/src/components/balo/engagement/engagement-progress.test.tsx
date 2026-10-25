@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import type { EngagementProgressView } from '@/lib/engagement/engagement-view';
 
 import { EngagementProgress } from './engagement-progress';
@@ -11,17 +11,25 @@ function makeProgress(overrides: Partial<EngagementProgressView> = {}): Engageme
     total: 5,
     pct: 40,
     reviewCopy: null,
+    reviewPill: null,
+    segments: [
+      { id: 'a', tone: 'completed', label: 'Discovery: Completed' },
+      { id: 'b', tone: 'completed', label: 'Design: Completed' },
+      { id: 'c', tone: 'in_progress', label: 'Build: In progress' },
+      { id: 'd', tone: 'pending', label: 'Test: Not started' },
+      { id: 'e', tone: 'pending', label: 'Launch: Not started' },
+    ],
     ...overrides,
   };
 }
 
 describe('EngagementProgress', () => {
-  it('renders the done/total count and percentage', () => {
+  it('renders the done/total count and never a percentage', () => {
     render(<EngagementProgress progress={makeProgress()} />);
 
     expect(screen.getByText('2 of 5')).toBeInTheDocument();
     expect(screen.getByText('milestones completed')).toBeInTheDocument();
-    expect(screen.getByText('40%')).toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
   });
 
   it('exposes an accessible native progress element with the correct value', () => {
@@ -33,14 +41,59 @@ describe('EngagementProgress', () => {
     expect(bar).toHaveAttribute('aria-label', 'Milestones completed');
   });
 
-  it('applies the signature gradient fill to the decorative bar', () => {
-    const { container } = render(<EngagementProgress progress={makeProgress()} />);
+  it('renders one named segment per milestone', () => {
+    render(<EngagementProgress progress={makeProgress()} />);
 
-    const fill = container.querySelector<HTMLElement>('[aria-hidden="true"]');
-    expect(fill).not.toBeNull();
-    expect(fill?.className).toContain('from-primary');
-    expect(fill?.className).toContain('to-violet-600');
-    expect(fill).toHaveStyle({ width: '40%' });
+    const list = screen.getByRole('list', { name: 'Milestone progress' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items).toHaveLength(5);
+    expect(items[0]).toHaveAccessibleName('Discovery: Completed');
+    expect(items[2]).toHaveAttribute('title', 'Build: In progress');
+  });
+
+  it('colours each segment by tone, with the signature gradient on completed ones', () => {
+    render(
+      <EngagementProgress
+        progress={makeProgress({
+          segments: [
+            { id: 'a', tone: 'completed', label: 'A: Completed' },
+            { id: 'b', tone: 'reopened', label: 'B: Changes requested' },
+            { id: 'c', tone: 'in_progress', label: 'C: In progress' },
+            { id: 'd', tone: 'pending', label: 'D: Not started' },
+          ],
+        })}
+      />
+    );
+
+    expect(screen.getByLabelText('A: Completed').className).toContain('to-violet-600');
+    expect(screen.getByLabelText('B: Changes requested').className).toContain('bg-warning');
+    expect(screen.getByLabelText('C: In progress').className).toContain('bg-primary/60');
+    expect(screen.getByLabelText('D: Not started').className).toContain('bg-muted');
+  });
+
+  it('lists only the tones in use in the legend, with counts', () => {
+    render(<EngagementProgress progress={makeProgress()} />);
+
+    expect(screen.getByText('Completed 2')).toBeInTheDocument();
+    expect(screen.getByText('In progress 1')).toBeInTheDocument();
+    expect(screen.getByText('Not started 2')).toBeInTheDocument();
+    expect(screen.queryByText(/Changes requested/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['warning', 'Changes requested'],
+    ['violet', 'Ready for your review'],
+    ['success', 'Accepted 6 Jul'],
+  ] as const)('renders the %s review pill', (tone, label) => {
+    render(<EngagementProgress progress={makeProgress({ reviewPill: { label, tone } })} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('renders no pill when the view carries none', () => {
+    render(<EngagementProgress progress={makeProgress()} />);
+
+    expect(screen.queryByText(/Changes requested|Ready for your review|Accepted/)).toBeNull();
   });
 
   it('renders the client-lens review copy when present', () => {

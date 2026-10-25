@@ -17,6 +17,8 @@ import { usePendingDialogClose } from './use-engagement-lifecycle-action';
 
 interface RequestCompletionModalProps {
   open: boolean;
+  /** Dialog heading — "Mark project ready" | "Mark project ready again". */
+  title: string;
   /** Pre-derived body copy (window + plan-lock + invoice) from the server view. */
   modalBody: string;
   clientCompanyName: string;
@@ -26,13 +28,14 @@ interface RequestCompletionModalProps {
 }
 
 /**
- * The confirm dialog for marking the whole project complete (BAL-334 / D4). Body is
+ * The confirm dialog for marking the whole project ready for the client's review (BAL-334 / D4). Body is
  * pre-derived server-side (`AUTO_ACCEPT_DAYS`, party names baked in) so the client
  * never touches `@balo/db`. Blocks close while `pending`; the gradient CTA shows a
  * spinner in flight.
  */
 export function RequestCompletionModal({
   open,
+  title,
   modalBody,
   clientCompanyName,
   pending,
@@ -45,7 +48,7 @@ export function RequestCompletionModal({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent showCloseButton={!pending}>
         <DialogHeader>
-          <DialogTitle>Mark project complete</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{modalBody}</DialogDescription>
         </DialogHeader>
 

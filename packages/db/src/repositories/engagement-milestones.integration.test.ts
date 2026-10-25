@@ -122,8 +122,10 @@ describe('engagementMilestonesRepository.revert', () => {
     expect(updated.startedAt?.getTime()).toBe(startedAt.getTime());
 
     const events = await auditEventsForEntity(milestoneId);
+    expect(events).toHaveLength(1);
     expect(events[0]?.action).toBe('engagement_milestone.reverted');
-    expect(events[0]?.metadata).toMatchObject({ engagementId });
+    // A plain revert carries no change-request id — only `requestChanges` adds one.
+    expect(events[0]?.metadata).toEqual({ from: 'completed', to: 'in_progress', engagementId });
   });
 });
 

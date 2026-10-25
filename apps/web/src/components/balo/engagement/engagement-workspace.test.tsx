@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { render, screen } from '@/test/utils';
-import type {
-  EngagementParties,
-  EngagementWorkspaceView,
-  MilestoneNodeView,
+import type { ProjectEngagementWithMilestones } from '@balo/db';
+import {
+  mapEngagementToWorkspaceView,
+  type CompletionCardView,
+  type EngagementParties,
+  type EngagementProgressView,
+  type EngagementWorkspaceView,
+  type MilestoneNodeView,
 } from '@/lib/engagement/engagement-view';
+import type { EngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 
 // The rating card's `RatingBlock` swaps its own content via `StateSwap`
@@ -83,8 +88,118 @@ function milestone(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeVie
     startedLabel: 'Started 16 Jun',
     completedLabel: 'Completed 30 Jun by Priya',
     completionNote: 'Delivered the discovery deck.',
+    feedback: null,
     ...overrides,
   };
+}
+
+function progress(overrides: Partial<EngagementProgressView> = {}): EngagementProgressView {
+  return {
+    done: 0,
+    total: 0,
+    pct: 0,
+    reviewCopy: null,
+    reviewPill: null,
+    segments: [],
+    ...overrides,
+  };
+}
+
+function completionCard(overrides: Partial<CompletionCardView> = {}): CompletionCardView {
+  return {
+    hasMilestones: true,
+    milestonesRemaining: 0,
+    milestonesTotal: 2,
+    canRequest: true,
+    bodyCopy: 'Every milestone is delivered.',
+    modalBody: 'All 2 milestones are delivered.',
+    ctaLabel: 'Mark project ready',
+    ...overrides,
+  };
+}
+
+const EXPERT_LENS: Partial<EngagementWorkspaceView> = {
+  lens: 'expert',
+  archetype: 'participant',
+  isClientOwner: false,
+  isDeliveringExpert: true,
+};
+
+const NOW = new Date('2026-07-07T00:00:00.000Z');
+const THEN = new Date('2026-06-12T00:00:00.000Z');
+
+/**
+ * A workspace view built by the real server-side derivation, so a regression in how the
+ * banner and the completion card are wired together fails here rather than being hidden
+ * by a hand-built fixture.
+ */
+function mappedView(
+  lens: EngagementLens,
+  statuses: readonly ('completed' | 'in_progress')[],
+  withRound = true
+): EngagementWorkspaceView {
+  const round = {
+    id: 'cr-1',
+    note: 'Fix the totals.',
+    requestedAt: THEN,
+    requestedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
+    taggedMilestoneIds: ['ms-1', 'ms-2'],
+  };
+  const engagement = {
+    id: 'eng-1',
+    status: 'active',
+    pricingMethod: 'fixed',
+    priceCents: 5_800_000,
+    baloFeeBps: 0,
+    currency: 'aud',
+    depositCents: null,
+    rateCents: null,
+    cadence: null,
+    activatedAt: THEN,
+    completionRequestedAt: null,
+    acceptedAt: null,
+    acceptanceMethod: null,
+    cancelledAt: null,
+    cancellationReason: null,
+    createdAt: THEN,
+    updatedAt: THEN,
+    milestones: statuses.map((status, index) => ({
+      id: `ms-${index + 1}`,
+      title: `Milestone ${index + 1}`,
+      sortOrder: index,
+      descriptionHtml: null,
+      acceptanceCriteria: null,
+      valueCents: null,
+      estimatedMinutes: null,
+      status,
+      startedAt: null,
+      completedAt: status === 'completed' ? THEN : null,
+      completionNote: null,
+    })),
+    expertProfile: {
+      id: 'expert-priya',
+      agencyId: null,
+      type: 'freelancer',
+      headline: 'CPQ Specialist',
+      user: { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
+      agency: null,
+    },
+    company: { id: 'company-northwind', name: 'Northwind Industrial' },
+    projectRequest: { id: 'req-1', title: 'CPQ implementation' },
+    changeRequestRounds: withRound ? [round] : [],
+    latestChangeRequest: withRound ? round : null,
+    changeRequestRoundCount: withRound ? 1 : 0,
+  } as unknown as ProjectEngagementWithMilestones;
+  return mapEngagementToWorkspaceView(
+    engagement,
+    {
+      lens,
+      archetype: 'participant',
+      isClientOwner: lens === 'client',
+      isDeliveringExpert: lens === 'expert',
+    },
+    NOW
+  );
 }
 
 function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorkspaceView {
@@ -104,7 +219,7 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
       backHref: '/projects',
     },
     parties: parties(),
-    progress: { done: 1, total: 2, pct: 50, reviewCopy: null },
+    progress: progress({ done: 1, total: 2, pct: 50 }),
     milestones: [milestone({ id: 'a' }), milestone({ id: 'b', title: 'Build integration' })],
     hasMilestones: true,
     reviewBanner: null,
@@ -143,7 +258,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           isDeliveringExpert: false,
           milestones: [],
           hasMilestones: false,
-          progress: { done: 0, total: 0, pct: 0, reviewCopy: null },
+          progress: progress({ done: 0, total: 0, pct: 0 }),
           emptyState: {
             icon: 'Flag',
             title: 'Shape the delivery plan',
@@ -168,7 +283,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           isDeliveringExpert: true,
           milestones: [],
           hasMilestones: false,
-          progress: { done: 0, total: 0, pct: 0, reviewCopy: null },
+          progress: progress({ done: 0, total: 0, pct: 0 }),
           emptyState: {
             icon: 'Flag',
             title: 'Shape the delivery plan',
@@ -205,6 +320,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
               autoInLabel: 'Auto-accepts in 5 days',
             },
             clientDecision: null,
+            lastRequest: null,
           },
         })}
       />
@@ -217,14 +333,12 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     render(
       <EngagementWorkspace
         view={view({
-          lens: 'expert',
-          archetype: 'participant',
-          isClientOwner: false,
-          isDeliveringExpert: true,
+          ...EXPERT_LENS,
           changeRequestBanner: {
-            attribution: 'Dana @ Northwind Industrial',
-            note: 'Please revisit the reporting section.',
-            expertNudge: '— fix it up and mark the project complete again when ready.',
+            variant: 'work_outstanding',
+            headline: 'Dana @ Northwind Industrial requested changes on Build.',
+            quote: 'Please revisit the reporting section.',
+            guidance: 'Build is back in progress.',
           },
         })}
       />
@@ -311,19 +425,12 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           archetype: 'participant',
           isClientOwner: false,
           isDeliveringExpert: true,
-          completionCard: {
-            hasMilestones: true,
-            milestonesRemaining: 0,
-            milestonesTotal: 2,
-            canRequest: true,
-            bodyCopy: 'Every milestone is delivered.',
-            modalBody: 'All 2 milestones are delivered.',
-          },
+          completionCard: completionCard(),
         })}
       />
     );
     expect(screen.getByText('Finish the project')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Mark project complete/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Mark project ready/i })).toBeEnabled();
   });
 
   it('admin lens renders the oversight strip above the progress/rail', () => {
@@ -343,6 +450,73 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     );
     expect(screen.getByText('Oversight')).toBeInTheDocument();
     expect(screen.getByText('Last delivery activity: 2d ago')).toBeInTheDocument();
+  });
+});
+
+describe('EngagementWorkspace — one "Mark project ready" control at a time', () => {
+  const READY_BUTTON = { name: /Mark project ready/i };
+
+  it('changes_made banner carries the control and the completion card is absent', () => {
+    const mapped = mappedView('expert', ['completed', 'completed']);
+    expect(mapped.changeRequestBanner).toMatchObject({ variant: 'changes_made' });
+    render(<EngagementWorkspace view={mapped} />);
+    expect(screen.getAllByRole('button', READY_BUTTON)).toHaveLength(1);
+    expect(screen.getByText(/Changes made\. Ready to send back/)).toBeInTheDocument();
+    expect(screen.queryByText('Finish the project')).not.toBeInTheDocument();
+  });
+
+  it('work_outstanding banner has no CTA; the completion card is the only control', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          ...EXPERT_LENS,
+          changeRequestBanner: {
+            variant: 'work_outstanding',
+            headline: 'Dana @ Northwind Industrial requested changes.',
+            quote: 'Fix the totals.',
+            guidance: 'Finish the remaining milestones, then mark the project ready again.',
+          },
+          completionCard: completionCard({
+            canRequest: false,
+            milestonesRemaining: 1,
+            ctaLabel: 'Mark project ready again',
+          }),
+        })}
+      />
+    );
+    expect(screen.getAllByRole('button', READY_BUTTON)).toHaveLength(1);
+    expect(screen.getByRole('button', READY_BUTTON)).toBeDisabled();
+  });
+
+  it('client_waiting banner renders its body and no control', () => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          changeRequestBanner: {
+            variant: 'client_waiting',
+            body: 'You requested changes on Build. Priya is working on them.',
+          },
+        })}
+      />
+    );
+    expect(screen.getByText(/You requested changes on Build/)).toBeInTheDocument();
+    expect(screen.queryAllByRole('button', READY_BUTTON)).toHaveLength(0);
+  });
+
+  it('shows exactly one control across every state the real view derivation produces', () => {
+    const scenarios: [EngagementLens, readonly ('completed' | 'in_progress')[], boolean][] = [
+      ['expert', ['completed', 'completed'], false],
+      ['expert', ['completed', 'in_progress'], false],
+      ['expert', ['completed', 'completed'], true],
+      ['expert', ['completed', 'in_progress'], true],
+    ];
+    for (const [lens, statuses, withRound] of scenarios) {
+      const { unmount } = render(
+        <EngagementWorkspace view={mappedView(lens, statuses, withRound)} />
+      );
+      expect(screen.getAllByRole('button', READY_BUTTON)).toHaveLength(1);
+      unmount();
+    }
   });
 });
 

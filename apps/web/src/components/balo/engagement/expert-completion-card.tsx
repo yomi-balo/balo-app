@@ -21,7 +21,7 @@ interface ExpertCompletionCardProps {
 
 /**
  * The expert "Finish the project" card (BAL-334 / D4). A gradient "Mark project
- * complete" CTA whose DISABLED state EXPLAINS (the pre-derived `bodyCopy` names the
+ * ready" CTA whose DISABLED state EXPLAINS (the pre-derived `bodyCopy` names the
  * blocker); confirming opens {@link RequestCompletionModal} → `requestCompletionAction`.
  *
  * This island is SEPARATE from the milestone rail, so completing the final milestone
@@ -83,13 +83,14 @@ export function ExpertCompletionCard({
             ) : (
               <Check className="size-4" aria-hidden />
             )}
-            Mark project complete
+            {card.ctaLabel}
           </button>
         </div>
       </Card>
 
       <RequestCompletionModal
         open={modalOpen}
+        title={card.ctaLabel}
         modalBody={card.modalBody}
         clientCompanyName={clientCompanyName}
         pending={isPending}

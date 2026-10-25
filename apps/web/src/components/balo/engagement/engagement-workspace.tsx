@@ -112,7 +112,11 @@ export function EngagementWorkspace({
 
       {view.changeRequestBanner !== null && (
         <Reveal delay={0.05}>
-          <ChangeRequestBanner banner={view.changeRequestBanner} />
+          <ChangeRequestBanner
+            banner={view.changeRequestBanner}
+            engagementId={view.engagementId}
+            clientCompanyName={view.parties.clientCompanyName}
+          />
         </Reveal>
       )}
 
