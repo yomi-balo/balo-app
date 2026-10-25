@@ -32,7 +32,7 @@ describe('proposalDraftPrompt', () => {
     expect(rendered.promptId).toBe(PROPOSAL_DRAFT_PROMPT_ID);
     expect(rendered.promptId).toBe('proposal-draft.generate');
     expect(rendered.promptVersion).toBe(PROMPT_VERSION);
-    expect(rendered.promptVersion).toBe('v1');
+    expect(rendered.promptVersion).toBe('v2');
   });
 
   it('forbids prices, hours, dates and timeframes', () => {
@@ -41,10 +41,28 @@ describe('proposalDraftPrompt', () => {
     );
   });
 
-  it('asks for first person, Australian English and 2-5 milestones', () => {
+  it('asks for first person and 2-5 milestones', () => {
     expect(rendered.system).toContain('first person');
-    expect(rendered.system).toContain('Australian English');
     expect(rendered.system).toContain('between 2 and 5 milestones');
+  });
+
+  it("follows the client's English spelling variant, defaulting to British English", () => {
+    expect(rendered.system).toContain(
+      'Write in the English spelling variant the client uses in the request (British or American), defaulting to British English when it is unclear.'
+    );
+    expect(rendered.system).not.toContain('Australian');
+  });
+
+  it('forbids a greeting, sign-off, signature or placeholder name', () => {
+    expect(rendered.system).toContain(
+      'Never add a greeting, sign-off, signature or placeholder name.'
+    );
+  });
+
+  it('forbids commenting on the request, its links or ignored instructions', () => {
+    expect(rendered.system).toContain(
+      'Never comment on the request itself, its links, or anything you were told to ignore: leave such content out silently.'
+    );
   });
 
   it('asks for the completion condition only, with the ticket example and no repeated label', () => {
@@ -62,10 +80,10 @@ describe('proposalDraftPrompt', () => {
     );
   });
 
-  it('gives each milestone description the narrower list: no link, blockquote or rule', () => {
-    expect(MILESTONE_TAGS).toBe('p, br, strong, b, em, i, h2, h3, ul, ol, li');
+  it('gives each milestone description only what the light milestone editor can show', () => {
+    expect(MILESTONE_TAGS).toBe('p, br, strong, em, ul, li');
     expect(rendered.system).toContain(
-      'Format each milestone description as HTML using ONLY these tags: p, br, strong, b, em, i, h2, h3, ul, ol, li.'
+      'Format each milestone description as HTML using ONLY these tags: p, br, strong, em, ul, li.'
     );
   });
 

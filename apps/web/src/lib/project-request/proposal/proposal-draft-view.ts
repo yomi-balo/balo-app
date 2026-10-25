@@ -10,6 +10,7 @@ import {
   PROPOSAL_DRAFT_MAX_MILESTONES,
   PROPOSAL_DRAFT_MAX_OVERVIEW_HTML,
   PROPOSAL_DRAFT_MAX_TITLE,
+  PROPOSAL_DRAFT_MILESTONE_TAGS,
   PROPOSAL_DRAFT_MIN_MILESTONES,
 } from '@balo/shared/project-requests';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -50,6 +51,30 @@ function stripLinks(html: string): string {
 }
 
 /**
+ * The milestone counterpart of {@link stripLinks}: narrows already-sanitised description HTML
+ * to exactly `PROPOSAL_DRAFT_MILESTONE_TAGS`, what the composer's light milestone editor can
+ * show. Anything else would be saved and reach the client without the expert ever seeing it,
+ * so structure degrades to the nearest tag the editor renders (a numbered list becomes bullets,
+ * a heading becomes a paragraph, `b`/`i` become `strong`/`em`) and every other tag, anchors
+ * included, is unwrapped to its text. No attribute survives.
+ */
+function narrowMilestoneHtml(html: string): string {
+  return sanitizeHtml(html, {
+    allowedTags: [...PROPOSAL_DRAFT_MILESTONE_TAGS],
+    allowedAttributes: {},
+    transformTags: {
+      ol: 'ul',
+      h1: 'p',
+      h2: 'p',
+      h3: 'p',
+      h4: 'p',
+      b: 'strong',
+      i: 'em',
+    },
+  });
+}
+
+/**
  * Sanitise a stored generation's output into the patch the composer applies, or `null` when
  * it does not hold the shape or the floor (a non-empty overview after sanitising).
  *
@@ -57,7 +82,8 @@ function stripLinks(html: string): string {
  * same split `submit-proposal-core.ts` applies: `sanitizeProposalOverviewHtml` for the overview,
  * `sanitizeProjectHtml` for milestone descriptions. Titles and acceptance criteria are plain
  * text rendered as input values, so they are trimmed and never treated as HTML. Links are
- * unwrapped to their text in both HTML fields.
+ * unwrapped to their text in both HTML fields, and each milestone description is then narrowed
+ * to what the light milestone editor renders (see {@link narrowMilestoneHtml}).
  */
 export function toProposalDraftPatch(output: unknown): ProposalDraftPatch | null {
   const parsed = storedOutputSchema.safeParse(output);
@@ -70,7 +96,7 @@ export function toProposalDraftPatch(output: unknown): ProposalDraftPatch | null
     overviewHtml,
     milestones: parsed.data.milestones.map((milestone) => ({
       title: milestone.title.trim(),
-      descriptionHtml: stripLinks(sanitizeProjectHtml(milestone.descriptionHtml)),
+      descriptionHtml: narrowMilestoneHtml(sanitizeProjectHtml(milestone.descriptionHtml)),
       acceptanceCriteria: milestone.acceptanceCriteria.trim(),
     })),
   };

@@ -132,17 +132,22 @@ describe('PROJECT_EVENTS proposal composer v2 (BAL-610)', () => {
 describe('AI-drafted proposal events (BAL-611)', () => {
   it('maps to the feature-prefixed snake_case event names', () => {
     expect(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED).toBe('project_proposal_draft_cleared');
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED).toBe('project_proposal_draft_discarded');
     expect(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED).toBe('project_proposal_draft_generated');
   });
 
   it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
     expect(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
     expect(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
   });
 
-  it('types the cleared section and the generation outcome', () => {
+  it('types the cleared section, the discard, and the generation outcome', () => {
     expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED]>().toEqualTypeOf<{
       section: 'overview' | 'milestones';
+      relationship_id: string;
+    }>();
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED]>().toEqualTypeOf<{
       relationship_id: string;
     }>();
     expectTypeOf<
@@ -156,10 +161,13 @@ describe('AI-drafted proposal events (BAL-611)', () => {
     }>();
   });
 
-  it('records whether a submitted proposal had an AI draft', () => {
+  it('records whether a draft was generated for a submitted proposal', () => {
     expectTypeOf<
-      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]['used_ai_draft']
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]['ai_draft_generated']
     >().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]
+    >().not.toHaveProperty('used_ai_draft');
   });
 });
 

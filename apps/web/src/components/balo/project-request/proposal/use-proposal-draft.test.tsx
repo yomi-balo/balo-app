@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
+  DRAFT_DEADLINE_MS,
   PROPOSAL_DRAFT_MAX_POLLS,
   PROPOSAL_DRAFT_POLL_INTERVAL_MS,
 } from '@balo/shared/project-requests';
@@ -167,6 +168,37 @@ describe('useProposalDraft', () => {
     expect(hook.result.current).toMatchObject({ drafting: false, failed: false });
   });
 
+  it('keeps polling a pending view past 80s, leaving the deadline to the server', async () => {
+    mockPoll.mockResolvedValue({ status: 'pending', generationId: 'gen-1' });
+    const { hook } = setup({ status: 'pending', generationId: 'gen-1' });
+    const pollsPastEightySeconds = 80_000 / PROPOSAL_DRAFT_POLL_INTERVAL_MS + 5;
+    for (let i = 0; i < pollsPastEightySeconds; i += 1) {
+      await tick();
+    }
+    expect(mockPoll).toHaveBeenCalledTimes(pollsPastEightySeconds);
+    expect(hook.result.current).toMatchObject({ drafting: true, failed: false });
+  });
+
+  it('stops polling on the failed view the server derives at its deadline', async () => {
+    const pollsBeforeDeadline = DRAFT_DEADLINE_MS / PROPOSAL_DRAFT_POLL_INTERVAL_MS;
+    let polls = 0;
+    mockPoll.mockImplementation(async () => {
+      polls += 1;
+      return polls <= pollsBeforeDeadline
+        ? { status: 'pending', generationId: 'gen-1' }
+        : { status: 'failed' };
+    });
+    const { hook } = setup({ status: 'pending', generationId: 'gen-1' });
+    for (let i = 0; i <= pollsBeforeDeadline; i += 1) {
+      await tick();
+    }
+    expect(mockPoll).toHaveBeenCalledTimes(pollsBeforeDeadline + 1);
+    expect(hook.result.current).toMatchObject({ drafting: false, failed: true });
+
+    await tick(PROPOSAL_DRAFT_POLL_INTERVAL_MS * 3);
+    expect(mockPoll).toHaveBeenCalledTimes(pollsBeforeDeadline + 1);
+  });
+
   it('fails after the poll cap while still pending', async () => {
     mockPoll.mockResolvedValue({ status: 'pending', generationId: 'gen-1' });
     const { hook } = setup({ status: 'pending', generationId: 'gen-1' });
@@ -212,6 +244,28 @@ describe('useProposalDraft', () => {
     await tick(PROPOSAL_DRAFT_POLL_INTERVAL_MS * 3);
     expect(mockPoll).not.toHaveBeenCalled();
     expect(onDraft).not.toHaveBeenCalled();
+  });
+
+  it('tracks the discard once, with the relationship, however many edits follow', () => {
+    const { hook } = setup({ status: 'pending', generationId: 'gen-1' });
+
+    act(() => hook.result.current.noteEdit('overview'));
+    act(() => hook.result.current.noteEdit('milestones'));
+    act(() => hook.result.current.noteEdit('overview'));
+
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED, {
+      relationship_id: RELATIONSHIP_ID,
+    });
+  });
+
+  it('tracks no discard for an edit once drafting is over', () => {
+    const succeeded = setup({ status: 'succeeded', generationId: 'g', patch: PATCH });
+    act(() => succeeded.hook.result.current.noteEdit('overview'));
+    const failed = setup({ status: 'failed' });
+    act(() => failed.hook.result.current.noteEdit('milestones'));
+
+    expect(track).not.toHaveBeenCalled();
   });
 
   it('ignores a poll result that was already in flight when the expert edited', async () => {

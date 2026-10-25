@@ -84,6 +84,9 @@ export const PROJECT_EVENTS = {
   // BAL-611: the expert cleared an AI-drafted section (Overview, or the suggested Milestones)
   // with its Clear control. Fired CLIENT-side by the composer.
   PROPOSAL_DRAFT_CLEARED: 'project_proposal_draft_cleared',
+  // BAL-611: the expert started typing while a draft was still being generated, so the draft
+  // was discarded before it arrived. Fired CLIENT-side by the composer, once per discard.
+  PROPOSAL_DRAFT_DISCARDED: 'project_proposal_draft_discarded',
   // BAL-324: an admin sent a "complete your billing details" reminder from the
   // kickoff board while the client-billing gate was still outstanding. Feature
   // prefix `project_` matches every constant here (the ticket's bare
@@ -364,10 +367,13 @@ export interface ProjectEventMap {
     milestone_count: number;
     milestones_priced: boolean;
   };
-  // BAL-611: `relationship_id` (not a proposal id, which may not exist yet) joins it to
-  // PROJECT_PROPOSAL_SUBMITTED's `used_ai_draft`.
+  // BAL-611: `relationship_id` (not a proposal id, which may not exist yet) joins these two to
+  // PROJECT_PROPOSAL_SUBMITTED's `ai_draft_generated`.
   [PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED]: {
     section: 'overview' | 'milestones';
+    relationship_id: string;
+  };
+  [PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED]: {
     relationship_id: string;
   };
   // BAL-324: admin-initiated client-billing reminder from the kickoff board.
@@ -556,11 +562,12 @@ export interface ProjectServerEventMap {
      *  SERVER-SIDE (BAL-357). `price_cents` above stays the expert's payout quote. */
     client_price_cents: number;
     /**
-     * BAL-611: true iff the relationship has a `succeeded` AI draft generation, looked up at
-     * submit. It does not detect a Clear (derive that from PROPOSAL_DRAFT_CLEARED), and it is
-     * also true when the draft arrived after the expert had started typing and was discarded.
+     * BAL-611: true iff a draft generation succeeded for this relationship, looked up at
+     * submit. It records that a draft was generated, NOT that the expert adopted it: adoption
+     * is the generated submits minus those whose `relationship_id` also carries
+     * PROPOSAL_DRAFT_CLEARED or PROPOSAL_DRAFT_DISCARDED.
      */
-    used_ai_draft: boolean;
+    ai_draft_generated: boolean;
     distinct_id: string;
   };
   // BAL-357: emitted server-side from the client's accept action — the fee +

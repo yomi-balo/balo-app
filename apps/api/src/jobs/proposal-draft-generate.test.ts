@@ -134,13 +134,13 @@ describe('startProposalDraftGenerateWorker', () => {
     markFailed.mockResolvedValue(undefined);
   });
 
-  it('registers a worker on the queue with concurrency 3', () => {
+  it('registers a worker on the queue with concurrency 10', () => {
     startProposalDraftGenerateWorker();
     expect(PROPOSAL_DRAFT_GENERATE_QUEUE).toBe('proposal-draft-generate');
     expect(WorkerMock).toHaveBeenCalledWith(
       'proposal-draft-generate',
       expect.any(Function),
-      expect.objectContaining({ concurrency: 3 })
+      expect.objectContaining({ concurrency: 10 })
     );
   });
 
@@ -268,5 +268,140 @@ describe('startProposalDraftGenerateWorker', () => {
       { err: persistError, generationId: 'g7' },
       'Proposal draft — failed to persist the terminal failure'
     );
+  });
+});
+
+/** A provider error shaped like the AI SDK's: a class name, a status, and request/response text. */
+function providerError(name: string, statusCode: number): Error {
+  const error = new Error('Overloaded: SECRET-BRIEF-TEXT');
+  error.name = name;
+  return Object.assign(error, {
+    statusCode,
+    requestBodyValues: { prompt: 'SECRET-BRIEF-TEXT' },
+    responseBody: 'SECRET-MODEL-OUTPUT',
+  });
+}
+
+describe('startProposalDraftGenerateWorker — provider and configuration failures are logged', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    markFailed.mockResolvedValue(undefined);
+  });
+
+  const failureLogCalls = (): unknown[][] =>
+    logError.mock.calls.filter(
+      (call) => call[1] === 'Proposal draft failed — provider or configuration error'
+    );
+
+  it('logs a terminal provider error as unknown with its class name and HTTP status only', async () => {
+    startProposalDraftGenerateWorker();
+    const job = { data: { generationId: 'g8' }, attemptsMade: 2, opts: { attempts: 2 } };
+    wired.failedHandler?.(job, providerError('AI_APICallError', 529));
+    await flush();
+
+    expect(failureLogCalls()).toEqual([
+      [
+        { generationId: 'g8', reason: 'unknown', errorName: 'AI_APICallError', statusCode: 529 },
+        'Proposal draft failed — provider or configuration error',
+      ],
+    ]);
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('SECRET');
+    expect(markFailed).toHaveBeenCalledWith({ generationId: 'g8', failureReason: 'unknown' });
+  });
+
+  it("reads the class and status of a retry wrapper's last attempt", async () => {
+    startProposalDraftGenerateWorker();
+    const retryError = Object.assign(new Error('Failed after 3 attempts: SECRET-BRIEF-TEXT'), {
+      name: 'AI_RetryError',
+      lastError: providerError('AI_APICallError', 503),
+    });
+    const job = { data: { generationId: 'g9' }, attemptsMade: 2, opts: { attempts: 2 } };
+    wired.failedHandler?.(job, retryError);
+    await flush();
+
+    expect(failureLogCalls()).toEqual([
+      [
+        {
+          generationId: 'g9',
+          reason: 'unknown',
+          errorName: 'AI_RetryError',
+          causeName: 'AI_APICallError',
+          statusCode: 503,
+        },
+        'Proposal draft failed — provider or configuration error',
+      ],
+    ]);
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('SECRET');
+  });
+
+  it('logs a model_unavailable failure with the classified error and its cause, across the UnrecoverableError boundary', async () => {
+    const notAllowed = new Error('Model "gpt-4" is not on the allow-list');
+    notAllowed.name = 'AiModelNotAllowedError';
+    runProposalDraftGeneration.mockRejectedValue(
+      Object.assign(new MockProposalDraftGenerationError('model_unavailable', 'nope'), {
+        cause: notAllowed,
+      })
+    );
+    startProposalDraftGenerateWorker();
+    const job = { data: { generationId: 'g10' }, attemptsMade: 1, opts: { attempts: 2 } };
+
+    let thrown: unknown;
+    try {
+      await wired.processor?.(job);
+    } catch (error) {
+      thrown = error;
+    }
+    wired.failedHandler?.(job, thrown as Error);
+    await flush();
+
+    expect(failureLogCalls()).toEqual([
+      [
+        {
+          generationId: 'g10',
+          reason: 'model_unavailable',
+          errorName: 'ProposalDraftGenerationError',
+          causeName: 'AiModelNotAllowedError',
+        },
+        'Proposal draft failed — provider or configuration error',
+      ],
+    ]);
+  });
+
+  it('does not log a failure while attempts remain', () => {
+    startProposalDraftGenerateWorker();
+    const job = { data: { generationId: 'g11' }, attemptsMade: 1, opts: { attempts: 2 } };
+    wired.failedHandler?.(job, providerError('AI_APICallError', 529));
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('does not log an invalid_output failure, whose reason already says what went wrong', async () => {
+    startProposalDraftGenerateWorker();
+    const job = { data: { generationId: 'g12' }, attemptsMade: 2, opts: { attempts: 2 } };
+    wired.failedHandler?.(job, new MockNoObjectGeneratedError('bad'));
+    await flush();
+    expect(failureLogCalls()).toEqual([]);
+    expect(markFailed).toHaveBeenCalledWith({
+      generationId: 'g12',
+      failureReason: 'invalid_output',
+    });
+  });
+
+  it('does not log a classified truncated failure, whose reason already says what went wrong', async () => {
+    runProposalDraftGeneration.mockRejectedValue(
+      new MockProposalDraftGenerationError('truncated', 'cut off')
+    );
+    startProposalDraftGenerateWorker();
+    const job = { data: { generationId: 'g13' }, attemptsMade: 1, opts: { attempts: 2 } };
+
+    let thrown: unknown;
+    try {
+      await wired.processor?.(job);
+    } catch (error) {
+      thrown = error;
+    }
+    wired.failedHandler?.(job, thrown as Error);
+    await flush();
+    expect(failureLogCalls()).toEqual([]);
+    expect(markFailed).toHaveBeenCalledWith({ generationId: 'g13', failureReason: 'truncated' });
   });
 });

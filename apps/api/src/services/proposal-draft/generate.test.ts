@@ -9,6 +9,7 @@ const findRequest = vi.hoisted(() => vi.fn());
 const trackServer = vi.hoisted(() => vi.fn());
 const logInfo = vi.hoisted(() => vi.fn());
 const logWarn = vi.hoisted(() => vi.fn());
+const logError = vi.hoisted(() => vi.fn());
 
 vi.mock('@balo/db', () => ({
   proposalDraftGenerationsRepository: {
@@ -27,7 +28,7 @@ vi.mock('@balo/analytics/server', () => ({
   PROJECT_SERVER_EVENTS: { PROPOSAL_DRAFT_GENERATED: 'project_proposal_draft_generated' },
 }));
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ warn: logWarn, info: logInfo, error: vi.fn(), debug: vi.fn() }),
+  createLogger: () => ({ warn: logWarn, info: logInfo, error: logError, debug: vi.fn() }),
 }));
 
 import { runProposalDraftGeneration, ProposalDraftGenerationError } from './generate.js';
@@ -74,10 +75,10 @@ function aiReturning(value: ProposalDraftOutput): {
     value,
     audit: {
       provider: 'anthropic',
-      modelId: 'claude-sonnet-5',
+      modelId: 'claude-sonnet-5-5',
       modelVersion: null,
       promptId: 'proposal-draft.generate',
-      promptVersion: 'v1',
+      promptVersion: 'v2',
       prompt: 'p',
     },
     usage: { inputTokens: 900, outputTokens: 400 },
@@ -112,14 +113,19 @@ describe('runProposalDraftGeneration', () => {
     vi.useRealTimers();
   });
 
-  it('throws an unknown error when the row is missing', async () => {
+  it('returns quietly without a model call when the row was released', async () => {
     findGeneration.mockResolvedValue(undefined);
     const { ai, generateObject } = aiReturning(goodOutput);
-    await expect(runProposalDraftGeneration(GEN_ID, { ai })).rejects.toMatchObject({
-      name: 'ProposalDraftGenerationError',
-      reason: 'unknown',
-    });
+    await expect(runProposalDraftGeneration(GEN_ID, { ai })).resolves.toBeUndefined();
     expect(generateObject).not.toHaveBeenCalled();
+    expect(findRelationship).not.toHaveBeenCalled();
+    expect(markSucceeded).not.toHaveBeenCalled();
+    expect(trackServer).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledWith(
+      { generationId: GEN_ID },
+      'Proposal draft abandoned — row was released'
+    );
   });
 
   it('returns without a model call when the row is already settled', async () => {
@@ -194,7 +200,7 @@ describe('runProposalDraftGeneration', () => {
     const { ai, generateObject } = aiReturning(goodOutput);
     await runProposalDraftGeneration(GEN_ID, { ai });
     expect(generateObject).toHaveBeenCalledWith(
-      expect.objectContaining({ modelId: 'claude-sonnet-5', maxOutputTokens: 4096 })
+      expect.objectContaining({ modelId: 'claude-sonnet-5-5', maxOutputTokens: 4096 })
     );
   });
 
@@ -205,8 +211,8 @@ describe('runProposalDraftGeneration', () => {
     expect(markSucceeded).toHaveBeenCalledWith({
       generationId: GEN_ID,
       output: goodOutput,
-      modelId: 'claude-sonnet-5',
-      promptVersion: 'v1',
+      modelId: 'claude-sonnet-5-5',
+      promptVersion: 'v2',
       inputTokens: 900,
       outputTokens: 400,
     });
@@ -221,11 +227,11 @@ describe('runProposalDraftGeneration', () => {
     expect(logInfo).toHaveBeenCalledWith(
       {
         generationId: GEN_ID,
-        modelId: 'claude-sonnet-5',
+        modelId: 'claude-sonnet-5-5',
         inputTokens: 900,
         outputTokens: 400,
         milestoneCount: 2,
-        promptVersion: 'v1',
+        promptVersion: 'v2',
       },
       'Proposal draft generated'
     );
@@ -329,7 +335,7 @@ describe('runProposalDraftGeneration', () => {
         vi.setSystemTime(createdAtMs + DRAFT_DEADLINE_MS + 1);
         return Promise.resolve({
           value: goodOutput,
-          audit: { modelId: 'claude-sonnet-5', promptVersion: 'v1' },
+          audit: { modelId: 'claude-sonnet-5-5', promptVersion: 'v2' },
           usage: { inputTokens: 1, outputTokens: 1 },
         });
       });

@@ -81,12 +81,18 @@ interface DraftRun {
  * Drives the one automatic AI draft of a composer (BAL-611). When the server found no
  * generation the hook starts one (idempotent per relationship, so a StrictMode double mount
  * or a second tab is safe); when one is pending it polls it every
- * `PROPOSAL_DRAFT_POLL_INTERVAL_MS`, up to `PROPOSAL_DRAFT_MAX_POLLS`. A draft that already
- * succeeded on the server was applied to the composer's first render, so the hook only turns
- * its badges on.
+ * `PROPOSAL_DRAFT_POLL_INTERVAL_MS`. A draft that already succeeded on the server was applied
+ * to the composer's first render, so the hook only turns its badges on.
+ *
+ * Polling stops only on a terminal view (`succeeded`, `failed` or `skipped`). The server owns
+ * the deadline: its read derives `failed` for a `pending` row past `DRAFT_DEADLINE_MS`, so the
+ * hook keeps no countdown of its own. `PROPOSAL_DRAFT_MAX_POLLS` is a safety cap that strictly
+ * outlasts that deadline and is reached only when the reads never turn terminal; it shows the
+ * same quiet failure line.
  *
  * The first edit to either section while drafting stops the run and discards the whole
- * draft, so a late result never overwrites what the expert typed. Unmount stops polling.
+ * draft (tracked once as `PROPOSAL_DRAFT_DISCARDED`), so a late result never overwrites what
+ * the expert typed. Unmount stops polling.
  */
 export function useProposalDraft({
   enabled,
@@ -185,6 +191,7 @@ export function useProposalDraft({
       if (current.phase === 'drafting') {
         runRef.current?.stop();
         commit(IDLE);
+        track(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED, { relationship_id: relationshipId });
         return;
       }
       const next: DraftUiState = {
@@ -200,7 +207,7 @@ export function useProposalDraft({
         commit(next);
       }
     },
-    [commit]
+    [commit, relationshipId]
   );
 
   const noteClear = useCallback(

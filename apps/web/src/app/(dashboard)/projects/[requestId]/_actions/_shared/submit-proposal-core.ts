@@ -243,14 +243,14 @@ async function didRequestAdvance(requestId: string, beforeStatus: string): Promi
 
 /**
  * Whether the relationship has a `succeeded` AI draft generation, for the submit event's
- * `used_ai_draft`. The submit has already been promoted by the time this runs, so a lookup
+ * `ai_draft_generated`. The submit has already been promoted by the time this runs, so a lookup
  * failure must never fail it: it warns and reads as `false`.
  */
-async function hasAiDraft(relationshipId: string): Promise<boolean> {
+async function hasGeneratedAiDraft(relationshipId: string): Promise<boolean> {
   try {
     return await proposalDraftGenerationsRepository.hasSucceededForRelationship(relationshipId);
   } catch (error) {
-    log.warn('Proposal draft lookup failed at submit — recording used_ai_draft as false', {
+    log.warn('Proposal draft lookup failed at submit — recording ai_draft_generated as false', {
       relationshipId,
       error: error instanceof Error ? error.message : String(error),
     });
@@ -382,9 +382,9 @@ async function runSubmit(
     transitioned,
   });
 
-  // True iff the relationship has a `succeeded` AI generation. It deliberately ignores Clear
-  // (PROPOSAL_DRAFT_CLEARED carries that) and counts a draft discarded before it arrived.
-  const usedAiDraft = await hasAiDraft(relationshipId);
+  // True iff the relationship has a `succeeded` AI generation: a draft was generated, not that
+  // the expert kept it. Adoption subtracts PROPOSAL_DRAFT_CLEARED and PROPOSAL_DRAFT_DISCARDED.
+  const aiDraftGenerated = await hasGeneratedAiDraft(relationshipId);
 
   // BAL-357: emit PROJECT_PROPOSAL_SUBMITTED SERVER-SIDE (audience boundary). The
   // Balo fee + client-charged price are derived here and NEVER returned to the
@@ -400,7 +400,7 @@ async function runSubmit(
     pricing_method: draft.pricingMethod,
     balo_fee_bps: draft.baloFeeBps,
     client_price_cents: clientPriceCents,
-    used_ai_draft: usedAiDraft,
+    ai_draft_generated: aiDraftGenerated,
     distinct_id: user.id,
   });
 

@@ -22,8 +22,11 @@ import { proposalDraftGenerationsRepository as repo } from './proposal-draft-gen
  *  2. **SCOPED READS ARE NOT-FOUNDS.** `findForRequester` misses on a wrong relationship OR a
  *     wrong user; `findForRelationshipExpert` misses unless the bearer user is both the
  *     requester and the relationship's expert, on a live relationship.
- *  3. **TERMINAL IS TERMINAL.** Both `mark*` CAS on `pending`; the second terminal write
- *     returns `undefined` and leaves the row unchanged.
+ *  3. **TERMINAL IS TERMINAL.** Both `mark*` and `releaseAfterEnqueueFailure` CAS on a live
+ *     `pending` row; the second terminal write returns `undefined` and leaves the row unchanged.
+ *     `markSucceeded` also refuses a row past `DRAFT_DEADLINE_MS` on the database clock.
+ *  3a. **A RELEASE FREES THE SLOT BUT STILL COUNTS.** An enqueue failure soft-deletes its row,
+ *     so the next visit drafts afresh, while `countCreatedSince` keeps counting the released row.
  *  4. **THE THREE CHECKS REALLY REJECT.** Each probe violates exactly one constraint, inside its
  *     own SAVEPOINT (`expectCheckViolation`), so the outer per-test transaction survives
  *     (memory `reference_caught_23505_aborts_test_transaction`).
@@ -80,6 +83,14 @@ async function seedPending(): Promise<{
     requestedByUserId: expertUserId,
   });
   return { relationshipId, expertUserId, row };
+}
+
+/** Backdate a row's `created_at` against the database clock, the clock the deadline CAS reads. */
+async function backdate(generationId: string, seconds: number): Promise<void> {
+  await db
+    .update(proposalDraftGenerations)
+    .set({ createdAt: sql`now() - make_interval(secs => ${seconds}::int)` })
+    .where(eq(proposalDraftGenerations.id, generationId));
 }
 
 async function softDelete(generationId: string): Promise<void> {
@@ -419,6 +430,31 @@ describe('markSucceeded', () => {
       await repo.markSucceeded({ generationId: row.id, output: draftOutput(), ...SUCCESS_AUDIT })
     ).toBeUndefined();
   });
+
+  it('refuses a success past the deadline and leaves the row pending', async () => {
+    const { row } = await seedPending();
+    await backdate(row.id, 91);
+    const before = await repo.findById(row.id);
+
+    const late = await repo.markSucceeded({
+      generationId: row.id,
+      output: draftOutput(),
+      ...SUCCESS_AUDIT,
+    });
+
+    expect(late).toBeUndefined();
+    expect(before).toMatchObject({ status: 'pending', output: null, completedAt: null });
+    expect(await repo.findById(row.id)).toEqual(before);
+  });
+
+  it('still accepts a success just inside the deadline', async () => {
+    const { row } = await seedPending();
+    await backdate(row.id, 89);
+
+    expect(
+      await repo.markSucceeded({ generationId: row.id, output: draftOutput(), ...SUCCESS_AUDIT })
+    ).toMatchObject({ id: row.id, status: 'succeeded' });
+  });
 });
 
 describe('markFailed', () => {
@@ -461,10 +497,109 @@ describe('markFailed', () => {
       await repo.markFailed({ generationId: randomUUID(), failureReason: 'unknown' })
     ).toBeUndefined();
   });
+
+  it('does not complete a soft-deleted row', async () => {
+    const { row } = await seedPending();
+    await softDelete(row.id);
+
+    expect(
+      await repo.markFailed({ generationId: row.id, failureReason: 'unknown' })
+    ).toBeUndefined();
+  });
+});
+
+describe('releaseAfterEnqueueFailure', () => {
+  it('fails and soft-deletes the pending row in one write', async () => {
+    const { row } = await seedPending();
+
+    const released = await repo.releaseAfterEnqueueFailure({ generationId: row.id });
+
+    expect(released).toMatchObject({
+      id: row.id,
+      status: 'failed',
+      failureReason: 'enqueue_failed',
+      output: null,
+      modelId: null,
+    });
+    expect(released?.completedAt).toBeInstanceOf(Date);
+    expect(released?.deletedAt).toBeInstanceOf(Date);
+    expect(await repo.findById(row.id)).toBeUndefined();
+  });
+
+  it('frees the relationship, so the next visit opens a fresh live row', async () => {
+    const { relationshipId, expertUserId, row } = await seedPending();
+    await repo.releaseAfterEnqueueFailure({ generationId: row.id });
+
+    const next = await repo.createOrGetForRelationship({
+      relationshipId,
+      requestedByUserId: expertUserId,
+    });
+
+    expect(next.created).toBe(true);
+    expect(next.row.id).not.toBe(row.id);
+    expect(next.row).toMatchObject({ status: 'pending', deletedAt: null });
+    expect((await repo.findLiveByRelationship(relationshipId))?.id).toBe(next.row.id);
+  });
+
+  it('still counts the released row towards the hourly limit', async () => {
+    const { relationshipId, expertUserId, row } = await seedPending();
+    await repo.releaseAfterEnqueueFailure({ generationId: row.id });
+    await repo.createOrGetForRelationship({ relationshipId, requestedByUserId: expertUserId });
+
+    expect(
+      await repo.countCreatedSince({ requestedByUserId: expertUserId, since: new Date(0) })
+    ).toBe(2);
+  });
+
+  it('refuses a late success or failure from a job that was enqueued after all', async () => {
+    const { row } = await seedPending();
+    await repo.releaseAfterEnqueueFailure({ generationId: row.id });
+
+    const orphanSuccess = await repo.markSucceeded({
+      generationId: row.id,
+      output: draftOutput(),
+      ...SUCCESS_AUDIT,
+    });
+    const orphanFailure = await repo.markFailed({
+      generationId: row.id,
+      failureReason: 'unknown',
+    });
+
+    expect(orphanSuccess).toBeUndefined();
+    expect(orphanFailure).toBeUndefined();
+    const [stored] = await db
+      .select()
+      .from(proposalDraftGenerations)
+      .where(eq(proposalDraftGenerations.id, row.id));
+    expect(stored).toMatchObject({
+      status: 'failed',
+      failureReason: 'enqueue_failed',
+      output: null,
+    });
+  });
+
+  it('loses the CAS when the worker already finished the row, and leaves it live', async () => {
+    const { row } = await seedPending();
+    const succeeded = await repo.markSucceeded({
+      generationId: row.id,
+      output: draftOutput(),
+      ...SUCCESS_AUDIT,
+    });
+
+    expect(await repo.releaseAfterEnqueueFailure({ generationId: row.id })).toBeUndefined();
+    expect(await repo.findById(row.id)).toEqual(succeeded);
+  });
+
+  it('is a no-op on a second release', async () => {
+    const { row } = await seedPending();
+    await repo.releaseAfterEnqueueFailure({ generationId: row.id });
+
+    expect(await repo.releaseAfterEnqueueFailure({ generationId: row.id })).toBeUndefined();
+  });
 });
 
 describe('countCreatedSince', () => {
-  it("counts the user's live rows at or after `since`, whatever their outcome", async () => {
+  it("counts the user's rows at or after `since`, whatever their outcome", async () => {
     const user = await userFactory();
     const a = await seedRelationship();
     const b = await seedRelationship();
@@ -513,13 +648,13 @@ describe('countCreatedSince', () => {
     expect(await repo.countCreatedSince({ requestedByUserId: expertUserId, since })).toBe(0);
   });
 
-  it('excludes a soft-deleted row', async () => {
+  it('counts a soft-deleted row', async () => {
     const { expertUserId, row } = await seedPending();
     await softDelete(row.id);
 
     expect(
       await repo.countCreatedSince({ requestedByUserId: expertUserId, since: new Date(0) })
-    ).toBe(0);
+    ).toBe(1);
   });
 });
 

@@ -32,11 +32,16 @@ The first time you open a new proposal, Balo drafts the **Overview** and the **M
 client's request, so you start with something to edit instead of a blank page. A moment of
 **Drafting from {name}'s request…** shows while it works, then the draft appears with a
 **Drafted from {name}'s request** label on the Overview and **Suggested from the brief** on the
-Milestones. ({name} is the client's first name.) It never fills in prices, hours, dates or payment
-terms. Those are yours to set, and drafted text never includes links. Edit anything you like, or
-choose **Clear** to empty a section and start from scratch. If you start typing in the **Overview**
-before the draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made once per request, so it won't change if you come back to the page
-later.
+Milestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and
+drafted text never includes links. Edit anything you like, or choose **Clear** to empty a section
+and start from scratch. You'll see **Overview cleared.** (or **Suggested milestones cleared.**)
+with **Undo**, which puts the drafted section back. If you start typing in the **Overview** before
+the draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made
+once per request, so it won't change if you come back to the page later.
+
+If Balo can't put a draft together, you'll see **Couldn't draft this one. Start from scratch.**
+at the top of the **Overview**. Nothing is wrong with your proposal: the sections are simply empty,
+and you write it yourself just as you would without a draft.
 
 ## The property bar
 

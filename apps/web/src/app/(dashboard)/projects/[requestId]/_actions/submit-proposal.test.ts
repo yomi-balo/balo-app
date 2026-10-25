@@ -596,29 +596,29 @@ describe('submitProposalAction', () => {
       pricing_method: 'fixed',
       balo_fee_bps: 2500,
       client_price_cents: 625000, // applyBaloFee(500000, 2500)
-      used_ai_draft: false,
+      ai_draft_generated: false,
       distinct_id: 'user-expert',
     });
   });
 
-  it('records used_ai_draft true when the relationship has a succeeded generation', async () => {
+  it('records ai_draft_generated true when the relationship has a succeeded generation', async () => {
     mockHasSucceededDraft.mockResolvedValue(true);
     const result = await submitProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     expect(mockHasSucceededDraft).toHaveBeenCalledWith(REL_ID);
     expect(mockTrackServer).toHaveBeenCalledWith(
       'project_proposal_submitted',
-      expect.objectContaining({ used_ai_draft: true })
+      expect.objectContaining({ ai_draft_generated: true })
     );
   });
 
-  it('records used_ai_draft false, warns, and still succeeds when the lookup throws', async () => {
+  it('records ai_draft_generated false, warns, and still succeeds when the lookup throws', async () => {
     mockHasSucceededDraft.mockRejectedValue(new Error('db down'));
     const result = await submitProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     expect(mockTrackServer).toHaveBeenCalledWith(
       'project_proposal_submitted',
-      expect.objectContaining({ used_ai_draft: false })
+      expect.objectContaining({ ai_draft_generated: false })
     );
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('Proposal draft lookup failed'),

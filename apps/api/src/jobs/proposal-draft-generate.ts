@@ -47,18 +47,70 @@ export async function enqueueProposalDraftGenerate(input: { generationId: string
 }
 
 /**
+ * What the failure log may say about an error: class names and an HTTP status. Never a message,
+ * a response body or a serialised error, because a provider error carries the request (the
+ * client's brief) and the response (model output).
+ */
+interface FailureDiagnostics {
+  readonly errorName: string;
+  /** The wrapped error's class: a `RetryError`'s last attempt, or a classified error's cause. */
+  readonly causeName?: string;
+  readonly statusCode?: number;
+}
+
+function errorClassName(value: unknown): string {
+  return value instanceof Error ? value.name : typeof value;
+}
+
+function readStatusCode(value: unknown): number | undefined {
+  if (typeof value === 'object' && value !== null && 'statusCode' in value) {
+    return typeof value.statusCode === 'number' ? value.statusCode : undefined;
+  }
+  return undefined;
+}
+
+/** The error a wrapper carries: the AI SDK's `RetryError.lastError`, else `Error.cause`. */
+function wrappedError(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return undefined;
+  if ('lastError' in value && value.lastError !== undefined) return value.lastError;
+  return value instanceof Error ? value.cause : undefined;
+}
+
+function diagnose(value: unknown): FailureDiagnostics {
+  const cause = wrappedError(value);
+  const statusCode = readStatusCode(value) ?? readStatusCode(cause);
+  return {
+    errorName: errorClassName(value),
+    ...(cause === undefined ? {} : { causeName: errorClassName(cause) }),
+    ...(statusCode === undefined ? {} : { statusCode }),
+  };
+}
+
+/**
  * Carries the classified failure reason across BullMQ's `UnrecoverableError` boundary. A bare
  * `ProposalDraftGenerationError` would just be retried, and a bare `UnrecoverableError` would
- * leave the 'failed' handler guessing a reason from a message string.
+ * leave the 'failed' handler guessing a reason from a message string. `diagnostics` describes
+ * the original error, which this wrapper would otherwise hide from the failure log.
  */
 class UnrecoverableProposalDraftError extends UnrecoverableError {
   constructor(
     readonly reason: ProposalDraftFailureReason,
-    message: string
+    message: string,
+    readonly diagnostics: FailureDiagnostics
   ) {
     super(message);
   }
 }
+
+/**
+ * The reasons that point at the provider or the configuration rather than the request. Every
+ * other reason already says what went wrong; these two would otherwise reach the expert as
+ * "Couldn't draft this one" with nothing in the logs.
+ */
+const LOGGED_FAILURE_REASONS: ReadonlySet<ProposalDraftFailureReason> = new Set([
+  'unknown',
+  'model_unavailable',
+]);
 
 /**
  * Map a job-failure error to the closed failure vocabulary. Never a vendor message. The one
@@ -104,12 +156,18 @@ export function startProposalDraftGenerateWorker(): Worker<ProposalDraftGenerate
       } catch (error) {
         if (error instanceof ProposalDraftGenerationError) {
           // Classified failures never benefit from a retry; carry the reason across.
-          throw new UnrecoverableProposalDraftError(error.reason, error.message);
+          throw new UnrecoverableProposalDraftError(error.reason, error.message, diagnose(error));
         }
         throw error;
       }
     },
-    { connection: createRedisConnection(), concurrency: 3 }
+    {
+      connection: createRedisConnection(),
+      // The model call is I/O-bound and every job races DRAFT_DEADLINE_MS from the moment its
+      // row was written, so a low concurrency would queue a burst of composer opens behind each
+      // other until they fail as `deadline_exceeded`.
+      concurrency: 10,
+    }
   );
 
   worker.on('failed', (job, err) => {
@@ -118,7 +176,17 @@ export function startProposalDraftGenerateWorker(): Worker<ProposalDraftGenerate
     const terminal = err instanceof UnrecoverableError || job.attemptsMade >= attempts;
     if (!terminal) return;
 
-    persistTerminalFailure(job.data.generationId, classifyFailure(err)).catch((error: unknown) => {
+    const reason = classifyFailure(err);
+    if (LOGGED_FAILURE_REASONS.has(reason)) {
+      const diagnostics =
+        err instanceof UnrecoverableProposalDraftError ? err.diagnostics : diagnose(err);
+      log.error(
+        { generationId: job.data.generationId, reason, ...diagnostics },
+        'Proposal draft failed — provider or configuration error'
+      );
+    }
+
+    persistTerminalFailure(job.data.generationId, reason).catch((error: unknown) => {
       // `err`, not a hand-flattened message: this is the line that explains why a row stays
       // `pending` until the read-side deadline derivation rescues it.
       log.error(

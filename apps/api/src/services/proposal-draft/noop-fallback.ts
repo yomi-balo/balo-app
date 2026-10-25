@@ -14,6 +14,13 @@ export const PROPOSAL_DRAFT_NOOP_MILESTONE_TITLES = [
 ] as const;
 
 /**
+ * Written as the condition alone: the composer already labels the field "Done when", the same
+ * rule the system prompt gives the model.
+ */
+export const PROPOSAL_DRAFT_NOOP_ACCEPTANCE_CRITERIA =
+  'This placeholder is replaced with real content.';
+
+/**
  * DEV/CI ONLY — unreachable in production (`createAiClient` throws when the key is absent).
  * Lets dev and CI exercise the whole path end to end without a key. The row carries
  * `model_id = 'noop'`, which is how an operator tells a stub from a real draft.
@@ -24,7 +31,7 @@ export function proposalDraftNoopResult(): ProposalDraftOutput {
     milestones: PROPOSAL_DRAFT_NOOP_MILESTONE_TITLES.map((title) => ({
       title,
       descriptionHtml: `<p>${PROPOSAL_DRAFT_NOOP_DISCLAIMER}</p>`,
-      acceptanceCriteria: 'Done when this placeholder is replaced with real content.',
+      acceptanceCriteria: PROPOSAL_DRAFT_NOOP_ACCEPTANCE_CRITERIA,
     })),
   };
 }

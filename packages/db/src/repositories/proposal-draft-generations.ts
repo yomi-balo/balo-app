@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, getTableColumns, gte, isNull, sql } from 'drizzle-orm';
+import { DRAFT_DEADLINE_MS } from '@balo/shared/project-requests';
 import type {
   ProposalDraftFailureReason,
   ProposalDraftOutput,
@@ -52,6 +53,10 @@ export interface MarkProposalDraftGenerationFailedInput {
   readonly failureReason: ProposalDraftFailureReason;
 }
 
+export interface ReleaseProposalDraftGenerationInput {
+  readonly generationId: string;
+}
+
 export interface CountProposalDraftGenerationsInput {
   readonly requestedByUserId: string;
   readonly since: Date;
@@ -69,9 +74,10 @@ const LIVE_ROW_ARBITER = sql`"deleted_at" IS NULL`;
 
 /**
  * ⚠⚠ THE CAS PREDICATE — the whole of the "terminal is terminal" guarantee. BullMQ delivers at
- * least once, and the web's `enqueue_failed` write can race the worker; whichever terminal write
- * lands second matches zero rows and its `mark*` returns `undefined`, which every caller reads
- * as "already terminal, nothing to do" — and as "do not fire analytics".
+ * least once, and the web's `enqueue_failed` release can race the worker; whichever terminal
+ * write lands second matches zero rows and returns `undefined`, which every caller reads as
+ * "already terminal, nothing to do" — and as "do not fire analytics". It also refuses a
+ * soft-deleted row, so a job the api did enqueue cannot write into a row the web has released.
  */
 function pendingPredicate(generationId: string): ReturnType<typeof and> {
   return and(
@@ -84,8 +90,15 @@ function pendingPredicate(generationId: string): ReturnType<typeof and> {
 // ── Repository ─────────────────────────────────────────────────────────────
 
 /**
+ * The deadline in whole seconds, for `make_interval(secs => …)` on the database clock.
+ * @see DRAFT_DEADLINE_MS
+ */
+const DRAFT_DEADLINE_SECONDS = Math.ceil(DRAFT_DEADLINE_MS / 1000);
+
+/**
  * `proposal_draft_generations` (BAL-611) — THE ONLY access path to the AI proposal draft's
- * handoff row. Every read filters `deleted_at IS NULL`.
+ * handoff row. Every row read filters `deleted_at IS NULL`; the one exception is the
+ * `countCreatedSince` rate count, which deliberately counts released rows too.
  *
  * ⚠ THREE READS, THREE SCOPES, AND THAT IS THE DESIGN:
  *   • {@link proposalDraftGenerationsRepository.findForRequester} — the WEB POLL. The id, the
@@ -230,9 +243,16 @@ export const proposalDraftGenerationsRepository = {
   },
 
   /**
-   * Terminal success. CAS on `pending` — see {@link pendingPredicate}. Returns the updated row
-   * only when this call won; `undefined` means the row was already terminal, soft-deleted or
-   * absent, and the caller must not fire analytics.
+   * Terminal success. CAS on `pending` — see {@link pendingPredicate} — AND on the row being
+   * younger than `DRAFT_DEADLINE_MS` by the database clock. Returns the updated row only when
+   * this call won; `undefined` means the row was already terminal, soft-deleted, absent or past
+   * the deadline, and the caller must not fire analytics.
+   *
+   * ⚠ THE DEADLINE IS IN THE WHERE, NOT ONLY IN THE WORKER. A read derives `failed` for a
+   * `pending` row past the deadline, so storing a success after that moment would show the
+   * expert a draft once they had already been told it failed. The worker's own deadline checks
+   * still run first; they save the paid model call, this one keeps the stored outcome honest.
+   * The row then stays `pending`, which every read already derives as failed.
    *
    * ⚠ `status`, `output` and `completed_at` are set in ONE `.set()`: the table's three
    * biconditional CHECKs reject any of them alone.
@@ -251,7 +271,12 @@ export const proposalDraftGenerationsRepository = {
         inputTokens: input.inputTokens,
         outputTokens: input.outputTokens,
       })
-      .where(pendingPredicate(input.generationId))
+      .where(
+        and(
+          pendingPredicate(input.generationId),
+          sql`${proposalDraftGenerations.createdAt} > now() - make_interval(secs => ${DRAFT_DEADLINE_SECONDS}::int)`
+        )
+      )
       .returning();
     return row;
   },
@@ -277,10 +302,43 @@ export const proposalDraftGenerationsRepository = {
   },
 
   /**
-   * The web-side counter behind `MAX_PROPOSAL_DRAFTS_PER_HOUR`: live generations this user
-   * opened at or after `since`, whatever their outcome. `apps/web` has no Redis, so the web's
-   * rolling window is a DB count; the api's Redis limit is the second, independent bound.
-   * Rides `proposal_draft_generations_requester_idx`.
+   * The web's answer to an `enqueue_failed`: fail the pending row AND soft-delete it, in ONE
+   * statement under the same CAS as `mark*`. The caller reports the failure for this visit
+   * itself (every scoped read misses the released row from here on), and because a soft-deleted
+   * row frees `proposal_draft_generations_relationship_live_idx`, the next
+   * `createOrGetForRelationship` opens a fresh row. A brief api outage therefore does not use
+   * up the relationship's one draft.
+   *
+   * Returns the row only when this call won; `undefined` means the worker already finished it
+   * (or it was already released), and the caller must not fire analytics.
+   *
+   * ⚠ RELEASED ROWS STILL COUNT TOWARDS `countCreatedSince`, so a retry loop during an outage
+   * stays inside `MAX_PROPOSAL_DRAFTS_PER_HOUR`.
+   */
+  async releaseAfterEnqueueFailure(
+    input: ReleaseProposalDraftGenerationInput
+  ): Promise<ProposalDraftGeneration | undefined> {
+    const now = new Date();
+    const [row] = await db
+      .update(proposalDraftGenerations)
+      .set({
+        status: 'failed',
+        failureReason: 'enqueue_failed' satisfies ProposalDraftFailureReason,
+        completedAt: now,
+        deletedAt: now,
+      })
+      .where(pendingPredicate(input.generationId))
+      .returning();
+    return row;
+  },
+
+  /**
+   * The web-side counter behind `MAX_PROPOSAL_DRAFTS_PER_HOUR`: generations this user opened at
+   * or after `since`, whatever their outcome. ⚠ DELIBERATELY INCLUDES SOFT-DELETED ROWS: a row
+   * released by `releaseAfterEnqueueFailure` still bounds how often an expert can retry while
+   * the api is down. `apps/web` has no Redis, so the web's rolling window is a DB count; the
+   * api's Redis limit is the second, independent bound. Rides
+   * `proposal_draft_generations_requester_idx`, which is not partial.
    */
   async countCreatedSince(input: CountProposalDraftGenerationsInput): Promise<number> {
     const [row] = await db
@@ -289,17 +347,16 @@ export const proposalDraftGenerationsRepository = {
       .where(
         and(
           eq(proposalDraftGenerations.requestedByUserId, input.requestedByUserId),
-          gte(proposalDraftGenerations.createdAt, input.since),
-          isNull(proposalDraftGenerations.deletedAt)
+          gte(proposalDraftGenerations.createdAt, input.since)
         )
       );
     return row?.count ?? 0;
   },
 
   /**
-   * Whether the relationship's live generation succeeded — the submit-time `used_ai_draft`
-   * lookup. It cannot tell whether the expert kept, cleared or never saw the draft; analytics
-   * derive a Clear from `PROPOSAL_DRAFT_CLEARED`.
+   * Whether the relationship's live generation succeeded — the submit-time `ai_draft_generated`
+   * lookup. It cannot tell whether the expert kept, cleared or discarded the draft; analytics
+   * subtract `PROPOSAL_DRAFT_CLEARED` and `PROPOSAL_DRAFT_DISCARDED` for that.
    */
   async hasSucceededForRelationship(relationshipId: string): Promise<boolean> {
     const [row] = await db

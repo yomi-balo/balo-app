@@ -146,8 +146,8 @@ export const proposalDraftGenerations = pgTable(
 
     /**
      * The `requested_by_user_id` FK, and `countCreatedSince`'s
-     * `(requested_by_user_id, created_at >= …)` hourly count. Not partial, so it also serves
-     * the FK's delete-time scan.
+     * `(requested_by_user_id, created_at >= …)` hourly count. Not partial: that count includes
+     * soft-deleted rows, and it also serves the FK's delete-time scan.
      */
     index('proposal_draft_generations_requester_idx').on(t.requestedByUserId, t.createdAt),
 

@@ -92,9 +92,12 @@ export async function runStartProposalDraft(
       'proposal draft generation'
     );
     if (!enqueued.ok) {
-      const failed = await proposalDraftGenerationsRepository.markFailed({
+      // Fails AND releases the row, so the expert sees the failure line on this visit and the
+      // next visit opens a fresh generation instead of finding this one: an api outage does not
+      // use up the relationship's one draft. The released row still counts towards the hourly
+      // cap. `undefined` means the worker finished the row first, so analytics stay silent.
+      const failed = await proposalDraftGenerationsRepository.releaseAfterEnqueueFailure({
         generationId: row.id,
-        failureReason: 'enqueue_failed',
       });
       if (failed !== undefined) {
         trackServerAndFlush(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED, {

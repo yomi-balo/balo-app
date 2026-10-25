@@ -9,6 +9,7 @@ import {
   PROPOSAL_DRAFT_MAX_OVERVIEW_HTML,
   PROPOSAL_DRAFT_MAX_POLLS,
   PROPOSAL_DRAFT_MAX_TITLE,
+  PROPOSAL_DRAFT_MILESTONE_TAGS,
   PROPOSAL_DRAFT_MIN_MILESTONES,
   PROPOSAL_DRAFT_POLL_INTERVAL_MS,
 } from './proposal-draft';
@@ -28,15 +29,30 @@ const COMPOSER_SAVE_BOUNDS = {
 } as const;
 
 describe('proposal-draft timing', () => {
-  it('gives up polling before a pending row is derived as failed', () => {
-    expect(PROPOSAL_DRAFT_POLL_INTERVAL_MS * PROPOSAL_DRAFT_MAX_POLLS).toBeLessThan(
+  it('caps polling only after the server deadline, even with instant round-trips', () => {
+    expect(PROPOSAL_DRAFT_POLL_INTERVAL_MS * PROPOSAL_DRAFT_MAX_POLLS).toBeGreaterThan(
       DRAFT_DEADLINE_MS
     );
   });
 
   it('pins the decided values', () => {
     expect(DRAFT_DEADLINE_MS).toBe(90_000);
+    expect(PROPOSAL_DRAFT_POLL_INTERVAL_MS).toBe(2_000);
+    expect(PROPOSAL_DRAFT_MAX_POLLS).toBe(60);
     expect(MAX_PROPOSAL_DRAFTS_PER_HOUR).toBe(20);
+  });
+});
+
+describe('PROPOSAL_DRAFT_MILESTONE_TAGS', () => {
+  it('is exactly what the light milestone editor renders', () => {
+    expect(PROPOSAL_DRAFT_MILESTONE_TAGS).toEqual(['p', 'br', 'strong', 'em', 'ul', 'li']);
+  });
+
+  it('carries no heading, numbered list or link', () => {
+    const tags: readonly string[] = PROPOSAL_DRAFT_MILESTONE_TAGS;
+    for (const banned of ['h1', 'h2', 'h3', 'h4', 'ol', 'a', 'b', 'i']) {
+      expect(tags).not.toContain(banned);
+    }
   });
 });
 
@@ -77,5 +93,6 @@ describe('@balo/shared/project-requests barrel', () => {
   it('re-exports the proposal-draft contract', () => {
     expect(projectRequests.DRAFT_DEADLINE_MS).toBe(DRAFT_DEADLINE_MS);
     expect(projectRequests.PROPOSAL_DRAFT_FAILURE_REASONS).toBe(PROPOSAL_DRAFT_FAILURE_REASONS);
+    expect(projectRequests.PROPOSAL_DRAFT_MILESTONE_TAGS).toBe(PROPOSAL_DRAFT_MILESTONE_TAGS);
   });
 });

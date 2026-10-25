@@ -90,6 +90,39 @@ describe('toProposalDraftPatch', () => {
     expect(patch?.overviewHtml).toBe('<ul><li><strong>One</strong> two</li></ul>');
   });
 
+  it('narrows a milestone description to the tags the light editor renders', () => {
+    const patch = toProposalDraftPatch({
+      overviewHtml: '<h2>Plan</h2><ol><li>One</li></ol>',
+      milestones: [
+        {
+          ...MILESTONE,
+          descriptionHtml:
+            '<h2>Scope</h2><h3>Detail</h3><ol><li><b>First</b></li><li><i>Second</i></li></ol>' +
+            '<p>Line<br>break with <strong>bold</strong>, <em>em</em> and ' +
+            '<a href="https://e.co">a link</a>.</p><ul><li>Kept</li></ul>',
+        },
+        MILESTONE,
+      ],
+    });
+    expect(patch?.overviewHtml).toBe('<h2>Plan</h2><ol><li>One</li></ol>');
+    expect(patch?.milestones[0]?.descriptionHtml).toBe(
+      '<p>Scope</p><p>Detail</p><ul><li><strong>First</strong></li><li><em>Second</em></li></ul>' +
+        '<p>Line<br />break with <strong>bold</strong>, <em>em</em> and a link.</p>' +
+        '<ul><li>Kept</li></ul>'
+    );
+  });
+
+  it('keeps the text of a tag the milestone narrowing discards', () => {
+    const patch = toProposalDraftPatch({
+      ...OUTPUT,
+      milestones: [
+        { ...MILESTONE, descriptionHtml: '<h1>Title</h1><blockquote>Quoted</blockquote>' },
+        MILESTONE,
+      ],
+    });
+    expect(patch?.milestones[0]?.descriptionHtml).toBe('TitleQuoted');
+  });
+
   it('strips scripts from both the overview and the milestone descriptions', () => {
     const patch = toProposalDraftPatch({
       overviewHtml: '<p>ok</p><script>alert(1)</script>',

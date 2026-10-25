@@ -134,9 +134,11 @@ function meetsUsableFloor(value: ProposalDraftOutput): boolean {
 }
 
 /**
- * Past the deadline the web has already stopped waiting and reads the row as failed, so a model
- * call (or a late write) would only spend tokens on an answer nobody sees. `createdAt` is the
- * database clock and `Date.now()` the worker's; the skew is negligible against a 90s budget.
+ * Past the deadline every read derives the row as failed and `markSucceeded` refuses the write,
+ * so a model call (or a late write) would only spend tokens on an answer nobody sees. This check
+ * saves the paid call; the database-clock guard in `markSucceeded` is what keeps the outcome
+ * correct. `createdAt` is the database clock and `Date.now()` the worker's; the skew is
+ * negligible against a 90s budget.
  */
 function assertWithinDeadline(generationId: string, createdAt: Date, stage: string): void {
   if (Date.now() - createdAt.getTime() <= DRAFT_DEADLINE_MS) return;
@@ -154,13 +156,13 @@ async function isStillPending(generationId: string): Promise<boolean> {
 
 /**
  * The worker's orchestration, in order:
- *  1. Load the row (a settled row is an idempotent no-op).
+ *  1. Load the row (a settled or released row is an idempotent no-op).
  *  2. Load the request the expert is answering.
  *  3. Re-check the row is still pending, so a settled row never costs a model call.
  *  4. Abandon as `deadline_exceeded` when the row is already past `DRAFT_DEADLINE_MS`.
  *  5. Call the model.
- *  6. Usable-output floor, then the deadline again (a slow call must not save a result the web
- *     has already stopped waiting for).
+ *  6. Usable-output floor, then the deadline again (a slow call must not save a result the
+ *     read already shows as failed).
  *  7. Persist, firing analytics only when this write won the compare-and-set.
  *
  * Non-retryable classifications are thrown as `ProposalDraftGenerationError` (the job layer maps
@@ -173,10 +175,11 @@ export async function runProposalDraftGeneration(
 ): Promise<void> {
   const row = await proposalDraftGenerationsRepository.findById(generationId);
   if (row === undefined) {
-    throw new ProposalDraftGenerationError(
-      'unknown',
-      `No proposal_draft_generations row for ${generationId}`
-    );
+    // `findById` reads live rows only, and the web writes the row before it enqueues, so a
+    // missing row was released after an enqueue the web saw fail (`releaseAfterEnqueueFailure`)
+    // even though the job was queued. Nothing is left to write; it is not a provider failure.
+    log.info({ generationId }, 'Proposal draft abandoned — row was released');
+    return;
   }
   if (row.status !== 'pending') return;
 

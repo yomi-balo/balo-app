@@ -27,14 +27,14 @@ const {
   mockFindLive,
   mockCountSince,
   mockCreateOrGet,
-  mockMarkFailed,
+  mockRelease,
   mockFindForRequester,
 } = vi.hoisted(() => ({
   mockFindCurrent: vi.fn(),
   mockFindLive: vi.fn(),
   mockCountSince: vi.fn(),
   mockCreateOrGet: vi.fn(),
-  mockMarkFailed: vi.fn(),
+  mockRelease: vi.fn(),
   mockFindForRequester: vi.fn(),
 }));
 
@@ -44,7 +44,7 @@ vi.mock('@balo/db', () => ({
     findLiveByRelationship: (...a: unknown[]) => mockFindLive(...a),
     countCreatedSince: (...a: unknown[]) => mockCountSince(...a),
     createOrGetForRelationship: (...a: unknown[]) => mockCreateOrGet(...a),
-    markFailed: (...a: unknown[]) => mockMarkFailed(...a),
+    releaseAfterEnqueueFailure: (...a: unknown[]) => mockRelease(...a),
     findForRequester: (...a: unknown[]) => mockFindForRequester(...a),
   },
 }));
@@ -81,7 +81,7 @@ describe('runStartProposalDraft', () => {
     mockCountSince.mockResolvedValue(0);
     mockCreateOrGet.mockResolvedValue({ row: freshRow(), created: true });
     mockPostApi.mockResolvedValue({ ok: true, data: { enqueued: true } });
-    mockMarkFailed.mockResolvedValue(freshRow({ status: 'failed' }));
+    mockRelease.mockResolvedValue(freshRow({ status: 'failed' }));
   });
 
   it('skips invalid input without touching anything', async () => {
@@ -186,13 +186,11 @@ describe('runStartProposalDraft', () => {
     expect(parse({})).toBeNull();
   });
 
-  it('marks enqueue_failed, tracks failed, logs, and answers failed when the enqueue fails', async () => {
+  it('releases the row, tracks failed, logs, and answers failed when the enqueue fails', async () => {
     mockPostApi.mockResolvedValue({ ok: false, status: 503, code: 'enqueue_failed' });
     expect(await runStartProposalDraft(USER, START_INPUT)).toEqual({ status: 'failed' });
-    expect(mockMarkFailed).toHaveBeenCalledWith({
-      generationId: GEN_ID,
-      failureReason: 'enqueue_failed',
-    });
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledWith({ generationId: GEN_ID });
     expect(mockTrack).toHaveBeenCalledWith(
       'project_proposal_draft_generated',
       expect.objectContaining({
@@ -212,7 +210,7 @@ describe('runStartProposalDraft', () => {
     const createdAt = new Date('2026-01-01T12:00:00.000Z');
     mockCreateOrGet.mockResolvedValue({ row: freshRow({ createdAt }), created: true });
     mockPostApi.mockResolvedValue({ ok: false, status: 503, code: 'enqueue_failed' });
-    mockMarkFailed.mockResolvedValue(
+    mockRelease.mockResolvedValue(
       freshRow({
         status: 'failed',
         createdAt,
@@ -234,9 +232,28 @@ describe('runStartProposalDraft', () => {
     expect(mockPostApi).not.toHaveBeenCalled();
   });
 
+  it('starts afresh on the next visit once an enqueue failure released the row', async () => {
+    mockPostApi.mockResolvedValueOnce({ ok: false, status: 503, code: 'enqueue_failed' });
+    expect(await runStartProposalDraft(USER, START_INPUT)).toEqual({ status: 'failed' });
+
+    const NEXT_GEN_ID = 'c0000000-0000-4000-8000-000000000004';
+    mockCreateOrGet.mockResolvedValue({ row: freshRow({ id: NEXT_GEN_ID }), created: true });
+    expect(await runStartProposalDraft(USER, START_INPUT)).toEqual({
+      status: 'pending',
+      generationId: NEXT_GEN_ID,
+    });
+    expect(mockPostApi).toHaveBeenLastCalledWith(
+      '/proposal-drafts/generate',
+      { generationId: NEXT_GEN_ID },
+      expect.any(Function),
+      'proposal draft generation'
+    );
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   it('does not track when the enqueue failure lost the compare-and-set to the worker', async () => {
     mockPostApi.mockResolvedValue({ ok: false, status: 503, code: 'enqueue_failed' });
-    mockMarkFailed.mockResolvedValue(undefined);
+    mockRelease.mockResolvedValue(undefined);
     expect(await runStartProposalDraft(USER, START_INPUT)).toEqual({ status: 'failed' });
     expect(mockTrack).not.toHaveBeenCalled();
   });

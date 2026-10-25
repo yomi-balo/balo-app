@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   proposalDraftNoopResult,
+  PROPOSAL_DRAFT_NOOP_ACCEPTANCE_CRITERIA,
   PROPOSAL_DRAFT_NOOP_DISCLAIMER,
   PROPOSAL_DRAFT_NOOP_MILESTONE_TITLES,
 } from './noop-fallback.js';
@@ -25,6 +26,16 @@ describe('proposalDraftNoopResult', () => {
     expect(result.milestones).toHaveLength(2);
     for (const milestone of result.milestones) {
       expect(milestone.descriptionHtml).toContain(PROPOSAL_DRAFT_NOOP_DISCLAIMER);
+    }
+  });
+
+  it('writes the completion condition without the "Done when" label the composer already shows', () => {
+    expect(PROPOSAL_DRAFT_NOOP_ACCEPTANCE_CRITERIA).toBe(
+      'This placeholder is replaced with real content.'
+    );
+    for (const milestone of proposalDraftNoopResult().milestones) {
+      expect(milestone.acceptanceCriteria).toBe('This placeholder is replaced with real content.');
+      expect(milestone.acceptanceCriteria).not.toMatch(/^done when/i);
     }
   });
 
