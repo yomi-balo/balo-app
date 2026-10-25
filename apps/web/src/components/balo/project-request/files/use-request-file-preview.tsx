@@ -32,12 +32,15 @@ function previewKindOf(contentType: string): 'image' | 'pdf' | null {
   return contentType === PDF_CONTENT_TYPE ? 'pdf' : null;
 }
 
-/** iPhone, iPad and iPadOS (which reports as a Mac with a touch screen). */
-function isIosDevice(): boolean {
+/**
+ * Mobile browsers that can't show an embedded PDF: iOS (iPhone, iPad, and iPadOS, which reports
+ * as a Mac with a touch screen) renders only the first page, and Android Chrome renders nothing.
+ */
+function opensPdfInNewTab(): boolean {
   const nav = globalThis.navigator;
   if (nav === undefined) return false;
   return (
-    /iPad|iPhone|iPod/.test(nav.userAgent) ||
+    /iPad|iPhone|iPod|Android/.test(nav.userAgent) ||
     (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
   );
 }
@@ -63,8 +66,9 @@ export interface UseRequestFilePreviewResult {
  * viewer never holds a null URL. A preview authorizes exactly like a download (the action runs
  * the same gate), so a revoked or deleted file cannot be previewed.
  *
- * iOS Safari blocks a window opened after an await, so a PDF there is opened in a tab created
- * synchronously inside the click and pointed at the URL once it is minted.
+ * On iOS and Android a PDF opens in a new tab instead of the viewer. Mobile browsers block a
+ * window opened after an await, so the tab is created synchronously inside the click, detached
+ * from this page (`opener = null`), and pointed at the URL once it is minted.
  */
 export function useRequestFilePreview(
   input: UseRequestFilePreviewInput
@@ -85,7 +89,7 @@ export function useRequestFilePreview(
         const result = await getRequestFileDownloadAction({
           requestId,
           fileId: file.id,
-          purpose: kind === 'pdf' ? 'preview' : 'download',
+          purpose: 'preview',
         });
         if (!result.success) {
           tab?.close();
@@ -116,7 +120,8 @@ export function useRequestFilePreview(
         onDownload(file.id);
         return;
       }
-      const tab = kind === 'pdf' && isIosDevice() ? globalThis.open('', '_blank') : null;
+      const tab = kind === 'pdf' && opensPdfInNewTab() ? globalThis.open('', '_blank') : null;
+      if (tab !== null) tab.opener = null;
       runPreview(file, kind, surface, tab).catch((error: unknown) => {
         Sentry.captureException(error);
       });

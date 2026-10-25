@@ -10,6 +10,7 @@ import {
   REQUEST_FILE_SHARE_AUDIENCE_CHOICES,
   REQUEST_FILE_PREVIEW_KINDS,
   REQUEST_FILE_PREVIEW_SURFACES,
+  REQUEST_FILE_DOWNLOAD_PURPOSES,
 } from './request-files';
 
 describe('REQUEST_FILE_SERVER_EVENTS', () => {
@@ -83,5 +84,6 @@ describe('REQUEST_FILE_EVENTS', () => {
     ]);
     expect(REQUEST_FILE_PREVIEW_KINDS).toEqual(['image', 'pdf']);
     expect(REQUEST_FILE_PREVIEW_SURFACES).toEqual(['thread_card', 'files_card', 'files_sheet']);
+    expect(REQUEST_FILE_DOWNLOAD_PURPOSES).toEqual(['download', 'preview']);
   });
 });

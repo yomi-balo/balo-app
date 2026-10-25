@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 describe('useRequestFilePreview', () => {
-  it('mints a download URL for an image, then mounts the viewer with an <img>', async () => {
+  it('mints a preview URL for an image, then mounts the viewer with an <img>', async () => {
     const user = userEvent.setup();
     setup(IMAGE);
     await user.click(screen.getByRole('button', { name: 'open' }));
@@ -69,7 +69,7 @@ describe('useRequestFilePreview', () => {
     expect(mocks.download).toHaveBeenCalledWith({
       requestId: REQUEST_ID,
       fileId: 'f-img',
-      purpose: 'download',
+      purpose: 'preview',
     });
     expect(document.body.querySelector('img')).toHaveAttribute('src', 'https://r2/get');
     expect(document.body.querySelector('iframe')).toBeNull();
@@ -169,6 +169,23 @@ describe('useRequestFilePreview', () => {
     await waitFor(() => expect(document.body.querySelector('img')).toBeNull());
   });
 
+  it('opens a PDF in a detached new tab on Android, never the embedded viewer', async () => {
+    const tab = { location: { href: '' }, close: vi.fn(), opener: {} } as unknown as Window;
+    const open = vi.fn(() => tab);
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/129.0 Mobile',
+      platform: 'Linux armv8l',
+      maxTouchPoints: 5,
+    });
+    vi.stubGlobal('open', open);
+    setup(PDF);
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.opener).toBeNull();
+    await waitFor(() => expect(tab.location.href).toBe('https://r2/get'));
+    expect(document.body.querySelector('iframe')).toBeNull();
+  });
+
   describe('on iOS', () => {
     function stubIos(open: () => Window | null): void {
       vi.stubGlobal('navigator', { userAgent: IPHONE, platform: 'iPhone', maxTouchPoints: 5 });
@@ -176,7 +193,7 @@ describe('useRequestFilePreview', () => {
     }
 
     it('opens the tab synchronously in the click and points it at the preview URL afterwards', async () => {
-      const tab = { location: { href: '' }, close: vi.fn() } as unknown as Window;
+      const tab = { location: { href: '' }, close: vi.fn(), opener: {} } as unknown as Window;
       const open = vi.fn(() => tab);
       stubIos(open);
       let resolve: (value: unknown) => void = () => {};
@@ -188,6 +205,7 @@ describe('useRequestFilePreview', () => {
       setup(PDF);
       fireEvent.click(screen.getByRole('button', { name: 'open' }));
       expect(open).toHaveBeenCalledWith('', '_blank');
+      expect(tab.opener).toBeNull();
       expect(tab.location.href).toBe('');
       resolve({ success: true, url: 'https://r2/preview', contentType: 'application/pdf' });
       await waitFor(() => expect(tab.location.href).toBe('https://r2/preview'));

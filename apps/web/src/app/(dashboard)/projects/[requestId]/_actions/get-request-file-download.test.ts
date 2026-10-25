@@ -171,7 +171,7 @@ describe('getRequestFileDownloadAction', () => {
     });
     expect(mockTrack).toHaveBeenCalledWith(
       'request_file_downloaded',
-      expect.objectContaining({ viewer_side: 'client' })
+      expect.objectContaining({ viewer_side: 'client', purpose: 'download' })
     );
   });
 
@@ -289,6 +289,10 @@ describe('getRequestFileDownloadAction', () => {
         'application/pdf'
       );
       expect(mockPresignDownload).not.toHaveBeenCalled();
+      expect(mockTrack).toHaveBeenCalledWith(
+        'request_file_downloaded',
+        expect.objectContaining({ purpose: 'preview' })
+      );
     });
 
     it.each([

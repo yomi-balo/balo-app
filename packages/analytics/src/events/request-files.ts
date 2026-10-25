@@ -42,6 +42,10 @@ export type RequestFilePreviewKindProp = (typeof REQUEST_FILE_PREVIEW_KINDS)[num
 export const REQUEST_FILE_PREVIEW_SURFACES = ['thread_card', 'files_card', 'files_sheet'] as const;
 export type RequestFilePreviewSurfaceProp = (typeof REQUEST_FILE_PREVIEW_SURFACES)[number];
 
+/** Why a URL was minted: a real download, or an in-app preview (image or PDF). */
+export const REQUEST_FILE_DOWNLOAD_PURPOSES = ['download', 'preview'] as const;
+export type RequestFileDownloadPurposeProp = (typeof REQUEST_FILE_DOWNLOAD_PURPOSES)[number];
+
 export const REQUEST_FILE_EVENTS = {
   /** The share dialog opened. */
   SHARE_DIALOG_OPENED: 'request_file_share_dialog_opened',
@@ -77,7 +81,10 @@ export const REQUEST_FILE_SERVER_EVENTS = {
    * not four analytics events).
    */
   AUDIENCE_CHANGED: 'request_file_audience_changed',
-  /** A presigned download URL was minted. Published from `get-request-file-download.ts`. */
+  /**
+   * A presigned URL was minted, for a download or an in-app preview (`purpose`). Published from
+   * `get-request-file-download.ts`.
+   */
   DOWNLOADED: 'request_file_downloaded',
 } as const;
 
@@ -104,6 +111,7 @@ export interface RequestFileServerEventMap {
   [REQUEST_FILE_SERVER_EVENTS.DOWNLOADED]: {
     viewer_side: RequestFileViewerSideProp;
     via_all_audience: boolean;
+    purpose: RequestFileDownloadPurposeProp;
     distinct_id: string;
   };
 }

@@ -364,6 +364,8 @@ export {
   type RequestFilePreviewKindProp,
   REQUEST_FILE_PREVIEW_SURFACES,
   type RequestFilePreviewSurfaceProp,
+  REQUEST_FILE_DOWNLOAD_PURPOSES,
+  type RequestFileDownloadPurposeProp,
   REQUEST_FILE_AUDIENCE_TYPES,
   type RequestFileAudienceProp,
   REQUEST_FILE_SIDES,

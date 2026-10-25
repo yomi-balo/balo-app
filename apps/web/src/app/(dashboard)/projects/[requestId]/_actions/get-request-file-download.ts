@@ -123,6 +123,7 @@ export async function getRequestFileDownloadAction(
     trackServerAndFlush(REQUEST_FILE_SERVER_EVENTS.DOWNLOADED, {
       viewer_side: scope.side,
       via_all_audience: viaAllAudience,
+      purpose,
       distinct_id: user.id,
     });
 
