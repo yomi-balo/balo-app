@@ -296,8 +296,7 @@ describe('ChangeOrderPanel · client', () => {
   });
 
   it('names the approving party and hides the buttons for a participant who cannot decide', () => {
-    const notice =
-      'Northwind approves changes — anyone who can approve proposals for Northwind can approve or decline this.';
+    const notice = 'Anyone who can approve proposals for Northwind can approve or decline this.';
     renderPanel(
       'client',
       view({ open: item(), affordances: { ...NO_AFFORDANCES, decideNotice: notice } })

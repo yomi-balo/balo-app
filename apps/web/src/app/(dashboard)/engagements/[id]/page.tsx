@@ -170,11 +170,9 @@ export default async function EngagementWorkspacePage({
   ]);
   const view = mapEngagementToWorkspaceView(engagement, ctx, new Date(), changeOrderRows);
   const parties = deriveEngagementParties(engagement);
-  const canDecide =
-    ctx.lens === 'client' &&
-    (await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
-      companyId: engagement.companyId,
-    }));
+  const canDecide = await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
+    companyId: engagement.companyId,
+  });
   const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties, canDecide);
   // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
   // settlement is not even loaded for anyone else.

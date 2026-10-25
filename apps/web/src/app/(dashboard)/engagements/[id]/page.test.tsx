@@ -456,7 +456,7 @@ describe('EngagementWorkspacePage (RSC) — change orders and the staff money vi
 
   describe('deciding on a sent change', () => {
     const NOTICE =
-      'anyone who can approve proposals for Northwind Industrial can approve or decline this.';
+      'Anyone who can approve proposals for Northwind Industrial can approve or decline this.';
 
     beforeEach(() => {
       mockFindWithMilestones.mockResolvedValue(engagement());

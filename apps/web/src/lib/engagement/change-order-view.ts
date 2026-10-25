@@ -507,7 +507,7 @@ function affordancesFor(
     decide: awaitingDecision && vc.canDecide,
     decideNotice:
       awaitingDecision && !vc.canDecide
-        ? `${vc.parties.clientCompanyName} approves changes — anyone who can approve proposals for ${vc.parties.clientCompanyName} can approve or decline this.`
+        ? `Anyone who can approve proposals for ${vc.parties.clientCompanyName} can approve or decline this.`
         : null,
     proposeDisabledReason:
       isExpert && status === 'sent'

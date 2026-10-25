@@ -161,7 +161,7 @@ describe('mapChangeOrdersToView — open order and affordances', () => {
     const participant = view([sentFixed], 'client', makeProject(), false);
     expect(participant.affordances.decide).toBe(false);
     expect(participant.affordances.decideNotice).toBe(
-      'Northwind approves changes — anyone who can approve proposals for Northwind can approve or decline this.'
+      'Anyone who can approve proposals for Northwind can approve or decline this.'
     );
 
     const expert = view([sentFixed], 'expert');
