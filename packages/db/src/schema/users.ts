@@ -81,6 +81,11 @@ export const users = pgTable(
     activeCompanyId: uuid('active_company_id').references(() => companies.id, {
       onDelete: 'set null',
     }),
+    /**
+     * In-app notification "seen" cursor: a UI cursor, monotonic (only ever advances, never past
+     * NOW()), with no audit row. Null = never initialised (first load seeds it without a toast).
+     */
+    notificationsLastSeenAt: timestamp('notifications_last_seen_at', { withTimezone: true }),
 
     // Status
     status: userStatusEnum('status').default('active').notNull(),

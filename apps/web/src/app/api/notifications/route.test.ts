@@ -6,12 +6,18 @@ import { NextRequest } from 'next/server';
 const mockFindUnreadByUserId = vi.fn();
 const mockFindByUserId = vi.fn();
 const mockCountUnreadByUserId = vi.fn();
+const mockCountUnseenByUserId = vi.fn();
+const mockFindNotificationsLastSeenAt = vi.fn();
 
 vi.mock('@balo/db', () => ({
   userNotificationsRepository: {
     findUnreadByUserId: (...args: unknown[]) => mockFindUnreadByUserId(...args),
     findByUserId: (...args: unknown[]) => mockFindByUserId(...args),
     countUnreadByUserId: (...args: unknown[]) => mockCountUnreadByUserId(...args),
+    countUnseenByUserId: (...args: unknown[]) => mockCountUnseenByUserId(...args),
+  },
+  usersRepository: {
+    findNotificationsLastSeenAt: (...args: unknown[]) => mockFindNotificationsLastSeenAt(...args),
   },
 }));
 
@@ -35,7 +41,8 @@ import { GET } from './route';
 const BASE_URL = 'http://localhost:3000';
 
 function makeRequest(queryString = ''): NextRequest {
-  const url = `${BASE_URL}/api/notifications${queryString ? `?${queryString}` : ''}`;
+  const suffix = queryString ? `?${queryString}` : '';
+  const url = `${BASE_URL}/api/notifications${suffix}`;
   return new NextRequest(new URL(url));
 }
 
@@ -63,6 +70,38 @@ describe('GET /api/notifications', () => {
     vi.clearAllMocks();
     mockGetCurrentUser.mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
     mockCountUnreadByUserId.mockResolvedValue(3);
+    mockFindNotificationsLastSeenAt.mockResolvedValue(null);
+    mockCountUnseenByUserId.mockResolvedValue(0);
+  });
+
+  describe('seen cursor', () => {
+    it('returns lastSeenAt null and unseenCount 0 without counting when the cursor is unset', async () => {
+      mockFindByUserId.mockResolvedValue([]);
+
+      const res = await GET(makeRequest());
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.lastSeenAt).toBeNull();
+      expect(body.unseenCount).toBe(0);
+      expect(mockFindNotificationsLastSeenAt).toHaveBeenCalledWith('user-1');
+      expect(mockCountUnseenByUserId).not.toHaveBeenCalled();
+    });
+
+    it('counts unseen from the cursor and serialises it as ISO', async () => {
+      const lastSeenAt = new Date('2026-03-22T09:00:00.000Z');
+      mockFindByUserId.mockResolvedValue([]);
+      mockFindNotificationsLastSeenAt.mockResolvedValue(lastSeenAt);
+      mockCountUnseenByUserId.mockResolvedValue(2);
+
+      const res = await GET(makeRequest());
+      const body = await res.json();
+
+      expect(mockCountUnseenByUserId).toHaveBeenCalledWith('user-1', lastSeenAt);
+      expect(body.lastSeenAt).toBe('2026-03-22T09:00:00.000Z');
+      expect(body.unseenCount).toBe(2);
+      expect(body.unreadCount).toBe(3);
+    });
   });
 
   describe('authentication', () => {

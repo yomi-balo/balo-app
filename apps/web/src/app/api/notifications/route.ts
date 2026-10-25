@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth';
 import { log } from '@/lib/logging';
-import { userNotificationsRepository } from '@balo/db';
+import { userNotificationsRepository, usersRepository } from '@balo/db';
 
 const querySchema = z.object({
   unread: z.enum(['true']).optional(),
@@ -28,12 +28,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { unread, limit, offset } = parsed.data;
 
   try {
-    const [rawNotifications, unreadCount] = await Promise.all([
+    const [rawNotifications, unreadCount, lastSeenAt] = await Promise.all([
       unread === 'true'
         ? userNotificationsRepository.findUnreadByUserId(user.id, limit)
         : userNotificationsRepository.findByUserId(user.id, limit, offset),
       userNotificationsRepository.countUnreadByUserId(user.id),
+      usersRepository.findNotificationsLastSeenAt(user.id),
     ]);
+
+    // A null cursor means "never initialised": nothing is unseen until the client seeds it.
+    const unseenCount = lastSeenAt
+      ? await userNotificationsRepository.countUnseenByUserId(user.id, lastSeenAt)
+      : 0;
 
     // Project only client-needed fields (omit metadata, userId, updatedAt, deletedAt)
     const notifications = rawNotifications.map(
@@ -48,7 +54,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       })
     );
 
-    return NextResponse.json({ notifications, unreadCount });
+    return NextResponse.json({
+      notifications,
+      unreadCount,
+      lastSeenAt: lastSeenAt?.toISOString() ?? null,
+      unseenCount,
+    });
   } catch (error) {
     log.error('Failed to fetch notifications', {
       userId: user.id,

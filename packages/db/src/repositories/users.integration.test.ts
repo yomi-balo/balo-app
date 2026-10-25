@@ -1391,3 +1391,69 @@ describe('usersRepository.updateName', () => {
     expect(await nameAudits(missing)).toHaveLength(0);
   });
 });
+
+describe('usersRepository notifications seen cursor (BAL-619)', () => {
+  const T1 = new Date('2026-01-01T00:00:00.000Z');
+  const T2 = new Date('2026-01-02T00:00:00.000Z');
+
+  it('findNotificationsLastSeenAt returns null for a fresh user', async () => {
+    const user = await userFactory();
+    expect(await usersRepository.findNotificationsLastSeenAt(user.id)).toBeNull();
+  });
+
+  it('advance sets the cursor from null and returns the stored value', async () => {
+    const user = await userFactory();
+
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(stored?.toISOString()).toBe(T1.toISOString());
+    const read = await usersRepository.findNotificationsLastSeenAt(user.id);
+    expect(read?.toISOString()).toBe(T1.toISOString());
+  });
+
+  it('is monotonic: an older through never moves the cursor back', async () => {
+    const user = await userFactory();
+
+    await usersRepository.advanceNotificationsSeenThrough(user.id, T2);
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(stored?.toISOString()).toBe(T2.toISOString());
+    const read = await usersRepository.findNotificationsLastSeenAt(user.id);
+    expect(read?.toISOString()).toBe(T2.toISOString());
+  });
+
+  it('clamps a future through to NOW() (the transaction clock)', async () => {
+    const user = await userFactory();
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, future);
+
+    const rows = await db.execute<{ now: Date }>(sql`SELECT now() AS now`);
+    const dbNow = rows[0]?.now;
+    expect(dbNow).toBeDefined();
+    expect(stored?.getTime()).toBe(new Date(dbNow as Date).getTime());
+    expect(stored?.getTime()).toBeLessThan(future.getTime());
+  });
+
+  it('returns null and writes nothing for a soft-deleted user', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    expect(await usersRepository.advanceNotificationsSeenThrough(user.id, T1)).toBeNull();
+    expect(await usersRepository.findNotificationsLastSeenAt(user.id)).toBeNull();
+    const [row] = await db
+      .select({ seen: users.notificationsLastSeenAt })
+      .from(users)
+      .where(eq(users.id, user.id));
+    expect(row?.seen).toBeNull();
+  });
+
+  it("does not touch another user's cursor", async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+
+    await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(await usersRepository.findNotificationsLastSeenAt(other.id)).toBeNull();
+  });
+});

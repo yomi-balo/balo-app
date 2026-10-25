@@ -1,4 +1,4 @@
-import { eq, and, isNull, desc, sql, count } from 'drizzle-orm';
+import { eq, and, isNull, desc, sql, count, gte } from 'drizzle-orm';
 import { db } from '../client';
 import { userNotifications, type UserNotification, type NewUserNotification } from '../schema';
 
@@ -57,6 +57,52 @@ export const userNotificationsRepository = {
         )
       );
     return result!.value;
+  },
+
+  /**
+   * Count unread notifications created after `since` (excludes soft-deleted).
+   * Backs the "unseen" count: unread items the user has not yet been told about.
+   * `created_at` has microsecond precision while the cursor round-trips through a
+   * millisecond-precision JS Date, so the bound is `since + 1ms`: a row created within the
+   * same millisecond as the cursor is the item the cursor was set from, not a new one.
+   */
+  countUnseenByUserId: async (userId: string, since: Date): Promise<number> => {
+    const [result] = await db
+      .select({ value: count() })
+      .from(userNotifications)
+      .where(
+        and(
+          eq(userNotifications.userId, userId),
+          isNull(userNotifications.readAt),
+          isNull(userNotifications.deletedAt),
+          gte(
+            userNotifications.createdAt,
+            sql`${since.toISOString()}::timestamptz + interval '1 millisecond'`
+          )
+        )
+      );
+    return result?.value ?? 0;
+  },
+
+  /**
+   * Mark unread notifications whose `action_url` path (the text before the first `?`) equals
+   * `path` as read. Exact match: `/projects/p1` does not match `/projects/p1/files` or
+   * `/projects/p10`. A null `action_url` never matches. Returns the updated ids.
+   */
+  markReadByActionPath: async (userId: string, path: string): Promise<string[]> => {
+    const rows = await db
+      .update(userNotifications)
+      .set({ readAt: sql`NOW()` })
+      .where(
+        and(
+          eq(userNotifications.userId, userId),
+          isNull(userNotifications.readAt),
+          isNull(userNotifications.deletedAt),
+          sql`split_part(${userNotifications.actionUrl}, '?', 1) = ${path}`
+        )
+      )
+      .returning({ id: userNotifications.id });
+    return rows.map((row) => row.id);
   },
 
   /**
