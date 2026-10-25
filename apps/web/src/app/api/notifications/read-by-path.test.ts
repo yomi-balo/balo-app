@@ -62,6 +62,21 @@ describe('POST /api/notifications/read-by-path', () => {
     expect(await res.json()).toEqual({ readIds: ['n1', 'n2'] });
   });
 
+  it.each([
+    '/projects',
+    '/experts',
+    '/settings/billing',
+    '/meetings/m1/call',
+    '/projects/p1/files',
+    '/cases/',
+  ])('returns an empty readIds without touching the repository for %s', async (path) => {
+    const res = await POST(makeRequest({ path }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ readIds: [] });
+    expect(mockMarkReadByActionPath).not.toHaveBeenCalled();
+  });
+
   it('skips with 200 and writes nothing under impersonation', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'user-1', isImpersonating: true });
 

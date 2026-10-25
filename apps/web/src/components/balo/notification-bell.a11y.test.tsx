@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from '@/test/axe';
 import { NotificationBell } from './notification-bell';
@@ -53,6 +53,15 @@ function serve(notifications: ReturnType<typeof notification>[], unseenCount: nu
   });
 }
 
+/** The bell lives in the top bar's header landmark; render it there so page-level axe rules apply. */
+function renderInHeader(): void {
+  render(
+    <header>
+      <NotificationBell />
+    </header>
+  );
+}
+
 async function flush(ms: number): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
@@ -89,10 +98,13 @@ describe('NotificationBell accessibility', () => {
 
   it('has no violations with a visible item toast', async () => {
     serve([notification('a', 'Fresh', minutesAgo(1))], 1);
-    render(<NotificationBell />);
+    renderInHeader();
     await flush(701);
 
-    expect(screen.getByRole('status')).toHaveTextContent('Fresh');
+    const announcer = screen.getByRole('status');
+    expect(announcer).toHaveTextContent(/^Fresh$/);
+    expect(within(announcer).queryByRole('button')).not.toBeInTheDocument();
+    expect(announcer).toHaveAttribute('aria-live', 'polite');
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
@@ -105,10 +117,12 @@ describe('NotificationBell accessibility', () => {
       ],
       3
     );
-    render(<NotificationBell />);
+    renderInHeader();
     await flush(701);
 
-    expect(screen.getByRole('status')).toHaveTextContent('3 updates since your last visit');
+    const announcer = screen.getByRole('status');
+    expect(announcer).toHaveTextContent(/^3 updates since your last visit$/);
+    expect(within(announcer).queryByRole('button')).not.toBeInTheDocument();
     expect(await axe(document.body)).toHaveNoViolations();
   });
 });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
+import { isAutoReadablePath } from '@/lib/notifications/auto-read-path';
 import { userNotificationsRepository } from '@balo/db';
 import { rejectNonJsonContentType } from '../require-json-content-type';
 
@@ -47,6 +48,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+
+  if (!isAutoReadablePath(parsed.data.path)) {
+    return NextResponse.json({ readIds: [] });
   }
 
   try {

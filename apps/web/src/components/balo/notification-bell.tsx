@@ -27,6 +27,10 @@ interface PanelRowProps {
   onOpen: (notification: BellNotification, source: ArrivalSource) => void;
 }
 
+function newestFirst(list: BellNotification[]): BellNotification[] {
+  return [...list].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
 function PanelRow({
   notification,
   highlighted,
@@ -127,8 +131,11 @@ export function NotificationBell(): React.JSX.Element {
   );
   const handleToastOpenPanel = useCallback(() => openPanel('toast'), [openPanel]);
 
-  const unread = notifications.filter((n) => n.readAt === null);
-  const earlier = notifications.filter((n) => n.readAt !== null).slice(0, EARLIER_LIMIT);
+  const unread = newestFirst(notifications.filter((n) => n.readAt === null));
+  const earlier = newestFirst(notifications.filter((n) => n.readAt !== null)).slice(
+    0,
+    EARLIER_LIMIT
+  );
   const badgeLabel = unreadCount > 9 ? '9+' : String(unreadCount);
   const unreadNoun = unreadCount === 1 ? 'notification' : 'notifications';
   const triggerLabel =

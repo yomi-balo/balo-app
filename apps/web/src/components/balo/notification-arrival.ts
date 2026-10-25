@@ -15,6 +15,8 @@ export interface NotificationsResponse {
   unreadCount: number;
   lastSeenAt: string | null;
   unseenCount: number;
+  /** True when staff is viewing as this user; the feed stays passive. */
+  impersonating: boolean;
 }
 
 export interface ArrivalToastState {

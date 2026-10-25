@@ -1,4 +1,4 @@
-import { eq, and, isNull, desc, sql, count, gte } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull, desc, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { userNotifications, type UserNotification, type NewUserNotification } from '../schema';
 
@@ -30,58 +30,56 @@ export const userNotificationsRepository = {
   },
 
   /**
-   * Find all notifications for a user (excludes soft-deleted)
+   * Notifications for the panel: up to `unreadLimit` unread rows followed by up to `readLimit`
+   * read rows, each newest first (excludes soft-deleted). Unread rows are selected independently
+   * of read ones, so a burst of newer read items can never push an unread item out of the result.
    */
-  findByUserId: async (userId: string, limit = 50, offset = 0): Promise<UserNotification[]> => {
-    return db
-      .select()
-      .from(userNotifications)
-      .where(and(eq(userNotifications.userId, userId), isNull(userNotifications.deletedAt)))
-      .orderBy(desc(userNotifications.createdAt))
-      .limit(limit)
-      .offset(offset);
+  findPanelByUserId: async (
+    userId: string,
+    { unreadLimit, readLimit }: { unreadLimit: number; readLimit: number }
+  ): Promise<UserNotification[]> => {
+    const forUser = and(eq(userNotifications.userId, userId), isNull(userNotifications.deletedAt));
+    const [unreadRows, readRows] = await Promise.all([
+      db
+        .select()
+        .from(userNotifications)
+        .where(and(forUser, isNull(userNotifications.readAt)))
+        .orderBy(desc(userNotifications.createdAt))
+        .limit(unreadLimit),
+      db
+        .select()
+        .from(userNotifications)
+        .where(and(forUser, isNotNull(userNotifications.readAt)))
+        .orderBy(desc(userNotifications.createdAt))
+        .limit(readLimit),
+    ]);
+    return [...unreadRows, ...readRows];
   },
 
   /**
-   * Count unread notifications for a user (excludes soft-deleted)
-   */
-  countUnreadByUserId: async (userId: string): Promise<number> => {
-    const [result] = await db
-      .select({ value: count() })
-      .from(userNotifications)
-      .where(
-        and(
-          eq(userNotifications.userId, userId),
-          isNull(userNotifications.readAt),
-          isNull(userNotifications.deletedAt)
-        )
-      );
-    return result!.value;
-  },
-
-  /**
-   * Count unread notifications created after `since` (excludes soft-deleted).
-   * Backs the "unseen" count: unread items the user has not yet been told about.
+   * Count unread notifications and, among them, those created after `since` (excludes
+   * soft-deleted), in one query. "Unseen" is unread items the user has not yet been told about;
+   * it is 0 when `since` is null (cursor never initialised).
    * `created_at` has microsecond precision while the cursor round-trips through a
    * millisecond-precision JS Date, so the bound is `since + 1ms`: a row created within the
    * same millisecond as the cursor is the item the cursor was set from, not a new one.
    */
-  countUnseenByUserId: async (userId: string, since: Date): Promise<number> => {
+  countUnreadAndUnseenByUserId: async (
+    userId: string,
+    since: Date | null
+  ): Promise<{ unread: number; unseen: number }> => {
+    const unseen =
+      since === null
+        ? sql<number>`0`
+        : sql<number>`(count(*) filter (where ${userNotifications.readAt} is null and ${userNotifications.createdAt} >= ${since.toISOString()}::timestamptz + interval '1 millisecond'))::int`;
     const [result] = await db
-      .select({ value: count() })
+      .select({
+        unread: sql<number>`(count(*) filter (where ${userNotifications.readAt} is null))::int`,
+        unseen,
+      })
       .from(userNotifications)
-      .where(
-        and(
-          eq(userNotifications.userId, userId),
-          isNull(userNotifications.readAt),
-          isNull(userNotifications.deletedAt),
-          gte(
-            userNotifications.createdAt,
-            sql`${since.toISOString()}::timestamptz + interval '1 millisecond'`
-          )
-        )
-      );
-    return result?.value ?? 0;
+      .where(and(eq(userNotifications.userId, userId), isNull(userNotifications.deletedAt)));
+    return { unread: result?.unread ?? 0, unseen: result?.unseen ?? 0 };
   },
 
   /**

@@ -4,7 +4,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockReturning = vi.fn();
 const mockLimit = vi.fn();
-const mockOffset = vi.fn();
 const mockOrderBy = vi.fn();
 const mockWhere = vi.fn();
 const mockFrom = vi.fn();
@@ -15,13 +14,8 @@ const mockSet = vi.fn();
 const mockUpdate = vi.fn();
 
 // Build chainable query builder mocks
-function setupSelectChain(result: unknown[], opts?: { withOffset?: boolean }) {
-  if (opts?.withOffset) {
-    mockOffset.mockReturnValue(result);
-    mockLimit.mockReturnValue({ offset: mockOffset });
-  } else {
-    mockLimit.mockReturnValue(result);
-  }
+function setupSelectChain(result: unknown[]) {
+  mockLimit.mockReturnValue(result);
   mockOrderBy.mockReturnValue({ limit: mockLimit });
   mockWhere.mockReturnValue({ orderBy: mockOrderBy });
   mockFrom.mockReturnValue({ where: mockWhere });
@@ -109,36 +103,62 @@ describe('userNotificationsRepository', () => {
     });
   });
 
-  describe('findByUserId', () => {
-    it('returns all notifications with pagination', async () => {
-      setupSelectChain([mockNotification], { withOffset: true });
-
-      const result = await userNotificationsRepository.findByUserId('user-1', 10, 5);
-
-      expect(result).toEqual([mockNotification]);
-      expect(mockLimit).toHaveBeenCalledWith(10);
-      expect(mockOffset).toHaveBeenCalledWith(5);
-    });
-
-    it('uses default limit and offset', async () => {
-      setupSelectChain([], { withOffset: true });
-
-      await userNotificationsRepository.findByUserId('user-1');
-
-      expect(mockLimit).toHaveBeenCalledWith(50);
-      expect(mockOffset).toHaveBeenCalledWith(0);
-    });
-  });
-
-  describe('countUnreadByUserId', () => {
-    it('returns unread count', async () => {
-      mockWhere.mockReturnValue([{ value: 3 }]);
+  describe('findPanelByUserId', () => {
+    it('queries unread and read separately with their own limits, unread first', async () => {
+      const unread = { ...mockNotification, id: 'unread-1' };
+      const read = { ...mockNotification, id: 'read-1', readAt: new Date() };
+      mockLimit.mockReturnValueOnce([unread]).mockReturnValueOnce([read]);
+      mockOrderBy.mockReturnValue({ limit: mockLimit });
+      mockWhere.mockReturnValue({ orderBy: mockOrderBy });
       mockFrom.mockReturnValue({ where: mockWhere });
       mockSelect.mockReturnValue({ from: mockFrom });
 
-      const result = await userNotificationsRepository.countUnreadByUserId('user-1');
+      const result = await userNotificationsRepository.findPanelByUserId('user-1', {
+        unreadLimit: 20,
+        readLimit: 5,
+      });
 
-      expect(result).toBe(3);
+      expect(result).toEqual([unread, read]);
+      expect(mockLimit).toHaveBeenNthCalledWith(1, 20);
+      expect(mockLimit).toHaveBeenNthCalledWith(2, 5);
+    });
+  });
+
+  describe('countUnreadAndUnseenByUserId', () => {
+    function setupCountChain(row: unknown): void {
+      mockWhere.mockReturnValue([row]);
+      mockFrom.mockReturnValue({ where: mockWhere });
+      mockSelect.mockReturnValue({ from: mockFrom });
+    }
+
+    it('returns both counts from a single select', async () => {
+      setupCountChain({ unread: 4, unseen: 2 });
+
+      const result = await userNotificationsRepository.countUnreadAndUnseenByUserId(
+        'user-1',
+        new Date('2026-01-01T00:00:00.000Z')
+      );
+
+      expect(result).toEqual({ unread: 4, unseen: 2 });
+      expect(mockSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns unseen 0 for a null cursor', async () => {
+      setupCountChain({ unread: 3, unseen: 0 });
+
+      expect(
+        await userNotificationsRepository.countUnreadAndUnseenByUserId('user-1', null)
+      ).toEqual({ unread: 3, unseen: 0 });
+    });
+
+    it('falls back to zeros when no row is returned', async () => {
+      mockWhere.mockReturnValue([]);
+      mockFrom.mockReturnValue({ where: mockWhere });
+      mockSelect.mockReturnValue({ from: mockFrom });
+
+      expect(
+        await userNotificationsRepository.countUnreadAndUnseenByUserId('user-1', null)
+      ).toEqual({ unread: 0, unseen: 0 });
     });
   });
 

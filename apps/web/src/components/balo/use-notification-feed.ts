@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import * as Sentry from '@sentry/nextjs';
 import { track, NOTIFICATION_EVENTS } from '@/lib/analytics';
+import { isAutoReadablePath } from '@/lib/notifications/auto-read-path';
 import {
   LOAD_TOAST_DELAY_MS,
   POLL_HIDDEN_MS,
@@ -42,6 +44,13 @@ const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 function isHidden(): boolean {
   return document.visibilityState === 'hidden';
+}
+
+/** Runs a background task whose outcome nobody awaits; a failure is reported, never left unhandled. */
+function detach(task: Promise<unknown>): void {
+  task.catch((error: unknown) => {
+    Sentry.captureException(error);
+  });
 }
 
 async function postJson(url: string, body: unknown): Promise<unknown> {
@@ -96,6 +105,7 @@ export function useNotificationFeed(): NotificationFeed {
   const toastKeyRef = useRef(0);
   const fetchSeqRef = useRef(0);
   const mountedRef = useRef(false);
+  const impersonatingRef = useRef(false);
   const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -133,10 +143,13 @@ export function useNotificationFeed(): NotificationFeed {
 
   const postSeen = useCallback(
     (through: Date): void => {
-      postJson('/api/notifications/seen', { through: through.toISOString() }).then((data) => {
-        const lastSeenAt = readLastSeenAt(data);
-        if (lastSeenAt !== null) advanceCursor(lastSeenAt);
-      });
+      if (impersonatingRef.current) return;
+      detach(
+        postJson('/api/notifications/seen', { through: through.toISOString() }).then((data) => {
+          const lastSeenAt = readLastSeenAt(data);
+          if (lastSeenAt !== null) advanceCursor(lastSeenAt);
+        })
+      );
     },
     [advanceCursor]
   );
@@ -154,23 +167,26 @@ export function useNotificationFeed(): NotificationFeed {
   const applyAutoRead = useCallback(
     (list: BellNotification[]): { list: BellNotification[]; matched: BellNotification[] } => {
       const path = pathnameRef.current;
-      const matched = path
-        ? list.filter(
-            (n) =>
-              n.readAt === null &&
-              !autoReadAttemptedRef.current.has(n.id) &&
-              notificationActionPath(n.actionUrl) === path
-          )
-        : [];
+      const matched =
+        path && isAutoReadablePath(path) && !impersonatingRef.current
+          ? list.filter(
+              (n) =>
+                n.readAt === null &&
+                !autoReadAttemptedRef.current.has(n.id) &&
+                notificationActionPath(n.actionUrl) === path
+            )
+          : [];
       if (matched.length === 0) return { list, matched };
 
       const ids = matched.map((n) => n.id);
       for (const id of ids) autoReadAttemptedRef.current.add(id);
       markAnnounced(ids);
-      postJson('/api/notifications/read-by-path', { path }).then((data) => {
-        const count = readReadIdsCount(data);
-        if (count > 0) track(NOTIFICATION_EVENTS.AUTO_READ, { count });
-      });
+      detach(
+        postJson('/api/notifications/read-by-path', { path }).then((data) => {
+          const count = readReadIdsCount(data);
+          if (count > 0) track(NOTIFICATION_EVENTS.AUTO_READ, { count });
+        })
+      );
 
       const readAt = new Date().toISOString();
       const matchedIds = new Set(ids);
@@ -202,7 +218,12 @@ export function useNotificationFeed(): NotificationFeed {
       markAnnounced(ids);
       const count = Math.max(unseen.length, unseenCount - excludedCount);
       schedule(LOAD_TOAST_DELAY_MS, () => {
-        if (panelOpenRef.current) return;
+        if (panelOpenRef.current || impersonatingRef.current) return;
+        if (isHidden()) {
+          for (const id of ids) announcedIdsRef.current.delete(id);
+          loadPendingRef.current = true;
+          return;
+        }
         const unreadIds = new Set(
           listRef.current.filter((n) => n.readAt === null).map((n) => n.id)
         );
@@ -254,6 +275,7 @@ export function useNotificationFeed(): NotificationFeed {
 
   const processResponse = useCallback(
     (data: NotificationsResponse): void => {
+      impersonatingRef.current = data.impersonating === true;
       if (data.lastSeenAt) advanceCursor(Date.parse(data.lastSeenAt));
       const cursor = cursorRef.current;
       const { list, matched } = applyAutoRead(data.notifications ?? []);
@@ -263,7 +285,7 @@ export function useNotificationFeed(): NotificationFeed {
       commitList(list);
       setUnreadCount(Math.max(0, (data.unreadCount ?? 0) - matched.length));
 
-      if (isHidden()) return;
+      if (isHidden() || impersonatingRef.current) return;
       if (loadPendingRef.current) {
         loadPendingRef.current = false;
         announceLoad(list, cursor, data.unseenCount ?? 0, excludedCount);
@@ -289,7 +311,11 @@ export function useNotificationFeed(): NotificationFeed {
       return;
     }
     if (!mountedRef.current || seq !== fetchSeqRef.current) return;
-    processResponse(data);
+    try {
+      processResponse(data);
+    } catch (error) {
+      Sentry.captureException(error);
+    }
     setStatus('ready');
   }, [processResponse]);
 
@@ -304,7 +330,7 @@ export function useNotificationFeed(): NotificationFeed {
       if (cancelled) return;
       const delay = isHidden() ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
       pollTimer = setTimeout(() => {
-        fetchFeed().then(scheduleNext);
+        detach(fetchFeed().finally(scheduleNext));
       }, delay);
     };
 
@@ -314,10 +340,10 @@ export function useNotificationFeed(): NotificationFeed {
         return;
       }
       clearTimeout(pollTimer);
-      fetchFeed().then(scheduleNext);
+      detach(fetchFeed().finally(scheduleNext));
     };
 
-    fetchFeed().then(scheduleNext);
+    detach(fetchFeed().finally(scheduleNext));
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
@@ -332,7 +358,7 @@ export function useNotificationFeed(): NotificationFeed {
   }, [fetchFeed]);
 
   useEffect(() => {
-    if (panelOpen) fetchFeed();
+    if (panelOpen) detach(fetchFeed());
   }, [panelOpen, fetchFeed]);
 
   useEffect(() => {
@@ -348,7 +374,7 @@ export function useNotificationFeed(): NotificationFeed {
     const byId = new Map(notifications.map((n) => [n.id, n]));
     return toast.ids
       .map((id) => byId.get(id))
-      .filter((n): n is BellNotification => n !== undefined && n.readAt === null);
+      .filter((n): n is BellNotification => n?.readAt === null);
   }, [toast, notifications]);
 
   useEffect(() => {
@@ -387,7 +413,7 @@ export function useNotificationFeed(): NotificationFeed {
         commitList(listRef.current.map((n) => (n.id === notification.id ? { ...n, readAt } : n)));
         setUnreadCount((count) => Math.max(0, count - 1));
         fetch(`/api/notifications/${notification.id}/read`, { method: 'PATCH' }).catch(() => {
-          fetchFeed();
+          detach(fetchFeed());
         });
       }
       track(NOTIFICATION_EVENTS.CLICKED, { event: notification.event, source });
@@ -403,12 +429,12 @@ export function useNotificationFeed(): NotificationFeed {
     commitList(listRef.current.map((n) => (n.readAt === null ? { ...n, readAt } : n)));
     setUnreadCount(0);
     fetch('/api/notifications/read-all', { method: 'POST' }).catch(() => {
-      fetchFeed();
+      detach(fetchFeed());
     });
   }, [commitList, fetchFeed]);
 
   const retry = useCallback((): void => {
-    fetchFeed();
+    detach(fetchFeed());
   }, [fetchFeed]);
 
   return {

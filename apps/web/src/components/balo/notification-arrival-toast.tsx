@@ -36,17 +36,21 @@ export function ArrivalToast({
   triggerRef,
 }: Readonly<ArrivalToastProps>): React.JSX.Element {
   const [first] = items;
+  const count = toast ? toastCount(toast, items) : 0;
+  const collapsed = count >= 2;
+  const announcement = first && toast ? announcementText(toast, first, count, collapsed) : '';
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="absolute top-[calc(100%+0.5rem)] right-0 z-50 w-[360px] max-w-[calc(100vw-2rem)] max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:w-auto max-sm:max-w-none"
-    >
+    <div className="absolute top-[calc(100%+0.5rem)] right-0 z-50 w-[360px] max-w-[calc(100vw-2rem)] max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:w-auto max-sm:max-w-none">
+      <output aria-live="polite" className="sr-only">
+        {announcement}
+      </output>
       {toast && first && (
         <ArrivalToastCard
           toast={toast}
           items={items}
           first={first}
+          count={count}
+          collapsed={collapsed}
           onOpen={onOpen}
           onOpenPanel={onOpenPanel}
           onDismiss={onDismiss}
@@ -57,23 +61,48 @@ export function ArrivalToast({
   );
 }
 
+function toastCount(toast: ArrivalToastState, items: readonly BellNotification[]): number {
+  return Math.max(items.length, toast.count - (toast.ids.length - items.length));
+}
+
+function toastHeading(toast: ArrivalToastState, count: number): string {
+  return toast.trigger === 'load'
+    ? NOTIFICATION_ARRIVAL_COPY.loadHeading(count)
+    : NOTIFICATION_ARRIVAL_COPY.liveHeading(count);
+}
+
+/** The text a screen reader announces: the item title, or the collapsed heading. */
+function announcementText(
+  toast: ArrivalToastState,
+  first: BellNotification,
+  count: number,
+  collapsed: boolean
+): string {
+  return collapsed ? toastHeading(toast, count) : first.title;
+}
+
 function ArrivalToastCard({
   toast,
   items,
   first,
+  count,
+  collapsed,
   onOpen,
   onOpenPanel,
   onDismiss,
   triggerRef,
 }: Readonly<
-  ArrivalToastProps & { toast: ArrivalToastState; first: BellNotification }
+  ArrivalToastProps & {
+    toast: ArrivalToastState;
+    first: BellNotification;
+    count: number;
+    collapsed: boolean;
+  }
 >): React.JSX.Element {
   const shouldReduceMotion = useReducedMotion();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const paused = hovered || focused;
-  const count = Math.max(items.length, toast.count - (toast.ids.length - items.length));
-  const collapsed = count >= 2;
   const duration = collapsed ? COLLAPSED_TOAST_MS : ITEM_TOAST_MS;
 
   useEffect(() => {
@@ -97,10 +126,7 @@ function ArrivalToastCard({
   };
 
   const actionLabel = notificationActionLabel(first.actionUrl);
-  const heading =
-    toast.trigger === 'load'
-      ? NOTIFICATION_ARRIVAL_COPY.loadHeading(count)
-      : NOTIFICATION_ARRIVAL_COPY.liveHeading(count);
+  const heading = toastHeading(toast, count);
   const toastBody = collapsed
     ? summariseNotificationTitles(
         items.map((item) => item.title),
