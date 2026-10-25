@@ -101,6 +101,13 @@ export * from './case-closed';
  */
 export * from './change-requests';
 
+/**
+ * Change-order money and estimate helpers (`clientPriceChangeCents`, `deriveProjectSettlement`,
+ * `changeOrderMinutesDelta`, `CHANGE_ORDER_STALE_BUSINESS_DAYS`), re-exported so
+ * `@balo/shared/engagements` stays ONE subpath.
+ */
+export * from './change-orders';
+
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;
 

@@ -3,6 +3,7 @@ import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { fireEvent } from '@testing-library/react';
 
+import { axe } from '@/test/axe';
 import { FileViewerDialog } from './file-viewer-dialog';
 
 const URL_A = 'https://acct.r2.cloudflarestorage.com/a.png?X-Amz-Signature=aaa';
@@ -36,6 +37,11 @@ describe('FileViewerDialog', () => {
    * ⚠ A plain `<img>` is a subresource load and ignores `Content-Disposition`; an anchor,
    * iframe or navigation would be governed by it and would download instead.
    */
+  it('offers no new-tab link for an image', () => {
+    renderViewer({});
+    expect(screen.queryByRole('link', { name: /Open in new tab/ })).not.toBeInTheDocument();
+  });
+
   it('shows the file with an <img>, never a navigating element', () => {
     renderViewer();
     // ⚠ `document.body`, not `container` — Radix portals DialogContent out of the render root.
@@ -103,5 +109,51 @@ describe('FileViewerDialog', () => {
 
     expect(screen.queryByText(/preview couldn't be loaded/i)).not.toBeInTheDocument();
     expect(screen.getByAltText('second.png')).toHaveAttribute('src', URL_B);
+  });
+
+  describe('accessibility', () => {
+    it('is axe-clean for an image preview', async () => {
+      renderViewer({});
+      expect(await axe(document.body)).toHaveNoViolations();
+    });
+  });
+
+  describe('pdf', () => {
+    const PDF_URL = 'https://acct.r2.cloudflarestorage.com/a.pdf?X-Amz-Signature=ccc';
+
+    it('embeds the document in an iframe titled with the file name, and no <img>', () => {
+      renderViewer({ kind: 'pdf', fileName: 'Brief.pdf', url: PDF_URL });
+      const frame = document.body.querySelector('iframe');
+      expect(frame).not.toBeNull();
+      expect(frame).toHaveAttribute('src', PDF_URL);
+      expect(frame).toHaveAttribute('title', 'Brief.pdf');
+      expect(document.body.querySelector('img')).toBeNull();
+    });
+
+    it('shows a loading state until the frame loads, then reveals it', () => {
+      renderViewer({ kind: 'pdf', fileName: 'Brief.pdf', url: PDF_URL });
+      expect(screen.getByText('Loading preview…')).toBeInTheDocument();
+      const frame = document.body.querySelector('iframe');
+      if (frame === null) throw new Error('expected an iframe');
+      expect(frame.className).toContain('opacity-0');
+      fireEvent.load(frame);
+      expect(screen.queryByText('Loading preview…')).not.toBeInTheDocument();
+      expect(document.body.querySelector('iframe')?.className).toContain('opacity-100');
+    });
+
+    it('offers a new-tab link beside Download, for browsers that cannot embed a PDF', () => {
+      renderViewer({ kind: 'pdf', fileName: 'Brief.pdf', url: PDF_URL });
+      const link = screen.getByRole('link', { name: /Open in new tab/ });
+      expect(link).toHaveAttribute('href', PDF_URL);
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+
+    it('keeps Download in the same chrome', async () => {
+      const user = userEvent.setup();
+      const { onDownload } = renderViewer({ kind: 'pdf', fileName: 'Brief.pdf', url: PDF_URL });
+      await user.click(screen.getByRole('button', { name: /Download/ }));
+      expect(onDownload).toHaveBeenCalledTimes(1);
+    });
   });
 });

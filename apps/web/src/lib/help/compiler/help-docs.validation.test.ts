@@ -9,6 +9,7 @@ import { validateHelpDocs } from './validate';
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../../../..');
 
 const EXPECTED_FILES = [
+  'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
   'connecting-your-calendar.md',
@@ -19,10 +20,12 @@ const EXPECTED_FILES = [
   'joining-a-call.md',
   'pausing-new-work.md',
   'project-requests-for-experts.md',
+  'proposing-a-change-to-a-live-project.md',
   'rate-and-payouts.md',
   'redeeming-a-promo-code.md',
   'requesting-a-project.md',
   'reviewing-a-finished-project.md',
+  'sharing-files-with-invited-experts.md',
   'turning-a-case-into-a-project.md',
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',

@@ -14,7 +14,10 @@ import {
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { isThreadOpenStatus, previewOfHtml } from '@/lib/project-request/conversation-view-types';
+import {
+  isThreadOpenStatus,
+  messagePreviewText,
+} from '@/lib/project-request/conversation-view-types';
 import { formatPostedRelative } from '@/lib/project-request/request-detail-view';
 import type { PortfolioLens } from './resolve-portfolio-lens';
 import {
@@ -176,7 +179,8 @@ function freshestInboundSignal(
     );
   for (const { relationshipId, summary } of ranked) {
     const latest = summary.latestMessage;
-    const preview = latest === null ? null : previewOfHtml(latest.body);
+    const preview =
+      latest === null ? null : messagePreviewText(latest.body, latest.requestSharedFileId);
     if (preview !== null && latest !== null) {
       return {
         from: latest.senderFirstName ?? counterpartLabel,

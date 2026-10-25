@@ -363,6 +363,16 @@ describe('loadCase — the tenancy order IS the contract', () => {
     expect(m.listConversationFiles).toHaveBeenCalledWith(CONVERSATION_ID, { kind: 'full' });
   });
 
+  /**
+   * ⚠ Request-share card messages are request-surface only; the case loader
+   * must NOT opt in, so the repository's fail-closed default keeps them out of the case panel.
+   */
+  it('does not opt in to request-share cards', async () => {
+    await loadOrThrow();
+    const [call] = m.listMessagesPage.mock.calls;
+    expect(call?.[0]).not.toHaveProperty('includeRequestFileShares');
+  });
+
   it('uses the conversation id FROM THE GATE, never the engagement id', async () => {
     seed({ access: { conversationId: 'gate-owned-conversation' } });
     await loadOrThrow();

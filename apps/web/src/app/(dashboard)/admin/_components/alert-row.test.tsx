@@ -307,4 +307,31 @@ describe('AlertRow', () => {
       age_bucket: 'over_7d',
     });
   });
+
+  it.each([
+    ['project.change_order_stale', 'marketplace'],
+    ['project.change_order_credit_required', 'money'],
+  ] as const)('renders the %s kind with its own icon and the project link', (kind, group) => {
+    const { container } = render(
+      <AlertRow
+        row={row({
+          kind,
+          group,
+          entityType: 'engagement',
+          target: { label: 'the project', href: '/engagements/eng-1' },
+        })}
+        index={0}
+        last
+        expanded
+        onToggle={noop}
+        canResolve
+        onClosed={noop}
+      />
+    );
+    expect(container.querySelector('svg.lucide-layers')).toBeNull();
+    expect(screen.getByRole('link', { name: /Open the project/ })).toHaveAttribute(
+      'href',
+      '/engagements/eng-1'
+    );
+  });
 });

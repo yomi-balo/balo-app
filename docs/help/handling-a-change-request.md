@@ -6,8 +6,8 @@ category:
   expert: projects
 order: 3
 published: false
-updated: 2026-10-25
-related: [writing-and-sending-a-proposal]
+updated: 2026-10-26
+related: [writing-and-sending-a-proposal, proposing-a-change-to-a-live-project]
 ---
 
 Sometimes a client reviews your finished project and asks for changes instead of accepting. This
@@ -31,15 +31,19 @@ A client can attach their feedback to specific milestones, or leave it general.
 
 Do the work in the milestones that came back. If the note points to a milestone that is still
 marked complete, choose **Move back to in progress** on it, make your changes, then complete it
-again as usual. You can also add a milestone if the feedback calls for new work. A new milestone
-has to be completed too before the project is ready to go back.
+again as usual. Wording fixes on a milestone are plain edits. If the feedback calls for new paid
+scope, such as an added milestone or a different price, send it as a change order instead. The
+client approves it first, and the new work has to be completed too before the project is ready to
+go back. See [Proposing a change to a live project](/help/proposing-a-change-to-a-live-project).
 
 ## When the banner changes to "Changes made"
 
 Once every milestone the client tagged is complete again, and every other milestone on the project
 is complete too, the banner changes to **Changes made** and offers to send the project back to the
 client. Until then, the project page keeps its **Mark project ready again** button, which stays
-unavailable while any milestone is unfinished. For an untagged request, the same button is there
+unavailable while any milestone is unfinished, and while a change is open on the project: a
+client's request for a change, a draft you made from one, or a change you've sent and the client
+hasn't decided. For an untagged request, the same button is there
 and you choose when you're done.
 
 ## Marking the project ready again

@@ -32,6 +32,8 @@ import {
   Gauge,
   Activity,
   Briefcase,
+  Hourglass,
+  ReceiptText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -58,6 +60,8 @@ import { closeAdminAlert } from '../_actions/close-admin-alert';
 const KIND_ICONS: Readonly<Record<string, LucideIcon>> = {
   'expert.application_pending': UserPlus,
   'project.repeat_change_request': RotateCcw,
+  'project.change_order_stale': Hourglass,
+  'project.change_order_credit_required': ReceiptText,
   'receivable.open': CreditCard,
   'session.settled_no_ledger_credit': Receipt,
   'topup.unresolved_pi': AlertTriangle,

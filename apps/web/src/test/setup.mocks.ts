@@ -81,6 +81,15 @@ vi.mock('@/lib/analytics', async () => {
     // BAL-587 — the in-app rating card's CLIENT event. `REVIEW_SERVER_EVENTS` must never join
     // this list — this mock stands in for `@/lib/analytics`, the client barrel.
     REVIEW_EVENTS: events.REVIEW_EVENTS,
+    // BAL-617 — the request-file share dialog + preview CLIENT family. ⚠ WITHOUT THESE LINES
+    // every test whose module graph reaches the share dialog throws on an undefined constant
+    // (memory `reference_web_analytics_test_mock_export_list`). ⚠ `REQUEST_FILE_SERVER_EVENTS`
+    // must NEVER join this list — it is server-only.
+    REQUEST_FILE_EVENTS: events.REQUEST_FILE_EVENTS,
+    REQUEST_FILE_SHARE_ENTRY_POINTS: events.REQUEST_FILE_SHARE_ENTRY_POINTS,
+    REQUEST_FILE_SHARE_AUDIENCE_CHOICES: events.REQUEST_FILE_SHARE_AUDIENCE_CHOICES,
+    REQUEST_FILE_PREVIEW_KINDS: events.REQUEST_FILE_PREVIEW_KINDS,
+    REQUEST_FILE_PREVIEW_SURFACES: events.REQUEST_FILE_PREVIEW_SURFACES,
     WALLET_EVENTS: events.WALLET_EVENTS,
     SCHEDULE_EVENTS: events.SCHEDULE_EVENTS,
     MEETING_CALL_EVENTS: events.MEETING_CALL_EVENTS,

@@ -332,6 +332,31 @@ export {
   MilestoneReorderMismatchError,
   type EngagementMilestoneStatus,
 } from './engagement-milestones';
+// ── Change orders on a live project (BAL-622) ──────────────────────────────
+export {
+  engagementChangeOrdersRepository,
+  CHANGE_ORDER_TRANSITIONS,
+  isAllowedChangeOrderTransition,
+  InvalidChangeOrderTransitionError,
+  ChangeOrderAlreadyOpenError,
+  ChangeOrderNotFoundError,
+  type ChangeOrderStatus,
+  type ChangeOrderLineOp,
+  type ChangeOrderLineInput,
+  type ChangeOrderRecord,
+  type ChangeOrderActor,
+  type ChangeOrderWithLines,
+  type ChangeOrderApproval,
+  type ChangeOrderSettlementTerms,
+  type StaleChangeOrderAlertRow,
+} from './engagement-change-orders';
+export { ChangeOrderCoherenceError, type ChangeOrderCoherenceRule } from './change-order-coherence';
+export {
+  blocksMarkReady,
+  ChangeOrderPendingError,
+  MilestoneChangePendingError,
+} from './_shared/change-order-guards';
+export type { EngagementChangeOrder, EngagementChangeOrderLine } from '../schema';
 export {
   actionItemsRepository,
   ACTION_ITEM_STATUS_TRANSITIONS,

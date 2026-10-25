@@ -9,12 +9,14 @@ import {
   lte,
   notExists,
   sql,
+  sum,
   type SQL,
 } from 'drizzle-orm';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { upfrontDueCents } from '@balo/shared/project-requests';
 import { db } from '../client';
 import {
+  engagementChangeOrders,
   engagementMilestones,
   engagements,
   projectChangeRequestMilestones,
@@ -46,6 +48,7 @@ import {
   snapshotFromProposalTx,
 } from './engagement-milestones';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
+import { ChangeOrderPendingError, findMarkReadyBlockerTx } from './_shared/change-order-guards';
 import {
   insertEngagementRowTx,
   lockEngagementRowTx,
@@ -566,6 +569,8 @@ function queryProjectEngagementWithMilestones(id: string) {
           sourceProposalId: true,
           pricingMethod: true,
           priceCents: true,
+          // The expert's hourly rate: the change-order composer prices a T&M estimate against it.
+          rateCents: true,
           cadence: true,
           completionRequestedAt: true,
           changeRequestNote: true,
@@ -904,6 +909,33 @@ function queryProjectEngagementsWithParties() {
   });
 }
 
+/**
+ * Σ `price_delta_cents` over each engagement's APPROVED, live change orders, in ONE grouped
+ * query over the whole id list (no N+1). An engagement with no approved order is absent
+ * from the map; its delta is 0. Adding it to `price_cents` gives the effective price, the
+ * same rule as `engagementChangeOrdersRepository.effectivePriceCents`.
+ */
+async function aggregateApprovedPriceDeltas(engagementIds: string[]): Promise<Map<string, number>> {
+  if (engagementIds.length === 0) {
+    return new Map();
+  }
+  const rows = await db
+    .select({
+      engagementId: engagementChangeOrders.engagementId,
+      total: sum(engagementChangeOrders.priceDeltaCents),
+    })
+    .from(engagementChangeOrders)
+    .where(
+      and(
+        inArray(engagementChangeOrders.engagementId, engagementIds),
+        eq(engagementChangeOrders.status, 'approved'),
+        isNull(engagementChangeOrders.deletedAt)
+      )
+    )
+    .groupBy(engagementChangeOrders.engagementId);
+  return new Map(rows.map((row): [string, number] => [row.engagementId, Number(row.total ?? 0)]));
+}
+
 type AdminGraphRow = Awaited<ReturnType<typeof queryProjectEngagementsWithParties>>[number];
 
 /** See `foldWorkspaceRow` — same flatten + hoist + status-last rule. */
@@ -931,6 +963,12 @@ function foldAdminRow(row: AdminGraphRow) {
  * flag is a later derivation from `lastActivityAt` vs a threshold.
  */
 export type AdminProjectEngagementListItem = ReturnType<typeof foldAdminRow> & {
+  /**
+   * `price_cents` + Σ approved, live change-order `price_delta_cents`. On a fixed-price
+   * project it is the price; on T&M it is the cap, which no change order moves, so it
+   * equals `price_cents`.
+   */
+  effectivePriceCents: number;
   totalMilestones: number;
   completedMilestones: number;
   inProgressMilestones: number;
@@ -1411,8 +1449,11 @@ export const projectEngagementsRepository = {
    * add a `where` to the nested relation. Costs nothing today: the only production
    * caller passes no arguments.
    *
-   * Excludes soft-deleted engagements and soft-deleted milestones. One batched
-   * aggregate (no N+1). The parties projection is PII-safe.
+   * `effectivePriceCents` adds each project's approved, live change-order deltas to
+   * `price_cents`.
+   *
+   * Excludes soft-deleted engagements, milestones and change orders. Two batched
+   * aggregates over the id list (no N+1). The parties projection is PII-safe.
    */
   async listAllWithProgress(opts?: {
     statuses?: readonly ProjectDeliveryStatus[];
@@ -1432,13 +1473,16 @@ export const projectEngagementsRepository = {
       return [];
     }
 
-    const progressById = await aggregateMilestoneProgress(narrowed.map((r) => r.id));
+    const ids = narrowed.map((r) => r.id);
+    const progressById = await aggregateMilestoneProgress(ids);
+    const deltaById = await aggregateApprovedPriceDeltas(ids);
 
     const items = narrowed.map((row) => {
       const progress = progressById.get(row.id);
       const lastActivityAt = progress?.lastMilestoneActivityAt ?? row.activatedAt ?? row.createdAt;
       return {
         ...row,
+        effectivePriceCents: row.priceCents + (deltaById.get(row.id) ?? 0),
         totalMilestones: progress?.totalMilestones ?? 0,
         completedMilestones: progress?.completedMilestones ?? 0,
         inProgressMilestones: progress?.inProgressMilestones ?? 0,
@@ -1575,6 +1619,8 @@ export const projectEngagementsRepository = {
    * DELIBERATE. Any incomplete live milestone → `MilestonesIncompleteError` (nothing
    * mutated). Clears any prior `change_request_note`. Returns the row plus
    * `priorChangeRounds`, the live change-request rounds before this request (0 on a first submission), read under the lock.
+   * An open change order that is sent, or came from a client request, blocks the
+   * request (`ChangeOrderPendingError`, nothing mutated); a fresh expert draft does not.
    *
    * NOTE the parent does NOT change: `pending_acceptance` projects to `'active'`.
    */
@@ -1584,6 +1630,11 @@ export const projectEngagementsRepository = {
   }): Promise<ProjectEngagementRow & { priorChangeRounds: number }> {
     return db.transaction(async (tx) => {
       await lockProjectForTransition(tx, input.engagementId, 'pending_acceptance');
+
+      const blocker = await findMarkReadyBlockerTx(tx, input.engagementId);
+      if (blocker !== null) {
+        throw new ChangeOrderPendingError(input.engagementId, blocker.status);
+      }
 
       // Under the engagement lock (single-writer gate): read live milestones and
       // require every one completed. Zero milestones ⇒ vacuously allowed.

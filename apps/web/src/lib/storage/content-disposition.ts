@@ -11,13 +11,27 @@
  *   inconsistently across browsers.
  */
 export function attachmentDisposition(fileName: string): string {
+  return dispositionOf('attachment', fileName);
+}
+
+/**
+ * The `inline` counterpart of {@link attachmentDisposition}, with the same file-name hardening.
+ * Only ever paired with a SERVER-FORCED response content type (see
+ * `createPresignedRequestFilePreview`) — an inline disposition on a stored, caller-influenced
+ * type would let the browser render it.
+ */
+export function inlineDisposition(fileName: string): string {
+  return dispositionOf('inline', fileName);
+}
+
+function dispositionOf(type: 'attachment' | 'inline', fileName: string): string {
   // eslint-disable-next-line no-control-regex -- strip header-breaking control chars from the stored name
   const safeName = fileName.replaceAll(/["\\\x00-\x1f\x7f]/g, '_');
   const asciiName = Array.from(safeName, (char) => (isAscii(char) ? char : '_')).join('');
   if (asciiName === safeName) {
-    return `attachment; filename="${safeName}"`;
+    return `${type}; filename="${safeName}"`;
   }
-  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeRfc5987(safeName)}`;
+  return `${type}; filename="${asciiName}"; filename*=UTF-8''${encodeRfc5987(safeName)}`;
 }
 
 function isAscii(char: string): boolean {

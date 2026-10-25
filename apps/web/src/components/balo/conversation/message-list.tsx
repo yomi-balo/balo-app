@@ -52,6 +52,12 @@ interface MessageListProps {
   onLoadEarlier: () => void;
   onRetry: () => void;
   onFileClick: (file: ConversationFileView) => void;
+  /**
+   * Renders a message that carries a request-share file card (BAL-617). Absent ⇒ every message
+   * renders as a plain text bubble, which is how the case surface — whose messages never carry
+   * a card — stays untouched.
+   */
+  renderSharedFile?: (message: ConversationMessageView, mine: boolean) => React.ReactNode;
 }
 
 type TimelineItem =
@@ -101,6 +107,7 @@ export function MessageList({
   onLoadEarlier,
   onRetry,
   onFileClick,
+  renderSharedFile,
 }: Readonly<MessageListProps>): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -244,6 +251,13 @@ export function MessageList({
             : item.file.uploadedByUserId === viewerUserId;
 
         if (item.kind === 'message') {
+          if (renderSharedFile !== undefined && item.message.requestSharedFile !== undefined) {
+            return (
+              <div key={item.id} className={cn('max-w-[82%]', isOwn ? 'self-end' : 'self-start')}>
+                {renderSharedFile(item.message, isOwn)}
+              </div>
+            );
+          }
           return (
             <div
               key={item.id}

@@ -4,6 +4,11 @@ import {
   UPCOMING_CALL_CAP,
   type UpcomingCallContextType,
 } from '@balo/shared/meetings';
+import {
+  THREAD_OPEN_RELATIONSHIP_STATUSES,
+  isThreadOpenStatus,
+  type ThreadOpenRelationshipStatus,
+} from '@balo/shared/conversations';
 import { previewOfPlainText } from '@balo/shared/notifications';
 import { relationshipIsOpened } from '@balo/shared/project-requests';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
@@ -44,22 +49,34 @@ export function previewOfHtml(bodyHtml: string): string | null {
   return previewOfPlainText(text);
 }
 
+/** Tab-strip, inbox and "Your move" preview for every request-share card, with or without a note. */
+export const SHARED_FILE_PREVIEW = 'Shared a file';
+
+/**
+ * Plain-text preview of one message. A request-share row ALWAYS reads {@link SHARED_FILE_PREVIEW},
+ * never its note: the file's access can be revoked, deleted or closed after the share, and a
+ * lingering note in a preview would outlive it. The copy names no file and no audience — the preview is built from
+ * the row alone, with no per-viewer audience check, so it must never carry either.
+ */
+export function messagePreviewText(
+  body: string,
+  requestSharedFileId: string | null
+): string | null {
+  if (requestSharedFileId !== null) return SHARED_FILE_PREVIEW;
+  return previewOfHtml(body);
+}
+
 /** Relationship status union, re-derived from the DB schema (type-only — bundle-safe). */
 export type RelationshipStatus = RequestExpertRelationship['status'];
 
-/** Relationship statuses whose thread is OPEN (listed, subscribable, postable). */
-export const THREAD_OPEN_RELATIONSHIP_STATUSES = [
-  'eoi_submitted',
-  'proposal_requested',
-  'proposal_submitted',
-  'accepted',
-] as const;
-
-export type ThreadOpenRelationshipStatus = (typeof THREAD_OPEN_RELATIONSHIP_STATUSES)[number];
-
-export function isThreadOpenStatus(status: string): boolean {
-  return (THREAD_OPEN_RELATIONSHIP_STATUSES as readonly string[]).includes(status);
-}
+/**
+ * Relationship statuses whose thread is OPEN (listed, subscribable, postable). ONE definition,
+ * in `@balo/shared/conversations`, because `requestSharedFilesRepository.share()` reads the
+ * same rule to decide which tracks receive a share card; re-exported so every existing import
+ * of this path is unchanged.
+ */
+export { THREAD_OPEN_RELATIONSHIP_STATUSES, isThreadOpenStatus };
+export type { ThreadOpenRelationshipStatus };
 
 /**
  * A closed request keeps its conversation for reading only. This is the one place that says

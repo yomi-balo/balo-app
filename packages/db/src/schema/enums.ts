@@ -318,6 +318,33 @@ export const engagementMilestoneStatusEnum = pgEnum('engagement_milestone_status
 ]);
 
 /**
+ * Change-order lifecycle on a live project. Standalone `CREATE TYPE`, so every value
+ * commits with the type (no ADD-VALUE one-tx hazard).
+ *
+ *   requested → draft | declined (an answer without a change order)
+ *   draft     → sent | withdrawn | requested (a discarded request-origin draft)
+ *   sent      → approved | declined | withdrawn
+ *
+ * `approved`, `declined` and `withdrawn` are terminal. The transition map lives in
+ * `engagementChangeOrdersRepository`.
+ */
+export const engagementChangeOrderStatusEnum = pgEnum('engagement_change_order_status', [
+  'requested',
+  'draft',
+  'sent',
+  'approved',
+  'declined',
+  'withdrawn',
+]);
+
+/** What one change-order line does to a milestone. Standalone `CREATE TYPE`. */
+export const engagementChangeOrderLineOpEnum = pgEnum('engagement_change_order_line_op', [
+  'add',
+  'edit',
+  'remove',
+]);
+
+/**
  * How an engagement's completion was accepted: by the `client`, or by the D7
  * auto-accept sweep (`auto`). NULL until the engagement reaches `completed`.
  */

@@ -1,9 +1,11 @@
 'use client';
 
-import { FileText, FileSpreadsheet, Trash2, Loader2, Check } from 'lucide-react';
+import { Trash2, Loader2, Check } from 'lucide-react';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
 import { formatRelativeTime } from '@/lib/format/relative-time';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
+import { FileGlyph } from './file-glyph';
 import { RequestFileAudienceBadges } from './request-file-audience-badges';
 import type {
   ClientRequestFileView,
@@ -11,14 +13,46 @@ import type {
   AdminRequestFileView,
 } from '@/lib/request-files/request-file-audience-view';
 
-function fileGlyph(contentType: string): React.JSX.Element {
-  const isSpreadsheet = contentType.includes('spreadsheet') || contentType === 'text/csv';
-  const Icon = isSpreadsheet ? FileSpreadsheet : FileText;
+interface FileNameProps {
+  fileName: string;
+  /** Present ⇒ the name previews on click (images and PDFs) or downloads (anything else). */
+  onPreview?: () => void;
+  previewing: boolean;
+  className?: string;
+}
+
+/** The file name — a button when the row can preview, plain text for the read-only admin row. */
+function FileName({
+  fileName,
+  onPreview,
+  previewing,
+  className,
+}: Readonly<FileNameProps>): React.JSX.Element {
+  if (onPreview === undefined) {
+    return <div className={cn('truncate text-sm font-medium', className)}>{fileName}</div>;
+  }
   return (
-    <span className="bg-muted text-muted-foreground mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-      <Icon className="h-4 w-4" aria-hidden="true" />
-    </span>
+    <button
+      type="button"
+      onClick={onPreview}
+      disabled={previewing}
+      aria-label={`Open ${fileName}`}
+      className={cn(
+        'hover:text-primary focus-visible:ring-ring flex min-h-11 w-full items-center gap-1.5 truncate text-left text-sm font-medium focus-visible:ring-2 focus-visible:outline-none disabled:opacity-70',
+        className
+      )}
+    >
+      <span className="truncate">{fileName}</span>
+      {previewing && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />}
+    </button>
   );
+}
+
+function previewHandlerOf(
+  onPreview: ((id: string) => void) | undefined,
+  id: string
+): (() => void) | undefined {
+  return onPreview === undefined ? undefined : () => onPreview(id);
 }
 
 interface RequestFileRowActionsProps {
@@ -43,14 +77,13 @@ function RequestFileRowActions({
         onClick={onDownload}
         disabled={downloading}
         aria-label={`Download ${fileName}`}
-        className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
+        className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring flex min-h-11 min-w-11 items-center justify-center rounded-md px-2.5 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
       >
         {downloading ? (
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
         ) : (
-          <Check className="sr-only h-4 w-4" aria-hidden="true" />
+          <span className="text-xs font-medium">Download</span>
         )}
-        {!downloading && <span className="text-xs font-medium">Download</span>}
       </button>
       {onDelete !== undefined && (
         <button
@@ -77,6 +110,8 @@ interface ClientRequestFileRowProps {
   onDownload: (id: string) => void;
   onDelete: (id: string) => void;
   onRevoke: (fileId: string, relationshipId: string, trackName: string) => void;
+  onPreview?: (id: string) => void;
+  previewingId?: string | null;
   downloadingId: string | null;
   deletingId: string | null;
   revokingRelationshipId: string | null;
@@ -89,6 +124,8 @@ interface ExpertRequestFileRowProps {
   clientPartyName: string;
   onDownload: (id: string) => void;
   onDelete: (id: string) => void;
+  onPreview?: (id: string) => void;
+  previewingId?: string | null;
   downloadingId: string | null;
   deletingId: string | null;
 }
@@ -112,7 +149,7 @@ export function RequestFileRow(props: Readonly<RequestFileRowProps>): React.JSX.
     const { file } = props;
     return (
       <li className="flex items-start gap-3 px-4 py-3">
-        {fileGlyph(file.contentType)}
+        <FileGlyph contentType={file.contentType} className="mt-0.5" />
         <div className="min-w-0 flex-1">
           <div
             className={
@@ -154,9 +191,13 @@ export function RequestFileRow(props: Readonly<RequestFileRowProps>): React.JSX.
     const { file } = props;
     return (
       <li className="flex items-start gap-3 px-4 py-3">
-        {fileGlyph(file.contentType)}
+        <FileGlyph contentType={file.contentType} className="mt-0.5" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">{file.fileName}</div>
+          <FileName
+            fileName={file.fileName}
+            onPreview={previewHandlerOf(props.onPreview, file.id)}
+            previewing={props.previewingId === file.id}
+          />
           <div className="text-muted-foreground mt-0.5 text-xs">
             {file.uploadedByName} · {formatRelativeTime(file.createdAtIso)} ·{' '}
             {formatBytes(file.sizeBytes)}
@@ -195,9 +236,13 @@ export function RequestFileRow(props: Readonly<RequestFileRowProps>): React.JSX.
   const { file } = props;
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      {fileGlyph(file.contentType)}
+      <FileGlyph contentType={file.contentType} className="mt-0.5" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{file.fileName}</div>
+        <FileName
+          fileName={file.fileName}
+          onPreview={previewHandlerOf(props.onPreview, file.id)}
+          previewing={props.previewingId === file.id}
+        />
         <div className="text-muted-foreground mt-0.5 text-xs">
           {file.uploadedByName} · {formatRelativeTime(file.createdAtIso)} ·{' '}
           {formatBytes(file.sizeBytes)}

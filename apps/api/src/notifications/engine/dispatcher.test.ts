@@ -210,6 +210,23 @@ describe('dispatch', () => {
     expect(deliveryPayload.recipientId).toBe('creator-1');
   });
 
+  it('resolves requester recipient from payload.requestedByUserId', async () => {
+    const requesterRule: NotificationRule = {
+      ...baseRule,
+      recipient: 'requester',
+      template: 'change-order-sent-client',
+    };
+    const context: RuleContext = {
+      event: 'change_order.sent',
+      payload: { correlationId: 'corr-co', recipientId: 'owner-1', requestedByUserId: 'req-1' },
+      data: {},
+    };
+
+    await dispatch(requesterRule, context);
+
+    expect(mockAdd.mock.calls[0][1].recipientId).toBe('req-1');
+  });
+
   it('skips billing_creator dispatch when payload.creatorUserId is absent', async () => {
     const creatorRule: NotificationRule = {
       ...baseRule,

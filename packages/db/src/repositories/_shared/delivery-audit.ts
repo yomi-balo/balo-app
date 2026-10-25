@@ -37,9 +37,22 @@ export type DeliveryAuditAction =
   // case lifecycle (BAL-417). There is deliberately NO
   // `engagement.resolution_requested` — the resolution-request pair is columns-only
   // (D1) and its write path (and its audit action) belong to BAL-421.
-  | 'engagement.case_closed';
+  | 'engagement.case_closed'
+  // change orders on a live project (BAL-622). `draft_discarded` returns a draft made
+  // from a client request back to `requested`; a fresh draft is withdrawn instead.
+  | 'engagement.change_order_requested'
+  | 'engagement.change_order_drafted'
+  | 'engagement.change_order_lines_replaced'
+  | 'engagement.change_order_sent'
+  | 'engagement.change_order_withdrawn'
+  | 'engagement.change_order_draft_discarded'
+  | 'engagement.change_order_approved'
+  | 'engagement.change_order_declined';
 
-export type DeliveryAuditEntityType = 'engagement' | 'engagement_milestone';
+export type DeliveryAuditEntityType =
+  | 'engagement'
+  | 'engagement_milestone'
+  | 'engagement_change_order';
 
 /**
  * Record ONE delivery audit event inside the caller's transaction (pass the `tx`

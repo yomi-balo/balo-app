@@ -26,6 +26,8 @@ interface ItemOpts {
   projectTitle?: string | null;
   pricingMethod?: 'fixed' | 'tm';
   priceCents?: number;
+  /** Defaults to `priceCents` (no approved change orders). */
+  effectivePriceCents?: number;
   rateCents?: number | null;
   currency?: string;
   activatedAt?: Date | null;
@@ -60,6 +62,7 @@ function buildItem(opts: ItemOpts = {}): AdminProjectEngagementListItem {
     projectTitle = 'CPQ rollout',
     pricingMethod = 'fixed',
     priceCents = 4_000_000,
+    effectivePriceCents = priceCents,
     rateCents = null,
     currency = 'aud',
     activatedAt = day(20),
@@ -81,6 +84,7 @@ function buildItem(opts: ItemOpts = {}): AdminProjectEngagementListItem {
     status,
     pricingMethod,
     priceCents,
+    effectivePriceCents,
     rateCents,
     currency,
     activatedAt,
@@ -221,6 +225,20 @@ describe('deriveOversightRow — pricing', () => {
       OPTS
     );
     expect(row.pricingLabel).toBe('Fixed · A$40,000');
+  });
+
+  it('shows the effective price on a fixed-price engagement with approved change orders', () => {
+    const row = deriveOversightRow(
+      buildItem({
+        pricingMethod: 'fixed',
+        priceCents: 4_000_000,
+        effectivePriceCents: 4_150_000,
+        currency: 'aud',
+      }),
+      NOW,
+      OPTS
+    );
+    expect(row.pricingLabel).toBe('Fixed · A$41,500');
   });
 
   it('formats a time-and-materials engagement (rate + cap)', () => {

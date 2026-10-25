@@ -5250,9 +5250,12 @@ describe('creditSessionsRepository.findSessionlessEndedCaseMeetings (BAL-474 §D
     expect(found).toContain(inside);
   });
 
-  it('orders oldest-ended first and honours the batch bound', async () => {
-    const older = await endedWith([caseCtx()], { endedMinutesAgo: 90 });
-    const newer = await endedWith([caseCtx()], { endedMinutesAgo: 30 });
+  it('orders the meeting nearest to leaving the window first and honours the batch bound', async () => {
+    // The sort key is LEAST(scheduled_start, ended_at), which is scheduled_start for both rows, so
+    // the starts must differ by more than the clock tick: two inserts in the same millisecond tie
+    // and fall back to the random id.
+    const older = await endedWith([caseCtx()], { scheduledHoursAgo: 3, endedMinutesAgo: 90 });
+    const newer = await endedWith([caseCtx()], { scheduledHoursAgo: 2, endedMinutesAgo: 30 });
     const now = Date.now();
     const rows = await creditSessionsRepository.findSessionlessEndedCaseMeetings({
       endedBefore: new Date(now - 2 * 60_000),

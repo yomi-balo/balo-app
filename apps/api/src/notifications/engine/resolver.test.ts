@@ -421,6 +421,42 @@ describe('resolveContext', () => {
     );
   });
 
+  describe('change order events hydration (BAL-622)', () => {
+    it.each([
+      'change_order.requested',
+      'change_order.sent',
+      'change_order.approved',
+      'change_order.declined',
+    ] as const)('hydrates adminUserIds for %s', async (event) => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+
+      const context = await resolveContext(event, {
+        correlationId: '550e8400-e29b-41d4-a716-446655440005:x',
+        engagementId: '550e8400-e29b-41d4-a716-446655440001',
+        changeOrderId: '550e8400-e29b-41d4-a716-446655440005',
+      });
+
+      expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+      expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+    });
+
+    it.each(['change_order.answered', 'change_order.withdrawn'] as const)(
+      'does not fan out to admins for %s (client-only)',
+      async (event) => {
+        mockFindIdsByPlatformRoles.mockClear();
+
+        const context = await resolveContext(event, {
+          correlationId: '550e8400-e29b-41d4-a716-446655440005:x',
+          engagementId: '550e8400-e29b-41d4-a716-446655440001',
+          changeOrderId: '550e8400-e29b-41d4-a716-446655440005',
+        });
+
+        expect(mockFindIdsByPlatformRoles).not.toHaveBeenCalled();
+        expect(context.data.adminUserIds).toBeUndefined();
+      }
+    );
+  });
+
   // ── BAL-334 admin fan-out hydration for the completion events (NOT cancel) ──
   describe('completion lifecycle events hydration', () => {
     it.each(['engagement.completion_requested', 'engagement.completion_withdrawn'] as const)(

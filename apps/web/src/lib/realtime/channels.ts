@@ -30,6 +30,18 @@ export function conversationChannelName(conversationId: string): string {
 export const CONVERSATION_EVENT_MESSAGE = 'message';
 /** Channel message name carrying a `ConversationFileView` JSON payload. */
 export const CONVERSATION_EVENT_FILE = 'file';
+/**
+ * Channel message name carrying a {@link ConversationFileSharedPayload}: a CONTENT-FREE ping that
+ * a request-share card was posted into the thread (BAL-617).
+ *
+ * ⚠ A NEW NAME, NOT `message`, ON PURPOSE. A share message has no body to render and its card is
+ * resolved per viewer on read, so the wire must carry neither. Only the request island
+ * subscribes to this name; the case panel and the in-call hook subscribe to `message` and
+ * `file` alone, so a share can never become a blank bubble there. The payload names no file and
+ * no audience, so a channel subscriber (the expert, any client member) learns nothing from it
+ * that the thread's own message list would not show them after the lens-correct refetch.
+ */
+export const CONVERSATION_EVENT_FILE_SHARED = 'file_shared';
 
 /**
  * BAL-437 — ⚠⚠ **THE CALL-GRAIN CHANNEL, AND WHY CHAT DOES NOT RIDE IT.**

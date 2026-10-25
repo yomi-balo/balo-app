@@ -7,6 +7,7 @@ import {
   transcriptsRepository,
   calendarRepository,
   calendarSubscriptionsRepository,
+  engagementChangeOrdersRepository,
   type OpenReceivableAlertRow,
   type AdminAlertFinding,
 } from '@balo/db';
@@ -15,6 +16,8 @@ import {
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
 import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
+import { CHANGE_ORDER_STALE_BUSINESS_DAYS } from '@balo/shared/engagements';
+import { addBusinessDays, businessDaysBetween } from '@balo/shared/timezone';
 import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
 import {
@@ -26,7 +29,7 @@ import { formatAudMinor } from '../notifications/channels/templates/credit-forma
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 
 /**
- * BAL-548 / ADR-1055 — the ten `admin_alerts` FINDER implementations, keyed by the NAME the
+ * BAL-548 / ADR-1055 — the eleven `admin_alerts` FINDER implementations, keyed by the NAME the
  * registry (`@balo/shared/admin-alerts`) holds on each finder-kind's `finder` field.
  * `packages/shared` cannot hold these functions (it imports no db, by rule), so the registry
  * holds a NAME and this module holds the implementation.
@@ -156,6 +159,52 @@ async function expertApplicationPending(
           ['Agency', row.agencyName ?? 'Independent'],
           ['Status', statusLabel],
           ['Submitted', formatDateShort(row.submittedAt)],
+        ],
+      },
+    };
+  });
+
+  return { findings, batchFilled };
+}
+
+const MS_PER_DAY = 86_400_000;
+
+function lastWeekdayOnOrBefore(date: Date): Date {
+  const day = date.getUTCDay();
+  if (day === 6) return new Date(date.getTime() - MS_PER_DAY);
+  if (day === 0) return new Date(date.getTime() - 2 * MS_PER_DAY);
+  return date;
+}
+
+// ── project.change_order_stale ───────────────────────────────────────────
+
+async function projectChangeOrderStale(
+  ctx: AdminAlertFinderContext
+): Promise<AdminAlertFinderOutcome> {
+  // A weekend `now` is anchored to the Friday before it (same UTC time of day), so the cutoff
+  // is five full business days back and the alert never fires on the fourth.
+  const cutoff = addBusinessDays(lastWeekdayOnOrBefore(ctx.now), -CHANGE_ORDER_STALE_BUSINESS_DAYS);
+  const rows = await engagementChangeOrdersRepository.listStaleSentForAlerts(cutoff, ctx.limit);
+  const batchFilled = rows.length === ctx.limit;
+
+  const findings: AdminAlertFinding[] = rows.map((row) => {
+    const person = personName(row.expertFirstName, row.expertLastName);
+    const expertLabel = row.agencyName === null ? person : `${person} @ ${row.agencyName}`;
+    const projectTitle = row.projectTitle ?? 'Project';
+    const waiting = businessDaysBetween(row.sentAt, ctx.now);
+    const sentOn = formatDateShort(row.sentAt);
+    return {
+      entityType: 'engagement',
+      entityId: row.engagementId,
+      detail: {
+        title: `A change is waiting on ${row.clientCompanyName}`,
+        entityLabel: `${projectTitle} · ${row.clientCompanyName}`,
+        evidence: `${expertLabel} sent it on ${sentOn} — ${String(waiting)} business days without a decision.`,
+        facts: [
+          ['Client', row.clientCompanyName],
+          ['Expert', expertLabel],
+          ['Sent', sentOn],
+          ['Business days waiting', String(waiting)],
         ],
       },
     };
@@ -732,6 +781,7 @@ async function sessionPresenceStuck(
  */
 export const ADMIN_ALERT_FINDERS: Readonly<Record<string, AdminAlertFinder>> = {
   expertApplicationPending,
+  projectChangeOrderStale,
   receivableOpen,
   sessionSettledNoLedgerCredit,
   recordingFailed,

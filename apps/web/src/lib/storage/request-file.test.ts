@@ -63,6 +63,7 @@ import {
   generateRequestFileKey,
   createPresignedRequestFileUpload,
   createPresignedRequestFileDownload,
+  createPresignedRequestFilePreview,
   deleteRequestFileFromR2,
 } from './request-file';
 
@@ -179,6 +180,34 @@ describe('request-file storage', () => {
       ).rejects.toThrow('Invalid content type');
       expect(mockGetSignedUrl).not.toHaveBeenCalled();
     });
+  });
+
+  describe('createPresignedRequestFilePreview', () => {
+    it('signs an inline disposition AND a forced application/pdf response type', async () => {
+      mockGetSignedUrl.mockResolvedValue('https://signed.example/preview');
+      await createPresignedRequestFilePreview('k', 'brief.pdf', 'application/pdf');
+      const input = commandInputOf(0);
+      expect(String(input.ResponseContentDisposition)).toMatch(/^inline;/);
+      expect(input.ResponseContentType).toBe('application/pdf');
+      expect(input.Key).toBe('k');
+      expect(expiresInOf(0)).toBe(300);
+    });
+
+    it('forces application/pdf even when the stored name looks like markup', async () => {
+      mockGetSignedUrl.mockResolvedValue('https://signed.example/preview');
+      await createPresignedRequestFilePreview('k', 'evil.html', 'application/pdf');
+      expect(commandInputOf(0).ResponseContentType).toBe('application/pdf');
+    });
+
+    it.each(['text/html', 'image/svg+xml', 'image/png', 'application/octet-stream'])(
+      'throws for %s without signing anything',
+      async (contentType) => {
+        await expect(createPresignedRequestFilePreview('k', 'x', contentType)).rejects.toThrow(
+          'Cannot preview content type'
+        );
+        expect(mockGetSignedUrl).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe('createPresignedRequestFileDownload', () => {

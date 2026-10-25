@@ -47,7 +47,7 @@ import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap, BookingServerEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
-import type { RequestFileServerEventMap } from './events/request-files';
+import type { RequestFileServerEventMap, RequestFileEventMap } from './events/request-files';
 import type { RequestDocumentServerEventMap } from './events/request-documents';
 import type { NavEventMap } from './events/nav';
 import type { MarketingEventMap } from './events/marketing';
@@ -150,7 +150,10 @@ export type AllEvents = AuthEventMap &
   ReviewEventMap &
   // BAL-589 — the "Convert a case to a project" AI brief's CLIENT family. `useCaseBriefFlow`
   // (apps/web) is the ONE dispatch point; no server events (see the family's own header).
-  CaseBriefEventMap;
+  CaseBriefEventMap &
+  // BAL-617 — the request-file share dialog + in-app preview CLIENT family.
+  // `RequestFileServerEventMap` stays in `ServerEvents` below; the two must never cross.
+  RequestFileEventMap;
 
 export type EventName = keyof AllEvents;
 

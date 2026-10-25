@@ -1,8 +1,18 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { createContext, useCallback, useContext, useState } from 'react';
 import { ChevronRight, FileText } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+
+const DismissRequestSheetContext = createContext<(() => void) | null>(null);
+
+/**
+ * Closes the enclosing mobile "Request, kickoff and files" sheet, or `null` outside one. A control
+ * inside the sheet that opens another overlay calls this first, so two bottom sheets never stack.
+ */
+export function useDismissRequestSheet(): (() => void) | null {
+  return useContext(DismissRequestSheetContext);
+}
 
 interface MobileRequestSheetProps {
   title: string;
@@ -17,7 +27,7 @@ interface MobileRequestSheetProps {
 /**
  * Mobile Phase-2 slim request bar (`lg:hidden` applied by the shell): icon +
  * REQUEST eyebrow + truncated title + chevron. Tapping opens a bottom sheet
- * titled "Request details" carrying the server-rendered request context.
+ * titled "Request, kickoff and files" carrying the server-rendered request context.
  */
 export function MobileRequestSheet({
   title,
@@ -25,13 +35,14 @@ export function MobileRequestSheet({
 }: Readonly<MobileRequestSheetProps>): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const handleOpen = useCallback((): void => setOpen(true), []);
+  const handleDismiss = useCallback((): void => setOpen(false), []);
 
   return (
     <>
       <button
         type="button"
         onClick={handleOpen}
-        aria-label={`Request details: ${title}`}
+        aria-label={`Request, kickoff and files: ${title}`}
         className="border-border bg-card hover:bg-muted/40 focus-visible:ring-ring flex min-h-[52px] w-full items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
       >
         <span className="bg-primary/10 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
@@ -53,9 +64,13 @@ export function MobileRequestSheet({
           className="max-h-[88vh] gap-0 overflow-hidden rounded-t-2xl"
         >
           <SheetHeader className="border-border border-b pb-3">
-            <SheetTitle className="text-sm">Request details</SheetTitle>
+            <SheetTitle className="text-sm">Request, kickoff and files</SheetTitle>
           </SheetHeader>
-          <div className="flex-1 overflow-y-auto p-4 pb-6">{children}</div>
+          <div className="flex-1 overflow-y-auto p-4 pb-6">
+            <DismissRequestSheetContext.Provider value={handleDismiss}>
+              {children}
+            </DismissRequestSheetContext.Provider>
+          </div>
         </SheetContent>
       </Sheet>
     </>

@@ -61,6 +61,19 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => mockIsRealtimeConfigured(),
 }));
 
+const mockAttachCards = vi.fn();
+vi.mock('@/lib/request-files/thread-file-cards', async () => {
+  const { mapMessageRowToView } = await import('@/lib/conversations/conversation-view');
+  return {
+    attachRequestFileCards: (...args: unknown[]) => {
+      mockAttachCards(...args);
+      return Promise.resolve(
+        (args[2] as Parameters<typeof mapMessageRowToView>[0][]).map(mapMessageRowToView)
+      );
+    },
+  };
+});
+
 import { loadConversationView, mapFileRowToView, participantNames } from './conversation-view';
 import type { RequestViewerContext } from './resolve-request-lens';
 
@@ -196,6 +209,7 @@ describe('loadConversationView', () => {
           id: 'm-9',
           body: '<p>hot thread</p>',
           createdAt: new Date('2026-06-09T00:00:00Z'),
+          requestSharedFileId: null,
           senderUserId: EXPERT_USER_ID,
         },
       }),
@@ -651,6 +665,7 @@ describe('loadConversationView', () => {
           id: 'm-1',
           body: '<p>mine</p>',
           createdAt: new Date('2026-06-09T10:00:00Z'),
+          requestSharedFileId: null,
           senderUserId: VIEWER_ID,
         },
         latestInboundActivityAt: null,
@@ -682,6 +697,7 @@ describe('loadConversationView', () => {
           id: 'm-2',
           body: '<p>theirs</p>',
           createdAt: new Date('2026-06-09T11:00:00Z'),
+          requestSharedFileId: null,
           senderUserId: 'someone-else',
         },
         latestOutboundMessageAt: new Date('2026-06-09T10:00:00Z'),
@@ -705,6 +721,7 @@ describe('loadConversationView', () => {
           id: 'm-1',
           body: `<p>${long}</p>`,
           createdAt: new Date('2026-06-09T10:00:00Z'),
+          requestSharedFileId: null,
           senderUserId: EXPERT_USER_ID,
         },
       }),
@@ -718,6 +735,48 @@ describe('loadConversationView', () => {
     const preview = view.threads[0]?.latestMessagePreview ?? '';
     expect(preview.length).toBeLessThanOrEqual(140);
     expect(preview.endsWith('…')).toBe(true);
+  });
+
+  it('previews a note-less request-share card as "Shared a file", never blank', async () => {
+    mockListThreadSummaries.mockResolvedValue([
+      summary({
+        latestMessage: {
+          id: 'm-1',
+          body: '',
+          createdAt: new Date('2026-06-09T10:00:00Z'),
+          senderUserId: EXPERT_USER_ID,
+          requestSharedFileId: 'file-1',
+        },
+      }),
+    ]);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.latestMessagePreview).toBe('Shared a file');
+  });
+
+  it('previews a share card that carries a note as the fallback, never the note', async () => {
+    mockListThreadSummaries.mockResolvedValue([
+      summary({
+        latestMessage: {
+          id: 'm-1',
+          body: '<p>Here is the spec</p>',
+          createdAt: new Date('2026-06-09T10:00:00Z'),
+          senderUserId: EXPERT_USER_ID,
+          requestSharedFileId: 'file-1',
+        },
+      }),
+    ]);
+    const view = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER,
+      null
+    );
+    expect(view.threads[0]?.latestMessagePreview).toBe('Shared a file');
   });
 
   it('loads the first page + files (newest first) for the default thread only', async () => {
@@ -781,7 +840,10 @@ describe('loadConversationView', () => {
       conversationId: convIdFor('rel-1'),
       scope: { kind: 'full' },
       limit: 30,
+      // The request surface is one of the TWO readers that opt in to share cards.
+      includeRequestFileShares: true,
     });
+    expect(mockAttachCards).toHaveBeenCalledWith(USER, 'req-1', expect.any(Array));
     expect(mockListFiles).toHaveBeenCalledWith(convIdFor('rel-1'), { kind: 'full' });
     expect(view.initialFiles.map((f) => f.id)).toEqual(['f-new', 'f-old']);
     expect(view.initialFiles[0]?.uploadedByName).toBe('Priya Nair');

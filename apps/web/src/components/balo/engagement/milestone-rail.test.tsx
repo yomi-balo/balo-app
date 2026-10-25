@@ -21,6 +21,8 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     completedLabel: null,
     completionNote: null,
     feedback: null,
+    changePending: false,
+    changeProvenance: null,
     ...overrides,
   };
 }

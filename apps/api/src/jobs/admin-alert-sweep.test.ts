@@ -41,6 +41,7 @@ const {
   mockMeetingUnprovisioned,
   mockMeetingStranded,
   mockSessionPresenceStuck,
+  mockProjectChangeOrderStale,
 } = vi.hoisted(() => ({
   mockExpertApplicationPending: vi.fn(),
   mockReceivableOpen: vi.fn(),
@@ -52,6 +53,7 @@ const {
   mockMeetingUnprovisioned: vi.fn(),
   mockMeetingStranded: vi.fn(),
   mockSessionPresenceStuck: vi.fn(),
+  mockProjectChangeOrderStale: vi.fn(),
 }));
 
 vi.mock('./admin-alert-finders.js', () => ({
@@ -68,6 +70,7 @@ vi.mock('./admin-alert-finders.js', () => ({
     // BAL-586 — `meeting.stranded` (5m) and `session.presence_stuck` (1m).
     meetingStranded: mockMeetingStranded,
     sessionPresenceStuck: mockSessionPresenceStuck,
+    projectChangeOrderStale: mockProjectChangeOrderStale,
   },
 }));
 
@@ -97,6 +100,7 @@ beforeEach(() => {
     mockMeetingUnprovisioned,
     mockMeetingStranded,
     mockSessionPresenceStuck,
+    mockProjectChangeOrderStale,
   ]) {
     mock.mockResolvedValue(EMPTY_OUTCOME);
   }
@@ -153,10 +157,14 @@ describe('runAdminAlertSweep', () => {
   it('calls reconcileKind once for the 15m cadence', async () => {
     await runAdminAlertSweep('15m', NOW);
     expect(mockCalendarSubscriptionLapse).toHaveBeenCalledTimes(1);
+    // BAL-622 — `project.change_order_stale` is 15m.
+    expect(mockProjectChangeOrderStale).toHaveBeenCalledTimes(1);
     expect(mockMeetingStranded).not.toHaveBeenCalled();
     expect(mockSessionPresenceStuck).not.toHaveBeenCalled();
-    expect(mockReconcileKind).toHaveBeenCalledTimes(1);
-    expect(mockReconcileKind.mock.calls[0]?.[0].kind).toBe('calendar.subscription_lapse');
+    expect(mockReconcileKind).toHaveBeenCalledTimes(2);
+    expect(new Set(mockReconcileKind.mock.calls.map(([input]) => input.kind))).toEqual(
+      new Set(['calendar.subscription_lapse', 'project.change_order_stale'])
+    );
     expect(mockMeetingUnprovisioned).not.toHaveBeenCalled();
   });
 
@@ -253,7 +261,9 @@ describe('runAdminAlertSweep', () => {
 
     await runAdminAlertSweep('15m', NOW);
 
-    expect(mockReconcileKind).not.toHaveBeenCalled();
+    expect(mockReconcileKind.mock.calls.map(([input]) => input.kind)).not.toContain(
+      'calendar.subscription_lapse'
+    );
     const skipWarnings = mockLog.warn.mock.calls.filter(([, msg]) =>
       String(msg).includes('admin_alert_sweep_kind_skipped')
     );

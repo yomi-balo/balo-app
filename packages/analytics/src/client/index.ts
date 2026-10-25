@@ -43,6 +43,13 @@ export {
   // BAL-587 — the in-app rating card's client event. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a
   // name here fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
   REVIEW_EVENTS,
+  // BAL-617 — the request-file share dialog + preview CLIENT family. ⚠ THE RE-EXPORT
+  // ALLOWLIST. ⚠ `REQUEST_FILE_SERVER_EVENTS` must NEVER join this list — it is server-only.
+  REQUEST_FILE_EVENTS,
+  REQUEST_FILE_SHARE_ENTRY_POINTS,
+  REQUEST_FILE_SHARE_AUDIENCE_CHOICES,
+  REQUEST_FILE_PREVIEW_KINDS,
+  REQUEST_FILE_PREVIEW_SURFACES,
   WALLET_EVENTS,
   SCHEDULE_EVENTS,
   MEETING_CALL_EVENTS,

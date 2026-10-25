@@ -103,6 +103,48 @@ describe('MessageList — timeline', () => {
     expect(texts).toEqual(['body m-1', 'f-1.pdf', 'body m-2']);
   });
 
+  describe('request-share cards', () => {
+    const shared = (id: string, at: string): ConversationMessageView => ({
+      ...msg(id, at, VIEWER_ID),
+      bodyHtml: '',
+      requestSharedFile: {
+        kind: 'expert',
+        file: {
+          id: 'file-1',
+          fileName: 'brief.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 1,
+          source: 'client',
+          uploadedByName: 'Acme',
+          createdAtIso: at,
+          sharedBeforeYouJoined: false,
+          canDelete: false,
+        },
+      },
+    });
+
+    it('hands a message that carries a card to renderSharedFile, flagged as the viewer’s own', () => {
+      const renderSharedFile = vi.fn((message: ConversationMessageView, mine: boolean) => (
+        <div data-testid="card">{`${message.id}:${mine}`}</div>
+      ));
+      renderList({
+        messages: [
+          msg('m-1', '2026-06-09T10:00:00.000Z'),
+          shared('m-2', '2026-06-09T11:00:00.000Z'),
+        ],
+        renderSharedFile,
+      });
+      expect(screen.getByTestId('card')).toHaveTextContent('m-2:true');
+      expect(screen.getByText('body m-1')).toBeInTheDocument();
+      expect(renderSharedFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders every message as a plain bubble when the surface gives no renderer', () => {
+      renderList({ messages: [shared('m-2', '2026-06-09T11:00:00.000Z')] });
+      expect(screen.queryByTestId('card')).not.toBeInTheDocument();
+    });
+  });
+
   it('clicking a file bubble requests its download', async () => {
     const user = userEvent.setup();
     const { onFileClick } = renderList({ files: [file('f-1', '2026-06-09T11:00:00.000Z')] });

@@ -236,6 +236,72 @@ describe('useConversationRealtime', () => {
     expect(state.channels.get('conversation:conv-1')?.listeners.get('file')).toHaveLength(1);
   });
 
+  describe('file_shared pings', () => {
+    const ping = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      conversationId: 'conv-1',
+      messageId: 'm-9',
+      senderUserId: 'user-2',
+      createdAtIso: '2026-06-10T10:00:00.000Z',
+      ...overrides,
+    });
+
+    it('subscribes to the event only when a handler is given', async () => {
+      renderHook(() =>
+        useConversationRealtime({
+          enabled: true,
+          fetchToken,
+          conversationIds: ['conv-1'],
+          onMessage: vi.fn(),
+          onFile: vi.fn(),
+        })
+      );
+      await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
+      expect(state.channels.get('conversation:conv-1')?.listeners.has('file_shared')).toBe(false);
+    });
+
+    it('delivers a well-formed ping and drops a malformed one', async () => {
+      const onFileShared = vi.fn();
+      renderHook(() =>
+        useConversationRealtime({
+          enabled: true,
+          fetchToken,
+          conversationIds: ['conv-1'],
+          onMessage: vi.fn(),
+          onFile: vi.fn(),
+          onFileShared,
+        })
+      );
+      await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
+      expect(state.channels.get('conversation:conv-1')?.listeners.get('file_shared')).toHaveLength(
+        1
+      );
+
+      act(() => emit('conversation:conv-1', 'file_shared', ping()));
+      expect(onFileShared).toHaveBeenCalledWith(ping());
+
+      act(() => emit('conversation:conv-1', 'file_shared', 'garbage'));
+      act(() => emit('conversation:conv-1', 'file_shared', ping({ messageId: 7 })));
+      expect(onFileShared).toHaveBeenCalledTimes(1);
+    });
+
+    it('never routes a ping to the message handler', async () => {
+      const onMessage = vi.fn();
+      renderHook(() =>
+        useConversationRealtime({
+          enabled: true,
+          fetchToken,
+          conversationIds: ['conv-1'],
+          onMessage,
+          onFile: vi.fn(),
+          onFileShared: vi.fn(),
+        })
+      );
+      await waitFor(() => expect(state.channels.has('conversation:conv-1')).toBe(true));
+      act(() => emit('conversation:conv-1', 'file_shared', ping()));
+      expect(onMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it('moves connecting → connected → connecting with the connection lifecycle', async () => {
     const { result } = renderHook(() =>
       useConversationRealtime({

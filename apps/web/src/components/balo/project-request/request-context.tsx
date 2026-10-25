@@ -3,6 +3,7 @@ import type { RequestDetailView } from '@/lib/project-request/request-detail-vie
 import { RequestCard } from './request-card';
 import { RichText } from './rich-text';
 import { DocumentList } from './document-list';
+import { RequestFilesCard } from './files/request-files-card';
 
 interface RequestContextProps {
   view: RequestDetailView;
@@ -96,11 +97,20 @@ function CompactRequestContext({ view }: Readonly<{ view: RequestDetailView }>):
         </div>
       </RequestCard>
 
-      {/* Card 3 — Documents (fully visible, never behind a scroll). */}
-      <RequestCard className="p-4">
-        <SectionLabel icon={Paperclip}>Request documents</SectionLabel>
-        <DocumentList requestId={view.id} documents={view.documents} compact />
-      </RequestCard>
+      {/* Card 3 — Files: the brief plus recently shared files (fully visible, never behind a
+          scroll). Without a file lens it is today's "Request documents" card. */}
+      <RequestFilesCard
+        variant="compact"
+        heading={<SectionLabel icon={Paperclip}>Files</SectionLabel>}
+        documents={<DocumentList requestId={view.id} documents={view.documents} compact />}
+        documentCount={view.documents.length}
+        fallback={
+          <RequestCard className="p-4">
+            <SectionLabel icon={Paperclip}>Request documents</SectionLabel>
+            <DocumentList requestId={view.id} documents={view.documents} compact />
+          </RequestCard>
+        }
+      />
     </div>
   );
 }
@@ -158,10 +168,18 @@ function FullRequestContext({ view }: Readonly<{ view: RequestDetailView }>): Re
         </div>
       )}
 
-      <div className="mt-5">
-        <SectionLabel icon={Paperclip}>Attached documents</SectionLabel>
-        <DocumentList requestId={view.id} documents={view.documents} />
-      </div>
+      <RequestFilesCard
+        variant="full"
+        heading={<SectionLabel icon={Paperclip}>Files</SectionLabel>}
+        documents={<DocumentList requestId={view.id} documents={view.documents} />}
+        documentCount={view.documents.length}
+        fallback={
+          <div className="mt-5">
+            <SectionLabel icon={Paperclip}>Attached documents</SectionLabel>
+            <DocumentList requestId={view.id} documents={view.documents} />
+          </div>
+        }
+      />
     </RequestCard>
   );
 }

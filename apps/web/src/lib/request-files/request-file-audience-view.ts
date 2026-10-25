@@ -19,7 +19,7 @@
  */
 
 import type { RequestTrackFileAccess, RequestFileAudienceVia } from '@balo/shared/authz';
-import { trackCanReadAllAudienceShare } from '@balo/shared/authz';
+import { resolveRequestFileAudience, trackCanReadAllAudienceShare } from '@balo/shared/authz';
 
 export type RequestFileAudienceLens = 'client' | 'expert' | 'admin';
 
@@ -33,6 +33,7 @@ export const REQUEST_FILE_CONCEALED_KEYS = [
   'liveTrackCount',
   'trackCount',
   'visibleTo',
+  'visibleToLiveTrackIds',
   'sharedWith',
   'expertRelationshipId',
   'relationshipId',
@@ -65,6 +66,7 @@ export const REQUEST_FILE_CLIENT_VIEW_KEYS = [
   'uploadedByName',
   'createdAtIso',
   'audience',
+  'visibleToLiveTrackIds',
   'canDelete',
 ] as const;
 
@@ -142,6 +144,12 @@ export interface ClientRequestFileView {
   uploadedByName: string;
   createdAtIso: string;
   audience: ClientRequestFileAudience;
+  /**
+   * The LIVE tracks that can read this file right now — the ONE definition behind the "All files"
+   * filter chips (AC12). Derived from `resolveRequestFileAudience`, the same read rule the
+   * download gate enforces, and filtered to live tracks; the UI never re-derives it.
+   */
+  visibleToLiveTrackIds: string[];
   canDelete: boolean;
 }
 
@@ -178,6 +186,20 @@ function allLiveTracksAudience(
   };
 }
 
+/** Live tracks whose own read rule admits this file — a FILTER over `resolveRequestFileAudience`. */
+function liveTrackIdsThatCanRead(
+  file: RequestFileSerializerFile,
+  grantedRelationshipIds: ReadonlySet<string>,
+  tracks: readonly RequestFileSerializerTrack[]
+): string[] {
+  const liveIds = new Set(
+    tracks.filter((t) => t.access.kind === 'live').map((t) => t.relationshipId)
+  );
+  return resolveRequestFileAudience(file, tracks, grantedRelationshipIds)
+    .map((entry) => entry.relationshipId)
+    .filter((relationshipId) => liveIds.has(relationshipId));
+}
+
 /**
  * `uploadedByName` for a client-uploaded row is "{Person} @ {Client}" (§12
  * `row.attribution.client`); for an expert-uploaded row it is the track's display name — the
@@ -209,6 +231,7 @@ export function toClientRequestFileView(
     uploadedByName,
     createdAtIso: file.createdAt.toISOString(),
     audience,
+    visibleToLiveTrackIds: liveTrackIdsThatCanRead(file, grantedRelationshipIds, tracks),
     // Ruling 3 — delete right ≡ upload right on that side. The client gate already proved
     // PARTICIPATE for the whole request, so every CLIENT-side file is deletable; an
     // expert-side file never is, from the client lens.
@@ -309,3 +332,20 @@ export function toAdminRequestFileView(
     deletedByName: file.deletedAt === null ? null : deletedByName,
   };
 }
+
+// ── Thread file card — the per-viewer shape of one request-share message ───────────────────
+
+/**
+ * What one request-share message carries to ONE viewer, resolved on read (never stored, never
+ * sent over the wire). The `kind` is the viewer's lens, so the audience-bearing client and admin
+ * shapes can never be handed to an expert: an expert card is exactly `{ kind, file }` with
+ * `file` the audience-free {@link ExpertRequestFileView}.
+ *
+ * `client_removed` is the client's tombstone for a file deleted after it was shared — name only,
+ * no actions, no audience.
+ */
+export type RequestThreadFileCard =
+  | { kind: 'client'; file: ClientRequestFileView }
+  | { kind: 'client_removed'; fileName: string }
+  | { kind: 'expert'; file: ExpertRequestFileView }
+  | { kind: 'admin'; file: AdminRequestFileView };

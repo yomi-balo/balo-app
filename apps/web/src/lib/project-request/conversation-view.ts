@@ -14,6 +14,7 @@ import {
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
+import { attachRequestFileCards } from '@/lib/request-files/thread-file-cards';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { log } from '@/lib/logging';
 import type { RequestViewerContext } from './resolve-request-lens';
@@ -22,7 +23,7 @@ import {
   deriveThreadStage,
   isConversationReadOnly,
   pickDefaultThread,
-  previewOfHtml,
+  messagePreviewText,
   previewOfPlainText,
   threadAdmits,
   type ConversationFileView,
@@ -328,7 +329,10 @@ export async function loadConversationView(
       stage: deriveThreadStage(relationship.status, request.status),
       invitedAtIso: relationship.invitedAt.toISOString(),
       unread,
-      latestMessagePreview: latestMessage === null ? null : previewOfHtml(latestMessage.body),
+      latestMessagePreview:
+        latestMessage === null
+          ? null
+          : messagePreviewText(latestMessage.body, latestMessage.requestSharedFileId),
       latestMessageAtIso: latestMessage === null ? null : latestMessage.createdAt.toISOString(),
       latestMessageFromViewer: latestMessage !== null && latestMessage.senderUserId === user.id,
       latestMessageFromExpert:
@@ -362,11 +366,14 @@ export async function loadConversationView(
         // Both parties read the whole thread; `{ kind: 'meeting' }` is the guest scope.
         scope: { kind: 'full' },
         limit: FIRST_PAGE_SIZE,
+        // The request surface is the ONLY reader that opts in to share cards: it resolves each
+        // against the viewer's own audience below, and drops the ones they cannot see.
+        includeRequestFileShares: true,
       }),
       conversationsRepository.listFiles(defaultThread.conversationId, { kind: 'full' }),
     ]);
     const names = participantNames(request, defaultThread.relationship);
-    initialMessages = page.messages.map(mapMessageRowToView);
+    initialMessages = await attachRequestFileCards(user, request.id, page.messages);
     initialHasEarlier = page.hasEarlier;
     // Repo returns oldest-first; the Files panel reads newest-first.
     initialFiles = files.map((file) => mapFileRowToView(file, names)).reverse();

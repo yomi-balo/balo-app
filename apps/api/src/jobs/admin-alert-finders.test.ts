@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { businessDaysBetween } from '@balo/shared/timezone';
 
 /**
  * BAL-548 / ADR-1055 — unit coverage per finder: the cutoff arithmetic, `batchFilled` when the
@@ -22,6 +23,7 @@ const {
   mockListPresenceOverrunning,
   mockFindPresenceUnsettled,
   mockListPresenceAlertLabels,
+  mockListStaleSentForAlerts,
 } = vi.hoisted(() => ({
   mockListPendingApplicationsForAlerts: vi.fn(),
   mockListOpen: vi.fn(),
@@ -38,9 +40,11 @@ const {
   mockListPresenceOverrunning: vi.fn(),
   mockFindPresenceUnsettled: vi.fn(),
   mockListPresenceAlertLabels: vi.fn(),
+  mockListStaleSentForAlerts: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
+  engagementChangeOrdersRepository: { listStaleSentForAlerts: mockListStaleSentForAlerts },
   expertsRepository: { listPendingApplicationsForAlerts: mockListPendingApplicationsForAlerts },
   creditReceivablesRepository: { listOpen: mockListOpen },
   creditSessionsRepository: {
@@ -840,5 +844,107 @@ describe('sessionPresenceStuck', () => {
       .findings;
     expect(finding?.detail.evidence).toContain('unknown guard');
     expect(finding?.detail.facts).toContainEqual(['Settlement refused', 'unknown guard']);
+  });
+});
+
+describe('projectChangeOrderStale', () => {
+  const STALE_NOW = new Date('2026-09-09T12:00:00.000Z'); // Wednesday
+  const row = {
+    engagementId: 'eng_1',
+    changeOrderId: 'co_1',
+    sentAt: new Date('2026-09-02T09:00:00.000Z'), // Wednesday, 5 business days earlier
+    projectTitle: 'CPQ implementation',
+    clientCompanyName: 'Northwind',
+    expertFirstName: 'Priya',
+    expertLastName: 'Nair',
+    agencyName: 'CloudPeak',
+  };
+
+  it('reads with the five-business-day cutoff and reports batchFilled at the limit', async () => {
+    mockListStaleSentForAlerts.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => ({ ...row, engagementId: `eng_${i}` }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectChangeOrderStale({
+      now: STALE_NOW,
+      limit: LIMIT,
+    });
+
+    expect(mockListStaleSentForAlerts).toHaveBeenCalledWith(
+      new Date('2026-09-02T12:00:00.000Z'),
+      LIMIT
+    );
+    expect(outcome.batchFilled).toBe(true);
+    expect(outcome.findings).toHaveLength(LIMIT);
+  });
+
+  it.each([
+    ['Saturday', '2026-09-12T12:00:00.000Z'],
+    ['Sunday', '2026-09-13T12:00:00.000Z'],
+  ])('anchors a %s now to the prior Friday so 4 days is never stale', async (_label, nowIso) => {
+    mockListStaleSentForAlerts.mockResolvedValue([]);
+    const now = new Date(nowIso);
+
+    await ADMIN_ALERT_FINDERS.projectChangeOrderStale({ now, limit: LIMIT });
+
+    const cutoff: unknown = mockListStaleSentForAlerts.mock.calls[0]?.[0];
+    if (!(cutoff instanceof Date)) throw new Error('cutoff was not passed');
+    expect(cutoff).toEqual(new Date('2026-09-04T12:00:00.000Z'));
+    const fourDaysAgo = new Date('2026-09-07T09:00:00.000Z'); // Monday
+    const fiveDaysAgo = new Date('2026-09-04T09:00:00.000Z'); // Friday
+    expect(fourDaysAgo.getTime()).toBeGreaterThan(cutoff.getTime());
+    expect(fiveDaysAgo.getTime()).toBeLessThanOrEqual(cutoff.getTime());
+    expect(businessDaysBetween(fiveDaysAgo, now)).toBe(5);
+    expect(businessDaysBetween(fourDaysAgo, now)).toBe(4);
+  });
+
+  it('produces an engagement-grained finding with party names and no amounts', async () => {
+    mockListStaleSentForAlerts.mockResolvedValue([row]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectChangeOrderStale({
+      now: STALE_NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.batchFilled).toBe(false);
+    expect(outcome.findings).toEqual([
+      {
+        entityType: 'engagement',
+        entityId: 'eng_1',
+        detail: {
+          title: 'A change is waiting on Northwind',
+          entityLabel: 'CPQ implementation · Northwind',
+          evidence:
+            'Priya Nair @ CloudPeak sent it on 2 Sept 2026 — 5 business days without a decision.',
+          facts: [
+            ['Client', 'Northwind'],
+            ['Expert', 'Priya Nair @ CloudPeak'],
+            ['Sent', '2 Sept 2026'],
+            ['Business days waiting', '5'],
+          ],
+        },
+      },
+    ]);
+  });
+
+  it('falls back for an independent expert, a deleted expert and a missing title', async () => {
+    mockListStaleSentForAlerts.mockResolvedValue([
+      {
+        ...row,
+        agencyName: null,
+        expertFirstName: null,
+        expertLastName: null,
+        projectTitle: null,
+      },
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectChangeOrderStale({
+      now: STALE_NOW,
+      limit: LIMIT,
+    });
+
+    const [finding] = outcome.findings;
+    expect(finding?.detail.entityLabel).toBe('Project · Northwind');
+    expect(finding?.detail.facts).toContainEqual(['Expert', 'An expert']);
   });
 });

@@ -6,6 +6,11 @@ describe('ENGAGEMENT_SERVER_EVENTS', () => {
     expect(Object.keys(ENGAGEMENT_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'ACCEPTED',
       'CANCELLED',
+      'CHANGE_ORDER_APPROVED',
+      'CHANGE_ORDER_DECLINED',
+      'CHANGE_ORDER_REQUESTED',
+      'CHANGE_ORDER_SENT',
+      'CHANGE_ORDER_WITHDRAWN',
       'CHANGES_REQUESTED',
       'COMPLETION_REQUESTED',
       'COMPLETION_WITHDRAWN',
@@ -18,6 +23,18 @@ describe('ENGAGEMENT_SERVER_EVENTS', () => {
       'REVIEW_REMINDER_SENT',
       'WORKSPACE_VIEWED',
     ]);
+  });
+
+  it('maps each change-order constant to its exact snake_case event name', () => {
+    expect(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_REQUESTED).toBe(
+      'engagement_change_order_requested'
+    );
+    expect(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT).toBe('engagement_change_order_sent');
+    expect(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED).toBe('engagement_change_order_approved');
+    expect(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED).toBe('engagement_change_order_declined');
+    expect(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN).toBe(
+      'engagement_change_order_withdrawn'
+    );
   });
 
   it('maps each milestone constant to its exact snake_case event name', () => {
