@@ -4,13 +4,11 @@ import {
   conversationContextKey,
   conversationsRepository,
   expertsRepository,
-  meetingsRepository,
   proposalChangeRequestsRepository,
   proposalsRepository,
   usersRepository,
   type ConversationContextRef,
   type ConversationFile,
-  type ContextMeetingSummary,
   type ProjectRequestWithRelations,
   type Proposal,
 } from '@balo/db';
@@ -19,13 +17,14 @@ import { mapMessageRowToView } from '@/lib/conversations/conversation-view';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { log } from '@/lib/logging';
 import type { RequestViewerContext } from './resolve-request-lens';
+import { listUpcomingCallsByThread } from './upcoming-calls';
 import {
   deriveThreadStage,
-  isThreadOpenStatus,
+  isConversationReadOnly,
   pickDefaultThread,
-  pickUpcomingContextMeeting,
   previewOfHtml,
   previewOfPlainText,
+  threadAdmits,
   type ConversationFileView,
   type ConversationMessageView,
   type ConversationThreadView,
@@ -43,6 +42,23 @@ import {
 type Relationship = ProjectRequestWithRelations['relationships'][number];
 
 const FIRST_PAGE_SIZE = 30;
+
+/**
+ * The won thread's engagement, when the request has one (`kickoff_approved`). Its calls live on
+ * the engagement's `project_call` context, so the view reads that context for this thread only.
+ * `deliveryEngagementId` is resolved by the caller from the request's own `project_engagements`
+ * row, never from client input.
+ */
+function wonProjectCall(
+  openThreads: ReadonlyArray<{ relationship: Relationship }>,
+  deliveryEngagementId: string | null
+): { relationshipId: string; engagementId: string } | null {
+  if (deliveryEngagementId === null) return null;
+  const won = openThreads.find((t) => t.relationship.status === 'accepted');
+  return won === undefined
+    ? null
+    : { relationshipId: won.relationship.id, engagementId: deliveryEngagementId };
+}
 
 /** BAL-424 — the `conversation_contexts` anchor a project thread's relationship names. */
 function conversationRefForRelationship(relationshipId: string): ConversationContextRef {
@@ -216,18 +232,20 @@ async function loadChangeRequests(
 }
 
 /**
- * Build the full `ConversationView` for a participant viewer. Open threads =
- * live relationships in `THREAD_OPEN_RELATIONSHIP_STATUSES` (the expert lens
+ * Build the full `ConversationView` for a participant viewer. Listed threads = the
+ * relationships `threadAdmits(…, 'records')` admits: the open statuses on a live request, and
+ * on a closed one the threads that were open when the close landed (read-only; the expert lens
  * additionally sees ONLY their own). Thread order is invite order
  * (`invitedAt asc, id asc`) — selection, never order, reacts to activity.
  */
 export async function loadConversationView(
   request: ProjectRequestWithRelations,
   ctx: RequestViewerContext,
-  user: SessionUser
+  user: SessionUser,
+  deliveryEngagementId: string | null
 ): Promise<ConversationView> {
   const candidateRelationships = request.relationships
-    .filter((r) => isThreadOpenStatus(r.status))
+    .filter((r) => threadAdmits(r, request.status, 'records'))
     .filter((r) => ctx.lens !== 'expert' || r.id === ctx.relationshipId)
     .sort((a, b) => a.invitedAt.getTime() - b.invitedAt.getTime() || a.id.localeCompare(b.id));
 
@@ -260,7 +278,7 @@ export async function loadConversationView(
     return [{ relationship, conversationId }];
   });
 
-  const [summaries, usernames, bookedCallsByRelationship, changeRequests] = await Promise.all([
+  const [summaries, usernames, upcomingByRelationship, changeRequests] = await Promise.all([
     conversationsRepository.listThreadSummaries({
       conversationIds: openThreads.map((t) => t.conversationId),
       viewerUserId: user.id,
@@ -269,44 +287,20 @@ export async function loadConversationView(
       openThreads.map((t) => t.relationship),
       ctx.lens
     ),
-    // BAL-283 (plan §12.4) — ONE batched read for the whole page's threads, never N+1. A
-    // thread can legitimately hold more than one live call over its life; the DISPLAY rule
-    // ("which one is THE booked call") lives here, at the render-path caller, not in the
-    // repository.
-    meetingsRepository.listActiveMeetingsForContexts({
-      contextType: 'request_interaction',
-      contextIds: openThreads.map((t) => t.relationship.id),
+    // ONE batched read for the whole page's threads, never N+1. The display rule ("which calls
+    // are upcoming") lives in the shared `isUpcomingContextMeeting`, applied by
+    // `listUpcomingCallsByThread`, not in the repository.
+    listUpcomingCallsByThread({
+      relationshipIds: openThreads.map((t) => t.relationship.id),
+      projectCall: wonProjectCall(openThreads, deliveryEngagementId),
+      // `Date.now()` is safe HERE: this is a `server-only` loader, so the instant is read once
+      // per request on the server and never re-evaluated in a browser (no hydration surface).
+      // Client components must never format or compare instants this way — see `LocalDateTime`.
+      nowMs: Date.now(),
     }),
     loadChangeRequests(request, ctx, new Set(openThreads.map((t) => t.relationship.id))),
   ]);
   const summaryById = new Map(summaries.map((s) => [s.conversationId, s]));
-
-  /**
-   * Display rule: the SOONEST call still AHEAD of the viewer — routed through the SHARED
-   * `pickUpcomingContextMeeting` so this and the server-side one-call-per-thread guard cannot
-   * disagree about what "already booked" means.
-   *
-   * ⚠ `.at(0)` (the earliest row) WAS A BUG. `listActiveMeetingsForContexts` filters only
-   * `status <> 'cancelled'`, and `meetingStatusEnum` includes `ended` — so once an intro call
-   * has happened, the earliest row is a PAST meeting that stays first forever. `deriveCallSlot`
-   * checks `bookedCall !== null` BEFORE `callAllowed`, so `{kind:'booked'}` won permanently:
-   * the CTA vanished from header, rail and nudge for BOTH lenses for the life of the thread,
-   * with no recovery path, while the nudge rendered stale copy about a past event.
-   *
-   * `Date.now()` is safe HERE: this is a `server-only` loader, so the instant is read once per
-   * request on the server and never re-evaluated in a browser (no hydration surface). Client
-   * components must never format or compare instants this way — see `LocalDateTime`.
-   */
-  const nowMs = Date.now();
-  function pickBookedCall(
-    relationshipId: string
-  ): { meetingId: string; scheduledStartIso: string } | null {
-    const meetings: ContextMeetingSummary[] = bookedCallsByRelationship.get(relationshipId) ?? [];
-    const meeting = pickUpcomingContextMeeting(meetings, nowMs);
-    return meeting === undefined
-      ? null
-      : { meetingId: meeting.meetingId, scheduledStartIso: meeting.scheduledStart.toISOString() };
-  }
 
   const threads: ConversationThreadView[] = openThreads.map(({ relationship, conversationId }) => {
     const summary = summaryById.get(conversationId);
@@ -347,7 +341,7 @@ export async function loadConversationView(
       eoiSubmittedAtIso:
         ctx.lens === 'client' && liveEoi !== undefined ? liveEoi.submittedAt.toISOString() : null,
       availabilitySharedAtIso: relationship.availabilitySharedAt?.toISOString() ?? null,
-      bookedCall: pickBookedCall(relationship.id),
+      upcomingCalls: upcomingByRelationship.get(relationship.id) ?? [],
       changeRequest: changeRequests.get(relationship.id) ?? null,
     };
   });
@@ -385,6 +379,6 @@ export async function loadConversationView(
     initialMessages,
     initialHasEarlier,
     initialFiles,
-    realtimeEnabled: isRealtimeConfigured(),
+    realtimeEnabled: isRealtimeConfigured() && !isConversationReadOnly(request.status),
   };
 }

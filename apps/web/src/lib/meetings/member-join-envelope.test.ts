@@ -83,13 +83,14 @@ describe('parseMemberJoinEnvelope — the happy path', () => {
       'case',
       'project_discovery',
       'project_kickoff',
+      'project_call',
       'package_session',
       'retainer_checkin',
       'request_interaction',
     ]) {
       const parsed = parseMemberJoinEnvelope({ ...FULL, context: { type, id: CONTEXT_ID } });
       expect(parsed.context?.type).toBe(type);
-      // ⚠ A missing title is `null`, a first-class answer: three of the six shapes have no title
+      // ⚠ A missing title is `null`, a first-class answer: four of the eight shapes have no title
       // column anywhere.
       expect(parsed.context?.title).toBeNull();
     }
@@ -105,7 +106,7 @@ describe('parseMemberJoinEnvelope — the happy path', () => {
 
 describe('parseMemberJoinEnvelope — ⚠⚠ every field degrades on its own', () => {
   it('an UNKNOWN context type yields null instead of an undefined table lookup', () => {
-    // ⚠ THE TYPEERROR THIS EXISTS TO STOP. A seventh `meeting_context_type` added server-side, a
+    // ⚠ THE TYPEERROR THIS EXISTS TO STOP. A ninth `meeting_context_type` added server-side, a
     // proxy injecting a body, or a schema drift used to crash the join path.
     const parsed = parseMemberJoinEnvelope({ ...FULL, context: { type: 'admin', id: CONTEXT_ID } });
 

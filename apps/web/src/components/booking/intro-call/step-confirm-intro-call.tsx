@@ -1,5 +1,6 @@
 'use client';
 
+import type { CallKind } from '@balo/shared/notifications';
 import { ChevronLeft, Loader2, MessageSquare, Receipt } from 'lucide-react';
 import type { SlotDurationMinutes } from '@balo/shared/availability';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,8 @@ export interface StepConfirmIntroCallProps {
   clientCompanyName: string | null;
 
   staleSlot: boolean;
+  /** `call` once this expert is the one the request chose — drops "intro" from the copy. */
+  callKind: CallKind;
 
   submitting: boolean;
   onBack: () => void;
@@ -54,10 +57,12 @@ export function StepConfirmIntroCall({
   viewerEmailDomain,
   clientCompanyName,
   staleSlot,
+  callKind,
   submitting,
   onBack,
   onSubmit,
 }: Readonly<StepConfirmIntroCallProps>): React.JSX.Element {
+  const noun = callKind === 'call' ? 'Call' : 'Intro call';
   return (
     <div className="space-y-5 p-6">
       {staleSlot && <StaleSlotBanner onChooseNewTime={onChangeTime} />}
@@ -73,7 +78,9 @@ export function StepConfirmIntroCall({
               showLength={false}
             />
           </p>
-          <p className="text-muted-foreground text-xs">Intro call · {slot.durationMinutes} min</p>
+          <p className="text-muted-foreground text-xs">
+            {noun} · {slot.durationMinutes} min
+          </p>
         </div>
         <button
           type="button"
@@ -86,7 +93,9 @@ export function StepConfirmIntroCall({
 
       <div className="border-border bg-muted/20 flex items-center gap-2 rounded-lg border p-3">
         <MessageSquare className="text-muted-foreground h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <p className="text-muted-foreground text-xs">Intro call for &ldquo;{requestTitle}&rdquo;</p>
+        <p className="text-muted-foreground text-xs">
+          {noun} for &ldquo;{requestTitle}&rdquo;
+        </p>
       </div>
 
       {/* D7 — guests ARE allowed on the intro call (owner amendment); routes through the

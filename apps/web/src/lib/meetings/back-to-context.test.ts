@@ -9,7 +9,7 @@ import {
 
 /**
  * ⚠ TOTAL BY CONSTRUCTION, NOT BY A SEPARATE ASSERTION. `satisfies Record<…, true>` requires a
- * key for EVERY holder-bearing label, so adding a seventh and forgetting it here fails to
+ * key for EVERY holder-bearing label, so adding an eighth and forgetting it here fails to
  * compile — and the guard is the object's own type, so there is nothing to keep in sync and
  * nothing to re-assert at runtime.
  *
@@ -21,6 +21,7 @@ const ALL_WITH_HOLDER = Object.keys({
   case: true,
   project_discovery: true,
   project_kickoff: true,
+  project_call: true,
   package_session: true,
   retainer_checkin: true,
   request_interaction: true,
@@ -52,7 +53,7 @@ describe('resolveBackTo', () => {
      * What actually needed guarding is the loop: over an empty list every assertion below is
      * skipped and the test still passes green.
      */
-    expect(ALL_WITH_HOLDER).toHaveLength(6);
+    expect(ALL_WITH_HOLDER).toHaveLength(7);
 
     for (const contextType of ALL_WITH_HOLDER) {
       // Every arm is fed its own resolved request id, so the two request-grain labels have a
@@ -78,7 +79,7 @@ describe('resolveBackTo', () => {
   });
 
   it('renders no /consultations link for any context', () => {
-    expect(ALL_WITH_HOLDER).toHaveLength(6);
+    expect(ALL_WITH_HOLDER).toHaveLength(7);
     for (const contextType of ALL_WITH_HOLDER) {
       expect(resolveBackTo(subject(contextType, 'ctx-1', 'req-1')).href).not.toContain(
         '/consultations'
@@ -127,6 +128,13 @@ describe('resolveBackTo', () => {
     });
   });
 
+  it('routes project_call to /engagements/{id}', () => {
+    expect(resolveBackTo(subject('project_call', 'e1'))).toEqual({
+      label: 'Back to the project',
+      href: '/engagements/e1',
+    });
+  });
+
   /**
    * BAL-567 — `package_session` / `retainer_checkin` NOW FALL BACK, AND THAT IS A FIX.
    *
@@ -148,7 +156,7 @@ describe('resolveBackTo', () => {
   it('BAL-567 — an UNVERIFIED owning row yields the fallback on every arm', () => {
     // `owningRowFound: false` is the repository's "this `meeting_contexts.context_id` resolved to
     // nobody" answer. Rendering it would leak another tenant's identifier into this viewer's page.
-    expect(ALL_WITH_HOLDER).toHaveLength(6);
+    expect(ALL_WITH_HOLDER).toHaveLength(7);
     for (const contextType of ALL_WITH_HOLDER) {
       expect(
         resolveBackTo({
@@ -162,7 +170,7 @@ describe('resolveBackTo', () => {
   });
 
   it('uses sentence case, so assistive tech does not spell the label out', () => {
-    expect(ALL_WITH_HOLDER).toHaveLength(6);
+    expect(ALL_WITH_HOLDER).toHaveLength(7);
     for (const contextType of ALL_WITH_HOLDER) {
       const { label } = resolveBackTo(subject(contextType, 'ctx-1', 'req-1'));
       expect(label).not.toBe(label.toUpperCase());
@@ -176,7 +184,15 @@ describe('resolveContextNoun', () => {
     const nouns = ALL_WITH_HOLDER.map((contextType) =>
       resolveContextNoun(subject(contextType, 'x'))
     );
-    expect(nouns).toEqual(['case', 'request', 'project', 'package', 'retainer', 'request']);
+    expect(nouns).toEqual([
+      'case',
+      'request',
+      'project',
+      'project',
+      'package',
+      'retainer',
+      'request',
+    ]);
   });
 
   /**

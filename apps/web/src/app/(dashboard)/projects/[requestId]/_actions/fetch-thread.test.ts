@@ -115,6 +115,15 @@ describe('fetchThreadAction', () => {
     expect(mockListMessagesPage).not.toHaveBeenCalled();
   });
 
+  it("reads under the 'records' admission so a closed request's history loads", async () => {
+    await fetchThreadAction({
+      requestId: REQUEST_ID,
+      relationshipId: REL_ID,
+      includeFiles: false,
+    });
+    expect(mockResolveAccess).toHaveBeenCalledWith(USER, REQUEST_ID, REL_ID, 'records');
+  });
+
   it('returns mapped messages without files when includeFiles is false', async () => {
     const result = await fetchThreadAction({
       requestId: REQUEST_ID,

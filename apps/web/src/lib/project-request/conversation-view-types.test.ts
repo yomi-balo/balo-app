@@ -1,14 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import {
   deriveThreadStage,
+  insertUpcomingCall,
+  isConversationReadOnly,
   isThreadOpenStatus,
+  isUpcomingContextMeeting,
+  mergeUpcomingCalls,
   pickDefaultThread,
-  pickUpcomingContextMeeting,
   previewOfHtml,
   previewOfPlainText,
   PREVIEW_MAX_CHARS,
   requestStatusRank,
   THREAD_OPEN_RELATIONSHIP_STATUSES,
+  threadAdmits,
+  UPCOMING_CALL_CAP,
+  upcomingCallCapCopy,
+  type UpcomingCallView,
 } from './conversation-view-types';
 import { thread } from '@/test/fixtures/conversation';
 
@@ -23,6 +30,55 @@ describe('isThreadOpenStatus', () => {
     expect(isThreadOpenStatus('eoi_submitted')).toBe(true);
     expect(isThreadOpenStatus('invited')).toBe(false);
     expect(isThreadOpenStatus('declined')).toBe(false);
+  });
+});
+
+describe('isConversationReadOnly', () => {
+  it('is true only for a closed request', () => {
+    expect(isConversationReadOnly('closed')).toBe(true);
+    expect(isConversationReadOnly('accepted')).toBe(false);
+    expect(isConversationReadOnly('eoi_submitted')).toBe(false);
+  });
+});
+
+describe('threadAdmits (BAL-616)', () => {
+  const OPENED = new Date('2026-10-01T00:00:00Z');
+  const closedRecord = {
+    status: 'declined',
+    declineReason: 'request_closed',
+    openedAt: OPENED,
+  } as const;
+
+  it("admits a thread that was open at the close under 'records' only", () => {
+    expect(threadAdmits(closedRecord, 'closed', 'records')).toBe(true);
+    expect(threadAdmits(closedRecord, 'closed', 'live')).toBe(false);
+  });
+
+  it('never admits a track declined before the close, or one that never opened', () => {
+    const before = { ...closedRecord, declineReason: 'client_declined' } as const;
+    const unopened = { ...closedRecord, openedAt: null };
+    for (const admission of ['live', 'records'] as const) {
+      expect(threadAdmits(before, 'closed', admission)).toBe(false);
+      expect(threadAdmits(unopened, 'closed', admission)).toBe(false);
+    }
+  });
+
+  it('refuses an accepted relationship on a closed request for live, whatever the cascade did', () => {
+    const accepted = { status: 'accepted', declineReason: null, openedAt: OPENED } as const;
+    expect(threadAdmits(accepted, 'closed', 'live')).toBe(false);
+    expect(threadAdmits(accepted, 'closed', 'records')).toBe(false);
+  });
+
+  it("on a live request 'records' equals 'live' for every relationship status", () => {
+    const statuses = [...THREAD_OPEN_RELATIONSHIP_STATUSES, 'invited', 'declined'] as const;
+    for (const status of statuses) {
+      for (const declineReason of [null, 'request_closed'] as const) {
+        const r = { status, declineReason, openedAt: OPENED };
+        const live = threadAdmits(r, 'proposal_submitted', 'live');
+        expect(threadAdmits(r, 'proposal_submitted', 'records')).toBe(live);
+        expect(live).toBe(isThreadOpenStatus(status));
+      }
+    }
   });
 });
 
@@ -188,101 +244,143 @@ describe('previewOfHtml', () => {
   });
 });
 
-/**
- * BAL-283 — THE ONE definition of "this thread has a live intro call", shared by
- * `loadConversationView` (what the CTA renders) and `assertNoLiveIntroCall` (what the server
- * enforces). If these two ever disagreed, the server would refuse bookings the UI was still
- * offering — so the rule is pinned here, once, in its pure form.
- */
-describe('pickUpcomingContextMeeting', () => {
+describe('isUpcomingContextMeeting (shared rule, re-exported)', () => {
   const NOW = Date.parse('2026-08-25T00:00:00.000Z');
 
-  function meeting(overrides: Record<string, unknown> = {}) {
+  it('is the shared rule, and the cap is 3', () => {
+    const past = {
+      status: 'scheduled' as const,
+      scheduledEnd: new Date('2026-08-24T04:30:00.000Z'),
+    };
+    expect(isUpcomingContextMeeting(past, NOW)).toBe(false);
+    expect(UPCOMING_CALL_CAP).toBe(3);
+  });
+});
+
+describe('mergeUpcomingCalls', () => {
+  const NOW = Date.parse('2026-08-25T00:00:00.000Z');
+
+  function summary(id: string, startIso: string, overrides: Record<string, unknown> = {}) {
+    const start = new Date(startIso);
     return {
-      meetingId: 'meeting-1',
-      scheduledStart: new Date('2026-08-26T04:00:00.000Z'),
-      scheduledEnd: new Date('2026-08-26T04:30:00.000Z'),
+      meetingId: id,
+      scheduledStart: start,
+      scheduledEnd: new Date(start.getTime() + 30 * 60_000),
       status: 'scheduled' as const,
       ...overrides,
     };
   }
 
-  it('picks an upcoming meeting', () => {
-    expect(pickUpcomingContextMeeting([meeting()], NOW)?.meetingId).toBe('meeting-1');
+  it('de-duplicates a meeting present in both sources to one project_call item', () => {
+    const shared = summary('m-1', '2026-08-26T04:00:00.000Z');
+    const merged = mergeUpcomingCalls(
+      [
+        { contextType: 'request_interaction', meetings: [shared] },
+        { contextType: 'project_call', meetings: [shared] },
+      ],
+      NOW
+    );
+    expect(merged).toEqual([
+      {
+        meetingId: 'm-1',
+        scheduledStartIso: '2026-08-26T04:00:00.000Z',
+        contextType: 'project_call',
+      },
+    ]);
   });
 
-  it('returns undefined for an empty list', () => {
-    expect(pickUpcomingContextMeeting([], NOW)).toBeUndefined();
+  it('keeps project_call when it is listed first and request_interaction second', () => {
+    const shared = summary('m-1', '2026-08-26T04:00:00.000Z');
+    const merged = mergeUpcomingCalls(
+      [
+        { contextType: 'project_call', meetings: [shared] },
+        { contextType: 'request_interaction', meetings: [shared] },
+      ],
+      NOW
+    );
+    expect(merged.map((c) => c.contextType)).toEqual(['project_call']);
   });
 
-  it.each(['scheduled', 'waiting_for_participants', 'in_progress'] as const)(
-    'accepts a live status %s while the window is still ahead',
-    (status) => {
-      expect(pickUpcomingContextMeeting([meeting({ status })], NOW)).toBeDefined();
-    }
-  );
-
-  it('rejects an ENDED meeting even when its window is somehow in the future', () => {
-    expect(pickUpcomingContextMeeting([meeting({ status: 'ended' })], NOW)).toBeUndefined();
+  it('orders soonest first with a meeting-id tiebreak', () => {
+    const merged = mergeUpcomingCalls(
+      [
+        {
+          contextType: 'request_interaction',
+          meetings: [
+            summary('m-b', '2026-08-26T04:00:00.000Z'),
+            summary('m-late', '2026-08-28T04:00:00.000Z'),
+          ],
+        },
+        {
+          contextType: 'project_call',
+          meetings: [
+            summary('m-a', '2026-08-26T04:00:00.000Z'),
+            summary('m-early', '2026-08-25T04:00:00.000Z'),
+          ],
+        },
+      ],
+      NOW
+    );
+    expect(merged.map((c) => c.meetingId)).toEqual(['m-early', 'm-a', 'm-b', 'm-late']);
   });
 
-  /**
-   * PR #236 review. A call that RUNS PAST its scheduled end stays `in_progress` —
-   * `MEETING_TRANSITIONS` only lets that status move to `ended`, so nothing advances it on the
-   * clock alone. Judging it by `scheduledEnd` would drop it from the pick while the parties are
-   * still in the room, the CTA would reappear, and `assertNoLiveIntroCall` would let a SECOND
-   * intro call be booked over the live one.
-   */
-  it.each(['in_progress', 'waiting_for_participants'] as const)(
-    'keeps a LIVE %s call that has overrun its scheduled end',
-    (status) => {
-      const overrun = meeting({
-        status,
-        scheduledStart: new Date(NOW - 90 * 60_000),
-        scheduledEnd: new Date(NOW - 30 * 60_000),
-      });
-      expect(pickUpcomingContextMeeting([overrun], NOW)?.meetingId).toBe('meeting-1');
-    }
-  );
+  it('drops ended and past-window meetings', () => {
+    const merged = mergeUpcomingCalls(
+      [
+        {
+          contextType: 'request_interaction',
+          meetings: [
+            summary('m-ended', '2026-08-26T04:00:00.000Z', { status: 'ended' }),
+            summary('m-past', '2026-08-24T04:00:00.000Z'),
+            summary('m-ok', '2026-08-27T04:00:00.000Z'),
+          ],
+        },
+      ],
+      NOW
+    );
+    expect(merged.map((c) => c.meetingId)).toEqual(['m-ok']);
+  });
 
-  it('prefers a live overrunning call over a later scheduled one', () => {
-    const live = meeting({
-      meetingId: 'meeting-live',
-      status: 'in_progress',
-      scheduledStart: new Date(NOW - 90 * 60_000),
-      scheduledEnd: new Date(NOW - 30 * 60_000),
+  it('returns an empty list when there are no sources', () => {
+    expect(mergeUpcomingCalls([], NOW)).toEqual([]);
+  });
+});
+
+describe('insertUpcomingCall', () => {
+  const call = (id: string, iso: string): UpcomingCallView => ({
+    meetingId: id,
+    scheduledStartIso: iso,
+    contextType: 'request_interaction',
+  });
+
+  it('keeps the list soonest first', () => {
+    const list = [call('a', '2026-08-26T04:00:00.000Z'), call('c', '2026-08-28T04:00:00.000Z')];
+    const next = insertUpcomingCall(list, call('b', '2026-08-27T04:00:00.000Z'));
+    expect(next.map((c) => c.meetingId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('replaces a same-id entry instead of duplicating it', () => {
+    const list = [call('a', '2026-08-26T04:00:00.000Z'), call('b', '2026-08-27T04:00:00.000Z')];
+    const next = insertUpcomingCall(list, {
+      ...call('a', '2026-08-29T04:00:00.000Z'),
+      contextType: 'project_call',
     });
-    // Rows arrive ordered `scheduled_start, id`, so the overrunning call sorts first.
-    expect(
-      pickUpcomingContextMeeting([live, meeting({ meetingId: 'meeting-2' })], NOW)?.meetingId
-    ).toBe('meeting-live');
+    expect(next.map((c) => c.meetingId)).toEqual(['b', 'a']);
+    expect(next[1]?.contextType).toBe('project_call');
   });
 
-  it('rejects a SCHEDULED meeting whose window has passed — nobody ever joined it', () => {
-    const past = meeting({
-      scheduledStart: new Date('2026-08-24T04:00:00.000Z'),
-      scheduledEnd: new Date('2026-08-24T04:30:00.000Z'),
-    });
-    expect(pickUpcomingContextMeeting([past], NOW)).toBeUndefined();
+  it('does not mutate the input list', () => {
+    const list = [call('a', '2026-08-26T04:00:00.000Z')];
+    insertUpcomingCall(list, call('b', '2026-08-25T04:00:00.000Z'));
+    expect(list).toHaveLength(1);
   });
+});
 
-  it('a meeting IN PROGRESS inside its window counts (see below for the overrun case)', () => {
-    const running = meeting({
-      scheduledStart: new Date('2026-08-24T23:45:00.000Z'),
-      scheduledEnd: new Date('2026-08-25T00:15:00.000Z'),
-      status: 'in_progress' as const,
+describe('upcomingCallCapCopy', () => {
+  it('names the expert and states the verbatim cap copy', () => {
+    expect(upcomingCallCapCopy('Priya')).toEqual({
+      title: 'You have 3 calls booked with Priya.',
+      body: 'Once one has happened you can book another.',
     });
-    expect(pickUpcomingContextMeeting([running], NOW)).toBeDefined();
-  });
-
-  it('given a past call then an upcoming one, the UPCOMING one wins (repository order)', () => {
-    const past = meeting({
-      meetingId: 'meeting-past',
-      scheduledStart: new Date('2026-08-20T04:00:00.000Z'),
-      scheduledEnd: new Date('2026-08-20T04:30:00.000Z'),
-      status: 'ended' as const,
-    });
-    const next = meeting({ meetingId: 'meeting-next' });
-    expect(pickUpcomingContextMeeting([past, next], NOW)?.meetingId).toBe('meeting-next');
   });
 });

@@ -104,6 +104,24 @@ describe('UpNextCard — rendering rows', () => {
     expect(track).toHaveBeenCalledTimes(1);
   });
 
+  it('renders a project call row with the "Project call" type label and its href', () => {
+    render(
+      <UpNextCard
+        data={{
+          kind: 'ready',
+          rows: [row({ contextType: 'project_call', href: '/engagements/eng-4' })],
+        }}
+        workspaceType="company"
+        subtitle="sub"
+        footerLinks={FOOTER_LINKS}
+      />
+    );
+    expect(screen.getByText('Project call')).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('link').some((l) => l.getAttribute('href') === '/engagements/eng-4')
+    ).toBe(true);
+  });
+
   it('F10: fires dashboard_up_next_viewed exactly once even across re-renders (the viewedRef guard, not the dep array, keeps it once)', () => {
     const data: UpNextData = { kind: 'ready', rows: [row()] };
     const { rerender } = render(
@@ -222,6 +240,7 @@ describe('UpNextCard — Join affordance', () => {
       target: 'join',
       meeting_type: 'case',
       row_state: 'starting_soon',
+      surface: 'dashboard',
     });
 
     Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation });
@@ -260,6 +279,7 @@ describe('UpNextCard — Join affordance', () => {
       target: 'join',
       meeting_type: 'case',
       row_state: 'happening_now',
+      surface: 'dashboard',
     });
 
     Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation });
@@ -292,6 +312,7 @@ describe('UpNextCard — Join affordance', () => {
       target: 'row',
       meeting_type: 'project_kickoff',
       row_state: 'starting_soon',
+      surface: 'dashboard',
     });
     vi.useRealTimers();
   });
@@ -346,6 +367,7 @@ describe('UpNextCard — Empty state', () => {
       target: 'find_expert',
       meeting_type: null,
       row_state: null,
+      surface: 'dashboard',
     });
   });
 
@@ -503,6 +525,7 @@ describe('UpNextCard — footer links', () => {
       target: 'cases',
       meeting_type: null,
       row_state: null,
+      surface: 'dashboard',
     });
   });
 

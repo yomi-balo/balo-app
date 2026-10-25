@@ -335,7 +335,9 @@ describe('PayAfterFunding', () => {
       expect(saveLowBalanceConfigAction).not.toHaveBeenCalled();
       expect(props.onFunded).not.toHaveBeenCalled();
       expect(screen.getByRole('button', { name: /Back/ })).toBeEnabled();
-      expect(props.onInFlightChange).toHaveBeenLastCalledWith(false);
+      // The in-flight flag clears in an effect after the "Check again" render, so wait for the
+      // settled value rather than reading the mock's last call synchronously.
+      await waitFor(() => expect(props.onInFlightChange).toHaveBeenLastCalledWith(false));
       expect(props.onBusyChange).toHaveBeenLastCalledWith(true);
     });
 

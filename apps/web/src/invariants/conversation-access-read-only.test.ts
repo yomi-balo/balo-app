@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { codeLinesOf } from './_source-scan';
 import {
@@ -119,9 +119,15 @@ describe('the writing resolver is the only one that provisions', () => {
     expect(code).toContain(`export async function ${READ_ONLY_ACCESS_RESOLVER}`);
   });
 
-  it('calls ensureForContext exactly once, and findByContext exactly once', () => {
+  /**
+   * `findByContext` appears twice: once in the read-only variant, and once in the writing
+   * variant's `'records'`-on-a-closed-request branch, which must never mint a thread (BAL-616).
+   * `ensureForContext` stays at exactly one, so the only provisioning call is still the writing
+   * variant's live path.
+   */
+  it('calls ensureForContext exactly once, and findByContext exactly twice', () => {
     expect(code.match(/ensureForContext/g)).toHaveLength(1);
-    expect(code.match(/findByContext/g)).toHaveLength(1);
+    expect(code.match(/findByContext/g)).toHaveLength(2);
   });
 
   /**
@@ -134,6 +140,39 @@ describe('the writing resolver is the only one that provisions', () => {
     expect(code.match(/await authorizeThread\(/g)).toHaveLength(2);
     // Neither variant re-implements the lens/status guards.
     expect(code.match(/resolveRequestLens\(/g)).toHaveLength(1);
-    expect(code.match(/isThreadOpenStatus\(/g)).toHaveLength(1);
+    expect(code.match(/threadAdmits\(/g)).toHaveLength(1);
+    // Both implementations default to `'live'`: only a caller that asks for `'records'` reaches a
+    // closed request's threads, and it is never a content write.
+    expect(code.match(/admission: ThreadAdmission = 'live'/g)).toHaveLength(2);
+  });
+});
+
+/**
+ * BAL-616 — WHO MAY ASK FOR `'records'`. That admission reaches a CLOSED request's threads, so
+ * it is only for the read paths that render them (the thread fetch) and the read watermark
+ * (mark-read). The defaults above pin `'live'` for everyone else; this pins the exceptions, so
+ * a proposal, booking or posting action that starts passing `'records'` fails here instead of
+ * quietly working on closed requests.
+ */
+const RECORDS_ADMISSION_CALLERS = [
+  'app/(dashboard)/projects/[requestId]/_actions/fetch-thread.ts',
+  'app/(dashboard)/projects/[requestId]/_actions/_shared/mark-thread-read-core.ts',
+] as const;
+
+function sourceFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((rel) => /\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel))
+    .map((rel) => rel.split(path.sep).join('/'));
+}
+
+describe("only the read paths pass the 'records' admission", () => {
+  it('finds exactly the allowed callers', () => {
+    expect(SRC_DIR).not.toBe('');
+    const callers = sourceFilesUnder(SRC_DIR).filter((rel) =>
+      /(?:resolve|read)ConversationAccess\([^)]*'records'/.test(
+        codeLinesOf(readFileSync(path.join(SRC_DIR, rel), 'utf8'))
+      )
+    );
+    expect(callers.sort()).toEqual([...RECORDS_ADMISSION_CALLERS].sort());
   });
 });

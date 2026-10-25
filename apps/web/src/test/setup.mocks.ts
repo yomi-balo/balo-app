@@ -60,6 +60,8 @@ vi.mock('@/lib/analytics', async () => {
     // graph reaches a Server Action that derives its Zod enum from it throws on an undefined
     // constant (memory `reference_web_analytics_test_mock_export_list`).
     CONVERSATION_CALL_SURFACES: events.CONVERSATION_CALL_SURFACES,
+    // BAL-616 — the client call route tuple, for the same reason.
+    CONVERSATION_CALL_ROUTES: events.CONVERSATION_CALL_ROUTES,
     PROJECTS_INBOX_EVENTS: events.PROJECTS_INBOX_EVENTS,
     BILLING_EVENTS: events.BILLING_EVENTS,
     ADMIN_ENGAGEMENTS_EVENTS: events.ADMIN_ENGAGEMENTS_EVENTS,
@@ -168,6 +170,8 @@ vi.mock('@/lib/analytics', async () => {
     // constant. ⚠ WITHOUT THIS LINE every test whose module graph reaches `UpNextCard` or
     // `YourMove` throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     DASHBOARD_EVENTS: events.DASHBOARD_EVENTS,
+    // BAL-616 — the Up next click's `surface` tuple.
+    DASHBOARD_UP_NEXT_SURFACES: events.DASHBOARD_UP_NEXT_SURFACES,
     // BAL-589 — the "Convert a case to a project" AI brief's CLIENT event constant. ⚠ WITHOUT
     // THIS LINE every test whose module graph reaches `useCaseBriefFlow` throws on an undefined
     // constant (memory `reference_web_analytics_test_mock_export_list`).

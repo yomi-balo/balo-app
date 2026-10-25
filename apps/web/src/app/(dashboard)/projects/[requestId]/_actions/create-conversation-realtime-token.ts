@@ -8,7 +8,7 @@ import { conversationsRepository, projectRequestsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
-import { isThreadOpenStatus } from '@/lib/project-request/conversation-view-types';
+import { threadAdmits } from '@/lib/project-request/conversation-view-types';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { mintSubscribeOnlyToken } from '@/lib/realtime/mint-subscribe-token';
 import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
@@ -74,7 +74,7 @@ export async function createConversationRealtimeTokenAction(
     }
 
     const entitledRelationshipIds = request.relationships
-      .filter((r) => isThreadOpenStatus(r.status))
+      .filter((r) => threadAdmits(r, request.status, 'live'))
       .filter((r) => ctx.lens !== 'expert' || r.id === ctx.relationshipId)
       .map((r) => r.id);
 

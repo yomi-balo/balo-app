@@ -177,6 +177,16 @@ describe('createConversationRealtimeTokenAction', () => {
     expect(mockEnsureManyForContexts).not.toHaveBeenCalled();
   });
 
+  it('denies an accepted relationship on a closed request — realtime is live-only', async () => {
+    mockFindByIdWithRelations.mockResolvedValue({
+      ...requestGraph([relationship(REL_OPEN, 'accepted')]),
+      status: 'closed',
+    });
+    const result = await createConversationRealtimeTokenAction({ requestId: REQUEST_ID });
+    expect(result).toEqual({ success: false, error: 'No open conversations on this request.' });
+    expect(mockEnsureManyForContexts).not.toHaveBeenCalled();
+  });
+
   it('returns the disabled flag (no error toast material) when ABLY_API_KEY is unset', async () => {
     mockIsConfigured.mockReturnValue(false);
     const result = await createConversationRealtimeTokenAction({ requestId: REQUEST_ID });

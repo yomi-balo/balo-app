@@ -1,7 +1,10 @@
+import type { ConversationCallRoute } from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
   requestStatusRank,
   type ConversationThreadView,
+  type ThreadStage,
+  type UpcomingCallView,
 } from '@/lib/project-request/conversation-view-types';
 import { narrowToTrackStage, type TrackStage } from '@/lib/project-request/close-copy';
 
@@ -12,7 +15,8 @@ import { narrowToTrackStage, type TrackStage } from '@/lib/project-request/close
  * proposal CTA is LIVE (BAL-272 / A5), the expert's `kind:'build'` CTA is LIVE
  * (BAL-288 / A6.2 — navigates to the proposal composer), and the `kind:'view'`
  * CTA is LIVE (BAL-289 / A6.3 — navigates to the read-only review/submitted
- * surface). The call CTA is wired to real booking (BAL-283).
+ * surface). The call CTA is wired to real booking (BAL-283) and, from BAL-616, is offered on
+ * every stage the client can still talk to the expert in.
  */
 
 export type HeaderProposalSlot =
@@ -33,24 +37,25 @@ export type RailProposalSlot = {
 };
 
 /**
- * BAL-283 (plan §12.3) — the call-CTA slot as ONE derived discriminated union, so header, rail
- * and nudge cannot disagree about what state this thread's call is in.
+ * The call-CTA slot as ONE derived discriminated union, so header, rail and nudge cannot
+ * disagree about what state this thread's call is in (BAL-283, reshaped by BAL-616).
  *
- *   'none'    — call CTA not offered at all (past kickoff, or thread not active)
- *   'book'    — client, nothing booked yet: "Book a call" opens the live-availability dialog
- *   'propose' — expert, has not yet shared availability: "Propose times" (share + nudge)
- *   'shared'  — expert, `availability_shared_at` is set: quiet, non-interactive pill
- *   'booked'  — either lens, a live request_interaction meeting exists: the slot is REMOVED
- *               from header/rail (there is nothing left to book against this relationship at
- *               this stage); `scheduledStartIso` carries the meeting's window for the nudge's
- *               "done" copy.
+ *   'none'     — no call control (a client with no expert profile to book through; an expert
+ *                past kickoff or off an active thread)
+ *   'book'     — client, nothing upcoming: "Book a call". `route: 'in_place'` opens the
+ *                live-availability dialog; `'profile'` links to the expert's profile, for a
+ *                thread the request has moved on from (declined, not selected, closed)
+ *   'upcoming' — a call is booked and live in this thread: `next` is the soonest, `more` the
+ *                count behind it, `canBookAnother` is client-only
+ *   'propose'  — expert, has not yet shared availability: "Propose times" (share + nudge)
+ *   'shared'   — expert, `availability_shared_at` is set: quiet, non-interactive pill
  */
 export type CallSlot =
   | { kind: 'none' }
-  | { kind: 'book' }
+  | { kind: 'book'; route: 'in_place' | 'profile' }
+  | { kind: 'upcoming'; next: UpcomingCallView; more: number; canBookAnother: boolean }
   | { kind: 'propose' }
-  | { kind: 'shared' }
-  | { kind: 'booked'; scheduledStartIso: string };
+  | { kind: 'shared' };
 
 export interface ThreadActions {
   callSlot: CallSlot;
@@ -123,35 +128,96 @@ function deriveRailProposal(
 }
 
 /**
- * BAL-283 — the call-slot derivation, isolated so its precedence is legible in one place:
- * BOOKED beats everything (nothing left to book), then the lens-specific progression.
+ * The call-slot derivation, isolated so its precedence is legible in one place: an upcoming
+ * call on an in-place thread beats everything, then the lens-specific progression.
  *
- * ⚠ `'booked'` IS A REAL LIMIT, NOT ONLY A DISPLAY STATE (round-1 security MEDIUM). The
- * matching server-side guard is `assertNoLiveIntroCall`, called by `bookIntroCallAction`, and
- * it asks the IDENTICAL question through the SAME shared `pickUpcomingContextMeeting` that
- * produced `thread.bookedCall` here. Before that guard existed this precedence was browser-only
- * and a fresh client-minted `bookingNonce` booked straight past it.
+ * "In place" is `active` or `won` — the stages the conversation is still live in. A thread the
+ * request moved on from shows no upcoming call (its calls belong to a relationship the client
+ * is no longer working with) and routes the client to the expert's profile to book instead.
  *
- * ⚠ AND `bookedCall` MEANS "an UPCOMING call", never "a call ever happened" — an ENDED intro
- * call resolves to `null` upstream, so the CTA correctly returns for a second conversation.
+ * ⚠ THE SAME ROUTE APPLIES ONCE THE REQUEST IS `kickoff_approved` BUT ITS DELIVERY ENGAGEMENT IS
+ * NO LONGER `active` (completed or cancelled — the request status never moves off
+ * `kickoff_approved` when the project ends). `apps/api` refuses a `project_call` on a
+ * non-`active` engagement, so an in-place dialog would end in "This request has moved on". Calls
+ * already booked stay visible; only the ability to book another goes.
+ *
+ * ⚠ `upcomingCalls` MEANS "UPCOMING", never "a call ever happened": ended calls are filtered
+ * upstream by `isUpcomingContextMeeting`, so the CTA returns once a call has happened. The cap
+ * on how many may be upcoming is enforced by the booking action, not here — "Book another call"
+ * stays visible at the cap and answers with the cap copy.
  */
 function deriveCallSlot(input: {
   lens: 'client' | 'expert';
-  callAllowed: boolean;
+  stage: ThreadStage;
+  beforeKickoff: boolean;
   availabilitySharedAtIso: string | null;
-  bookedCall: { meetingId: string; scheduledStartIso: string } | null;
+  upcomingCalls: readonly UpcomingCallView[];
+  expertUsername: string | null;
+  deliveryEnded: boolean;
 }): CallSlot {
-  const { lens, callAllowed, availabilitySharedAtIso, bookedCall } = input;
-  if (bookedCall !== null) {
-    return { kind: 'booked', scheduledStartIso: bookedCall.scheduledStartIso };
+  const {
+    lens,
+    stage,
+    beforeKickoff,
+    availabilitySharedAtIso,
+    upcomingCalls,
+    expertUsername,
+    deliveryEnded,
+  } = input;
+  const inPlace = stage === 'active' || stage === 'won';
+  const [next] = upcomingCalls;
+  if (inPlace && next !== undefined) {
+    return {
+      kind: 'upcoming',
+      next,
+      more: upcomingCalls.length - 1,
+      canBookAnother: lens === 'client' && !deliveryEnded,
+    };
   }
-  if (!callAllowed) {
-    return { kind: 'none' };
+  if (lens === 'expert') {
+    if (!(stage === 'active' && beforeKickoff)) return { kind: 'none' };
+    return availabilitySharedAtIso === null ? { kind: 'propose' } : { kind: 'shared' };
   }
-  if (lens === 'client') {
-    return { kind: 'book' };
-  }
-  return availabilitySharedAtIso === null ? { kind: 'propose' } : { kind: 'shared' };
+  if (inPlace && !deliveryEnded) return { kind: 'book', route: 'in_place' };
+  return expertUsername === null ? { kind: 'none' } : { kind: 'book', route: 'profile' };
+}
+
+/**
+ * The call slot for one thread — the single entry point for both `deriveThreadActions` and the
+ * stage's click handlers, so what the header shows and what a click tracks cannot diverge.
+ */
+export function deriveThreadCallSlot(input: {
+  lens: 'client' | 'expert';
+  requestStatus: ProjectRequestStatus;
+  thread: ConversationThreadView;
+  /**
+   * True when the request's delivery engagement is `active`. Only read at `kickoff_approved`,
+   * where a completed or cancelled engagement stops accepting `project_call` bookings. Defaults
+   * `true` so every call site outside the page's kickoff window is unaffected.
+   */
+  deliveryActive?: boolean;
+}): CallSlot {
+  const { lens, requestStatus, thread, deliveryActive = true } = input;
+  return deriveCallSlot({
+    lens,
+    stage: thread.stage,
+    beforeKickoff: requestStatusRank(requestStatus) < requestStatusRank('kickoff_approved'),
+    availabilitySharedAtIso: thread.availabilitySharedAtIso,
+    upcomingCalls: thread.upcomingCalls,
+    expertUsername: thread.expertUsername,
+    deliveryEnded: requestStatus === 'kickoff_approved' && !deliveryActive,
+  });
+}
+
+/**
+ * How a client's call click reaches the booking flow: `in_place` opens the dialog on this page,
+ * `profile` navigates to the expert's profile. `null` for slots that book nothing (the expert's
+ * propose/shared pill, or no call control at all).
+ */
+export function callRouteOf(slot: CallSlot): ConversationCallRoute | null {
+  if (slot.kind === 'upcoming') return 'in_place';
+  if (slot.kind === 'book') return slot.route;
+  return null;
 }
 
 export function deriveThreadActions(input: {
@@ -169,25 +235,29 @@ export function deriveThreadActions(input: {
    * included) keeps compiling unchanged.
    */
   canDecline?: boolean;
+  /** See {@link deriveThreadCallSlot}. */
+  deliveryActive?: boolean;
 }): ThreadActions {
-  const { lens, requestStatus, thread, nudgeIsProposal, canDecline = false } = input;
+  const {
+    lens,
+    requestStatus,
+    thread,
+    nudgeIsProposal,
+    canDecline = false,
+    deliveryActive = true,
+  } = input;
   const rank = requestStatusRank(requestStatus);
   const beforeKickoff = rank < requestStatusRank('kickoff_approved');
   const pastAcceptance = rank >= requestStatusRank('accepted');
-  const callAllowed = beforeKickoff && thread.stage === 'active';
+  const proposalAllowed = beforeKickoff && thread.stage === 'active';
   const revising = thread.changeRequest !== null;
 
-  const callSlot = deriveCallSlot({
-    lens,
-    callAllowed,
-    availabilitySharedAtIso: thread.availabilitySharedAtIso,
-    bookedCall: thread.bookedCall,
-  });
+  const callSlot = deriveThreadCallSlot({ lens, requestStatus, thread, deliveryActive });
 
   return {
     callSlot,
-    // Design: the proposal slot shares the call gate (hidden once decided).
-    headerProposal: callAllowed
+    // The proposal slot is hidden once the thread is decided or past kickoff.
+    headerProposal: proposalAllowed
       ? deriveHeaderProposal(lens, thread.relationshipStatus, revising, nudgeIsProposal)
       : null,
     railProposal: deriveRailProposal(

@@ -1,15 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockEngagementFindById,
   mockProjectRequestFindById,
   mockRelationshipFindById,
   mockGetMemberRole,
+  mockListActiveMeetingsForContexts,
+  mockFindByBookingIdempotencyKey,
 } = vi.hoisted(() => ({
   mockEngagementFindById: vi.fn(),
   mockProjectRequestFindById: vi.fn(),
   mockRelationshipFindById: vi.fn(),
   mockGetMemberRole: vi.fn(),
+  mockListActiveMeetingsForContexts: vi.fn(),
+  mockFindByBookingIdempotencyKey: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -24,6 +28,11 @@ vi.mock('@balo/db', () => ({
   // import, not silently at a 404.
   requestExpertRelationshipsRepository: { findById: mockRelationshipFindById },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
+  // BAL-616 — the upcoming-call cap reads the cancelled-filtered active-meetings list.
+  meetingsRepository: {
+    listActiveMeetingsForContexts: mockListActiveMeetingsForContexts,
+    findByBookingIdempotencyKey: mockFindByBookingIdempotencyKey,
+  },
 }));
 // NOTE: `@balo/shared/authz` is deliberately NOT mocked — the real, pure `roleHasCapability`
 // map is the thing under test at the capability step (owner/admin/member hold PARTICIPATE;
@@ -41,6 +50,7 @@ const EXPERT_PROFILE_ID = '44444444-4444-4444-8444-444444444444';
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetMemberRole.mockResolvedValue('member');
+  mockListActiveMeetingsForContexts.mockResolvedValue(new Map());
 });
 
 /**
@@ -67,6 +77,7 @@ describe('per-context-type resolution of the owning party', () => {
   it.each([
     { contextType: 'case', engagementType: 'case' },
     { contextType: 'project_kickoff', engagementType: 'project' },
+    { contextType: 'project_call', engagementType: 'project' },
     { contextType: 'package_session', engagementType: 'package' },
   ] as const)(
     '$contextType reads engagements and returns engagementType "$engagementType"',
@@ -475,7 +486,7 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
    * slot afterwards is a manual discovery by the expert. The gate below is what stops it.
    */
   it.each(['accepted', 'kickoff_approved', 'closed'])(
-    'DECIDED — a request at %s denies booking, and membership is never consulted',
+    'DECIDED — a LOSING relationship on a request at %s denies booking, membership never consulted',
     async (status) => {
       mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status }));
 
@@ -485,6 +496,37 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
       });
       // ⚠ Collapsed into the ORDINARY not-found literal (§3's oracle decision) — no new code,
       // so a prober cannot distinguish "decided request" from "uuid resolves to nothing".
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+    }
+  );
+
+  /**
+   * BAL-616 — the WON relationship is admitted at `accepted`. From
+   * `kickoff_approved` the engagement exists and booking moves to `project_call`, so the
+   * request-grain label is refused for EVERY relationship; `closed` stays refused (BAL-540).
+   */
+  it('WON — the accepted relationship on an accepted request books', async () => {
+    mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'accepted' }));
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status: 'accepted' }));
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: true,
+      companyId: COMPANY_ID,
+      engagementType: null,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+  });
+
+  it.each(['kickoff_approved', 'closed'])(
+    'WON — the accepted relationship on a request at %s is refused, membership never consulted',
+    async (status) => {
+      mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'accepted' }));
+      mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status }));
+
+      await expect(authorizeInteraction()).resolves.toEqual({
+        ok: false,
+        code: 'context_not_found',
+      });
       expect(mockGetMemberRole).not.toHaveBeenCalled();
     }
   );
@@ -587,10 +629,235 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
   });
 });
 
+/**
+ * BAL-616 — `project_call` anchors on the engagement the won thread materialized into. The
+ * membership read runs BEFORE the coherence verdict, so a non-member never learns a guessed
+ * uuid's type.
+ */
+describe('BAL-616 — the project_call arm', () => {
+  const authorizeProjectCall = (): Promise<unknown> =>
+    authorizeMeetingBooking({
+      contextType: 'project_call',
+      contextId: CONTEXT_ID,
+      userId: USER_ID,
+    });
+
+  it('a NON-member gets context_not_found even when the engagement is `case`-typed', async () => {
+    mockEngagementFindById.mockResolvedValue(engagementRow({ engagementType: 'case' }));
+    mockGetMemberRole.mockResolvedValue(undefined);
+
+    await expect(authorizeProjectCall()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).toHaveBeenCalledWith('company', COMPANY_ID, USER_ID);
+  });
+
+  it('a member with a `case` engagement gets context_type_mismatch', async () => {
+    mockEngagementFindById.mockResolvedValue(engagementRow({ engagementType: 'case' }));
+
+    await expect(authorizeProjectCall()).resolves.toEqual({
+      ok: false,
+      code: 'context_type_mismatch',
+    });
+  });
+
+  it('a completed engagement is refused, after the membership read', async () => {
+    mockEngagementFindById.mockResolvedValue(
+      engagementRow({ engagementType: 'project', status: 'completed' })
+    );
+
+    await expect(authorizeProjectCall()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).toHaveBeenCalledTimes(1);
+  });
+
+  it('ok → engagementType project, expert off the engagement row, no money arm', async () => {
+    mockEngagementFindById.mockResolvedValue(engagementRow({ engagementType: 'project' }));
+
+    await expect(authorizeProjectCall()).resolves.toEqual({
+      ok: true,
+      companyId: COMPANY_ID,
+      engagementType: 'project',
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+    expect(mockProjectRequestFindById).not.toHaveBeenCalled();
+    expect(mockRelationshipFindById).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-616 — at most {@link UPCOMING_CALL_CAP} upcoming calls per context, enforced
+ * AFTER authorization succeeds and answered with its own 409 literal.
+ */
+describe('BAL-616 — the upcoming-call cap', () => {
+  const NOW = new Date('2026-10-23T00:00:00Z');
+  const HOUR = 3_600_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'accepted' }));
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status: 'accepted' }));
+    mockEngagementFindById.mockResolvedValue(engagementRow({ engagementType: 'project' }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function meeting(
+    meetingId: string,
+    overrides: { status?: string; endOffsetMs?: number } = {}
+  ): unknown {
+    const endOffsetMs = overrides.endOffsetMs ?? 24 * HOUR;
+    return {
+      meetingId,
+      status: overrides.status ?? 'scheduled',
+      scheduledStart: new Date(NOW.getTime() + endOffsetMs - HOUR),
+      scheduledEnd: new Date(NOW.getTime() + endOffsetMs),
+    };
+  }
+
+  function listing(contextId: string, meetings: unknown[]): void {
+    mockListActiveMeetingsForContexts.mockResolvedValue(new Map([[contextId, meetings]]));
+  }
+
+  const book = (contextType: 'request_interaction' | 'project_call', key?: string) =>
+    authorizeMeetingBooking({
+      contextType,
+      contextId: CONTEXT_ID,
+      userId: USER_ID,
+      bookingIdempotencyKey: key,
+    });
+
+  it.each(['request_interaction', 'project_call'] as const)(
+    '%s: three upcoming calls refuse the fourth with call_cap_reached',
+    async (contextType) => {
+      listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+
+      await expect(book(contextType)).resolves.toEqual({ ok: false, code: 'call_cap_reached' });
+      expect(mockListActiveMeetingsForContexts).toHaveBeenCalledWith({
+        contextType,
+        contextIds: [CONTEXT_ID],
+      });
+    }
+  );
+
+  it.each(['request_interaction', 'project_call'] as const)(
+    '%s: two upcoming calls still book',
+    async (contextType) => {
+      listing(CONTEXT_ID, [meeting('m1'), meeting('m2')]);
+
+      await expect(book(contextType)).resolves.toMatchObject({ ok: true });
+    }
+  );
+
+  it('ended calls and calls whose window has passed do not count', async () => {
+    listing(CONTEXT_ID, [
+      meeting('m1'),
+      meeting('m2', { status: 'ended' }),
+      meeting('m3', { endOffsetMs: -HOUR }),
+    ]);
+
+    await expect(book('request_interaction')).resolves.toMatchObject({ ok: true });
+  });
+
+  it('a live call that has run past its scheduled end still counts', async () => {
+    listing(CONTEXT_ID, [
+      meeting('m1'),
+      meeting('m2'),
+      meeting('m3', { status: 'in_progress', endOffsetMs: -HOUR }),
+    ]);
+
+    await expect(book('project_call')).resolves.toEqual({ ok: false, code: 'call_cap_reached' });
+  });
+
+  it('a meeting listed twice counts once', async () => {
+    listing(CONTEXT_ID, [meeting('m1'), meeting('m1'), meeting('m2'), meeting('m2')]);
+
+    await expect(book('request_interaction')).resolves.toMatchObject({ ok: true });
+  });
+
+  it('counts only AFTER authorization: a non-member gets context_not_found, and nothing is read', async () => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+    listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+
+    await expect(book('project_call')).resolves.toEqual({ ok: false, code: 'context_not_found' });
+    expect(mockListActiveMeetingsForContexts).not.toHaveBeenCalled();
+  });
+
+  it('a losing thread is refused as context_not_found, never as the cap', async () => {
+    mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'eoi_submitted' }));
+    listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+
+    await expect(book('request_interaction')).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockListActiveMeetingsForContexts).not.toHaveBeenCalled();
+  });
+
+  it('an uncapped label never reads the meeting list', async () => {
+    mockEngagementFindById.mockResolvedValue(engagementRow({ engagementType: 'project' }));
+
+    await expect(
+      authorizeMeetingBooking({
+        contextType: 'project_kickoff',
+        contextId: CONTEXT_ID,
+        userId: USER_ID,
+      })
+    ).resolves.toMatchObject({ ok: true });
+    expect(mockListActiveMeetingsForContexts).not.toHaveBeenCalled();
+  });
+
+  describe('a lost-201 retry at the cap', () => {
+    const KEY = 'a'.repeat(64);
+
+    it('leaves the key’s own meeting out of the count, so the replay is reached', async () => {
+      listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+      mockFindByBookingIdempotencyKey.mockResolvedValue({ id: 'm3' });
+
+      await expect(book('request_interaction', KEY)).resolves.toMatchObject({ ok: true });
+      expect(mockFindByBookingIdempotencyKey).toHaveBeenCalledWith(KEY);
+    });
+
+    it('a key that names no meeting in this thread does not lift the cap', async () => {
+      listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+      mockFindByBookingIdempotencyKey.mockResolvedValue({ id: 'elsewhere' });
+
+      await expect(book('request_interaction', KEY)).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+    });
+
+    it('a key with no meeting yet does not lift the cap', async () => {
+      listing(CONTEXT_ID, [meeting('m1'), meeting('m2'), meeting('m3')]);
+      mockFindByBookingIdempotencyKey.mockResolvedValue(undefined);
+
+      await expect(book('project_call', KEY)).resolves.toEqual({
+        ok: false,
+        code: 'call_cap_reached',
+      });
+    });
+
+    it('is not read at all below the cap', async () => {
+      listing(CONTEXT_ID, [meeting('m1')]);
+
+      await expect(book('project_call', KEY)).resolves.toMatchObject({ ok: true });
+      expect(mockFindByBookingIdempotencyKey).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('engagementTypeForContext (BAL-581)', () => {
   it.each([
     ['case', 'case'],
     ['project_kickoff', 'project'],
+    ['project_call', 'project'],
     ['package_session', 'package'],
   ] as const)('%s → %s', (contextType, expected) => {
     expect(engagementTypeForContext(contextType)).toBe(expected);

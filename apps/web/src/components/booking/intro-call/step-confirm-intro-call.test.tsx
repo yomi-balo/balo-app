@@ -25,6 +25,7 @@ function renderStep(overrides: Record<string, unknown> = {}) {
       viewerEmailDomain="northwind.example"
       clientCompanyName="Northwind Industrial"
       staleSlot={false}
+      callKind="intro"
       submitting={false}
       onBack={onBack}
       onSubmit={onSubmit}
@@ -147,5 +148,12 @@ describe('StepConfirmIntroCall', () => {
     expect(onChangeTime).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: /Back/ }));
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('callKind "call" reads "Call" on the slot summary and the context strip, never "Intro"', () => {
+    const { baseElement } = renderStep({ callKind: 'call' });
+    expect(screen.getByText('Call · 30 min')).toBeInTheDocument();
+    expect(screen.getByText(/Call for/)).toBeInTheDocument();
+    expect(baseElement.textContent ?? '').not.toMatch(/intro/i);
   });
 });

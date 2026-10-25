@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { CASE_INACTIVITY_DAYS, isCaseInactive } from '@balo/shared/engagements';
+import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   auditEvents,
@@ -9,6 +10,7 @@ import {
   engagements,
   meetingContexts,
   meetings,
+  requestExpertRelationships,
   type MeetingStatus,
   type NewMeeting,
 } from '../schema';
@@ -18,6 +20,7 @@ import {
   conversationFileFactory,
   conversationMessageFactory,
   creditWalletFactory,
+  engagementFactory,
   expertDraftFactory,
   meetingAuditEventFactory,
   meetingFactory,
@@ -38,6 +41,8 @@ import {
   meetingContextsRepository,
   MeetingAdminContextExistsError,
   MeetingPrimaryContextRepointedError,
+  MeetingReanchorOwnerMismatchError,
+  reanchorRequestCallsToEngagementTx,
   type ConsultationTimestamps,
 } from './meeting-contexts';
 
@@ -1777,5 +1782,218 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
       .where(eq(engagements.id, engagement.id));
     expect(parent?.createdAt.getTime()).toBe(created.getTime());
     expect(engagement.createdAt.getTime()).toBe(created.getTime());
+  });
+});
+
+describe('reanchorRequestCallsToEngagementTx (BAL-616 — the kickoff re-anchor, ADR-1046 amendment)', () => {
+  interface WonPair {
+    relationshipId: string;
+    companyId: string;
+    expertProfileId: string;
+  }
+
+  /** A direct request and its accepted relationship — the won thread at kickoff. */
+  async function seedWonPair(): Promise<WonPair> {
+    const request = await projectRequestFactory();
+    const expertProfileId = request.expertProfileId;
+    if (expertProfileId === null) {
+      throw new Error('fixture: projectRequestFactory seeds a direct request with an expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId,
+      values: { status: 'accepted' },
+    });
+    return { relationshipId: relationship.id, companyId: request.companyId, expertProfileId };
+  }
+
+  /** A call booked through the real writer, so it carries a `consultations` projection. */
+  async function bookInteractionCall(relationshipId: string): Promise<string> {
+    const start = new Date(Date.now() + DAY_MS);
+    const created = await meetingsRepository.create({
+      scheduledStart: start,
+      scheduledEnd: new Date(start.getTime() + HOUR_MS),
+      contexts: [{ contextType: 'request_interaction', contextId: relationshipId }],
+    });
+    return created.meeting.id;
+  }
+
+  /** Runs the re-anchor inside a transaction, as its one caller does. */
+  async function reanchor(input: { relationshipId: string; engagementId: string }) {
+    return db.transaction((tx) => reanchorRequestCallsToEngagementTx(tx, input));
+  }
+
+  async function liveContextTypes(meetingId: string): Promise<string[]> {
+    const rows = await meetingContextsRepository.listByMeeting(meetingId);
+    return rows.map((row) => row.contextType).sort((a, b) => a.localeCompare(b));
+  }
+
+  it('HAPPY PATH — the call gains project_call(E), KEEPS request_interaction(R), and its primary is the engagement', async () => {
+    const pair = await seedWonPair();
+    const meetingId = await bookInteractionCall(pair.relationshipId);
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+
+    const ids = await reanchor({
+      relationshipId: pair.relationshipId,
+      engagementId: engagement.id,
+    });
+
+    expect(ids).toEqual([meetingId]);
+    const rows = await meetingContextsRepository.listByMeeting(meetingId);
+    expect(rows.map((row) => [row.contextType, row.contextId])).toEqual(
+      expect.arrayContaining([
+        ['request_interaction', pair.relationshipId],
+        ['project_call', engagement.id],
+      ])
+    );
+    expect(rows).toHaveLength(2);
+    expect(selectPrimaryMeetingContext(rows)).toEqual({
+      ok: true,
+      context: { contextType: 'project_call', contextId: engagement.id },
+    });
+    // The booked projection still names the same expert.
+    expect((await findProjectionForMeeting(meetingId))?.expertProfileId).toBe(pair.expertProfileId);
+  });
+
+  it('IDEMPOTENT — a second run inserts no duplicate row and returns the same id', async () => {
+    const pair = await seedWonPair();
+    const meetingId = await bookInteractionCall(pair.relationshipId);
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+    const input = { relationshipId: pair.relationshipId, engagementId: engagement.id };
+
+    await reanchor(input);
+    const second = await reanchor(input);
+
+    expect(second).toEqual([meetingId]);
+    expect(await liveContextTypes(meetingId)).toEqual(['project_call', 'request_interaction']);
+  });
+
+  it('ENDED, CANCELLED and SOFT-DELETED meetings gain nothing; another relationship’s call is untouched', async () => {
+    const pair = await seedWonPair();
+    const liveId = await bookInteractionCall(pair.relationshipId);
+    const onRelationship = [
+      { contextType: 'request_interaction' as const, contextId: pair.relationshipId },
+    ];
+    const { meeting: ended } = await meetingFactory({
+      contexts: onRelationship,
+      values: { status: 'ended' },
+    });
+    const { meeting: cancelled } = await meetingFactory({
+      contexts: onRelationship,
+      values: { status: 'cancelled' },
+    });
+    const { meeting: deleted } = await meetingFactory({
+      contexts: onRelationship,
+      values: { deletedAt: new Date() },
+    });
+    const other = await seedWonPair();
+    const otherId = await bookInteractionCall(other.relationshipId);
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+
+    const ids = await reanchor({
+      relationshipId: pair.relationshipId,
+      engagementId: engagement.id,
+    });
+
+    expect(ids).toEqual([liveId]);
+    for (const meetingId of [ended.id, cancelled.id, deleted.id, otherId]) {
+      expect(await liveContextTypes(meetingId)).toEqual(['request_interaction']);
+    }
+  });
+
+  it('a relationship with NO live call returns [] and writes nothing', async () => {
+    const pair = await seedWonPair();
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+
+    await expect(
+      reanchor({ relationshipId: pair.relationshipId, engagementId: engagement.id })
+    ).resolves.toEqual([]);
+  });
+
+  it('REFUSES an engagement for a DIFFERENT company (company_changed) and leaves no project_call row', async () => {
+    const pair = await seedWonPair();
+    const meetingId = await bookInteractionCall(pair.relationshipId);
+    // A fresh personal company — same expert, so only the company differs.
+    const { engagement } = await engagementFactory({ expertProfileId: pair.expertProfileId });
+
+    const refusal = reanchor({ relationshipId: pair.relationshipId, engagementId: engagement.id });
+
+    await expect(refusal).rejects.toBeInstanceOf(MeetingReanchorOwnerMismatchError);
+    await expect(refusal).rejects.toMatchObject({ meetingId, reason: 'company_changed' });
+    expect(await liveContextTypes(meetingId)).toEqual(['request_interaction']);
+  });
+
+  it('REFUSES an engagement for a DIFFERENT expert with expert_changed — the owner comparison runs BEFORE the BAL-428 projection guard', async () => {
+    const pair = await seedWonPair();
+    const meetingId = await bookInteractionCall(pair.relationshipId);
+    const otherExpert = await expertDraftFactory();
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: otherExpert.id,
+    });
+
+    const refusal = reanchor({ relationshipId: pair.relationshipId, engagementId: engagement.id });
+
+    await expect(refusal).rejects.toBeInstanceOf(MeetingReanchorOwnerMismatchError);
+    await expect(refusal).rejects.toMatchObject({ meetingId, reason: 'expert_changed' });
+    expect(await liveContextTypes(meetingId)).toEqual(['request_interaction']);
+  });
+
+  it('REFUSES when the engagement does not become the primary (not_engagement_after) — an existing tier-100 context makes it ambiguous', async () => {
+    const pair = await seedWonPair();
+    const { engagement: kickoff } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+    // A call already anchored on another engagement, carrying a lower-tier row on R.
+    const { meeting } = await meetingFactory({
+      contexts: [
+        { contextType: 'project_kickoff', contextId: kickoff.id },
+        { contextType: 'request_interaction', contextId: pair.relationshipId },
+      ],
+    });
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+
+    const refusal = reanchor({ relationshipId: pair.relationshipId, engagementId: engagement.id });
+
+    await expect(refusal).rejects.toMatchObject({
+      meetingId: meeting.id,
+      reason: 'not_engagement_after',
+    });
+    expect(await liveContextTypes(meeting.id)).toEqual(['project_kickoff', 'request_interaction']);
+  });
+
+  it('REFUSES a call whose relationship no longer resolves (no_primary_before)', async () => {
+    const pair = await seedWonPair();
+    const meetingId = await bookInteractionCall(pair.relationshipId);
+    const { engagement } = await engagementFactory({
+      companyId: pair.companyId,
+      expertProfileId: pair.expertProfileId,
+    });
+    // A soft-deleted relationship: the old primary names no owner.
+    await db
+      .update(requestExpertRelationships)
+      .set({ deletedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, pair.relationshipId));
+
+    await expect(
+      reanchor({ relationshipId: pair.relationshipId, engagementId: engagement.id })
+    ).rejects.toMatchObject({ meetingId, reason: 'no_primary_before' });
+    expect(await liveContextTypes(meetingId)).toEqual(['request_interaction']);
   });
 });

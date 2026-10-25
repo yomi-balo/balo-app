@@ -60,6 +60,9 @@ const {
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
   companyBillingRepository: { findByCompanyId: () => Promise.resolve(undefined) },
+  projectEngagementsRepository: {
+    findByProjectRequestId: (...a: unknown[]) => mockFindEngagementIdByRequest(...a),
+  },
   partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
   usersRepository: { findNamesByIds: (...a: unknown[]) => mockFindNamesByIds(...a) },
   auditEventsRepository: {
@@ -126,6 +129,18 @@ vi.mock('@/lib/project-request/load-balo-panel', () => ({
 
 // useIsMobile (inside the conversation island) reads window.matchMedia.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
+// BAL-616 — the kickoff board's next-call read and the engagement id the conversation loader gets.
+const mockListUpcomingCallsByThread = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/project-request/upcoming-calls', () => ({
+  listUpcomingCallsByThread: (...args: unknown[]) => mockListUpcomingCallsByThread(...args),
+}));
+const mockFindEngagementIdByRequest = vi.hoisted(() => vi.fn());
+// The admin observer's billing panel loader reads proposals; this file only needs the page to
+// render for that lens.
+vi.mock('@/lib/project-request/load-admin-kickoff-billing', () => ({
+  loadAdminKickoffBilling: () => Promise.resolve(null),
+}));
 
 const mockLoadKickoffUpfront = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/project-request/kickoff-upfront', () => ({
@@ -220,6 +235,8 @@ async function renderPage(requestId = REQUEST_ID) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveWorkspaceForEntity.mockResolvedValue(null);
+  mockFindEngagementIdByRequest.mockResolvedValue(undefined);
+  mockListUpcomingCallsByThread.mockResolvedValue(new Map());
   mockLoadConversationView.mockResolvedValue({
     viewerUserId: 'user-x',
     threads: [],
@@ -621,6 +638,54 @@ describe('RequestDetailPage (RSC) — Phase-2 conversation payload (BAL-271)', (
     expect(screen.getByText(/Your conversation lives here/i)).toBeInTheDocument();
   });
 
+  it("BAL-616: loads the conversation for a closed request's client and hands the view to the shell", async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        status: 'closed',
+        closedAt: new Date('2026-09-05T10:00:00Z'),
+        closedByUserId: 'user-admin',
+        closeReason: 'unfilled',
+      } as Partial<ProjectRequestWithRelations>)
+    );
+    mockLoadConversationView.mockResolvedValue({
+      viewerUserId: 'user-x',
+      threads: [conversationThread({ relationshipStatus: 'declined', stage: 'request_closed' })],
+      defaultThreadId: 'rel-1',
+      initialMessages: [],
+      initialHasEarlier: false,
+      initialFiles: [],
+      realtimeEnabled: false,
+    });
+
+    await renderPage();
+
+    expect(mockLoadConversationView).toHaveBeenCalledTimes(1);
+    // The surviving thread reached the stage: its read-only composer is on the page.
+    expect(screen.getByPlaceholderText(/This request is closed/i)).toBeDisabled();
+  });
+
+  it('BAL-616: never loads the conversation for the admin observer on a closed request', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        status: 'closed',
+        closedAt: new Date('2026-09-05T10:00:00Z'),
+        closedByUserId: 'user-admin',
+        closeReason: 'unfilled',
+      } as Partial<ProjectRequestWithRelations>)
+    );
+    mockFindNamesByIds.mockResolvedValue([
+      { id: 'user-admin', firstName: 'Adeeb', lastName: null },
+    ]);
+    mockFindLatestByEntityAndAction.mockResolvedValue(undefined);
+
+    await renderPage();
+    expect(mockLoadConversationView).not.toHaveBeenCalled();
+  });
+
   it('never loads the conversation in Phase 1', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     mockFindByIdWithRelations.mockResolvedValue(request({ status: 'requested' }));
@@ -753,5 +818,158 @@ describe('RequestDetailPage (RSC) — kickoff upfront amount audience', () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     const ui = await RequestDetailPage({ params: Promise.resolve({ requestId: REQUEST_ID }) });
     expect(shellProps(ui).kickoffUpfront).toEqual({ amountCents: 522_000, currency: 'aud' });
+  });
+});
+
+describe('RequestDetailPage (RSC) — BAL-616 kickoff next call + project calls', () => {
+  const acceptedRel = (): ProjectRequestWithRelations['relationships'][number] =>
+    ({
+      ...liveRelationship(),
+      status: 'accepted',
+      expressionsOfInterest: [],
+      conversationMessages: [],
+      updatedAt: new Date('2025-01-02T00:00:00Z'),
+      invitedAt: new Date('2025-01-01T00:00:00Z'),
+    }) as ProjectRequestWithRelations['relationships'][number];
+
+  function shellPropsWith(node: unknown, key: string): Record<string, unknown> {
+    const found: Array<Record<string, unknown>> = [];
+    const walk = (n: unknown): void => {
+      if (n === null || n === undefined || typeof n !== 'object') return;
+      if (Array.isArray(n)) {
+        n.forEach(walk);
+        return;
+      }
+      const el = n as React.ReactElement<Record<string, unknown>>;
+      if (el.props && key in el.props) found.push(el.props);
+      walk(el.props?.children);
+    };
+    walk(node);
+    return found[0] ?? {};
+  }
+
+  async function pageUi(): Promise<unknown> {
+    return RequestDetailPage({ params: Promise.resolve({ requestId: REQUEST_ID }) });
+  }
+
+  beforeEach(() => {
+    mockLoadKickoffUpfront.mockResolvedValue(null);
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+  });
+
+  it('passes the soonest pre-kickoff call of the accepted thread as kickoffNextCallStartIso', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'accepted', relationships: [acceptedRel()] })
+    );
+    mockListUpcomingCallsByThread.mockResolvedValue(
+      new Map([
+        [
+          'rel-1',
+          [
+            {
+              meetingId: 'm-1',
+              scheduledStartIso: '2999-09-01T04:00:00.000Z',
+              contextType: 'request_interaction',
+            },
+          ],
+        ],
+      ])
+    );
+    const ui = await pageUi();
+    expect(mockListUpcomingCallsByThread).toHaveBeenCalledWith({
+      relationshipIds: ['rel-1'],
+      projectCall: null,
+      nowMs: expect.any(Number),
+    });
+    expect(shellPropsWith(ui, 'kickoffNextCallStartIso').kickoffNextCallStartIso).toBe(
+      '2999-09-01T04:00:00.000Z'
+    );
+  });
+
+  it('is read for the admin lens too (an admin has no conversation stage)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'accepted', relationships: [acceptedRel()] })
+    );
+    await pageUi();
+    expect(mockListUpcomingCallsByThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes null when the accepted thread has no upcoming call', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'accepted', relationships: [acceptedRel()] })
+    );
+    const ui = await pageUi();
+    expect(shellPropsWith(ui, 'kickoffNextCallStartIso').kickoffNextCallStartIso).toBeNull();
+  });
+
+  it('skips the read once kickoff is approved', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
+    );
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status: 'active' });
+    const ui = await pageUi();
+    expect(mockListUpcomingCallsByThread).not.toHaveBeenCalled();
+    expect(shellPropsWith(ui, 'kickoffNextCallStartIso').kickoffNextCallStartIso).toBeNull();
+  });
+
+  it('skips the read when the request has no kickoff', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'eoi_submitted' }));
+    await pageUi();
+    expect(mockListUpcomingCallsByThread).not.toHaveBeenCalled();
+  });
+
+  it('degrades to null and warns when the next-call read fails', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'accepted', relationships: [acceptedRel()] })
+    );
+    mockListUpcomingCallsByThread.mockRejectedValue(new Error('db down'));
+    const ui = await pageUi();
+    expect(shellPropsWith(ui, 'kickoffNextCallStartIso').kickoffNextCallStartIso).toBeNull();
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      expect.stringContaining('Kickoff next-call read failed'),
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'db down' })
+    );
+  });
+
+  it('resolves the engagement id BEFORE the conversation load and passes it in', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
+    );
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status: 'active' });
+    await pageUi();
+    expect(mockLoadConversationView).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      'eng-1'
+    );
+  });
+
+  it.each([
+    ['active', true],
+    ['completed', false],
+    ['cancelled', false],
+  ])('passes deliveryActive for a %s engagement as %s', async (status, expected) => {
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'kickoff_approved', relationships: [acceptedRel()] })
+    );
+    mockFindEngagementIdByRequest.mockResolvedValue({ id: 'eng-1', status });
+    const ui = await pageUi();
+    expect(shellPropsWith(ui, 'deliveryActive').deliveryActive).toBe(expected);
+  });
+
+  it('passes null for the engagement before kickoff', async () => {
+    mockFindByIdWithRelations.mockResolvedValue(request({ status: 'eoi_submitted' }));
+    await pageUi();
+    expect(mockLoadConversationView).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      null
+    );
+    expect(mockFindEngagementIdByRequest).not.toHaveBeenCalled();
   });
 });

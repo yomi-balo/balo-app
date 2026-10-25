@@ -245,7 +245,7 @@ describe('loadGuestRecapIndex — the envelope null arm (project_discovery)', ()
 });
 
 describe('loadGuestRecapIndex — the two envelope arms', () => {
-  it('engagement arm — listMeetingsForContexts called once with the exact four pairs', async () => {
+  it('engagement arm — listMeetingsForContexts called once with the exact five pairs', async () => {
     mockResolveSubject.mockResolvedValue(subjectFor());
     mockResolveAccess.mockResolvedValue(accessFor(OWN_MEETING_ID));
     mockListMeetingsForContexts.mockResolvedValue([]);
@@ -256,6 +256,7 @@ describe('loadGuestRecapIndex — the two envelope arms', () => {
     expect(mockListMeetingsForContexts).toHaveBeenCalledWith([
       { contextType: 'case', contextId: CASE_CONTEXT_ID },
       { contextType: 'project_kickoff', contextId: CASE_CONTEXT_ID },
+      { contextType: 'project_call', contextId: CASE_CONTEXT_ID },
       { contextType: 'package_session', contextId: CASE_CONTEXT_ID },
       { contextType: 'retainer_checkin', contextId: CASE_CONTEXT_ID },
     ]);

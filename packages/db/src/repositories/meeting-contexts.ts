@@ -2,14 +2,20 @@ import { and, asc, eq, gt, inArray, isNull, notInArray, or, sql, type SQL } from
 import {
   findPrimaryMeetingContextRepoint,
   MEETING_CLOSED_TO_JOIN,
+  resolveContextOwner,
+  selectPrimaryMeetingContext,
+  type MeetingContextOwnerReads,
   type PrimaryMeetingContext,
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   auditEvents,
   creditSessions,
+  engagements,
   meetingContexts,
   meetings,
+  projectRequests,
+  requestExpertRelationships,
   type Meeting,
   type MeetingContext,
   type MeetingContextType,
@@ -139,6 +145,203 @@ async function assertPrimaryContextUnchangedTx(
   }
 }
 
+/** Why {@link reanchorRequestCallsToEngagementTx} refused ONE meeting. */
+export type MeetingReanchorRefusalReason =
+  /** The meeting had no resolvable primary context (or owner) before the re-anchor. */
+  | 'no_primary_before'
+  /** After the insert the primary is not `{ project_call, engagementId }`, or names no owner. */
+  | 'not_engagement_after'
+  /** The engagement's company is not the company the meeting already named. */
+  | 'company_changed'
+  /** The engagement's delivering expert is not the expert the meeting already named. */
+  | 'expert_changed';
+
+/**
+ * Thrown by {@link reanchorRequestCallsToEngagementTx} when re-anchoring a meeting would change
+ * who owns it, or would not make the engagement its primary context. The throw rolls back the
+ * caller's whole transaction (the kickoff), so a refused re-anchor never leaves a half-moved call.
+ *
+ * ⚠ `meetingId` AND `reason` ARE LOG-ONLY — the same posture as
+ * {@link MeetingPrimaryContextRepointedError}. The wire answer for this error is the caller's
+ * generic failure copy, never a distinct reason literal.
+ */
+export class MeetingReanchorOwnerMismatchError extends Error {
+  constructor(
+    public readonly meetingId: string,
+    public readonly reason: MeetingReanchorRefusalReason
+  ) {
+    super(`Re-anchoring meeting ${meetingId} onto its project engagement was refused: ${reason}`);
+    this.name = 'MeetingReanchorOwnerMismatchError';
+  }
+}
+
+/** Every live context row of ONE meeting, read on `exec`. */
+async function liveContextRowsTx(
+  exec: DbExecutor,
+  meetingId: string
+): Promise<Array<{ contextType: MeetingContextType; contextId: string | null }>> {
+  return exec
+    .select({ contextType: meetingContexts.contextType, contextId: meetingContexts.contextId })
+    .from(meetingContexts)
+    .where(and(eq(meetingContexts.meetingId, meetingId), isNull(meetingContexts.deletedAt)));
+}
+
+/**
+ * The owner rule's three reads, bound to `exec`. Mirrors `REPOSITORY_READS`
+ * (`_shared/meeting-context-owner.ts`) — each filters `deleted_at IS NULL`, the injector's
+ * obligation — but reads through the transaction, because the engagement the re-anchor points at
+ * was inserted in that same uncommitted transaction and the base `db` cannot see it.
+ */
+function ownerReadsTx(exec: DbExecutor): MeetingContextOwnerReads {
+  return {
+    findEngagement: async (engagementId) => {
+      const [row] = await exec
+        .select({ companyId: engagements.companyId, expertProfileId: engagements.expertProfileId })
+        .from(engagements)
+        .where(and(eq(engagements.id, engagementId), isNull(engagements.deletedAt)))
+        .limit(1);
+      return row;
+    },
+    findProjectRequest: async (projectRequestId) => {
+      const [row] = await exec
+        .select({
+          companyId: projectRequests.companyId,
+          expertProfileId: projectRequests.expertProfileId,
+        })
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, projectRequestId), isNull(projectRequests.deletedAt)))
+        .limit(1);
+      return row;
+    },
+    findRelationship: async (relationshipId) => {
+      const [row] = await exec
+        .select({
+          projectRequestId: requestExpertRelationships.projectRequestId,
+          expertProfileId: requestExpertRelationships.expertProfileId,
+        })
+        .from(requestExpertRelationships)
+        .where(
+          and(
+            eq(requestExpertRelationships.id, relationshipId),
+            isNull(requestExpertRelationships.deletedAt)
+          )
+        )
+        .limit(1);
+      return row;
+    },
+  };
+}
+
+/**
+ * BAL-616 (ADR-1046 amendment 2026-10-23) — THE ONE SANCTIONED PRIMARY RE-ANCHOR. At kickoff,
+ * the won relationship's live calls become project calls: every meeting with a live
+ * `request_interaction` context naming `relationshipId`, not soft-deleted and not
+ * `ended`/`cancelled`, gains a `project_call` context naming `engagementId`. Precedence 100 over
+ * 50 makes the engagement its primary context. The `request_interaction` row is KEPT (the
+ * multi-context pattern), so the meeting still reads from the relationship's side.
+ *
+ * ⚠ BOOKING-VS-KICKOFF RACE. The booking path takes no request lock, so a call committed after
+ * kickoff's re-anchor read stays `request_interaction`-only. It still shows on the request page
+ * and in Up next, but a `project_call` cap does not count it. Accepted, low impact.
+ *
+ * ⚠ TRANSACTION-ONLY, AND ITS ONLY CALLER IS `materializeFromKickoff`. Every read and write
+ * runs on `tx`: the engagement row was inserted earlier in that same transaction.
+ *
+ * ⚠ WHY NOT `meetingContextsRepository.attach`. `attach` opens its own `db.transaction`, and
+ * its guard 1 (`assertPrimaryContextUnchangedTx`) refuses exactly this insert by design — the
+ * primary moves from `{request_interaction, R}` to `{project_call, E}`. That repoint is allowed
+ * HERE, and only here, because the two things a repoint can change are asserted invariant for
+ * every meeting, before and after the insert:
+ *   · the OWNING COMPANY — `resolveContextOwner` on the old and the new primary (the ONE owner
+ *     rule, never a second walk) must name the same `companyId`;
+ *   · the DELIVERING EXPERT — the same rule must name the same `expertProfileId`, and then
+ *     `assertProjectionExpertUnchangedTx` (BAL-428) re-checks the booked projection.
+ * Any other outcome throws {@link MeetingReanchorOwnerMismatchError} (or the projection guard's
+ * `MeetingExpertAmbiguousError`) and the whole kickoff rolls back.
+ *
+ * The status filter is by STATUS, not by clock: `packages/db` holds no "upcoming" rule. A
+ * scheduled call whose start time has passed is still carried over.
+ *
+ * IDEMPOTENT: the insert uses `attach`'s `onConflictDoNothing` arbiter, so a meeting that
+ * already carries the `project_call` row gains nothing and is still returned.
+ *
+ * @returns every re-anchored meeting id, in `scheduled_start, id` order.
+ */
+export async function reanchorRequestCallsToEngagementTx(
+  tx: DbExecutor,
+  input: { relationshipId: string; engagementId: string }
+): Promise<string[]> {
+  const candidates = await tx
+    .selectDistinct({ meetingId: meetings.id, scheduledStart: meetings.scheduledStart })
+    .from(meetingContexts)
+    .innerJoin(meetings, eq(meetings.id, meetingContexts.meetingId))
+    .where(
+      and(
+        eq(meetingContexts.contextType, 'request_interaction'),
+        eq(meetingContexts.contextId, input.relationshipId),
+        isNull(meetingContexts.deletedAt),
+        isNull(meetings.deletedAt),
+        notInArray(meetings.status, [...MEETING_CLOSED_TO_JOIN])
+      )
+    )
+    .orderBy(asc(meetings.scheduledStart), asc(meetings.id));
+
+  const reads = ownerReadsTx(tx);
+  const reanchored: string[] = [];
+  for (const { meetingId } of candidates) {
+    await reanchorOneMeetingTx(tx, reads, meetingId, input.engagementId);
+    reanchored.push(meetingId);
+  }
+  return reanchored;
+}
+
+/** One meeting of {@link reanchorRequestCallsToEngagementTx}: insert, then assert ownership. */
+async function reanchorOneMeetingTx(
+  tx: DbExecutor,
+  reads: MeetingContextOwnerReads,
+  meetingId: string,
+  engagementId: string
+): Promise<void> {
+  const primaryBefore = selectPrimaryMeetingContext(await liveContextRowsTx(tx, meetingId));
+  if (!primaryBefore.ok) {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'no_primary_before');
+  }
+  const ownerBefore = await resolveContextOwner(primaryBefore.context, reads);
+  if (ownerBefore.outcome !== 'resolved') {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'no_primary_before');
+  }
+
+  await tx
+    .insert(meetingContexts)
+    .values({ meetingId, contextType: 'project_call', contextId: engagementId })
+    .onConflictDoNothing({
+      target: [meetingContexts.meetingId, meetingContexts.contextType, meetingContexts.contextId],
+      where: isNull(meetingContexts.deletedAt), // predicate MUST match the index exactly
+    });
+
+  const primaryAfter = selectPrimaryMeetingContext(await liveContextRowsTx(tx, meetingId));
+  if (
+    !primaryAfter.ok ||
+    primaryAfter.context.contextType !== 'project_call' ||
+    primaryAfter.context.contextId !== engagementId
+  ) {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'not_engagement_after');
+  }
+  const ownerAfter = await resolveContextOwner(primaryAfter.context, reads);
+  if (ownerAfter.outcome !== 'resolved') {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'not_engagement_after');
+  }
+
+  if (ownerAfter.owner.companyId !== ownerBefore.owner.companyId) {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'company_changed');
+  }
+  if (ownerAfter.owner.expertProfileId !== ownerBefore.owner.expertProfileId) {
+    throw new MeetingReanchorOwnerMismatchError(meetingId, 'expert_changed');
+  }
+
+  await assertProjectionExpertUnchangedTx(tx, meetingId);
+}
+
 /**
  * `meetingContextsRepository` (BAL-418 / ADR-1045 §2) — the polymorphic seam's read/write
  * surface, plus THE BAL-425 SEAM (`consultationTimestampsForEngagements`).
@@ -235,6 +438,12 @@ export const meetingContextsRepository = {
    *      it appears under, and which engagement's consultation anchors it feeds; that is not a
    *      tag edit, and `attach` is a tagging operation (see `detach`'s docblock, which this
    *      mirrors on purpose). Widening this needs an ADR-1046 amendment and a named caller.
+   *      THE ONE SANCTIONED RE-ANCHOR is `reanchorRequestCallsToEngagementTx` (BAL-616,
+   *      ADR-1046 amendment 2026-10-23), whose only caller is
+   *      `projectEngagementsRepository.materializeFromKickoff`. It moves a won relationship's
+   *      live calls from `request_interaction` to `project_call`, and the repoint is allowed
+   *      only because it asserts the owning company and the delivering expert invariant across
+   *      it. It does not go through `attach`, so this guard stays unconditional.
    *
    *   2. `assertProjectionExpertUnchangedTx` (BAL-428) — THE BOOKING'S EXPERT.
    *      `meetingsRepository` resolves the delivering expert from the contexts it is given at

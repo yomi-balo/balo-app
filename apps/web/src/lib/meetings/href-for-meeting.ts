@@ -53,6 +53,7 @@ export function hrefForMeeting(meeting: MeetingHrefSubject): string | null {
     case 'case':
       return `/cases/${meeting.contextId}`;
     case 'project_kickoff':
+    case 'project_call':
       return `/engagements/${meeting.contextId}`;
     case 'project_discovery':
     case 'request_interaction':

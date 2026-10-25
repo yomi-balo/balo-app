@@ -17,7 +17,7 @@ import type {
  */
 
 /**
- * The five labels this registry is total over.
+ * The six labels this registry is total over.
  *
  * ⚠ `Extract`, NOT A BARE UNION. A label renamed in the database drops out of the Extract,
  * which shrinks {@link CALENDAR_CONTEXT_REGISTRY}'s key set below `MeetingBookingContextType`
@@ -26,9 +26,9 @@ import type {
  * A plain union would keep the stale name and nothing would notice. Same pattern, same reason,
  * as `HandledMeetingContextType` in `@balo/shared/meetings`.
  *
- * ⚠ THE ARITIES, STATED ONCE SO NOTHING GUESSES: **7** = the `meeting_context_type` pgEnum
- * (incl. `admin`, `retainer_checkin`); **6** = `MeetingContextTypeWithHolder`; **5** =
- * `BOOKABLE_CONTEXT_TYPES` = THIS REGISTRY; **4** = `apps/web`'s engagement-authz. The two
+ * ⚠ THE ARITIES, STATED ONCE SO NOTHING GUESSES: **8** = the `meeting_context_type` pgEnum
+ * (incl. `admin`, `retainer_checkin`); **7** = `MeetingContextTypeWithHolder`; **6** =
+ * `BOOKABLE_CONTEXT_TYPES` = THIS REGISTRY. The two
  * excluded labels are excluded BY TYPE, never by a runtime branch: `admin` has `context_id IS
  * NULL` by CHECK and no owning party at all (unrepresentable in `MeetingContextTypeWithHolder`),
  * and `retainer_checkin` is holder-bearing but not bookable (unrepresentable in
@@ -95,6 +95,7 @@ export const CALENDAR_CONTEXT_REGISTRY: Record<
 > = {
   case: { eventLabel: 'Consultation', subjectSource: 'case_title' },
   project_kickoff: { eventLabel: 'Project kickoff', subjectSource: 'label' },
+  project_call: { eventLabel: 'Call', subjectSource: 'label' },
   package_session: { eventLabel: 'Package session', subjectSource: 'label' },
   project_discovery: { eventLabel: 'Discovery call', subjectSource: 'request_title' },
   request_interaction: { eventLabel: 'Intro call', subjectSource: 'request_title' },

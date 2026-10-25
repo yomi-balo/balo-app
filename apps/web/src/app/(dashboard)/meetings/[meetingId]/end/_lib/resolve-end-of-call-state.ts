@@ -37,7 +37,8 @@ export function resolveEndOfCallRecapReadiness(
  *
  * ⚠⚠ THIS SET IS DECIDED BY THE WRITE PATH, NOT BY TASTE. `applyReview`'s `reviewableKind`
  * accepts `project` and `case` and REFUSES `package` / `retainer`, so:
- *   · `case` and `project_kickoff` are engagement-grain AND reviewable — they qualify;
+ *   · `case`, `project_kickoff` and `project_call` are engagement-grain AND reviewable (a
+ *     `project_call`'s engagement type is `project`, reviewable like a kickoff) — they qualify;
  *   · `package_session` / `retainer_checkin` are engagement-grain but their engagement types
  *     are declared-and-unbuilt, so a submit would ALWAYS fail. Offering a control that can only
  *     error is worse than not offering it (the same rule the recap applies to its action-items
@@ -48,6 +49,7 @@ export function resolveEndOfCallRecapReadiness(
 export const RATEABLE_CONTEXTS: ReadonlySet<RecapContextType> = new Set<RecapContextType>([
   'case',
   'project_kickoff',
+  'project_call',
 ]);
 
 /** Can a review be captured for this meeting's context? See {@link RATEABLE_CONTEXTS}. */

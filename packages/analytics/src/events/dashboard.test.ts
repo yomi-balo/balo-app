@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DASHBOARD_EVENTS,
   DASHBOARD_UP_NEXT_MEETING_TYPES,
+  DASHBOARD_UP_NEXT_SURFACES,
   DASHBOARD_UP_NEXT_TARGETS,
   DASHBOARD_UP_NEXT_ROW_STATES,
   DASHBOARD_YOUR_MOVE_CARD_KINDS,
@@ -43,12 +44,34 @@ describe('DASHBOARD_EVENTS (BAL-566 / BAL-600, client)', () => {
 });
 
 describe('DASHBOARD_UP_NEXT_MEETING_TYPES', () => {
-  it('is exactly the four listed context types, in display-tile order', () => {
+  it('is exactly the five listed context types, in display-tile order', () => {
     expect(DASHBOARD_UP_NEXT_MEETING_TYPES).toEqual([
       'case',
       'project_kickoff',
+      'project_call',
       'project_discovery',
       'request_interaction',
+    ]);
+  });
+});
+
+describe('DASHBOARD_UP_NEXT_SURFACES', () => {
+  it('is exactly the two Up next click surfaces (BAL-616)', () => {
+    expect(DASHBOARD_UP_NEXT_SURFACES).toEqual(['dashboard', 'request_thread']);
+  });
+
+  it('up next clicked carries the surface', () => {
+    const clicked: DashboardEventMap[typeof DASHBOARD_EVENTS.UP_NEXT_CLICKED] = {
+      surface: 'request_thread',
+      target: 'join',
+      meeting_type: 'project_call',
+      row_state: 'starting_soon',
+    };
+    expect(Object.keys(clicked).sort((a, b) => a.localeCompare(b))).toEqual([
+      'meeting_type',
+      'row_state',
+      'surface',
+      'target',
     ]);
   });
 });

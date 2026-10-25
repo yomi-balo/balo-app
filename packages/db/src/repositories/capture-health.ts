@@ -164,7 +164,7 @@ export interface CaptureHealthRecapDetail {
  * WHO DELIVERED THE CALL, read from `consultations`.
  *
  * ⚠ `consultations` IS THE SHIPPED WRITE-TIME PROJECTION OF "whose call is this" —
- * `_shared/consultation-projection.ts` resolves the expert across all seven context labels at
+ * `_shared/consultation-projection.ts` resolves the expert across all eight context labels at
  * booking time. Reading it is REUSE; re-walking `meeting_contexts` for the expert would be a
  * SECOND answer to a question the platform has already answered, and the two would drift.
  * Absent (no live consultation, a match-routed discovery, an `admin` meeting) ⇒ the view
@@ -219,6 +219,7 @@ export interface CaptureHealthDetails {
 const CONTEXT_LABEL_PRECEDENCE: readonly MeetingContextType[] = [
   'case',
   'project_kickoff',
+  'project_call',
   'package_session',
   'retainer_checkin',
   'project_discovery',
@@ -237,9 +238,10 @@ const ENGAGEMENT_CONTEXT_TYPES: readonly MeetingContextType[] = [
   'project_kickoff',
   'package_session',
   'retainer_checkin',
+  'project_call',
 ];
 
-/** Where a label sits in {@link CONTEXT_LABEL_PRECEDENCE}. An UNKNOWN label (an 8th enum
+/** Where a label sits in {@link CONTEXT_LABEL_PRECEDENCE}. An UNKNOWN label (a new enum
  *  value added without touching that array) sorts LAST rather than winning by accident. */
 function contextPrecedenceOf(contextType: MeetingContextType): number {
   const index = CONTEXT_LABEL_PRECEDENCE.indexOf(contextType);
@@ -782,7 +784,8 @@ export const captureHealthRepository = {
           ),
         })
         .from(meetingContexts)
-        // `case` / `project_kickoff` / `package_session` / `retainer_checkin` → engagements.id
+        // `case` / `project_kickoff` / `package_session` / `retainer_checkin` / `project_call`
+        // → engagements.id
         .leftJoin(
           engagements,
           and(eq(engagements.id, meetingContexts.contextId), isNull(engagements.deletedAt))

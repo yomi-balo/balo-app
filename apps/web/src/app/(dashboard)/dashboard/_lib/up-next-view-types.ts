@@ -7,7 +7,7 @@ import type { DashboardUpNextMeetingType } from '@balo/analytics/events';
  * components (`up-next-card.tsx`, `up-next-row.tsx`).
  */
 
-/** `'case' | 'project_kickoff' | 'project_discovery' | 'request_interaction'`. */
+/** `'case' | 'project_kickoff' | 'project_call' | 'project_discovery' | 'request_interaction'`. */
 export type UpNextMeetingType = DashboardUpNextMeetingType;
 /** = `NavWorkspaceType`. */
 export type UpNextWorkspaceType = 'company' | 'expert';

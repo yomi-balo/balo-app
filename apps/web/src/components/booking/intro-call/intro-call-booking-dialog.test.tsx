@@ -74,9 +74,12 @@ vi.mock('@/lib/analytics', async (importOriginal) => ({
 
 import { IntroCallBookingDialog } from './intro-call-booking-dialog';
 
-function successResult(overrides: Partial<Extract<BookIntroCallResult, { ok: true }>> = {}) {
+function successResult(
+  overrides: Partial<Extract<BookIntroCallResult, { ok: true }>> = {}
+): Extract<BookIntroCallResult, { ok: true }> {
   return {
     ok: true as const,
+    contextType: 'request_interaction',
     meetingId: 'meeting-1',
     joinPath: '/meetings/meeting-1/call',
     provisioned: true,
@@ -108,6 +111,8 @@ function renderDialog(overrides: Record<string, unknown> = {}) {
       viewerEmailDomain="northwind.example"
       viewerTimezone="UTC"
       surface="header"
+      callKind="intro"
+      requestStatus="eoi_submitted"
       onBooked={onBooked}
       onMessage={onMessage}
       {...overrides}
@@ -223,7 +228,12 @@ describe('IntroCallBookingDialog', () => {
     expect(await screen.findByText("You're booked!")).toBeInTheDocument();
     expect(track).toHaveBeenCalledWith(
       'conversation_intro_call_booked',
-      expect.objectContaining({ request_id: 'request-1', relationship_id: 'rel-1' })
+      expect.objectContaining({
+        request_id: 'request-1',
+        relationship_id: 'rel-1',
+        context_type: 'request_interaction',
+        request_status: 'eoi_submitted',
+      })
     );
     expect(toast.success).toHaveBeenCalled();
     // ⚠ round-1 C1: `onBooked` carries the booked snapshot so the CALLER can flip its own
@@ -233,6 +243,7 @@ describe('IntroCallBookingDialog', () => {
       relationshipId: 'rel-1',
       meetingId: 'meeting-1',
       scheduledStartIso: '2026-06-05T09:00:00.000Z',
+      contextType: 'request_interaction',
     });
   });
 
@@ -317,5 +328,68 @@ describe('IntroCallBookingDialog', () => {
     const { baseElement } = renderDialog();
     await advanceToConfirm(user);
     expect(baseElement.textContent ?? '').not.toMatch(/\bcase\b/i);
+  });
+
+  describe('callKind', () => {
+    it('intro keeps the intro-call copy on the sheet title, confirm strip, toast and booked step', async () => {
+      const user = userEvent.setup();
+      mockBookIntroCallAction.mockResolvedValue(successResult());
+      renderDialog();
+      expect(screen.getByText('Book an intro call with Priya Nair')).toBeInTheDocument();
+      expect(
+        screen.getByText('Pick a time — this is a free intro call, no commitment.')
+      ).toBeInTheDocument();
+      await advanceToConfirm(user);
+      expect(screen.getByText(/Intro call · 30 min/)).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Confirm & book call' }));
+      await screen.findByText("You're booked!");
+      expect(toast.success).toHaveBeenCalledWith('Booked', {
+        description: '30-minute intro call with Priya confirmed.',
+      });
+      expect(screen.getByText(/Intro call with Priya\./)).toBeInTheDocument();
+    });
+
+    it('call drops "intro" from every string, and tracks the project call context', async () => {
+      const user = userEvent.setup();
+      mockBookIntroCallAction.mockResolvedValue(successResult({ contextType: 'project_call' }));
+      const { baseElement, onBooked } = renderDialog({
+        callKind: 'call',
+        requestStatus: 'kickoff_approved',
+      });
+      expect(screen.getByText('Book a call with Priya Nair')).toBeInTheDocument();
+      expect(screen.getByText('Pick a time — calls with Priya are free.')).toBeInTheDocument();
+      await advanceToConfirm(user);
+      expect(screen.getByText(/^Call · 30 min/)).toBeInTheDocument();
+      expect(screen.getByText(/Call for/)).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Confirm & book call' }));
+      await screen.findByText("You're booked!");
+
+      expect(toast.success).toHaveBeenCalledWith('Booked', {
+        description: '30-minute call with Priya confirmed.',
+      });
+      expect(baseElement.textContent ?? '').not.toMatch(/intro/i);
+      expect(track).toHaveBeenCalledWith(
+        'conversation_intro_call_booked',
+        expect.objectContaining({
+          context_type: 'project_call',
+          request_status: 'kickoff_approved',
+        })
+      );
+      expect(onBooked).toHaveBeenCalledWith(
+        expect.objectContaining({ contextType: 'project_call' })
+      );
+    });
+  });
+
+  it('call_cap_reached shows the cap copy naming the expert, with no retry', async () => {
+    const user = userEvent.setup();
+    mockBookIntroCallAction.mockResolvedValue({ ok: false, code: 'call_cap_reached' });
+    renderDialog();
+    await advanceToConfirm(user);
+    await user.click(screen.getByRole('button', { name: 'Confirm & book call' }));
+
+    expect(await screen.findByText('You have 3 calls booked with Priya.')).toBeInTheDocument();
+    expect(screen.getByText('Once one has happened you can book another.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 });

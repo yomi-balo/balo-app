@@ -33,7 +33,7 @@ interface TypePresentation {
   readonly labelClassName: string;
 }
 
-/** Case is indigo (`primary`); the three project-side types share the `violet` token. */
+/** Case is indigo (`primary`); the project-side types share the `violet` token. */
 const UP_NEXT_TYPE_PRESENTATION: Record<UpNextRowView['contextType'], TypePresentation> = {
   case: {
     icon: Video,
@@ -41,6 +41,11 @@ const UP_NEXT_TYPE_PRESENTATION: Record<UpNextRowView['contextType'], TypePresen
     labelClassName: 'text-primary',
   },
   project_kickoff: {
+    icon: Briefcase,
+    tileClassName: 'bg-violet/10 text-violet',
+    labelClassName: 'text-violet',
+  },
+  project_call: {
     icon: Briefcase,
     tileClassName: 'bg-violet/10 text-violet',
     labelClassName: 'text-violet',
@@ -83,6 +88,7 @@ export function UpNextRow({
       target: 'row',
       meeting_type: row.contextType,
       row_state: rowState,
+      surface: 'dashboard',
     });
   }, [row]);
 
@@ -92,6 +98,7 @@ export function UpNextRow({
       target: 'join',
       meeting_type: row.contextType,
       row_state: rowState,
+      surface: 'dashboard',
     });
   }, [row]);
 

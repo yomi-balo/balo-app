@@ -119,6 +119,7 @@ export type MeetingJoinableResult =
 const CONTEXT_HAS_ENGAGEMENT: Record<PrimaryMeetingContext['contextType'], boolean> = {
   case: true,
   project_kickoff: true,
+  project_call: true,
   package_session: true,
   retainer_checkin: true,
   project_discovery: false,

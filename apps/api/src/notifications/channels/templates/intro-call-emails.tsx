@@ -1,3 +1,4 @@
+import type { CallKind } from '@balo/shared/notifications';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
 import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
@@ -78,8 +79,22 @@ export function AvailabilitySharedClientEmail({
 
 export type IntroCallBookedRecipient = 'client' | 'expert';
 
+/**
+ * Which copy the booked email carries. `'intro'` is the pre-decision exploratory call; `'call'`
+ * is a call on the won relationship or on the engagement, which is never called an intro call
+ * and never costs credit (BAL-616). The payload field is optional and an absent value means
+ * `'intro'`, so a web deploy that predates the field keeps today's copy.
+ */
+export type IntroCallBookedKind = CallKind;
+
+/** Normalises the optional wire value; anything but `'call'` is `'intro'`. */
+export function introCallBookedKind(value: unknown): IntroCallBookedKind {
+  return value === 'call' ? 'call' : 'intro';
+}
+
 export interface IntroCallBookedEmailProps {
   readonly recipient: IntroCallBookedRecipient;
+  readonly callKind: IntroCallBookedKind;
   readonly firstName: string;
   /** Client company name (expert-facing email) or expert party label (client-facing email). */
   readonly counterpartyLabel: string;
@@ -95,25 +110,38 @@ export interface IntroCallBookedEmailProps {
   readonly baseUrl: string;
 }
 
+function callNoun(callKind: IntroCallBookedKind): string {
+  return callKind === 'call' ? 'call' : 'intro call';
+}
+
+function withArticle(callKind: IntroCallBookedKind): string {
+  return callKind === 'call' ? 'a call' : 'an intro call';
+}
+
 export function introCallBookedSubject(
   recipient: IntroCallBookedRecipient,
-  counterpartyLabel: string
+  counterpartyLabel: string,
+  callKind: IntroCallBookedKind = 'intro'
 ): string {
   return recipient === 'client'
-    ? `Your intro call with ${counterpartyLabel} is confirmed`
-    : `${counterpartyLabel} booked an intro call with you`;
+    ? `Your ${callNoun(callKind)} with ${counterpartyLabel} is confirmed`
+    : `${counterpartyLabel} booked ${withArticle(callKind)} with you`;
 }
 
 function introCallBodyLines(props: Readonly<IntroCallBookedEmailProps>): string[] {
-  const { recipient, counterpartyLabel, requestTitle, guestCount } = props;
+  const { recipient, counterpartyLabel, requestTitle, guestCount, callKind } = props;
   const window = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
 
   const intro =
     recipient === 'client'
-      ? `Your intro call with ${counterpartyLabel} is confirmed for ${window} (${props.durationMinutes} min).`
-      : `${counterpartyLabel} booked an intro call with you for ${window} (${props.durationMinutes} min).`;
+      ? `Your ${callNoun(callKind)} with ${counterpartyLabel} is confirmed for ${window} (${props.durationMinutes} min).`
+      : `${counterpartyLabel} booked ${withArticle(callKind)} with you for ${window} (${props.durationMinutes} min).`;
 
-  const lines = [intro, `Free — no charge, no commitment. This is about "${requestTitle}".`];
+  const freeLine =
+    callKind === 'call'
+      ? `Free — calls on this project never cost credit. This is about "${requestTitle}".`
+      : `Free — no charge, no commitment. This is about "${requestTitle}".`;
+  const lines = [intro, freeLine];
 
   if (guestCount > 0) {
     lines.push(
@@ -135,23 +163,28 @@ function introCallBodyLines(props: Readonly<IntroCallBookedEmailProps>): string[
   return lines;
 }
 
-function introCallCopy(recipient: IntroCallBookedRecipient, subject: string) {
+function introCallCopy(
+  recipient: IntroCallBookedRecipient,
+  callKind: IntroCallBookedKind,
+  subject: string
+) {
+  const noun = callNoun(callKind);
   return recipient === 'client'
     ? {
         subject,
-        heading: 'Your intro call is confirmed',
+        heading: `Your ${noun} is confirmed`,
         subtext: 'A quiet confirmation — nothing else to do here.',
       }
     : {
         subject,
-        heading: 'A new intro call was booked',
+        heading: `A new ${noun} was booked`,
         subtext: 'Momentum — a client wants to talk to you.',
       };
 }
 
 export function IntroCallBookedEmail(props: Readonly<IntroCallBookedEmailProps>) {
-  const subject = introCallBookedSubject(props.recipient, props.counterpartyLabel);
-  const copy = introCallCopy(props.recipient, subject);
+  const subject = introCallBookedSubject(props.recipient, props.counterpartyLabel, props.callKind);
+  const copy = introCallCopy(props.recipient, props.callKind, subject);
   return (
     <CaseBillingReceiptEmail
       firstName={props.firstName}

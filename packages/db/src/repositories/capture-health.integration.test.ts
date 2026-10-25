@@ -22,6 +22,7 @@ import {
   agencyFactory,
   caseEngagementFactory,
   companyFactory,
+  engagementFactory,
   expertDraftFactory,
   meetingFactory,
   meetingRecordingFactory,
@@ -953,6 +954,41 @@ describe('captureHealthRepository.loadDetails', () => {
 
     expect(details.party.get(meetingId)?.contextType).toBe('project_kickoff');
     expect(details.party.get(meetingId)?.companyName).toBe('Northwind Industrial');
+  });
+
+  it('a carried-over call (request_interaction + project_call) reads as project_call, with an engagement context (BAL-616)', async () => {
+    const client = await companyFactory({ name: 'Northwind Industrial' });
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({
+      companyId: client.id,
+      expertProfileId: expert.id,
+    });
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+    const { engagement } = await engagementFactory({
+      companyId: client.id,
+      expertProfileId: expert.id,
+    });
+    const { meeting } = await meetingFactory({
+      contexts: [
+        { contextType: 'request_interaction', contextId: relationship.id },
+        { contextType: 'project_call', contextId: engagement.id },
+      ],
+      values: { scheduledStart: at(9), scheduledEnd: new Date(at(9).getTime() + HOUR_MS) },
+    });
+    await seedReadySegment(meeting.id);
+
+    const details = await captureHealthRepository.loadDetails([meeting.id]);
+    expect(details.party.get(meeting.id)).toEqual({
+      meetingId: meeting.id,
+      contextType: 'project_call',
+      companyName: 'Northwind Industrial',
+    });
+
+    const { rows } = await listAll();
+    expect(rows.find((row) => row.meetingId === meeting.id)?.facts.hasEngagementContext).toBe(true);
   });
 
   it('a soft-deleted context row does not win the precedence pick', async () => {

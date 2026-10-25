@@ -880,15 +880,16 @@ export const meetingPresenceRepository = {
           eq(meetingContexts.contextId, engagementId),
           // ⚠ AN ALLOW-LIST, SO A NEW `meeting_context_type` LABEL IS SILENTLY EXCLUDED —
           // nothing here typechecks against the enum. Correct for every label added so
-          // far (only these four carry an `engagements.id`), but a future
-          // ENGAGEMENT-GRAIN label would silently drop client participants from the
-          // review-nudge fan-out with no failure anywhere. `invariants/
-          // meeting-context-type-labels.test.ts` names this line in its sweep list.
+          // far (only these five carry an `engagements.id`; `project_call` joined in
+          // BAL-616), but a future ENGAGEMENT-GRAIN label would silently drop client
+          // participants from the review-nudge fan-out with no failure anywhere.
+          // `invariants/meeting-context-type-labels.test.ts` names this line in its sweep list.
           inArray(meetingContexts.contextType, [
             'case',
             'project_kickoff',
             'package_session',
             'retainer_checkin',
+            'project_call',
           ]),
           eq(meetingPresence.party, 'client'),
           isNotNull(meetingPresence.userId),

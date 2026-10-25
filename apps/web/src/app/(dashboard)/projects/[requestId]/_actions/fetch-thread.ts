@@ -70,7 +70,7 @@ export async function fetchThreadAction(
   const { requestId, relationshipId, before, includeFiles } = parsed.data;
 
   try {
-    const access = await readConversationAccess(user, requestId, relationshipId);
+    const access = await readConversationAccess(user, requestId, relationshipId, 'records');
     if (!access.ok) {
       return { success: false, error: access.error };
     }

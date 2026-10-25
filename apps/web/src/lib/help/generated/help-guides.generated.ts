@@ -412,7 +412,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "calls-cases"
     },
     "order": 2,
-    "updated": "2026-10-18",
+    "updated": "2026-10-23",
     "related": [
       "booking-a-consultation",
       "your-cases"
@@ -431,7 +431,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Join opens 3 minutes before the scheduled start and stays available until 30 minutes after the\nscheduled end, or until the call itself ends. Try earlier and you'll see \"This call isn't open yet\n— you can join from {time}.\" — the time is shown in your device's timezone, and you can come back\nto the same page when it arrives.</p>\n<p>If you're signed in to Balo and you're part of the consultation, opening the link takes you\nstraight in. There's no name or email step.</p>\n<p>Before you enter, you get a quick camera-and-sound check headed <strong>Ready to join?</strong> Choose <strong>Join\nnow</strong> when you're set. If your camera is blocked in your browser, you can still join. Tick <strong>Skip\nthis next time</strong> and Balo takes you straight into the call on this device from then on.</p>\n<p>Consultations are recorded and may be transcribed, and you're told before you go in: \"This\nconsultation is recorded and may be transcribed.\"</p>",
+            "html": "<p>Join opens 3 minutes before the scheduled start and stays available until 30 minutes after the\nscheduled end, or until the call itself ends. Try earlier and you'll see \"This call isn't open yet\n— you can join from {time}.\" — the time is shown in your device's timezone, and you can come back\nto the same page when it arrives.</p>\n<p>On your project request page, <strong>Join</strong> also appears in the conversation header once a call with your\nexpert is booked. It opens at the same time and shows a countdown until then.</p>\n<p>If you're signed in to Balo and you're part of the consultation, opening the link takes you\nstraight in. There's no name or email step.</p>\n<p>Before you enter, you get a quick camera-and-sound check headed <strong>Ready to join?</strong> Choose <strong>Join\nnow</strong> when you're set. If your camera is blocked in your browser, you can still join. Tick <strong>Skip\nthis next time</strong> and Balo takes you straight into the call on this device from then on.</p>\n<p>Consultations are recorded and may be transcribed, and you're told before you go in: \"This\nconsultation is recorded and may be transcribed.\"</p>",
             "id": "s1-b0"
           }
         ],

@@ -1,5 +1,11 @@
 import type { ContextMeetingSummary, RequestExpertRelationship } from '@balo/db';
+import {
+  isUpcomingContextMeeting,
+  UPCOMING_CALL_CAP,
+  type UpcomingCallContextType,
+} from '@balo/shared/meetings';
 import { previewOfPlainText } from '@balo/shared/notifications';
+import { relationshipIsOpened } from '@balo/shared/project-requests';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import type {
   ConversationFileView,
@@ -56,6 +62,46 @@ export function isThreadOpenStatus(status: string): boolean {
 }
 
 /**
+ * A closed request keeps its conversation for reading only. This is the one place that says
+ * so; the stage, the loader and the access resolver all read it.
+ */
+export function isConversationReadOnly(requestStatus: ProjectRequestStatus): boolean {
+  return requestStatus === 'closed';
+}
+
+/**
+ * What a caller wants from a thread. `live` is every content write plus realtime; `records`
+ * adds the closed request's surviving threads, for reads and the read watermark only.
+ */
+export type ThreadAdmission = 'live' | 'records';
+
+/**
+ * THE thread-admission predicate (BAL-616).
+ *
+ * - `live`: the request still accepts messages and the thread's status is an open one. The
+ *   explicit closed term does not rely on the close cascade, which declines every track — an
+ *   `accepted` relationship on a closed request would otherwise be postable.
+ * - `records`: `live`, plus on a closed request the threads that were OPEN when the close
+ *   landed (declined with `request_closed` after the track had opened). A track declined
+ *   before the close, or never opened, stays hidden as it was while the request was live.
+ *   On every non-closed request it equals `live`.
+ */
+export function threadAdmits(
+  relationship: Pick<RequestExpertRelationship, 'status' | 'declineReason' | 'openedAt'>,
+  requestStatus: ProjectRequestStatus,
+  admission: ThreadAdmission
+): boolean {
+  const readOnly = isConversationReadOnly(requestStatus);
+  if (!readOnly && isThreadOpenStatus(relationship.status)) return true;
+  if (admission === 'live' || !readOnly) return false;
+  return (
+    relationship.status === 'declined' &&
+    relationship.declineReason === 'request_closed' &&
+    relationshipIsOpened(relationship)
+  );
+}
+
+/**
  * Pipeline rank of every request status — used for "before kickoff" style gating.
  *
  * ⚠ BAL-540 — A `Record`, NOT a plain array walked with `.indexOf`. The array form returned
@@ -84,50 +130,80 @@ export function requestStatusRank(status: ProjectRequestStatus): number {
 }
 
 /**
- * A meeting whose parties are in the room RIGHT NOW, so the scheduled window says nothing about
- * whether it is over. Kept next to its only consumer rather than exported: this is a display
- * rule for the call-CTA pick, not a lifecycle predicate — `@balo/shared/meetings` owns those.
+ * "Upcoming call" is ONE rule, defined in `@balo/shared/meetings` (`isUpcomingContextMeeting`,
+ * BAL-616) so `apps/api`'s booking gate counts the same calls this page does. It has two web
+ * consumers, which therefore cannot disagree:
+ *   · `loadConversationView` — the thread's `upcomingCalls` list (via {@link mergeUpcomingCalls});
+ *   · the cap pre-check (`assertUnderUpcomingCallCap`).
+ *
+ * ⚠ The rule judges `ended` and the clock only; it does not exclude `cancelled`. Every feed must
+ * come from `meetingsRepository.listActiveMeetingsForContexts` (already cancelled-filtered).
  */
-function isLiveMeetingStatus(status: ContextMeetingSummary['status']): boolean {
-  return status === 'in_progress' || status === 'waiting_for_participants';
+export { isUpcomingContextMeeting, UPCOMING_CALL_CAP };
+
+/** The context a call is anchored to: the relationship before kickoff, the engagement after. */
+export type { UpcomingCallContextType };
+
+/** One upcoming call on a thread, as the page renders it. */
+export interface UpcomingCallView {
+  meetingId: string;
+  scheduledStartIso: string;
+  /**
+   * Which context the call was read from. A carried-over meeting holds both contexts and is
+   * reported once, as `project_call`.
+   */
+  contextType: UpcomingCallContextType;
+}
+
+function compareUpcomingCalls(a: UpcomingCallView, b: UpcomingCallView): number {
+  const byStart = Date.parse(a.scheduledStartIso) - Date.parse(b.scheduledStartIso);
+  if (byStart !== 0) return byStart;
+  if (a.meetingId < b.meetingId) return -1;
+  return a.meetingId > b.meetingId ? 1 : 0;
 }
 
 /**
- * BAL-283 — THE ONE DEFINITION OF "this thread has a live intro call".
- *
- * `listActiveMeetingsForContexts` filters only `status <> 'cancelled'` and deliberately
- * DELEGATES the pick to its caller (see its docblock: "an intro call that ended, then a second
- * one booked"). This is that pick, and it is shared by BOTH consumers so they cannot disagree:
- *   · `loadConversationView` — decides `bookedCall`, i.e. whether the CTA renders;
- *   · `assertNoLiveIntroCall` — the server-side one-call-per-thread guard behind it.
- * A second copy of this rule would let the UI hide a CTA the server still allows, or vice versa.
- *
- * ⚠ TWO INDEPENDENT DISQUALIFIERS, BOTH LOAD-BEARING: `status === 'ended'` (the explicit
- * signal) AND a window already in the past (the clock, for a meeting nobody ever moved off
- * `scheduled`). Rows arrive ordered `scheduled_start, id`, so the first survivor is the soonest
- * upcoming one.
- *
- * ⚠ THE CLOCK DISQUALIFIER IS SUPPRESSED WHILE A CALL IS ACTUALLY LIVE (PR #236 review). A call
- * that runs past its scheduled end stays `in_progress` — `MEETING_TRANSITIONS` only lets that
- * status move to `ended` (`@balo/shared/meetings` lifecycle), so nothing advances it on the
- * clock alone. Judging such a row by `scheduledEnd` alone would drop it from the pick WHILE THE
- * PARTIES ARE STILL IN THE ROOM: the CTA would reappear and `assertNoLiveIntroCall` would pass,
- * letting a second intro call be booked over a call in progress. `waiting_for_participants` is
- * treated the same way — somebody is sitting in the lobby of that exact meeting. Only the
- * explicit `ended` signal (or `cancelled`, already filtered in the repository) retires a row.
- *
- * ⚠ `nowMs` IS A PARAMETER, NEVER `Date.now()` READ INSIDE. Both callers are server-side, but
- * passing the instant keeps this pure and testable, and keeps a clock out of a module that
- * client components import.
+ * Merge the upcoming calls of every context a thread reads into one list, soonest first (id
+ * tiebreak). A meeting present in several sources is reported once and `project_call` wins, so
+ * a carried-over call counts once everywhere. Pure: the caller supplies `nowMs`.
  */
-export function pickUpcomingContextMeeting(
-  meetings: readonly ContextMeetingSummary[],
+export function mergeUpcomingCalls(
+  sources: ReadonlyArray<{
+    contextType: UpcomingCallContextType;
+    meetings: readonly ContextMeetingSummary[];
+  }>,
   nowMs: number
-): ContextMeetingSummary | undefined {
-  return meetings.find(
-    (m) =>
-      m.status !== 'ended' && (isLiveMeetingStatus(m.status) || m.scheduledEnd.getTime() > nowMs)
-  );
+): UpcomingCallView[] {
+  const byMeetingId = new Map<string, UpcomingCallView>();
+  for (const { contextType, meetings } of sources) {
+    for (const m of meetings) {
+      if (!isUpcomingContextMeeting(m, nowMs)) continue;
+      const existing = byMeetingId.get(m.meetingId);
+      if (existing?.contextType === 'project_call') continue;
+      byMeetingId.set(m.meetingId, {
+        meetingId: m.meetingId,
+        scheduledStartIso: m.scheduledStart.toISOString(),
+        contextType,
+      });
+    }
+  }
+  return [...byMeetingId.values()].sort(compareUpcomingCalls);
+}
+
+/** Insert (or replace, by meeting id) a call, keeping the list soonest first. */
+export function insertUpcomingCall(
+  list: readonly UpcomingCallView[],
+  call: UpcomingCallView
+): UpcomingCallView[] {
+  return [...list.filter((c) => c.meetingId !== call.meetingId), call].sort(compareUpcomingCalls);
+}
+
+/** The cap message: shown as a toast at the cap and as the booking dialog's failure copy. */
+export function upcomingCallCapCopy(expertFirstName: string): { title: string; body: string } {
+  return {
+    title: `You have ${UPCOMING_CALL_CAP} calls booked with ${expertFirstName}.`,
+    body: 'Once one has happened you can book another.',
+  };
 }
 
 /** Derived per-thread display stage. */
@@ -210,11 +286,12 @@ export interface ConversationThreadView {
    */
   availabilitySharedAtIso: string | null;
   /**
-   * BAL-283 — the live `request_interaction` meeting for this thread, if one has been booked.
-   * `null` ⇒ nothing booked yet. Once set, the call-CTA slot on this thread is `'booked'` and
-   * is removed from header/rail (plan §12.3/§12.4).
+   * The thread's upcoming calls, soonest first. Read across the thread's `request_interaction`
+   * context and, for a won thread after kickoff, its `project_call` context; "upcoming" is
+   * `isUpcomingContextMeeting`. Empty ⇒ nothing booked. Render-path only, never an
+   * authorization input.
    */
-  bookedCall: { meetingId: string; scheduledStartIso: string } | null;
+  upcomingCalls: UpcomingCallView[];
   /**
    * The client's open change request on this thread's CURRENT proposal — non-null while that
    * proposal is `changes_requested`. The relationship stays `proposal_submitted` throughout the

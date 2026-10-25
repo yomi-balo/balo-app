@@ -1,9 +1,13 @@
 'use client';
 
-import { Calendar, Clock, FileText, Loader2, X } from 'lucide-react';
+import { Clock, FileText, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
+import type {
+  ConversationThreadView,
+  UpcomingCallView,
+} from '@/lib/project-request/conversation-view-types';
 import type { ThreadActions } from './thread-actions';
+import { CallGroup, NextCallLine } from './thread-call-group';
 import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
 import { declineVerbFor } from '@/lib/project-request/close-copy';
 
@@ -12,21 +16,29 @@ interface ThreadHeaderProps {
   showYouSuffix: boolean;
   actions: ThreadActions;
   callPending: boolean;
+  /** `/experts/{u}?book=1&src=request_thread`; non-null only when the client books via the profile. */
+  profileBookingHref: string | null;
+  /** Non-null once kickoff materialized the engagement — the target of a project call's link. */
+  deliveryEngagementId: string | null;
+  /** Names the other party in the Join button's accessible name. */
+  joinPartyLabel: string;
   onCall: () => void;
+  onBookAnother: () => void;
+  onJoin: (call: UpcomingCallView) => void;
   /**
    * The `kind:'request'` proposal CTA handler (client lens, A5). Non-null →
-   * the slot renders ENABLED; null → disabled stub.
+   * the slot renders; null → the slot renders nothing.
    */
   onRequestProposal: (() => void) | null;
   /**
    * The `kind:'build'` proposal CTA handler (expert lens, A6.2 — opens the
-   * composer). Non-null → the slot renders ENABLED; null → disabled stub.
+   * composer). Non-null → the slot renders; null → the slot renders nothing.
    */
   onBuildProposal: (() => void) | null;
   /**
    * The `kind:'view'` proposal CTA handler (BAL-289 / A6.3 — opens the read-only
-   * review/submitted surface). Non-null → the slot renders ENABLED; null →
-   * disabled stub (defensive).
+   * review/submitted surface). Non-null → the slot renders; null → the slot
+   * renders nothing.
    */
   onViewProposal: (() => void) | null;
   /**
@@ -37,10 +49,33 @@ interface ThreadHeaderProps {
   onDecline: (() => void) | null;
 }
 
+/** The solid proposal commit CTA; `quiet` defers to the nudge that already pushes it. */
+function ProposalCtaButton({
+  label,
+  quiet,
+  onClick,
+}: Readonly<{ label: string; quiet: boolean; onClick: () => void }>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none',
+        quiet
+          ? 'border-primary/30 bg-primary/5 text-primary border'
+          : 'bg-primary text-primary-foreground'
+      )}
+    >
+      <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+      {label}
+    </button>
+  );
+}
+
 /**
  * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar,
- * expert name, lens-aware call CTA (mock seam) and the proposal slot per the
- * gating matrix.
+ * expert name with the next-call line, the lens-aware call group (book / join /
+ * propose times) and the proposal slot per the gating matrix.
  *
  * ⚠ NO FILES PILL — RETIRED BY BAL-431 (OSD-2), NOT MISSING. The request surface has exactly
  * ONE file home now, `RequestFilesPanel` (request-level, audience-aware), so the in-thread
@@ -52,15 +87,21 @@ interface ThreadHeaderProps {
  * LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's "Build
  * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided; the
  * "View proposal"/"View submitted proposal" CTA is LIVE (BAL-289 / A6.3) when
- * `onViewProposal` is provided. Deliberate cut (recorded): no rating/role
- * subline — that data isn't hydrated.
+ * `onViewProposal` is provided. A proposal CTA whose handler is `null` renders nothing — there
+ * is no disabled stub. Deliberate cut (recorded): no rating/role subline — that data isn't
+ * hydrated.
  */
 export function ThreadHeader({
   thread,
   showYouSuffix,
   actions,
   callPending,
+  profileBookingHref,
+  deliveryEngagementId,
+  joinPartyLabel,
   onCall,
+  onBookAnother,
+  onJoin,
   onRequestProposal,
   onBuildProposal,
   onViewProposal,
@@ -68,41 +109,31 @@ export function ThreadHeader({
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal, declineSlot } = actions;
   return (
-    <div className="border-border flex items-center gap-2.5 border-b px-4 py-3">
+    <div className="border-border flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-4 py-3">
       <InitialsAvatar initials={thread.expertInitials} size="md" />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-[10rem] flex-1">
         <p className="text-foreground truncate text-sm font-semibold">
           {thread.expertName}
           {showYouSuffix && <span className="text-muted-foreground ml-1.5 text-[11px]">(you)</span>}
         </p>
+        <NextCallLine
+          slot={actions.callSlot}
+          upcomingCalls={thread.upcomingCalls}
+          deliveryEngagementId={deliveryEngagementId}
+        />
       </div>
 
-      {(actions.callSlot.kind === 'book' || actions.callSlot.kind === 'propose') && (
-        <button
-          type="button"
-          onClick={onCall}
-          disabled={callPending}
-          className="border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
-        >
-          {callPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-          ) : (
-            <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
-          )}
-          {actions.callSlot.kind === 'propose' ? 'Propose times' : 'Book a call'}
-        </button>
-      )}
-      {/* BAL-283 — the expert has shared availability: quiet, non-interactive pill, same
-          visual family as the `pill-awaiting` proposal treatment below. */}
-      {actions.callSlot.kind === 'shared' && (
-        <span
-          aria-disabled="true"
-          className="border-border bg-muted/50 text-muted-foreground animate-in fade-in zoom-in-95 inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 text-xs font-medium motion-reduce:animate-none"
-        >
-          <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
-          Availability shared
-        </span>
-      )}
+      <CallGroup
+        slot={actions.callSlot}
+        mobile={false}
+        callPending={callPending}
+        profileBookingHref={profileBookingHref}
+        expertFirstName={thread.expertFirstName}
+        joinPartyLabel={joinPartyLabel}
+        onCall={onCall}
+        onBookAnother={onBookAnother}
+        onJoin={onJoin}
+      />
 
       {headerProposal?.kind === 'pill-requested' && (
         <span className="border-warning/30 bg-warning/10 text-warning animate-in fade-in zoom-in-95 inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 text-xs font-semibold motion-reduce:animate-none">
@@ -119,56 +150,29 @@ export function ThreadHeader({
           Awaiting proposal request
         </span>
       )}
-      {headerProposal?.kind === 'view' && (
+      {headerProposal?.kind === 'view' && onViewProposal !== null && (
         <button
           type="button"
-          onClick={onViewProposal ?? undefined}
-          disabled={onViewProposal === null}
-          aria-disabled={onViewProposal === null ? true : undefined}
-          className={cn(
-            'border-primary/30 bg-primary/5 text-primary focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
-            onViewProposal === null ? 'opacity-60' : 'hover:opacity-90'
-          )}
+          onClick={onViewProposal}
+          className="border-primary/30 bg-primary/5 text-primary focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none"
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />
           {headerProposal.label}
         </button>
       )}
-      {headerProposal?.kind === 'request' && (
-        <button
-          type="button"
-          onClick={onRequestProposal ?? undefined}
-          disabled={onRequestProposal === null}
-          aria-disabled={onRequestProposal === null ? true : undefined}
-          className={cn(
-            'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
-            onRequestProposal === null ? 'opacity-60' : 'hover:opacity-90',
-            headerProposal.quiet
-              ? 'border-primary/30 bg-primary/5 text-primary border'
-              : 'bg-primary text-primary-foreground'
-          )}
-        >
-          <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-          {headerProposal.label}
-        </button>
+      {headerProposal?.kind === 'request' && onRequestProposal !== null && (
+        <ProposalCtaButton
+          label={headerProposal.label}
+          quiet={headerProposal.quiet}
+          onClick={onRequestProposal}
+        />
       )}
-      {headerProposal?.kind === 'build' && (
-        <button
-          type="button"
-          onClick={onBuildProposal ?? undefined}
-          disabled={onBuildProposal === null}
-          aria-disabled={onBuildProposal === null ? true : undefined}
-          className={cn(
-            'focus-visible:ring-ring inline-flex min-h-9 items-center gap-1.5 rounded-[9px] px-3.5 text-[13px] font-bold transition-opacity focus-visible:ring-2 focus-visible:outline-none',
-            onBuildProposal === null ? 'opacity-60' : 'hover:opacity-90',
-            headerProposal.quiet
-              ? 'border-primary/30 bg-primary/5 text-primary border'
-              : 'bg-primary text-primary-foreground'
-          )}
-        >
-          <FileText className="h-3.5 w-3.5" aria-hidden="true" />
-          {headerProposal.label}
-        </button>
+      {headerProposal?.kind === 'build' && onBuildProposal !== null && (
+        <ProposalCtaButton
+          label={headerProposal.label}
+          quiet={headerProposal.quiet}
+          onClick={onBuildProposal}
+        />
       )}
       {declineSlot !== null && onDecline !== null && (
         <button

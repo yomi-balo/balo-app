@@ -1,11 +1,14 @@
 'use client';
 
+import type { CallKind } from '@balo/shared/notifications';
 import { CalendarPlus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatSlotDateTime } from '../format';
 import { downloadIcsEvent } from '../ics';
 
 export interface StepBookedIntroCallProps {
+  /** `call` once this expert is the one the request chose — drops "intro" from the copy. */
+  callKind: CallKind;
   expertFirstName: string | null;
   startIso: string;
   viewerTimezone: string;
@@ -24,6 +27,7 @@ export interface StepBookedIntroCallProps {
  * instead of case-shaped. No "View case" (there is no case) — "Back to conversation" instead.
  */
 export function StepBookedIntroCall({
+  callKind,
   expertFirstName,
   startIso,
   viewerTimezone,
@@ -36,13 +40,15 @@ export function StepBookedIntroCall({
 }: Readonly<StepBookedIntroCallProps>): React.JSX.Element {
   const name = expertFirstName ?? 'them';
   const when = formatSlotDateTime(startIso, viewerTimezone);
+  const isCall = callKind === 'call';
+  const noun = isCall ? 'Call' : 'Intro call';
 
   function handleAddToCalendar(): void {
     downloadIcsEvent({
-      summary: `Intro call with ${name}`,
+      summary: `${noun} with ${name}`,
       startIso,
       durationMinutes,
-      filename: 'intro-call.ics',
+      filename: isCall ? 'call.ics' : 'intro-call.ics',
     });
   }
 
@@ -54,7 +60,7 @@ export function StepBookedIntroCall({
       <div className="max-w-[360px] space-y-1.5">
         <h2 className="text-foreground text-lg font-semibold">You&apos;re booked!</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
-          {when} · Intro call with {name}.
+          {when} · {noun} with {name}.
         </p>
         {/* Same honesty rule as `StepBooked`: the promise holds. A provisioning failure is
             captured to Sentry at booking time and raises the `meeting.unprovisioned` admin

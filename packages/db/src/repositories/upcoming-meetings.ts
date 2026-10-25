@@ -41,9 +41,9 @@ import { caseHasLiveThread } from './_shared/case-thread';
 /**
  * BAL-566 — THE COMPANY-WIDE READ BEHIND THE DASHBOARD "UP NEXT" CARD.
  *
- * Every upcoming meeting on a company's cases, project kickoffs, project requests (discovery
- * calls) and request relationships (intro calls), already folded to ONE primary context per
- * meeting — the company counterpart of `meetingsRepository.listCalendarForExpert`.
+ * Every upcoming meeting on a company's cases, project kickoffs, project calls, project requests
+ * (discovery calls) and request relationships (intro calls), already folded to ONE primary
+ * context per meeting — the company counterpart of `meetingsRepository.listCalendarForExpert`.
  *
  * ⚠ READ-ONLY, AND IT NEVER NOTIFIES. No writer lives here and nothing here publishes, queues
  * or emails — pinned by `invariants/repositories-never-notify.test.ts`.
@@ -94,8 +94,16 @@ export const MAX_UPCOMING_RANGE_DAYS = 15;
  */
 export const MAX_UPCOMING_CONTEXT_ROWS = 2000;
 
-/** The four context types Up next lists — one arm each. Package/retainer contexts have no arm. */
-export type UpcomingArm = 'case' | 'project_kickoff' | 'project_discovery' | 'request_interaction';
+/**
+ * The five context types Up next lists — one arm each. Package/retainer contexts have no arm.
+ * `project_call` (BAL-616) mirrors `project_kickoff`: both name a project `engagements.id`.
+ */
+export type UpcomingArm =
+  | 'case'
+  | 'project_kickoff'
+  | 'project_call'
+  | 'project_discovery'
+  | 'request_interaction';
 
 /** `toISOString` throws `RangeError` on an Invalid Date; the guard must still throw ITS error. */
 function isoOrInvalid(date: Date): string {
@@ -314,10 +322,10 @@ function projectChildIsLive(): SQL {
   );
 }
 
-// ── Step 1: the four arms ─────────────────────────────────────────────────────────────────────
+// ── Step 1: the five arms ─────────────────────────────────────────────────────────────────────
 
 interface EngagementGrainArm {
-  readonly arm: 'case' | 'project_kickoff';
+  readonly arm: 'case' | 'project_kickoff' | 'project_call';
   readonly engagementType: 'case' | 'project';
   /** The arm's own gate predicates, each correlated on `engagements.id`. */
   readonly gatePredicates: () => SQL[];
@@ -326,7 +334,8 @@ interface EngagementGrainArm {
 /**
  * ⚠ The subtype child is required through a correlated `EXISTS` rather than an INNER JOIN. The
  * child's PK is `engagement_id`, so the two are row-for-row identical (a join cannot fan out);
- * `EXISTS` lets the case and kickoff arms share ONE query shape instead of two near-duplicates.
+ * `EXISTS` lets the case, kickoff and project-call arms share ONE query shape instead of three
+ * near-duplicates.
  */
 const CASE_ARM: EngagementGrainArm = {
   arm: 'case',
@@ -336,6 +345,17 @@ const CASE_ARM: EngagementGrainArm = {
 
 const KICKOFF_ARM: EngagementGrainArm = {
   arm: 'project_kickoff',
+  engagementType: 'project',
+  gatePredicates: () => [projectChildIsLive()],
+};
+
+/**
+ * Project calls (BAL-616) gate exactly as the kickoff does: a live project engagement of the
+ * company. A call carried over at kickoff also carries its `request_interaction` row, so the
+ * interaction arm lists it too — step 3 keeps it ONCE, under the fold winner `project_call`.
+ */
+const PROJECT_CALL_ARM: EngagementGrainArm = {
+  arm: 'project_call',
   engagementType: 'project',
   gatePredicates: () => [projectChildIsLive()],
 };
@@ -543,8 +563,8 @@ async function readRequestTitles(
 
 export const upcomingMeetingsRepository = {
   /**
-   * Every upcoming meeting across the company's cases, project kickoffs, discovery calls and intro
-   * calls, one row per meeting, `scheduled_start ASC, meetings.id ASC`. See the module docblock
+   * Every upcoming meeting across the company's cases, project kickoffs, project calls, discovery
+   * calls and intro calls, one row per meeting, `scheduled_start ASC, meetings.id ASC`. See the module docblock
    * for the three-step tenancy discipline.
    *
    * @param input.companyId the SESSION's workspace company — the caller has already resolved the
@@ -566,6 +586,7 @@ export const upcomingMeetingsRepository = {
     const arms = await Promise.all([
       listEngagementGrainArm(input.companyId, range, CASE_ARM),
       listEngagementGrainArm(input.companyId, range, KICKOFF_ARM),
+      listEngagementGrainArm(input.companyId, range, PROJECT_CALL_ARM),
       listDiscoveryArm(input.companyId, range),
       listInteractionArm(input.companyId, range),
     ]);

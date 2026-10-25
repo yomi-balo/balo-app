@@ -8,19 +8,27 @@ import { cn } from '@/lib/utils';
 import {
   track,
   CONVERSATION_EVENTS,
+  DASHBOARD_EVENTS,
   PROJECT_EVENTS,
+  type ConversationCallRoute,
   type ConversationCallSurface,
   type ConversationProposalCta,
   type ConversationProposalSurface,
 } from '@/lib/analytics';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
+  insertUpcomingCall,
+  isConversationReadOnly,
   previewOfHtml,
+  upcomingCallCapCopy,
+  UPCOMING_CALL_CAP,
   type ConversationFileView,
   type ConversationMessageView,
   type ConversationThreadView,
   type ConversationView,
+  type UpcomingCallView,
 } from '@/lib/project-request/conversation-view-types';
+import { signedMinutesUntilCalendarStart } from '@/lib/calendar/join-window';
 import { threadNudgeFor } from '@/lib/project-request/thread-nudge-content';
 import { RequestCard } from '../request-card';
 import { postConversationMessageAction } from '@/app/(dashboard)/projects/[requestId]/_actions/post-conversation-message';
@@ -48,7 +56,7 @@ import {
   firstNamesByUserId,
   resolveTypingNames,
 } from '@/components/balo/conversation/typing-names';
-import { deriveThreadActions } from './thread-actions';
+import { callRouteOf, deriveThreadActions, deriveThreadCallSlot } from './thread-actions';
 import { ThreadTabs } from './thread-tabs';
 import { ThreadHeader } from './thread-header';
 import { ThreadNudge } from './thread-nudge';
@@ -56,7 +64,7 @@ import { MobileActionRail } from './mobile-action-rail';
 import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet';
 import { ProposalRequestDialog } from './proposal-request-dialog';
 import { DeclineTrackDialog } from '../close/decline-track-dialog';
-import { useRegisterExpertProposeTimes } from '../expert-call-bridge';
+import { useRegisterClientBookCall, useRegisterExpertProposeTimes } from '../expert-call-bridge';
 
 interface ConversationStageProps {
   requestId: string;
@@ -81,6 +89,12 @@ interface ConversationStageProps {
   canDecline?: boolean;
   /** BAL-331 delivery engagement id — null until kickoff approves. Feeds the nudge's workspace link. */
   deliveryEngagementId?: string | null;
+  /**
+   * BAL-616 — true when that engagement is `active`. A completed or cancelled project keeps
+   * `kickoff_approved` but no longer takes `project_call` bookings, so the won thread's call CTA
+   * routes to the expert's profile instead of the in-place dialog.
+   */
+  deliveryActive?: boolean;
 }
 
 interface ThreadData {
@@ -140,6 +154,8 @@ interface StageRenderModel {
   single: boolean;
   showYouSuffix: boolean;
   profileHref: string | null;
+  /** The profile deep link that opens the booking flow (`?book=1`), for the client only. */
+  profileBookingHref: string | null;
   showProposalPill: boolean;
   showOverflow: boolean;
 }
@@ -160,6 +176,7 @@ function deriveStageRender(input: {
   /** BAL-540 — threaded straight to `deriveThreadActions`. */
   canDecline: boolean;
   deliveryEngagementId: string | null;
+  deliveryActive: boolean;
 }): StageRenderModel {
   const {
     lens,
@@ -169,6 +186,7 @@ function deriveStageRender(input: {
     clientCompanyName,
     canDecline,
     deliveryEngagementId,
+    deliveryActive,
   } = input;
   const nudge = threadNudgeFor(
     lens,
@@ -184,11 +202,14 @@ function deriveStageRender(input: {
     thread: activeThread,
     nudgeIsProposal,
     canDecline,
+    deliveryActive,
   });
   const profileHref =
     lens === 'client' && activeThread.expertUsername !== null
       ? `/experts/${activeThread.expertUsername}`
       : null;
+  const profileBookingHref =
+    profileHref === null ? null : `${profileHref}?book=1&src=request_thread`;
   const showProposalPill =
     lens === 'client' && activeThread.relationshipStatus === 'proposal_requested';
   return {
@@ -197,6 +218,7 @@ function deriveStageRender(input: {
     single: threadCount === 1,
     showYouSuffix: lens === 'expert',
     profileHref,
+    profileBookingHref,
     showProposalPill,
     showOverflow: hasOverflowContent({
       profileHref,
@@ -207,9 +229,79 @@ function deriveStageRender(input: {
 }
 
 const noopSend = (): Promise<boolean> => Promise.resolve(false);
+const CLOSED_COMPOSER_PLACEHOLDER = 'This request is closed — messaging is off.';
+
 const noopDraftChange = (): void => {
   // Disabled composer — no draft to keep.
 };
+
+interface ComposerStateArgs {
+  readOnly: boolean;
+  activeDraft: string;
+  sending: boolean;
+  onDraftChange: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
+  onFocusChange: (focused: boolean) => void;
+}
+
+interface ComposerState {
+  disabled: boolean;
+  disabledPlaceholder: string | undefined;
+  sending: boolean;
+  value: string;
+  onChange: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
+  onFocusChange: ((focused: boolean) => void) | undefined;
+}
+
+/**
+ * The composer's live-or-inert props. A closed request's composer is disabled and inert: no
+ * draft, no send, no focus tracking. Pure + module-scope so the component body stays
+ * branch-light (keeps `ConversationStage` under the cognitive-complexity limit).
+ */
+function resolveComposerState(args: ComposerStateArgs): ComposerState {
+  if (args.readOnly) {
+    return {
+      disabled: true,
+      disabledPlaceholder: CLOSED_COMPOSER_PLACEHOLDER,
+      sending: false,
+      value: '',
+      onChange: noopDraftChange,
+      onSend: noopSend,
+      onFocusChange: undefined,
+    };
+  }
+  return {
+    disabled: false,
+    disabledPlaceholder: undefined,
+    sending: args.sending,
+    value: args.activeDraft,
+    onChange: args.onDraftChange,
+    onSend: args.onSend,
+    onFocusChange: args.onFocusChange,
+  };
+}
+
+/** The conversation whose typing channel to attach: the on-screen thread, and never a read-only one. */
+function typingConversationIdOf(
+  thread: Pick<ConversationThreadView, 'conversationId'> | null,
+  readOnly: boolean
+): string | null {
+  if (thread === null || readOnly) return null;
+  return thread.conversationId;
+}
+
+/** Names the counterparty for the composer and for Join's accessible name (party, not person). */
+function resolveCounterpartyLabels(
+  lens: 'client' | 'expert',
+  thread: Pick<ConversationThreadView, 'expertFirstName' | 'expertName'>,
+  clientCompanyName: string | null
+): { composerExpertName: string; joinPartyLabel: string } {
+  if (lens === 'expert') {
+    return { composerExpertName: 'the client', joinPartyLabel: clientCompanyName ?? 'the client' };
+  }
+  return { composerExpertName: thread.expertFirstName, joinPartyLabel: thread.expertName };
+}
 
 /**
  * Fire the proposal-CTA-click funnel event. Extracted to module scope so the
@@ -397,6 +489,7 @@ export function ConversationStage({
   viewerEmailDomain,
   canDecline = false,
   deliveryEngagementId = null,
+  deliveryActive = true,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
   const router = useRouter();
@@ -468,6 +561,9 @@ export function ConversationStage({
    * there is a composer to type into — and never for a thread that is not on screen.
    */
   const hasLiveComposer = threads.length > 0 && activeThread !== null;
+  // BAL-616 — a closed request's threads are records: the composer shows disabled and nothing
+  // is typed, sent or signalled. The rest of the stage (history, files, header) reads as usual.
+  const readOnly = isConversationReadOnly(requestStatus);
 
   // ── Read-state plumbing ────────────────────────────────────────────────
   const markReadSafe = useCallback(
@@ -666,7 +762,7 @@ export function ConversationStage({
     conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
-    typingConversationId: hasLiveComposer ? activeThread.conversationId : null,
+    typingConversationId: typingConversationIdOf(hasLiveComposer ? activeThread : null, readOnly),
     sendTyping,
   });
 
@@ -799,29 +895,76 @@ export function ConversationStage({
     []
   );
 
-  /** Local flip: record the booked call so the CTA becomes the "booked" done cell instantly. */
-  const flipThreadToBooked = useCallback(
-    (threadId: string, booked: { meetingId: string; scheduledStartIso: string }): void => {
-      setThreads((prev) =>
-        prev.map((t) => (t.relationshipId === threadId ? { ...t, bookedCall: booked } : t))
-      );
+  /** Local flip: add the booked call to the thread's upcoming list, soonest first. */
+  const flipThreadToBooked = useCallback((threadId: string, booked: UpcomingCallView): void => {
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.relationshipId === threadId
+          ? { ...t, upcomingCalls: insertUpcomingCall(t.upcomingCalls, booked) }
+          : t
+      )
+    );
+  }, []);
+
+  /**
+   * Track a call-CTA click against `thread` and resolve how the click reaches booking. The
+   * route is the CLIENT's (`in_place` dialog, or `profile` link); the expert lens has none.
+   */
+  const trackCallCtaClick = useCallback(
+    (
+      thread: ConversationThreadView,
+      surface: ConversationCallSurface
+    ): ConversationCallRoute | null => {
+      const slot =
+        lens === 'client'
+          ? deriveThreadCallSlot({ lens, requestStatus, thread, deliveryActive })
+          : null;
+      const route = slot === null ? null : callRouteOf(slot);
+      track(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
+        request_id: requestId,
+        relationship_id: thread.relationshipId,
+        lens,
+        surface,
+        request_status: requestStatus,
+        upcoming_count: slot?.kind === 'upcoming' ? slot.more + 1 : 0,
+        route,
+      });
+      return route;
+    },
+    [lens, requestStatus, requestId, deliveryActive]
+  );
+
+  /**
+   * The client's click, after tracking: an in-place route opens the booking dialog unless the
+   * thread already holds the cap, which answers with the cap copy instead. A `profile` route is
+   * a link that navigates on its own, so there is nothing to open here. The cap is also
+   * enforced server-side; this pre-check only spares the round trip.
+   */
+  const openClientCallDialog = useCallback(
+    (
+      thread: ConversationThreadView,
+      surface: ConversationCallSurface,
+      route: ConversationCallRoute | null
+    ): void => {
+      if (route === 'profile') return;
+      if (thread.upcomingCalls.length >= UPCOMING_CALL_CAP) {
+        const copy = upcomingCallCapCopy(thread.expertFirstName);
+        toast.info(copy.title, { description: copy.body });
+        return;
+      }
+      setIntroCallSurface(surface);
+      setIntroCallDialogOpen(true);
     },
     []
   );
 
   const handleCall = useCallback(
     (surface: ConversationCallSurface): void => {
-      if (activeThreadId === null || callPending) return;
-      track(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED, {
-        request_id: requestId,
-        relationship_id: activeThreadId,
-        lens,
-        surface,
-      });
+      if (activeThreadId === null || activeThread === null || callPending) return;
+      const route = trackCallCtaClick(activeThread, surface);
 
       if (lens === 'client') {
-        setIntroCallSurface(surface);
-        setIntroCallDialogOpen(true);
+        openClientCallDialog(activeThread, surface, route);
         return;
       }
 
@@ -863,11 +1006,14 @@ export function ConversationStage({
     },
     [
       activeThreadId,
+      activeThread,
       callPending,
       requestId,
       lens,
       router,
       clientCompanyName,
+      trackCallCtaClick,
+      openClientCallDialog,
       flipThreadToAvailabilityShared,
     ]
   );
@@ -879,6 +1025,7 @@ export function ConversationStage({
       flipThreadToBooked(booked.relationshipId, {
         meetingId: booked.meetingId,
         scheduledStartIso: booked.scheduledStartIso,
+        contextType: booked.contextType,
       });
       router.refresh();
     },
@@ -890,6 +1037,41 @@ export function ConversationStage({
   const handlePageNudgeCall = useCallback((): void => handleCall('page_nudge'), [handleCall]);
   // The page nudge's "Propose times" runs this same handler (see `expert-call-bridge.tsx`).
   useRegisterExpertProposeTimes(lens === 'expert' ? handlePageNudgeCall : null, callPending);
+
+  // The Join click is an Up next click: both surfaces count in one event, told apart by `surface`.
+  const handleJoin = useCallback((call: UpcomingCallView): void => {
+    const minutes = signedMinutesUntilCalendarStart(new Date(), new Date(call.scheduledStartIso));
+    track(DASHBOARD_EVENTS.UP_NEXT_CLICKED, {
+      target: 'join',
+      meeting_type: call.contextType,
+      row_state: minutes <= 0 ? 'happening_now' : 'starting_soon',
+      surface: 'request_thread',
+    });
+  }, []);
+
+  // The kickoff board's "Pick a time" books through this stage's dialog, against the WON thread
+  // (which may not be the one on screen). Offered only to the client, only while that thread has
+  // no upcoming call: with one booked the board shows "Booked for …" instead.
+  const kickoffBookThreadId =
+    lens === 'client'
+      ? (threads.find((t) => t.stage === 'won' && t.upcomingCalls.length === 0)?.relationshipId ??
+        null)
+      : null;
+  const handleKickoffBookCall = useCallback((): void => {
+    const thread = threads.find((t) => t.relationshipId === kickoffBookThreadId);
+    if (thread === undefined) return;
+    if (thread.relationshipId !== activeThreadId) selectThread(thread.relationshipId, 'manual');
+    const route = trackCallCtaClick(thread, 'kickoff_board');
+    openClientCallDialog(thread, 'kickoff_board', route);
+  }, [
+    threads,
+    kickoffBookThreadId,
+    activeThreadId,
+    selectThread,
+    trackCallCtaClick,
+    openClientCallDialog,
+  ]);
+  useRegisterClientBookCall(kickoffBookThreadId === null ? null : handleKickoffBookCall);
 
   // ── Request proposal (BAL-272 / A5 — client lens only) ─────────────────
   // Surface + thread captured at CTA-click time; the modal blocks tab switches
@@ -1126,16 +1308,25 @@ export function ConversationStage({
     return <EmptyConversationStage lens={lens} />;
   }
 
-  const { nudge, actions, single, showYouSuffix, profileHref, showProposalPill, showOverflow } =
-    deriveStageRender({
-      lens,
-      requestStatus,
-      activeThread,
-      threadCount: threads.length,
-      clientCompanyName,
-      canDecline,
-      deliveryEngagementId,
-    });
+  const {
+    nudge,
+    actions,
+    single,
+    showYouSuffix,
+    profileHref,
+    profileBookingHref,
+    showProposalPill,
+    showOverflow,
+  } = deriveStageRender({
+    lens,
+    requestStatus,
+    activeThread,
+    threadCount: threads.length,
+    clientCompanyName,
+    canDecline,
+    deliveryEngagementId,
+    deliveryActive,
+  });
 
   // Lens-gated handler wiring (pure helper — keeps the component body branch-light).
   const {
@@ -1157,7 +1348,19 @@ export function ConversationStage({
   });
   // The `kind:'view'` review/submitted link is live for BOTH lenses (the route
   // dispatches by lens). Always wired; the slot only renders at submitted/accepted.
-  const composerExpertName = lens === 'expert' ? 'the client' : activeThread.expertFirstName;
+  const { composerExpertName, joinPartyLabel } = resolveCounterpartyLabels(
+    lens,
+    activeThread,
+    clientCompanyName
+  );
+  const composer = resolveComposerState({
+    readOnly,
+    activeDraft,
+    sending,
+    onDraftChange: handleDraftChange,
+    onSend: handleSend,
+    onFocusChange: setComposerFocused,
+  });
 
   return (
     <RequestCard className={STAGE_CARD_CLASS}>
@@ -1198,7 +1401,12 @@ export function ConversationStage({
           showYouSuffix={showYouSuffix}
           actions={actions}
           callPending={callPending}
+          profileBookingHref={profileBookingHref}
+          deliveryEngagementId={deliveryEngagementId}
+          joinPartyLabel={joinPartyLabel}
           onCall={handleHeaderCall}
+          onBookAnother={handleHeaderCall}
+          onJoin={handleJoin}
           onRequestProposal={onHeaderRequestProposal}
           onBuildProposal={onHeaderBuildProposal}
           onViewProposal={handleHeaderView}
@@ -1252,13 +1460,15 @@ export function ConversationStage({
       <div ref={composerContainerRef}>
         <MessageComposer
           expertFirstName={composerExpertName}
+          disabled={composer.disabled}
+          disabledPlaceholder={composer.disabledPlaceholder}
           placeholder={nudge?.composerPlaceholder}
-          sending={sending}
+          sending={composer.sending}
           uploading={null}
-          value={activeDraft}
-          onChange={handleDraftChange}
-          onSend={handleSend}
-          onFocusChange={setComposerFocused}
+          value={composer.value}
+          onChange={composer.onChange}
+          onSend={composer.onSend}
+          onFocusChange={composer.onFocusChange}
           onTyping={typing?.onKeystroke}
           onTypingStopped={typing?.onStopped}
         />
@@ -1268,8 +1478,16 @@ export function ConversationStage({
         visible={!composerFocused}
         callSlot={actions.callSlot}
         callPending={callPending}
+        expertName={activeThread.expertName}
+        expertFirstName={activeThread.expertFirstName}
+        upcomingCalls={activeThread.upcomingCalls}
+        profileBookingHref={profileBookingHref}
+        deliveryEngagementId={deliveryEngagementId}
+        joinPartyLabel={joinPartyLabel}
         proposalCta={actions.railProposal}
         onCall={handleRailCall}
+        onBookAnother={handleRailCall}
+        onJoin={handleJoin}
         onProposal={onRailProposal}
         onBuildProposal={onRailBuildProposal}
         onViewProposal={handleRailView}
@@ -1329,6 +1547,8 @@ export function ConversationStage({
           viewerEmailDomain={viewerEmailDomain}
           viewerTimezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
           surface={introCallSurface}
+          callKind={activeThread.stage === 'won' ? 'call' : 'intro'}
+          requestStatus={requestStatus}
           onBooked={handleIntroCallBooked}
           onMessage={handleIntroCallMessage}
         />

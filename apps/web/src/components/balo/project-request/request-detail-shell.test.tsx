@@ -646,6 +646,51 @@ describe('RequestDetailShell — KickoffBoard mounting (BAL-291)', () => {
     expect(screen.getAllByText('Before kickoff').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('forwards kickoffNextCallStartIso to the board for the admin observer (no thread needed)', async () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'accepted',
+          relationships: [relationship({ status: 'accepted', state: 'accepted' })],
+          kickoff: kickoff(),
+        })}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', isOwner: false, canSeeContact: true })}
+        kickoffNextCallStartIso="2030-01-15T03:00:00.000Z"
+      />
+    );
+    expect(await screen.findByText(/Booked for .* at 3:00 am\./)).toBeInTheDocument();
+  });
+
+  it('forwards kickoffNextCallStartIso to every board mount for the client (desktop column + mobile sheet)', async () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'accepted', kickoff: kickoff() })}
+        ctx={ctx({ lens: 'client' })}
+        conversation={conversation()}
+        kickoffNextCallStartIso="2030-01-15T03:00:00.000Z"
+      />
+    );
+    expect(
+      (await screen.findAllByText(/Booked for .* at 3:00 am\./)).length
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.queryByText("Book any time — it doesn't hold up kickoff.")
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the no-call kickoff copy when no call is booked', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'accepted', kickoff: kickoff() })}
+        ctx={ctx({ lens: 'client' })}
+        conversation={conversation()}
+      />
+    );
+    expect(
+      screen.getAllByText("Book any time — it doesn't hold up kickoff.").length
+    ).toBeGreaterThanOrEqual(1);
+  });
+
   it('does NOT render the KickoffBoard when kickoff is null (default fixtures)', () => {
     render(<RequestDetailShell view={view({ status: 'eoi_submitted' })} ctx={ctx()} />);
     expect(screen.queryByText('Before kickoff')).not.toBeInTheDocument();
@@ -1177,6 +1222,78 @@ describe('RequestDetailShell — BAL-540 close control + closed state', () => {
     );
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
     expect(screen.getByText('Ended — request closed')).toBeInTheDocument();
+  });
+
+  describe('BAL-616 — the closed request shows its conversation read-only', () => {
+    const closedView = (): RequestDetailView =>
+      view({
+        status: 'closed',
+        closed: {
+          closedAtIso: '2026-09-05T00:00:00.000Z',
+          reason: 'unfilled',
+          closedByLabel: 'Adeeb @ Balo',
+          closedByParty: 'balo',
+          note: null,
+          counts: { tracksEnded: 1, proposalsWithdrawn: 0, meetingsCancelled: 0 },
+        },
+        closedTracks: [
+          {
+            relationshipId: 'rel-9',
+            expertName: 'Morgan Lee',
+            expertInitials: 'ML',
+            partyLabel: 'Morgan Lee',
+            finalChip: 'declined',
+            endedLabel: 'Declined before the request closed',
+          },
+        ],
+      });
+    const closedThread = (): ConversationView =>
+      conversation({
+        threads: [conversationThread({ relationshipStatus: 'declined', stage: 'request_closed' })],
+      });
+
+    it('mounts the stage beside the banner and the track list when a thread survives', () => {
+      render(<RequestDetailShell view={closedView()} ctx={ctx()} conversation={closedThread()} />);
+      expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/This request is closed/i)).toBeDisabled();
+      expect(screen.getByText('Morgan Lee')).toBeInTheDocument();
+    });
+
+    it('keeps the Balo panel beside the conversation', () => {
+      render(
+        <RequestDetailShell
+          view={closedView()}
+          ctx={ctx()}
+          conversation={closedThread()}
+          baloPanel={baloPanelView()}
+        />
+      );
+      expect(screen.getByText('Balo')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/This request is closed/i)).toBeDisabled();
+    });
+
+    it.each([
+      ['an empty thread list', conversation({ threads: [] })],
+      ['no conversation at all', null],
+    ])('mounts no stage and no empty copy for %s', (_label, conv) => {
+      render(<RequestDetailShell view={closedView()} ctx={ctx()} conversation={conv} />);
+      expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+      expect(screen.getByText('Morgan Lee')).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/This request is closed/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Once experts express interest/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Your conversation lives here/i)).not.toBeInTheDocument();
+    });
+
+    it('still mounts the Balo panel when there is no conversation', () => {
+      render(
+        <RequestDetailShell
+          view={closedView()}
+          ctx={ctx({ lens: 'admin', archetype: 'observer', canSeeBaloPanel: true })}
+          baloPanel={baloPanelView()}
+        />
+      );
+      expect(screen.getByText('Balo')).toBeInTheDocument();
+    });
   });
 });
 

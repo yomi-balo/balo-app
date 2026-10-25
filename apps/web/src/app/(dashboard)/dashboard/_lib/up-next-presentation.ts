@@ -15,9 +15,35 @@ import type { UpNextRowView, UpNextWorkspaceType } from './up-next-view-types';
 
 const MS_PER_MINUTE = 60_000;
 
+interface ZonedDayAndTime {
+  readonly day: 'today' | 'tomorrow' | 'other';
+  /** `'EEE d MMM'` in the viewer's zone. */
+  readonly dateStr: string;
+  /** `'h:mm aaa'` in the viewer's zone. */
+  readonly timeStr: string;
+}
+
+/**
+ * The ONE rule for "which day is this start, and how is its date and time spelled" in the
+ * VIEWER's zone. Time `'h:mm aaa'` (lowercase am/pm), date `'EEE d MMM'`. Both
+ * {@link formatUpNextWhen} and {@link formatNextCallWhen} phrase this result.
+ */
+function zonedDayAndTime(startIso: string, now: Date, timeZone: string): ZonedDayAndTime {
+  const timeStr = formatInTimeZone(new Date(startIso), timeZone, 'h:mm aaa');
+  const dateStr = formatInTimeZone(new Date(startIso), timeZone, 'EEE d MMM');
+
+  const todayKey = todayDayKey(timeZone, now);
+  const tomorrowKey = addDaysToDayKey(todayKey, 1);
+  const startDayKey = zonedDayKey(startIso, timeZone);
+
+  if (startDayKey === todayKey) return { day: 'today', dateStr, timeStr };
+  if (startDayKey === tomorrowKey) return { day: 'tomorrow', dateStr, timeStr };
+  return { day: 'other', dateStr, timeStr };
+}
+
 /**
  * "Today, 2:30 pm" + "30 min"; "Tomorrow, 9:00 am" + "60 min"; otherwise "Thu 17 Sep" + "3:00 pm,
- * 45 min". Time `'h:mm aaa'` (lowercase am/pm), date `'EEE d MMM'`, both in the VIEWER's zone (R3).
+ * 45 min". Time `'h:mm aaa'` (lowercase am/pm), date `'EEE d MMM'`, both in the VIEWER's zone.
  * Duration = round((end − start) / 60000) scheduled minutes.
  */
 export function formatUpNextWhen(
@@ -29,20 +55,27 @@ export function formatUpNextWhen(
   const durationMinutes = Math.round(
     (new Date(row.scheduledEnd).getTime() - new Date(startIso).getTime()) / MS_PER_MINUTE
   );
-  const timeStr = formatInTimeZone(new Date(startIso), timeZone, 'h:mm aaa');
-  const dateStr = formatInTimeZone(new Date(startIso), timeZone, 'EEE d MMM');
+  const { day, dateStr, timeStr } = zonedDayAndTime(startIso, now, timeZone);
 
-  const todayKey = todayDayKey(timeZone, now);
-  const tomorrowKey = addDaysToDayKey(todayKey, 1);
-  const startDayKey = zonedDayKey(startIso, timeZone);
-
-  if (startDayKey === todayKey) {
+  if (day === 'today') {
     return { primary: `Today, ${timeStr}`, secondary: `${durationMinutes} min` };
   }
-  if (startDayKey === tomorrowKey) {
+  if (day === 'tomorrow') {
     return { primary: `Tomorrow, ${timeStr}`, secondary: `${durationMinutes} min` };
   }
   return { primary: dateStr, secondary: `${timeStr}, ${durationMinutes} min` };
+}
+
+/**
+ * The same day rule as {@link formatUpNextWhen}, phrased to sit mid-sentence after "Next call":
+ * "today at 2:30 pm", "tomorrow at 9:00 am", otherwise "Thu 17 Sep at 3:00 pm". In the VIEWER's
+ * zone; `now` and `timeZone` are injected.
+ */
+export function formatNextCallWhen(startIso: string, now: Date, timeZone: string): string {
+  const { day, dateStr, timeStr } = zonedDayAndTime(startIso, now, timeZone);
+  if (day === 'today') return `today at ${timeStr}`;
+  if (day === 'tomorrow') return `tomorrow at ${timeStr}`;
+  return `${dateStr} at ${timeStr}`;
 }
 
 export interface UpNextRowTiming {

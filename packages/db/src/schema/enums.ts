@@ -919,6 +919,8 @@ export const meetingEndedByEnum = pgEnum('meeting_ended_by', [
  *   admin             → NULL (no subject; CHECK `meeting_context_admin_no_id`)
  *   request_interaction → request_expert_relationships.id   (BAL-413 / ADR-1046 amendment
  *                       2026-08-07)
+ *   project_call      → engagements.id  (BAL-616, ADR-1045 §2 / ADR-1046 amendment
+ *                       2026-10-23 — a client↔expert call on a project AFTER kickoff)
  * ADR-1045 §2 is the authoritative list (ADR-1043 §1 predates `retainer_checkin`).
  *
  * ⚠ THE TWO REQUEST-GRAIN LABELS ARE NOT INTERCHANGEABLE — this is the single most likely
@@ -928,10 +930,20 @@ export const meetingEndedByEnum = pgEnum('meeting_ended_by', [
  * On a `direct`-routed request the two grains coincide and resolve to the same expert; on a
  * `match` request only `request_interaction` has a holder at all.
  *
+ * ⚠ REQUEST GRAIN vs ENGAGEMENT GRAIN FOR THE SAME PAIR OF PARTIES. A call between the client
+ * and the won expert is `request_interaction` (relationship grain) until kickoff materialises
+ * the engagement, and `project_call` (engagement grain) from then on. The two labels name the
+ * same people at different grains. Kickoff ATTACHES a `project_call` context to every live
+ * `request_interaction` meeting of the won relationship
+ * (`meetingContextsRepository.reanchorRequestCallsToEngagementTx`) and keeps the
+ * `request_interaction` row, so a carried-over meeting carries BOTH and the engagement grain
+ * wins on precedence. `project_kickoff` is the one kickoff meeting; `project_call` is any
+ * other call on the project.
+ *
  * ⚠ APPEND-ONLY. A label is added at the END of this array, never inserted mid-array — an
  * insert changes enum ordinals and makes drizzle recreate the type instead of emitting a
  * plain `ALTER TYPE … ADD VALUE`. See the runtime drift guard in
- * `src/invariants/meeting-context-type-labels.test.ts` for what an 8th label must sweep.
+ * `src/invariants/meeting-context-type-labels.test.ts` for what a new label must sweep.
  */
 export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
   'case',
@@ -941,6 +953,7 @@ export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
   'retainer_checkin',
   'admin',
   'request_interaction',
+  'project_call',
 ]);
 
 /**
@@ -957,11 +970,11 @@ export const meetingContextTypeEnum = pgEnum('meeting_context_type', [
  *                    project, package and retainer). The delivery thread.
  *
  * ⚠ THE LABELS NAME THE ANCHOR TABLE, NOT A PURPOSE — DELIBERATELY UNLIKE
- * `meeting_context_type`, whose seven labels name what a MEETING IS FOR
+ * `meeting_context_type`, whose eight labels name what a MEETING IS FOR
  * (`case`/`project_discovery`/`project_kickoff`/…). A conversation has no purpose axis: it
  * is one continuous thread between two parties, and the only question the seam answers is
- * "whose thread is this". Collapsing the four engagement-grain meeting labels into one
- * `engagement` label here is what makes kickoff carry-over a single row rather than four.
+ * "whose thread is this". Collapsing the five engagement-grain meeting labels into one
+ * `engagement` label here is what makes kickoff carry-over a single row rather than five.
  *
  * ⚠ NO `admin` LABEL, AND `context_id` IS THEREFORE `NOT NULL` (scope decision 1,
  * 2026-08-10). `meeting_contexts` carries an `admin` label with a NULLABLE `context_id`, a

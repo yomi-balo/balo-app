@@ -174,6 +174,10 @@ export const MEETING_CONTEXT_PRECEDENCE = {
   project_kickoff: 100,
   package_session: 100,
   retainer_checkin: 100,
+  // BAL-616 (ADR-1046 amendment 2026-10-23): a project call after kickoff. Kickoff attaches
+  // it to the won relationship's live `request_interaction` meetings, and 100 over 50 is
+  // what makes the engagement the primary context of a carried-over call.
+  project_call: 100,
   // ── Request grain: the context names a `project_requests.id` /
   //    `request_expert_relationships.id`. Real, but out-ranked by an engagement. ──
   request_interaction: 50,
@@ -183,23 +187,23 @@ export const MEETING_CONTEXT_PRECEDENCE = {
 } as const;
 
 /**
- * The seven `meeting_context_type` labels, DERIVED from the precedence map so the map is
+ * The eight `meeting_context_type` labels, DERIVED from the precedence map so the map is
  * total by construction.
  *
  * ⚠ THIS IS A RESTATEMENT OF A pgEnum IN A PACKAGE THAT CANNOT IMPORT IT, and it is pinned
  * rather than trusted: `apps/api`'s `authorize-meeting-participation.ts` carries a two-way
- * `AssertNever` against `@balo/db`'s `MeetingContextType`, so an EIGHTH label added to the
+ * `AssertNever` against `@balo/db`'s `MeetingContextType`, so a NINTH label added to the
  * database fails `pnpm --filter api typecheck` until it is given a precedence here.
  */
 export type MeetingContextTypeLabel = keyof typeof MEETING_CONTEXT_PRECEDENCE;
 
 /**
- * The six context types that CAN have a holder on the engagement axis — everything except
+ * The seven context types that CAN have a holder on the engagement axis — everything except
  * `admin`.
  *
  * ⚠ IT EXISTS SO `selectPrimaryMeetingContext`'s RESULT IS NARROWER THAN ITS ARGUMENT. The
  * rule drops `admin` (precedence 0), so a primary context can never be an admin one — and
- * saying that in the TYPE is what lets the caller's `switch` over the six be exhaustive with
+ * saying that in the TYPE is what lets the caller's `switch` over the seven be exhaustive with
  * a `never` default. Typing the result as a union that still admitted `admin` made that arm
  * reachable in the type system but dead at runtime, i.e. unprovable dead code that
  * SonarCloud counts as uncovered changed lines.

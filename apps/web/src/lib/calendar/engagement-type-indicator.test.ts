@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ENGAGEMENT_TYPE_INDICATOR } from './engagement-type-indicator';
 
 describe('ENGAGEMENT_TYPE_INDICATOR', () => {
-  it('is total over all six holder-bearing context labels', () => {
+  it('is total over all seven holder-bearing context labels', () => {
     // ⚠ Explicit comparators on both sides (SonarCloud S2871 — a comparator-less `.sort()` is a
     // reliability bug by rule, even where the default happens to be correct). BAL-498 R5, B1.
     const byCodePoint = (a: string, b: string): number => a.localeCompare(b);
@@ -11,12 +11,18 @@ describe('ENGAGEMENT_TYPE_INDICATOR', () => {
       [
         'case',
         'package_session',
+        'project_call',
         'project_discovery',
         'project_kickoff',
         'request_interaction',
         'retainer_checkin',
       ].sort(byCodePoint)
     );
+  });
+
+  it('labels a project call as such, on the same violet accent as a kickoff', () => {
+    expect(ENGAGEMENT_TYPE_INDICATOR.project_call.label).toBe('Project call');
+    expect(ENGAGEMENT_TYPE_INDICATOR.project_call.borderClass).toBe('border-l-violet');
   });
 
   it('every entry has an icon, a border class, and a non-empty label', () => {

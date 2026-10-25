@@ -2,13 +2,16 @@
 
 import { useCallback, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, Clock, Loader2, PartyPopper } from 'lucide-react';
+import { Calendar, Check, Clock, Loader2, PartyPopper, Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
+import { useViewerClock } from '@/hooks/use-viewer-clock';
+import { formatNextCallWhen } from '@/app/(dashboard)/dashboard/_lib/up-next-presentation';
 import { RequestCard } from '../request-card';
+import { useClientBookCall } from '../expert-call-bridge';
 import { ClientBillingAffordance } from './billing-details-dialog';
 import { formatProposalAmount } from './proposal-format';
 import { markUpfrontInvoiceRaisedAction } from '@/app/(dashboard)/projects/[requestId]/_actions/mark-upfront-invoice-raised';
@@ -39,6 +42,11 @@ interface KickoffBoardProps {
   billing?: KickoffBillingCapture | null;
   /** Tightens padding for the mobile bottom-sheet mount. */
   mobile?: boolean;
+  /**
+   * The start of the next upcoming call with the accepted expert, or `null` when none is
+   * booked. Read by the optional kickoff-call row only — it never gates a step.
+   */
+  nextCallStartIso?: string | null;
 }
 
 /**
@@ -177,6 +185,28 @@ function resolveSteps(
   ];
 }
 
+/** The kickoff-call row's label and, with no call booked, its sub-copy — per viewer lens. */
+function kickoffCallCopy(
+  lens: KickoffLens,
+  expertName: string,
+  company: string
+): { label: string; sub: string } {
+  const [first = expertName] = expertName.split(' ');
+  if (lens === 'client') {
+    return {
+      label: `Kickoff call with ${first}`,
+      sub: "Book any time — it doesn't hold up kickoff.",
+    };
+  }
+  if (lens === 'expert') {
+    return {
+      label: `Kickoff call with ${company}`,
+      sub: `${company} can book a time on your calendar.`,
+    };
+  }
+  return { label: 'Kickoff call', sub: "Optional — it doesn't hold up approval." };
+}
+
 /** The admin's action on a step, or `null` when the step carries none for the admin. */
 function adminActionFor(key: KickoffStepKey): AdminStepAction | null {
   if (key === 'invoice') return { label: 'Mark sent', handler: 'markInvoiceSent' };
@@ -197,6 +227,7 @@ export function KickoffBoard({
   upfront,
   billing = null,
   mobile = false,
+  nextCallStartIso = null,
 }: Readonly<KickoffBoardProps>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -313,6 +344,7 @@ export function KickoffBoard({
             else if (index === currentIndex) state = 'current';
             let connector: StepConnector = null;
             if (index < steps.length - 1) connector = step.done ? 'done' : 'pending';
+            else if (!approved) connector = 'dashed';
             return (
               <KickoffThreadStep
                 key={step.key}
@@ -332,6 +364,15 @@ export function KickoffBoard({
               />
             );
           })}
+          {!approved && (
+            <KickoffCallRow
+              lens={lens}
+              expertName={expertName}
+              company={clientCompanyName}
+              nextCallStartIso={nextCallStartIso}
+              mobile={mobile}
+            />
+          )}
         </ol>
       </RequestCard>
     </div>
@@ -356,8 +397,17 @@ function KickoffCelebration(): React.JSX.Element {
 }
 
 type StepState = 'done' | 'current' | 'future';
-/** The line joining a step to the next: solid once the step is done, neutral until then. */
-type StepConnector = 'done' | 'pending' | null;
+/**
+ * The line joining a step to the next: solid once the step is done, neutral until then, and
+ * dashed where it leads into the optional kickoff-call row.
+ */
+type StepConnector = 'done' | 'pending' | 'dashed' | null;
+
+const CONNECTOR_CLASS: Readonly<Record<NonNullable<StepConnector>, string>> = {
+  done: 'bg-success/35',
+  pending: 'bg-border',
+  dashed: 'border-border border-l-2 border-dashed',
+};
 
 interface KickoffThreadStepProps {
   step: KickoffStep;
@@ -446,8 +496,9 @@ function KickoffThreadStep({
           <span
             aria-hidden="true"
             className={cn(
-              'my-1 min-h-3.5 w-0.5 flex-1',
-              connector === 'done' ? 'bg-success/35' : 'bg-border'
+              'my-1 min-h-3.5 flex-1',
+              connector !== 'dashed' && 'w-0.5',
+              CONNECTOR_CLASS[connector]
             )}
           />
         )}
@@ -529,5 +580,75 @@ function KickoffActionButton({
       {spinning && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
       {label}
     </button>
+  );
+}
+
+/**
+ * The optional kickoff call, after the gating steps. It is not a step: it never counts toward
+ * "N of M done" and never becomes the current step, so it can't hold up kickoff or approval.
+ * With a call booked every lens reads "Booked for …"; otherwise the client can pick a time
+ * through the conversation stage's own booking dialog (the call bridge).
+ */
+function KickoffCallRow({
+  lens,
+  expertName,
+  company,
+  nextCallStartIso,
+  mobile,
+}: Readonly<{
+  lens: KickoffLens;
+  expertName: string;
+  company: string;
+  nextCallStartIso: string | null;
+  mobile: boolean;
+}>): React.JSX.Element {
+  const clock = useViewerClock();
+  const bookCall = useClientBookCall();
+  const copy = kickoffCallCopy(lens, expertName, company);
+  const showPick = lens === 'client' && nextCallStartIso === null && bookCall !== null;
+
+  let sub: React.ReactNode = copy.sub;
+  if (nextCallStartIso !== null) {
+    sub =
+      clock === null ? (
+        <span
+          aria-hidden="true"
+          className="bg-muted inline-block h-3 w-32 animate-pulse rounded align-middle"
+        />
+      ) : (
+        `Booked for ${formatNextCallWhen(nextCallStartIso, clock.now, clock.timeZone)}.`
+      );
+  }
+
+  return (
+    <li data-kickoff-call="" className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-3">
+      <div className="flex flex-col items-center">
+        <span
+          className="border-muted-foreground/40 text-muted-foreground/60 flex size-6 shrink-0 items-center justify-center rounded-full border-[1.5px] border-dashed"
+          aria-hidden="true"
+        >
+          <Video className="size-[11px]" />
+        </span>
+      </div>
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-foreground mt-0.5 text-sm font-medium">{copy.label}</p>
+          <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-normal">{sub}</p>
+        </div>
+        {showPick && (
+          <button
+            type="button"
+            onClick={bookCall}
+            className={cn(
+              'border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 items-center justify-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none',
+              mobile ? 'min-h-11' : 'min-h-9'
+            )}
+          >
+            <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+            Pick a time
+          </button>
+        )}
+      </div>
+    </li>
   );
 }

@@ -793,7 +793,7 @@ export interface CalendarContextIdBuckets {
 /**
  * `listCalendarForExpert` step 3a — classify each folded meeting's winning context by grain, so
  * step 3b can batch-load one query per non-empty bucket. Exhaustive `switch` with `const
- * unhandled: never` — an eighth `meeting_context_type` label fails `pnpm typecheck` here.
+ * unhandled: never` — a new `meeting_context_type` label fails `pnpm typecheck` here.
  */
 export function classifyCalendarContextIds(
   folded: readonly FoldedCalendarMeeting[]
@@ -807,6 +807,7 @@ export function classifyCalendarContextIds(
       case 'project_kickoff':
       case 'package_session':
       case 'retainer_checkin':
+      case 'project_call':
         engagementIds.add(meeting.contextId);
         break;
       case 'project_discovery':
@@ -848,7 +849,7 @@ export interface CalendarOwnerLookups {
 /**
  * `listCalendarForExpert` step 4 — resolve each folded meeting's counterparty from the batch-load
  * results and assemble the final `ExpertCalendarMeeting[]`. Mirrors the exhaustive `switch` from
- * {@link classifyCalendarContextIds} (rather than `includes()`/`else if`/`else`) so a seventh
+ * {@link classifyCalendarContextIds} (rather than `includes()`/`else if`/`else`) so a new
  * holder-bearing label cannot silently fall into the `request_interaction` bucket.
  *
  * `owningRowFound` is surfaced on every row (not just logged) so the WEB LOADER can refuse to
@@ -970,7 +971,7 @@ interface ResolvedCalendarMeetingOwner {
  * behaviour is byte-for-byte what the inlined switch did.
  *
  * The exhaustive `switch` with `const unhandled: never` is deliberate (rather than
- * `includes()`/`else if`/`else`) so a seventh holder-bearing label cannot silently fall into the
+ * `includes()`/`else if`/`else`) so a new holder-bearing label cannot silently fall into the
  * `request_interaction` bucket — it fails `pnpm typecheck` instead.
  */
 function resolveCalendarMeetingOwner(
@@ -988,7 +989,8 @@ function resolveCalendarMeetingOwner(
     case 'case':
     case 'project_kickoff':
     case 'package_session':
-    case 'retainer_checkin': {
+    case 'retainer_checkin':
+    case 'project_call': {
       const owning = owners.engagementById.get(meeting.contextId);
       if (owning === undefined) return missing;
       return {
@@ -1188,8 +1190,8 @@ export const meetingsRepository = {
    * BAL-283 — THE BATCHED "is a call booked on this context?" READ. One query for a WHOLE
    * page's worth of context ids; never one per id.
    *
-   * Its first caller is the project-request conversation loader, which derives one
-   * `bookedCall` per thread and must not go N+1 over a request's relationships — the same
+   * Its first caller is the project-request conversation loader, which derives each
+   * thread's `upcomingCalls` and must not go N+1 over a request's relationships — the same
    * batching posture as `conversationsRepository.latestMessagesForRelationships` and
    * `meetingContextsRepository.consultationTimestampsForEngagements`.
    *
@@ -2459,7 +2461,7 @@ export interface ExpertCalendarMeeting {
    * identifier, not this expert's (BAL-498 fix round 3, R8).
    */
   readonly contextId: string | null;
-  /** Non-null for the four engagement-grain labels only. */
+  /** Non-null for the five engagement-grain labels only. */
   readonly engagementType: EngagementType | null;
   /** `project_requests.id` — non-null for the two request-grain labels only (link target). */
   readonly projectRequestId: string | null;

@@ -443,9 +443,10 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'intro-call-booked-client': (data) => {
     const expertParty = (data.expertPartyLabel as string) ?? 'your expert';
     const requestId = data.requestId as string | undefined;
+    const isCall = data.callKind === 'call';
     return {
-      title: 'Intro call confirmed',
-      body: `Your intro call with ${expertParty} is confirmed.`,
+      title: isCall ? 'Call confirmed' : 'Intro call confirmed',
+      body: `Your ${isCall ? 'call' : 'intro call'} with ${expertParty} is confirmed.`,
       actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },
@@ -459,9 +460,10 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'intro-call-booked-expert': (data) => {
     const clientPerson = (data.clientPersonName as string) ?? 'A client';
     const requestId = data.requestId as string | undefined;
+    const isCall = data.callKind === 'call';
     return {
-      title: 'New intro call booked',
-      body: `${personWithOrgLabel(clientPerson, data.clientCompanyName as string)} booked an intro call with you.`,
+      title: isCall ? 'New call booked' : 'New intro call booked',
+      body: `${personWithOrgLabel(clientPerson, data.clientCompanyName as string)} booked ${isCall ? 'a call' : 'an intro call'} with you.`,
       actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },

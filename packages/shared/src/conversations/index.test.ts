@@ -21,16 +21,19 @@ function primary(
 }
 
 describe('conversationSubjectForMeetingContext', () => {
-  // The four ENGAGEMENT-grain labels all collapse onto ONE conversation label — that
-  // collapse is what makes kickoff carry-over a single context row rather than four.
-  it.each(['case', 'project_kickoff', 'package_session', 'retainer_checkin'] as const)(
-    'maps %s to the engagement anchor',
-    (contextType) => {
-      expect(
-        conversationSubjectForMeetingContext({ contextType, contextId: ENGAGEMENT_ID })
-      ).toEqual({ contextType: 'engagement', contextId: ENGAGEMENT_ID });
-    }
-  );
+  // The five ENGAGEMENT-grain labels all collapse onto ONE conversation label — that
+  // collapse is what makes kickoff carry-over a single context row rather than five.
+  it.each([
+    'case',
+    'project_kickoff',
+    'package_session',
+    'retainer_checkin',
+    'project_call',
+  ] as const)('maps %s to the engagement anchor', (contextType) => {
+    expect(conversationSubjectForMeetingContext({ contextType, contextId: ENGAGEMENT_ID })).toEqual(
+      { contextType: 'engagement', contextId: ENGAGEMENT_ID }
+    );
+  });
 
   it('maps request_interaction to the relationship anchor', () => {
     expect(

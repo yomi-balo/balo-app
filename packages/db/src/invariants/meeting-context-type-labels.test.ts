@@ -8,7 +8,7 @@ import { meetingContextTypeEnum } from '../schema/enums';
  * resolver switch (`apps/api/src/services/meetings/authorize-engagement-host.ts`). It exists
  * because the two ends of that pair fail differently and a label change must trip BOTH:
  *
- *   · the resolver's `const exhaustive: never = subject;` tail catches an 8th label at
+ *   · the resolver's `const exhaustive: never = subject;` tail catches a new label at
  *     `pnpm --filter api typecheck` — but ONLY for a consumer that switches exhaustively.
  *     Nothing forces a future consumer to switch at all, and nothing at all guards the
  *     ORDER of the labels.
@@ -17,7 +17,7 @@ import { meetingContextTypeEnum } from '../schema/enums';
  *     change is actually made. `@balo/db` has no `typecheck` script, so a type-level
  *     assertion placed here would be vacuously green; a runtime assertion is not.
  *
- * ⚠⚠ IF THIS TEST FAILS, DO NOT JUST UPDATE THE EXPECTED LIST. An 8th label must sweep:
+ * ⚠⚠ IF THIS TEST FAILS, DO NOT JUST UPDATE THE EXPECTED LIST. A new label must sweep:
  *   1. `apps/api/src/services/meetings/authorize-engagement-host.ts` — the exhaustive
  *      `switch (subject.contextType)` that resolves the engagement-capability holder set
  *      (BAL-413 / ADR-1046 §3). A label with NO arm has NO holder rule; a label given the
@@ -38,10 +38,10 @@ import { meetingContextTypeEnum } from '../schema/enums';
  *      A new label needs a deliberate answer: project it, ignore it, or
  *      `MeetingContextNotProjectableError`. (`request_interaction` is projected as of
  *      BAL-283 Ruling 1 — through `request_expert_relationships.expert_profile_id` — so
- *      `MeetingContextNotProjectableError` is now the generic 8th-label defence and no
+ *      `MeetingContextNotProjectableError` is now the generic new-label defence and no
  *      shipped label reaches it.)
  *   3. `../repositories/meeting-presence.ts` — `listClientUserIdsForEngagement`'s
- *      `inArray(meetingContexts.contextType, [...])` ALLOW-LIST. It names the four
+ *      `inArray(meetingContexts.contextType, [...])` ALLOW-LIST. It names the five
  *      engagement-grain labels explicitly, so a new label is silently EXCLUDED. That is
  *      the correct default (the function reads engagement-grain contexts only, and
  *      `request_interaction` is at request-relationship grain, so excluding it is right)
@@ -53,12 +53,23 @@ import { meetingContextTypeEnum } from '../schema/enums';
  *   5. The `meeting_context_admin_no_id` CHECK (`context_id IS NULL ⟺ context_type='admin'`).
  *      A new NON-admin label inherits the correct half automatically and needs no CHECK
  *      change; a second id-less label WOULD need one.
+ *   6. `../repositories/upcoming-meetings.ts` — `UpcomingArm` and one arm per listed label
+ *      (the dashboard "Up next" read). A label with no arm is silently ABSENT from Up next,
+ *      so a call re-anchored onto it drops off the dashboard. `DASHBOARD_UP_NEXT_MEETING_TYPES`
+ *      in `@balo/analytics` is the event-side twin of the same list.
+ *   7. `../repositories/capture-health.ts` — `CONTEXT_LABEL_PRECEDENCE` (an unknown label
+ *      sorts LAST, so it never wins the display label) and `ENGAGEMENT_CONTEXT_TYPES` (an
+ *      engagement-grain label missing from it reads transcription/recap as `na`, not broken).
+ *      Both are plain arrays: nothing typechecks their membership.
+ *   8. `apps/web/src/app/(dashboard)/meetings/[meetingId]/end/_lib/resolve-end-of-call-state.ts`
+ *      — `RATEABLE_CONTEXTS`. A label missing from it silently skips the end-of-call review.
  *
  * ⚠ ITEM 3 IS THE SILENT ONE, AND ITEM 2 IS HALF SILENT. Item 1 fails at
  * `pnpm --filter api typecheck`; so does item 2's `resolveOneContext` half, since BAL-283
  * made it an exhaustive `switch` with a `never` witness. Item 2's `loadContextExperts` half
  * and item 3 still fail at RUNTIME, in production, on the first row written with the new
- * label. That asymmetry is why they are named here rather than left to the compiler.
+ * label. Items 6–8 are allow-lists too, and fail the same way: by silently leaving the label
+ * out. That asymmetry is why they are named here rather than left to the compiler.
  *
  * ⚠ ORDER IS ASSERTED ON PURPOSE, not incidentally. `toEqual` on an array pins the ordinals:
  * Postgres `ALTER TYPE … ADD VALUE` appends, so a label inserted MID-ARRAY makes drizzle
@@ -66,9 +77,11 @@ import { meetingContextTypeEnum } from '../schema/enums';
  */
 
 /**
- * The 7 labels of `meeting_context_type`, in DECLARED ORDER, as of BAL-413 (migration
- * `0060_bal413_request_interaction_context`). Six shipped with ADR-1045; `request_interaction`
- * is the seventh (ADR-1046 amendment 2026-08-07, at `request_expert_relationships` grain).
+ * The 8 labels of `meeting_context_type`, in DECLARED ORDER, as of BAL-616 (migration
+ * `0113_bal616_project_call_context`). Six shipped with ADR-1045; `request_interaction` is the
+ * seventh (BAL-413, ADR-1046 amendment 2026-08-07, at `request_expert_relationships` grain);
+ * `project_call` is the eighth (BAL-616, ADR-1045 §2 / ADR-1046 amendment 2026-10-23, at
+ * `engagements` grain).
  */
 const EXPECTED_MEETING_CONTEXT_TYPES: readonly string[] = [
   'case',
@@ -78,9 +91,10 @@ const EXPECTED_MEETING_CONTEXT_TYPES: readonly string[] = [
   'retainer_checkin',
   'admin',
   'request_interaction',
+  'project_call',
 ];
 
-describe('invariant: meeting_context_type label set (BAL-413 / ADR-1046)', () => {
+describe('invariant: meeting_context_type label set (BAL-413 / BAL-616 / ADR-1046)', () => {
   it('resolves the pgEnum and it is still the meeting_context_type enum (non-vacuity guard)', () => {
     // Guard the guard: if the import ever resolved to something without `enumValues`, the
     // assertions below would compare `undefined` and could go quietly green.
@@ -88,16 +102,17 @@ describe('invariant: meeting_context_type label set (BAL-413 / ADR-1046)', () =>
     expect(Array.isArray(meetingContextTypeEnum.enumValues)).toBe(true);
   });
 
-  it('declares EXACTLY the 7 expected labels, in order', () => {
+  it('declares EXACTLY the 8 expected labels, in order', () => {
     expect(meetingContextTypeEnum.enumValues).toEqual(EXPECTED_MEETING_CONTEXT_TYPES);
   });
 
-  it('declares `request_interaction` LAST — appended, never inserted mid-array', () => {
+  it('declares `project_call` LAST — appended, never inserted mid-array', () => {
     // The ordinal-stability half, stated separately so a mid-array insert names itself in
     // the failure output rather than showing up as a whole-array diff.
-    expect(meetingContextTypeEnum.enumValues.at(-1)).toBe('request_interaction');
+    expect(meetingContextTypeEnum.enumValues.at(-1)).toBe('project_call');
+    expect(meetingContextTypeEnum.enumValues.at(-2)).toBe('request_interaction');
     expect(meetingContextTypeEnum.enumValues.indexOf('admin')).toBe(
-      meetingContextTypeEnum.enumValues.length - 2
+      meetingContextTypeEnum.enumValues.length - 3
     );
   });
 
