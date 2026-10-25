@@ -158,8 +158,12 @@ Tailwind v4 uses OKLCH color format. Values are defined in `globals.css` and bri
 - `BaloCard` takes no ref and no `dangerouslySetInnerHTML`; ref-bearing elements use `baloCardClassName`.
 - For `motion.*` or other elements, use `className={cn(baloCardClassName(), '…')}`.
 - shadcn `Card` is flat too, but Balo surfaces use `BaloCard`.
-- Still allowed a shadow: buttons, chips, avatars, active tabs (`tabs-are-static`), inset rules, sticky bars, and floating layers.
-- `invariants/flat-card-surfaces.test.ts` pins the four card-defining files as shadow-free.
+- A featured or emphasised card (the featured move card, the featured case, the projects hero card) uses `emphasis="highlight"` or `baloCardClassName('highlight')`. A shadow is never the emphasis cue.
+- Still allowed a shadow: buttons, chips, avatars, active tabs (`tabs-are-static`), inset rules, sticky bars, search bars, and floating layers. A card that floats over other content counts as a floating layer: the expert-profile booking card is sticky and overlaps the hero, so it keeps its shadow.
+- Two invariants enforce this:
+  - `invariants/flat-card-surfaces.test.ts` keeps the card-defining files shadow-free: `BaloCard`, `RequestCard`, `SectionCard`, shadcn `Card` and `WALLET_CARD_CHROME`.
+  - `invariants/no-elevated-card-surfaces.test.ts` scans all of `apps/web/src` and fails on any class expression that draws a card (`bg-card`, `baloCardClassName(`, or the `className` of a card component) and carries a shadow under any variant.
+- If a non-card that uses `bg-card` genuinely needs a shadow, add its file to `ALLOWED` in `no-elevated-card-surfaces.test.ts` with an exact count and a one-line reason. Never allowlist a card; drop its shadow instead.
 
 ## Typography
 

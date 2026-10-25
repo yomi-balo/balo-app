@@ -11,8 +11,9 @@ import { resolveRouteDir, scanRouteSources } from './_source-scan';
  * is still one unit) or one string literal anywhere else (a class constant). A unit is a card
  * when it carries a `bg-card` token, calls `baloCardClassName(`, or is the `className` of a card
  * component (`BaloCard`, `Card`, `RequestCard`, `SectionCard`). It is elevated when it carries a
- * `shadow` utility at any variant (`shadow-sm`, `hover:shadow-md`, `dark:shadow-[…]`);
- * `shadow-none` and `transition-shadow` are not elevation.
+ * `shadow` utility under any variants and with either `!` (`shadow-sm`, `hover:shadow-md`,
+ * `data-[state=open]:shadow`, `@md:!shadow-lg`); `shadow-none` and `transition-shadow` are not
+ * elevation.
  *
  * `bg-card` also paints things that are not cards and legitimately keep a shadow: active tabs,
  * sticky bars, tooltips and overlays. Those live in {@link ALLOWED}, per file with an exact
@@ -21,8 +22,13 @@ import { resolveRouteDir, scanRouteSources } from './_source-scan';
  */
 
 const CARD_COMPONENTS = new Set(['BaloCard', 'Card', 'RequestCard', 'SectionCard']);
-const SHADOW = /(?:^|[\s'"`])(?:[\w-]+:)*shadow(?:-(?!none(?=[\s'"`]|$))[^\s'"`]+)?(?=[\s'"`]|$)/;
-const BG_CARD = /(?:^|[\s'"`])(?:[\w-]+:)*bg-card(?:\/\d+)?(?=[\s'"`]|$)/;
+/**
+ * A variant run is any `…:` segments (`md:`, `data-[state=open]:`, `group-hover/card:`, `@md:`,
+ * `has-[a:b]:`); `!` important may lead (v3) or trail (v4).
+ */
+const SHADOW =
+  /(?:^|[\s'"`])(?:[^\s'"`:]+:)*!?shadow(?:-(?!none!?(?=[\s'"`]|$))[^\s'"`]+)?!?(?=[\s'"`]|$)/;
+const BG_CARD = /(?:^|[\s'"`])(?:[^\s'"`:]+:)*!?bg-card(?:\/\d+)?!?(?=[\s'"`]|$)/;
 
 interface Allowed {
   readonly count: number;
@@ -164,7 +170,15 @@ describe('invariant: no elevated card surface anywhere in apps/web (BAL-618)', (
     expect(flagged(`<Card className="p-0 dark:shadow-[0_1px_2px_#000]" />`)).toBe(1);
     expect(flagged(`<li className={cn(baloCardClassName(), 'shadow-lg')} />`)).toBe(1);
     expect(flagged(`const CHROME = 'bg-card/95 border shadow';`)).toBe(1);
+    expect(flagged(`<div className="bg-card data-[state=open]:shadow-md" />`)).toBe(1);
+    expect(flagged(`<div className="bg-card group-hover/card:shadow-md" />`)).toBe(1);
+    expect(flagged(`<div className="bg-card @md:shadow" />`)).toBe(1);
+    expect(flagged(`<div className="bg-card !shadow-sm" />`)).toBe(1);
+    expect(flagged(`<div className="bg-card shadow-sm!" />`)).toBe(1);
+    expect(flagged(`<div className="bg-card has-[button:focus-visible]:shadow" />`)).toBe(1);
+    expect(flagged(`<div className="data-[state=open]:!bg-card border shadow" />`)).toBe(1);
     expect(flagged(`<div className="bg-card border transition-shadow shadow-none" />`)).toBe(0);
+    expect(flagged(`<div className="bg-card border md:shadow-none!" />`)).toBe(0);
     expect(flagged(`<div className="bg-card border" /><Button className="shadow-sm" />`)).toBe(0);
   });
 
