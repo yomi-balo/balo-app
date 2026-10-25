@@ -44,8 +44,9 @@ function AvailabilityDayButton(
       aria-label={
         shorterOnly ? `${props['aria-label'] ?? ''}, shorter times only` : props['aria-label']
       }
-      // Keep the 44px touch target even though the cell width is tightened at md+.
-      className={cn(props.className, 'relative pointer-coarse:aspect-auto pointer-coarse:h-11')}
+      // 44px tall at every width (the prototype's cell): the md+ cell is only 28px wide, and a
+      // 28px square leaves the dot no room under the number. Also keeps the 44px touch target.
+      className={cn(props.className, 'relative aspect-auto h-11')}
     >
       {props.day.date.getDate()}
       {showDot && (
