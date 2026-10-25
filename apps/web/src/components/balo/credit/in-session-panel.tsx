@@ -37,10 +37,10 @@ import { NudgeButton } from './nudge-button';
  * ⚠ BAL-466 (D7) — `session_started` NO LONGER FIRES FROM THIS COMPONENT. It moved server-side
  * to the real connect seam. See the effect below for why.
  *
- * ── ⚠⚠ BAL-403 ADDED THE `variant` PROP — ADDITIVE, `'card'` IS BYTE-IDENTICAL TO BAL-378 ────
+ * ── ⚠⚠ BAL-403 ADDED THE `variant` PROP — ADDITIVE, `'card'` MATCHES BAL-378 EXCEPT ITS SHADOW ─
  *
- * `'card'` (the default, and what every existing consumer passes) is UNCHANGED: the stage
- * header, the lifecycle `track()` call, the `max-w-[520px]` shadowed card. `'embedded'` is
+ * `'card'` (the default, and what every existing consumer passes) keeps BAL-378's stage
+ * header, lifecycle `track()` call and `max-w-[520px]` card, now flat (border, no shadow). `'embedded'` is
  * the in-call drawer's composition — see `components/balo/credit/in-call-balance-panel.tsx`
  * for why (no `CallStageHeader`, the dark block kept for `SessionMeter` alone, no outer card
  * chrome, no lifecycle event, and — per the orchestrator's OQ1 decision — the CLIENT
@@ -445,9 +445,7 @@ export function InSessionPanel(props: Readonly<InSessionPanelProps>): React.JSX.
     <div
       className={cn(
         'overflow-hidden',
-        isEmbedded
-          ? 'w-full'
-          : 'border-border bg-card w-full max-w-[520px] rounded-[22px] border shadow-[0_1px_2px_rgba(15,23,41,0.04),0_18px_50px_rgba(15,23,41,0.09)]'
+        isEmbedded ? 'w-full' : 'border-border bg-card w-full max-w-[520px] rounded-[22px] border'
       )}
     >
       {/* dark call stage — always dark, in both themes. Embedded: header dropped, tightened

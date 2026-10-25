@@ -183,7 +183,7 @@ function Card({
 }>): React.JSX.Element {
   return (
     <div
-      className={`rounded-[14px] border transition-all duration-200 ${hover ? 'hover:border-[#BFDBFE] hover:shadow-[0_4px_16px_rgba(37,99,235,0.12)]' : ''} ${extraClassName ?? ''}`}
+      className={`rounded-[14px] border transition-all duration-200 ${hover ? 'hover:border-[#BFDBFE]' : ''} ${extraClassName ?? ''}`}
       style={{
         background: colors.surface,
         borderColor: colors.border,

@@ -68,7 +68,7 @@ export function WorkAvailabilityCard({
     <section
       aria-label="Availability for new work"
       className={cn(
-        'flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px] shadow-xs transition-colors',
+        'flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px] transition-colors',
         paused ? 'bg-paused-hatch border-paused-border' : 'bg-card border-border'
       )}
     >

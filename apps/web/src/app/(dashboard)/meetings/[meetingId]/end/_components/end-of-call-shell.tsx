@@ -15,7 +15,7 @@
  *
  * ⚠⚠ A FLAT MUTED BACKGROUND, NEVER A GRADIENT — AND THIS IS THE DESIGN REFERENCE, NOT A
  * SIMPLIFICATION. `.claude/design-references/end-of-call.jsx` paints a FLAT `C.bg` (`#EEF0F3`)
- * behind the card and lets the card's own border and shadow carry the depth. The gradient wash
+ * behind the card and lets the card's own border carry the depth. The gradient wash
  * this replaced was a child of the dashboard's `max-w-7xl` inside `main.p-6`, so it was inset on
  * all four sides and terminated in a visible seam — a tinted rectangle floating on the page
  * rather than atmosphere. balo-ui asks for depth, and depth here comes from the card.

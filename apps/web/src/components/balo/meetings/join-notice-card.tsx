@@ -1,6 +1,8 @@
 'use client';
 
 import { CalendarClock, Link2Off, RefreshCw, Users } from 'lucide-react';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
+import { cn } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
 import {
   JOIN_LONG_WAIT_BODY,
@@ -57,7 +59,12 @@ export function JoinNoticeCard({
   children,
 }: Readonly<JoinNoticeCardProps>): React.JSX.Element {
   return (
-    <output className="border-border bg-card mx-auto flex w-full max-w-md flex-col items-center rounded-2xl border p-8 text-center shadow-sm">
+    <output
+      className={cn(
+        baloCardClassName(),
+        'mx-auto flex w-full max-w-md flex-col items-center p-8 text-center'
+      )}
+    >
       <span className="border-border bg-muted/40 flex h-12 w-12 items-center justify-center rounded-2xl border">
         <Icon className="text-muted-foreground h-6 w-6" aria-hidden="true" />
       </span>
@@ -226,7 +233,12 @@ export function JoinWaitingCard({
   children?: React.ReactNode;
 }>): React.JSX.Element {
   return (
-    <output className="border-border bg-card mx-auto flex w-full max-w-md flex-col items-center rounded-2xl border p-8 text-center shadow-sm">
+    <output
+      className={cn(
+        baloCardClassName(),
+        'mx-auto flex w-full max-w-md flex-col items-center p-8 text-center'
+      )}
+    >
       <span className="border-border bg-muted/40 flex h-12 w-12 items-center justify-center rounded-2xl border">
         <Users className="text-muted-foreground h-6 w-6" aria-hidden="true" />
       </span>

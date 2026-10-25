@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { AlertCircle } from 'lucide-react';
 
 /**
@@ -17,7 +18,7 @@ export default function LobbyResumeError({
   reset,
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
-    <div className="border-border bg-card mx-auto w-full max-w-md rounded-2xl border p-8 text-center shadow-sm">
+    <BaloCard className="mx-auto w-full max-w-md p-8 text-center">
       <span className="bg-muted/40 border-border mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border">
         <AlertCircle className="text-muted-foreground h-6 w-6" aria-hidden="true" />
       </span>
@@ -32,6 +33,6 @@ export default function LobbyResumeError({
       >
         Try again
       </button>
-    </div>
+    </BaloCard>
   );
 }

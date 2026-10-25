@@ -2,6 +2,8 @@
 
 import { Zap, Clock, ChevronRight } from 'lucide-react';
 import { motion } from 'motion/react';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
+import { cn } from '@/lib/utils';
 import type { QuickStartSummary } from '@/components/expert/profile';
 
 interface PackageCardProps {
@@ -22,7 +24,10 @@ export function PackageCard({ pkg, onViewDetails }: Readonly<PackageCardProps>):
       onClick={() => onViewDetails(pkg.id)}
       whileHover={{ y: -2 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="border-border bg-card group flex w-full gap-4 rounded-[14px] border p-5 text-left shadow-sm transition-colors hover:border-violet-500/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none"
+      className={cn(
+        baloCardClassName(),
+        'group flex w-full gap-4 rounded-[14px] p-5 text-left transition-colors hover:border-violet-500/40 focus-visible:ring-2 focus-visible:ring-violet-500/40 focus-visible:outline-none'
+      )}
     >
       <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-400">
         <Zap className="h-5 w-5" />

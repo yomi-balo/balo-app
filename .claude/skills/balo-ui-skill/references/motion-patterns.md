@@ -58,19 +58,23 @@ Interactive cards get a subtle lift on hover. This is THE signature Balo micro-i
   transition={{ duration: 0.2, ease: 'easeOut' }}
   className="cursor-pointer"
 >
-  <Card className="transition-shadow duration-200 hover:shadow-md">{/* Card content */}</Card>
+  <BaloCard className="hover:border-primary/30 transition-colors duration-200">
+    {/* Card content */}
+  </BaloCard>
 </motion.div>
 ```
 
-**Combined with CSS for shadow (better performance):**
+**For a `motion.*` card surface, use `baloCardClassName()` (cards stay flat; no shadow):**
 
 ```tsx
 // Motion handles the transform (GPU-accelerated)
-// Tailwind handles the shadow (CSS transition)
-<motion.div whileHover={{ y: -4 }} transition={{ duration: 0.2 }}>
-  <Card className="dark:hover:shadow-primary/5 transition-shadow duration-200 hover:shadow-lg">
-    ...
-  </Card>
+// Tailwind handles the border tint (CSS transition)
+<motion.div
+  whileHover={{ y: -4 }}
+  transition={{ duration: 0.2 }}
+  className={cn(baloCardClassName(), 'hover:border-primary/30 transition-colors duration-200')}
+>
+  ...
 </motion.div>
 ```
 

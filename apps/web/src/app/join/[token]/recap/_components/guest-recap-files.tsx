@@ -1,5 +1,6 @@
 'use client';
 
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Folder } from 'lucide-react';
@@ -123,7 +124,7 @@ export function GuestRecapFiles({
   const isLoading = files === null && !hasFailed;
 
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 shadow-sm">
+    <BaloCard as="section" className="p-6">
       <SectionHead
         icon={Folder}
         title="Files"
@@ -142,6 +143,6 @@ export function GuestRecapFiles({
         emptyLine="Nothing was shared on this call."
         errorBody="This is on our side. Try again in a moment."
       />
-    </section>
+    </BaloCard>
   );
 }

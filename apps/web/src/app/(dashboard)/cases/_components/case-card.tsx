@@ -3,6 +3,7 @@
 import { useCallback } from 'react';
 import Link from 'next/link';
 import { CalendarClock, CircleHelp, ListChecks, MessageSquare } from 'lucide-react';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -98,7 +99,10 @@ export function CaseCard({
   }, [handleTrack]);
 
   return (
-    <article className="border-border bg-card hover:border-muted-foreground/30 flex min-w-0 flex-col overflow-hidden rounded-2xl border shadow-sm transition-colors">
+    <BaloCard
+      as="article"
+      className="hover:border-muted-foreground/30 flex min-w-0 flex-col overflow-hidden transition-colors"
+    >
       {band !== null && <CardStateBand band={band} />}
 
       <Link
@@ -159,7 +163,7 @@ export function CaseCard({
           </span>
         )}
       </div>
-    </article>
+    </BaloCard>
   );
 }
 

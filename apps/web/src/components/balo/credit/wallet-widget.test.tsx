@@ -123,24 +123,24 @@ describe('WalletWidget — indicative FX secondary', () => {
 });
 
 describe('WalletWidget — chrome override', () => {
-  it('keeps the 380px cap and arbitrary shadow by default', () => {
+  it('keeps the 380px cap and renders flat by default', () => {
     const resting = render(<WalletWidget state="healthy" balanceMinor={34_700} />);
     expect(resting.container.firstElementChild).toHaveClass('max-w-[380px]');
-    expect(resting.container.firstElementChild?.className).toContain('shadow-[');
+    expect(resting.container.firstElementChild?.className).not.toContain('shadow');
     resting.unmount();
     render(<WalletWidget state="loading" />);
     expect(screen.getByLabelText('Loading wallet balance')).toHaveClass('max-w-[380px]');
   });
 
-  it('swaps the cap and shadow when given the dashboard slot class', () => {
+  it('swaps the cap when given the dashboard slot class and stays flat', () => {
     const { container } = render(
       <WalletWidget state="healthy" balanceMinor={34_700} className={DASHBOARD_WALLET_SLOT_CLASS} />
     );
     const root = container.firstElementChild;
-    expect(root).toHaveClass('max-w-none', 'shadow-sm', 'lg:flex-1');
+    expect(root).toHaveClass('max-w-none', 'lg:flex-1');
     expect(root).not.toHaveClass('flex-col');
     expect(root).not.toHaveClass('max-w-[380px]');
-    expect(root?.className).not.toContain('shadow-[');
+    expect(root?.className).not.toContain('shadow');
   });
 
   it('keeps the resting footer a plain block unless growFooter is set', () => {

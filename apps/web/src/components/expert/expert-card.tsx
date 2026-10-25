@@ -582,7 +582,7 @@ function GridCard({
       whileHover={{ y: -4 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-      <Card className="dark:hover:shadow-primary/5 flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+      <Card className="hover:border-primary/30 flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
         {/* Photo header */}
         <div className="relative aspect-[5/4]">
           <AvatarHeader expert={expert} initialsTextClass="text-3xl" />
@@ -665,7 +665,7 @@ function ListRow({
   const meta = buildListMeta(expert);
 
   return (
-    <Card className="dark:hover:shadow-primary/5 flex min-h-[256px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm transition-shadow duration-200 hover:shadow-lg">
+    <Card className="hover:border-primary/30 flex min-h-[256px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
       {/* Photo panel */}
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />

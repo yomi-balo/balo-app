@@ -9,6 +9,7 @@ import {
   CARD_BACKED_MODE_TITLE,
 } from '@/components/billing/top-up/LowBalanceModePicker';
 import { autoTopupConfigErrors } from '@/lib/credit/display-constants';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { armSavedCardMandateAction, saveLowBalanceConfigAction } from '@/lib/credit/actions';
 import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo/shared/credit';
@@ -400,7 +401,7 @@ export function LowBalanceSection({
   }, [runRetryArm]);
 
   return (
-    <div className="border-border bg-card rounded-2xl border p-6 shadow-sm">
+    <BaloCard className="p-6">
       <LowBalanceModePicker
         mode={draft.mode}
         onModeChange={handleModeChange}
@@ -508,6 +509,6 @@ export function LowBalanceSection({
           )}
         </Button>
       </div>
-    </div>
+    </BaloCard>
   );
 }

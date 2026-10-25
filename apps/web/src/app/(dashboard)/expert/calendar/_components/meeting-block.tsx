@@ -93,7 +93,7 @@ export const MeetingBlock = memo(function MeetingBlock({
   const cardBody = (
     <span
       className={cn(
-        'bg-card border-border block h-full w-full overflow-hidden rounded-lg border-y border-r border-l-[3px] p-1.5 text-left shadow-sm',
+        'bg-card border-border block h-full w-full overflow-hidden rounded-lg border-y border-r border-l-[3px] p-1.5 text-left',
         indicator.borderClass,
         isPast && 'opacity-60',
         isContinuationFragment && 'rounded-t-none'
@@ -125,7 +125,7 @@ export const MeetingBlock = memo(function MeetingBlock({
     <motion.div
       className="absolute"
       style={{ top, height, left: `${leftPercent}%`, width: `${widthPercent}%` }}
-      whileHover={{ y: -2, boxShadow: '0 4px 12px rgb(0 0 0 / 0.12)' }}
+      whileHover={{ y: -2 }}
       whileTap={{ scale: 0.98 }}
       transition={{ duration: 0.2 }}
     >
