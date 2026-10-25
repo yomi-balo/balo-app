@@ -32,10 +32,11 @@ startCommand = "TZ=UTC NODE_ENV=production node apps/api/dist/index.js"
 # drizzle-kit connects with the MIGRATION_DATABASE_URL service variable: Supabase's session
 # pooler, the shared `*.pooler.supabase.com` host on port 5432. (The direct db.<ref>.supabase.co
 # host is IPv6-only, which Railway reaches only with outbound IPv6 enabled.) drizzle.config.ts
-# refuses the transaction pooler (:6543) the API connects through rather than fall back to it; see
-# packages/db/src/migration-database-url.ts. drizzle-kit is a runtime dependency of @balo/db so
-# this step survives dev-dependency pruning. The command stays shell-free because Railway does
-# not document whether a pre-deploy command runs through a shell.
+# refuses the transaction pooler (:6543) the API connects through rather than fall back to it,
+# and `migrate` falls back to DATABASE_URL only for a local database, so the variable is required
+# here; see packages/db/src/migration-database-url.ts. drizzle-kit is a runtime dependency of
+# @balo/db so this step survives dev-dependency pruning. The command stays shell-free because
+# Railway does not document whether a pre-deploy command runs through a shell.
 preDeployCommand = "pnpm --filter @balo/db db:migrate"
 # Without a cap, a migration waiting on a lock holds the deploy "in progress" indefinitely.
 preDeployTimeoutSeconds = 600

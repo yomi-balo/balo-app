@@ -320,6 +320,8 @@ postgresql://user:password@host:port/database
 
 `postgres://` works too. Don't add parameters postgres-js doesn't know, such as `?pgbouncer=true`: it sends them to the server as startup settings, which a direct connection rejects and Supabase's poolers ignore, so a setting like `?options=-c lock_timeout=5s` silently does nothing through a pooler. `sslmode` is fine: postgres-js handles it itself. drizzle-kit also loads `.env` from the working directory without overriding variables that are already set, so `MIGRATION_DATABASE_URL=… pnpm db:migrate` targets that database even when `.env` points elsewhere.
 
+`migrate` and `push` fall back to `DATABASE_URL` only for a local database (`localhost` or `127.0.0.1`; Docker with its port published there). A developer's `packages/db/.env` usually points at balo-dev, so a bare `pnpm db:migrate` refuses to run rather than apply a branch's migrations there. Railway sets `MIGRATION_DATABASE_URL`. For `migrate` only, naming a remote database in it yourself is the deliberate override, for a hotfix run from a checkout of `main` only. `push` never targets a remote database. Every other command (`generate`, `studio`, `check`, `pull`, …) falls back to `DATABASE_URL` for any host.
+
 ### Migrations run on every API deploy
 
 Railway's pre-deploy step runs `pnpm --filter @balo/db db:migrate` before the new API build takes traffic. Every pending migration applies in ONE transaction:

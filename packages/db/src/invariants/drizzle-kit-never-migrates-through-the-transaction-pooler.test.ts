@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * `src/migration-database-url.ts` and `client.ts`.
  *
  * `migration-database-url.test.ts` covers the resolver. This test is the wiring half: it loads
- * the real `drizzle.config.ts`, so pointing `dbCredentials` back at `process.env.DATABASE_URL`
- * fails here even though the resolver suite stays green.
+ * the real `drizzle.config.ts`, so pointing `dbCredentials` back at `process.env.DATABASE_URL`, or
+ * dropping the `process.argv` that lets `migrate` refuse a remote fallback, fails here even though
+ * the resolver suite stays green.
  */
 
 const SESSION_POOLER =
@@ -24,8 +25,11 @@ async function loadDrizzleConfig(): Promise<unknown> {
 }
 
 describe('invariant: drizzle-kit never migrates through the transaction pooler', () => {
+  const originalArgv = process.argv;
+
   afterEach(() => {
     vi.unstubAllEnvs();
+    process.argv = originalArgv;
   });
 
   it('hands drizzle-kit MIGRATION_DATABASE_URL, not the API transaction-pooler DATABASE_URL', async () => {
@@ -40,5 +44,15 @@ describe('invariant: drizzle-kit never migrates through the transaction pooler',
     vi.stubEnv('DATABASE_URL', TRANSACTION_POOLER);
 
     await expect(loadDrizzleConfig()).rejects.toThrow(/transaction pooler \(:6543\)/);
+  });
+
+  it('refuses a bare `drizzle-kit migrate` against a remote DATABASE_URL', async () => {
+    vi.stubEnv('MIGRATION_DATABASE_URL', undefined);
+    vi.stubEnv('DATABASE_URL', SESSION_POOLER);
+    process.argv = ['node', 'drizzle-kit/bin.cjs', 'migrate'];
+
+    await expect(loadDrizzleConfig()).rejects.toThrow(
+      /migrate falls back to DATABASE_URL only for a local database/
+    );
   });
 });

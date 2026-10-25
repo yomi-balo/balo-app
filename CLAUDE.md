@@ -172,7 +172,7 @@ const response = await loggedFetch('https://api.stripe.com/v1/charges', {
 - Soft deletes via `deleted_at` timestamp — every table gets it
 - Foreign keys explicit with ON DELETE behaviour specified
 - Migrations run on deploy (Railway pre-deploy `db:migrate`, one transaction) and are never undone. **Every migration must work with the build it replaces (expand/contract):** add nullable or defaulted columns first; drop, rename or tighten only in a later PR, once no live build (Railway or Vercel) declares the old shape. Vercel can also go live before the migrate commits. An unasked `DROP` from `db:generate` is a stop-and-check. Details: `drizzle-schema` skill.
-- drizzle-kit uses `MIGRATION_DATABASE_URL` (session pooler :5432, or direct), else `DATABASE_URL`, and refuses :6543. Never `db:push` or `db:migrate` a branch against balo-dev (the deployed apps' DB): untracked schema fails the next deploy, and a stray `when` makes the migrator skip merged migrations.
+- drizzle-kit uses `MIGRATION_DATABASE_URL` (session pooler :5432, or direct), else `DATABASE_URL`, and refuses :6543. `migrate`/`push` fall back to `DATABASE_URL` only for a local database. Never `db:push` or `db:migrate` a branch against balo-dev (the deployed apps' DB): untracked schema fails the next deploy, and a stray `when` makes the migrator skip merged migrations.
 
 ### Integration Tests
 

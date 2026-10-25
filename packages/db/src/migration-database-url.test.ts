@@ -73,4 +73,90 @@ describe('resolveMigrationDatabaseUrl', () => {
     expect(error.message).not.toContain(PASSWORD);
     expect(error.cause).toBeUndefined();
   });
+
+  describe('migrate and push, which write schema', () => {
+    const argvFor = (command: string): string[] => [
+      '/usr/bin/node',
+      '/app/node_modules/drizzle-kit/bin.cjs',
+      command,
+      '--config',
+      'drizzle.config.ts',
+    ];
+
+    it('refuses a remote DATABASE_URL for migrate, offering the hotfix override only from main', () => {
+      const error = thrownBy(() =>
+        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor('migrate'))
+      );
+
+      expect(error.message).toContain(
+        'drizzle-kit migrate falls back to DATABASE_URL only for a local database'
+      );
+      expect(error.message).toContain("never apply a branch's migrations to balo-dev");
+      expect(error.message).toContain(
+        'Only for a hotfix from a checkout of main, name the remote database in MIGRATION_DATABASE_URL'
+      );
+      expect(error.message).not.toContain(PASSWORD);
+    });
+
+    it('refuses a remote DATABASE_URL for push, with no remote override', () => {
+      const error = thrownBy(() =>
+        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor('push'))
+      );
+
+      expect(error.message).toContain(
+        'drizzle-kit push falls back to DATABASE_URL only for a local database'
+      );
+      expect(error.message).toContain('push is for a local database only');
+      expect(error.message).not.toContain('MIGRATION_DATABASE_URL');
+      expect(error.message).not.toContain(PASSWORD);
+    });
+
+    it.each([
+      ['localhost (CI)', CI_EPHEMERAL],
+      ['127.0.0.1', 'postgresql://postgres:postgres@127.0.0.1:5432/postgres'],
+      ['LOCALHOST', 'postgresql://postgres:postgres@LOCALHOST:5432/postgres'],
+    ])('falls back to a local DATABASE_URL on %s', (_host, url) => {
+      expect(resolveMigrationDatabaseUrl({ DATABASE_URL: url }, argvFor('migrate'))).toBe(url);
+    });
+
+    it('accepts a remote database named explicitly in MIGRATION_DATABASE_URL (Railway, a hotfix)', () => {
+      expect(
+        resolveMigrationDatabaseUrl(
+          { MIGRATION_DATABASE_URL: SESSION_POOLER, DATABASE_URL: TRANSACTION_POOLER },
+          argvFor('migrate')
+        )
+      ).toBe(SESSION_POOLER);
+    });
+
+    it.each(['generate', 'studio', 'check'])(
+      'still lets %s use a remote DATABASE_URL',
+      (command) => {
+        expect(
+          resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, argvFor(command))
+        ).toBe(SESSION_POOLER);
+      }
+    );
+
+    // drizzle-kit accepts `--config <path>` before the command; the path must not pass for it.
+    it.each(['migrate', 'push'])('finds %s after a leading --config <path>', (command) => {
+      expect(() =>
+        resolveMigrationDatabaseUrl({ DATABASE_URL: SESSION_POOLER }, [
+          'node',
+          'bin.cjs',
+          '--config',
+          'drizzle.config.ts',
+          command,
+        ])
+      ).toThrow(`drizzle-kit ${command} falls back`);
+    });
+
+    it('treats [::1] as remote, since drizzle-kit cannot connect to it', () => {
+      expect(() =>
+        resolveMigrationDatabaseUrl(
+          { DATABASE_URL: 'postgresql://postgres:postgres@[::1]:5432/postgres' },
+          argvFor('migrate')
+        )
+      ).toThrow(/migrate falls back/);
+    });
+  });
 });
