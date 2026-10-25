@@ -366,8 +366,9 @@ describe('PayAfterFunding', () => {
       const props = renderBlock(view(SAVED_CARD, { firstTime: false }));
       await choosePayAfter();
       await userEvent.click(screen.getByRole('button', { name: PAY_AFTER_COPY.ctaSaved }));
+      const checkAgain = await screen.findByRole('button', { name: 'Check again' });
       vi.mocked(getWalletMandateStatusAction).mockResolvedValue({ status: 'active' });
-      await userEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+      await userEvent.click(checkAgain);
       await waitFor(() =>
         expect(props.onFunded).toHaveBeenCalledWith(
           expect.objectContaining({ method: 'pay_after', card: SAVED_CARD })

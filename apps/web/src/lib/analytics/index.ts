@@ -76,6 +76,8 @@ export {
   COMMAND_PALETTE_EVENTS,
   COMMAND_PALETTE_OPEN_METHODS,
   COMMAND_PALETTE_ACTION_TYPES,
+  /** BAL-619 — the notification bell's arrival toast / panel event constants. */
+  NOTIFICATION_EVENTS,
   /** BAL-597 — the public help centre's event constant, vocabulary tuples and comment cap. */
   HELP_EVENTS,
   HELP_AUDIENCES,
@@ -203,6 +205,8 @@ export type {
   CommandPaletteEventMap,
   CommandPaletteOpenMethod,
   CommandPaletteActionType,
+  /** BAL-619 — the notification bell's client event payload map. */
+  NotificationEventMap,
   /** BAL-597 — the public help centre's event payload and vocabularies. */
   HelpEventMap,
   HelpAudience,

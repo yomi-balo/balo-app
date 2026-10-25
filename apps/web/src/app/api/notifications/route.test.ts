@@ -4,14 +4,18 @@ import { NextRequest } from 'next/server';
 // ── Mocks ───────────────────────────────────────────────────────
 
 const mockFindUnreadByUserId = vi.fn();
-const mockFindByUserId = vi.fn();
-const mockCountUnreadByUserId = vi.fn();
+const mockFindPanelByUserId = vi.fn();
+const mockCountUnreadAndUnseenByUserId = vi.fn();
+const mockFindNotificationsLastSeenAt = vi.fn();
 
 vi.mock('@balo/db', () => ({
   userNotificationsRepository: {
     findUnreadByUserId: (...args: unknown[]) => mockFindUnreadByUserId(...args),
-    findByUserId: (...args: unknown[]) => mockFindByUserId(...args),
-    countUnreadByUserId: (...args: unknown[]) => mockCountUnreadByUserId(...args),
+    findPanelByUserId: (...args: unknown[]) => mockFindPanelByUserId(...args),
+    countUnreadAndUnseenByUserId: (...args: unknown[]) => mockCountUnreadAndUnseenByUserId(...args),
+  },
+  usersRepository: {
+    findNotificationsLastSeenAt: (...args: unknown[]) => mockFindNotificationsLastSeenAt(...args),
   },
 }));
 
@@ -35,7 +39,8 @@ import { GET } from './route';
 const BASE_URL = 'http://localhost:3000';
 
 function makeRequest(queryString = ''): NextRequest {
-  const url = `${BASE_URL}/api/notifications${queryString ? `?${queryString}` : ''}`;
+  const suffix = queryString ? `?${queryString}` : '';
+  const url = `${BASE_URL}/api/notifications${suffix}`;
   return new NextRequest(new URL(url));
 }
 
@@ -62,7 +67,57 @@ describe('GET /api/notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetCurrentUser.mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
-    mockCountUnreadByUserId.mockResolvedValue(3);
+    mockFindNotificationsLastSeenAt.mockResolvedValue(null);
+    mockCountUnreadAndUnseenByUserId.mockResolvedValue({ unread: 3, unseen: 0 });
+  });
+
+  describe('seen cursor', () => {
+    it('returns lastSeenAt null and unseenCount 0 when the cursor is unset', async () => {
+      mockFindPanelByUserId.mockResolvedValue([]);
+
+      const res = await GET(makeRequest());
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.lastSeenAt).toBeNull();
+      expect(body.unseenCount).toBe(0);
+      expect(mockFindNotificationsLastSeenAt).toHaveBeenCalledWith('user-1');
+      expect(mockCountUnreadAndUnseenByUserId).toHaveBeenCalledWith('user-1', null);
+    });
+
+    it('counts unseen from the cursor and serialises it as ISO', async () => {
+      const lastSeenAt = new Date('2026-03-22T09:00:00.000Z');
+      mockFindPanelByUserId.mockResolvedValue([]);
+      mockFindNotificationsLastSeenAt.mockResolvedValue(lastSeenAt);
+      mockCountUnreadAndUnseenByUserId.mockResolvedValue({ unread: 3, unseen: 2 });
+
+      const res = await GET(makeRequest());
+      const body = await res.json();
+
+      expect(mockCountUnreadAndUnseenByUserId).toHaveBeenCalledWith('user-1', lastSeenAt);
+      expect(body.lastSeenAt).toBe('2026-03-22T09:00:00.000Z');
+      expect(body.unseenCount).toBe(2);
+      expect(body.unreadCount).toBe(3);
+    });
+  });
+
+  describe('impersonation flag', () => {
+    it('reports impersonating false for a normal session', async () => {
+      mockFindPanelByUserId.mockResolvedValue([]);
+
+      const body = await (await GET(makeRequest())).json();
+
+      expect(body.impersonating).toBe(false);
+    });
+
+    it('reports impersonating true for an impersonated session', async () => {
+      mockGetCurrentUser.mockResolvedValue({ id: 'user-1', isImpersonating: true });
+      mockFindPanelByUserId.mockResolvedValue([]);
+
+      const body = await (await GET(makeRequest())).json();
+
+      expect(body.impersonating).toBe(true);
+    });
   });
 
   describe('authentication', () => {
@@ -87,23 +142,30 @@ describe('GET /api/notifications', () => {
       expect(body.notifications).toHaveLength(1);
     });
 
-    it('calls findByUserId when unread is not set', async () => {
-      mockFindByUserId.mockResolvedValue([makeNotification()]);
+    it('calls findPanelByUserId when unread is not set', async () => {
+      mockFindPanelByUserId.mockResolvedValue([makeNotification()]);
 
       const res = await GET(makeRequest());
       const body = await res.json();
 
       expect(res.status).toBe(200);
-      expect(mockFindByUserId).toHaveBeenCalledWith('user-1', 20, 0);
+      expect(mockFindPanelByUserId).toHaveBeenCalledWith('user-1', {
+        unreadLimit: 20,
+        readLimit: 5,
+      });
+      expect(mockFindUnreadByUserId).not.toHaveBeenCalled();
       expect(body.notifications).toHaveLength(1);
     });
 
-    it('respects custom limit and offset', async () => {
-      mockFindByUserId.mockResolvedValue([]);
+    it('uses the limit as the unread limit and keeps the read limit fixed', async () => {
+      mockFindPanelByUserId.mockResolvedValue([]);
 
-      await GET(makeRequest('limit=10&offset=5'));
+      await GET(makeRequest('limit=10'));
 
-      expect(mockFindByUserId).toHaveBeenCalledWith('user-1', 10, 5);
+      expect(mockFindPanelByUserId).toHaveBeenCalledWith('user-1', {
+        unreadLimit: 10,
+        readLimit: 5,
+      });
     });
   });
 
@@ -131,16 +193,16 @@ describe('GET /api/notifications', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 400 for negative offset', async () => {
-      const res = await GET(makeRequest('offset=-1'));
+    it('returns 400 for a non-"true" unread value', async () => {
+      const res = await GET(makeRequest('unread=false'));
       expect(res.status).toBe(400);
     });
   });
 
   describe('error handling', () => {
     it('returns 500 when repository throws', async () => {
-      mockFindByUserId.mockRejectedValue(new Error('DB down'));
-      mockCountUnreadByUserId.mockRejectedValue(new Error('DB down'));
+      mockFindPanelByUserId.mockRejectedValue(new Error('DB down'));
+      mockCountUnreadAndUnseenByUserId.mockRejectedValue(new Error('DB down'));
 
       const res = await GET(makeRequest());
       expect(res.status).toBe(500);

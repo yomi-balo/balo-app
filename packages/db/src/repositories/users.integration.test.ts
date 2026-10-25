@@ -171,7 +171,9 @@ describe('usersRepository.findIdsByPlatformRoles', () => {
 
     const ids = await usersRepository.findIdsByPlatformRoles(['admin', 'super_admin']);
 
-    expect(ids.sort()).toEqual([admin.id, superAdmin.id].sort());
+    expect(ids.sort((a, b) => a.localeCompare(b))).toEqual(
+      [admin.id, superAdmin.id].sort((a, b) => a.localeCompare(b))
+    );
   });
 
   it('excludes soft-deleted users', async () => {
@@ -241,7 +243,11 @@ describe('usersRepository.listPlatformStaff (BAL-541)', () => {
     const [firstRow] = await usersRepository.listPlatformStaff();
 
     if (firstRow === undefined) throw new Error('expected a row');
-    expect(Object.keys(firstRow).sort()).toEqual(['firstName', 'id', 'lastName']);
+    expect(Object.keys(firstRow).sort((a, b) => a.localeCompare(b))).toEqual([
+      'firstName',
+      'id',
+      'lastName',
+    ]);
   });
 
   it('orders by firstName ascending, then lastName ascending', async () => {
@@ -336,7 +342,11 @@ describe('usersRepository.createWithWorkspace domain capture removed (BAL-369)',
 
     // The return shape no longer carries a `domainCapture` field — exactly the three
     // workspace-creation rows.
-    expect(Object.keys(result).sort()).toEqual(['company', 'membership', 'user']);
+    expect(Object.keys(result).sort((a, b) => a.localeCompare(b))).toEqual([
+      'company',
+      'membership',
+      'user',
+    ]);
   });
 });
 
@@ -357,7 +367,11 @@ describe('usersRepository.findNamesByIds', () => {
     // The projection carries NO PII columns (email / workosId).
     const [firstRow] = rows;
     if (firstRow === undefined) throw new Error('expected a row');
-    expect(Object.keys(firstRow).sort()).toEqual(['firstName', 'id', 'lastName']);
+    expect(Object.keys(firstRow).sort((a, b) => a.localeCompare(b))).toEqual([
+      'firstName',
+      'id',
+      'lastName',
+    ]);
   });
 
   it('excludes soft-deleted users', async () => {
@@ -394,7 +408,7 @@ describe('usersRepository.findIncompleteOnboardingCreatedBetween (BAL-374)', () 
     expect(row.id).toBe(user.id);
     expect(row.email).toBe(user.email);
     // Projection carries ONLY id + email — no PII/other columns leak.
-    expect(Object.keys(row).sort()).toEqual(['email', 'id']);
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual(['email', 'id']);
   });
 
   it('excludes a user who has completed onboarding', async () => {
@@ -670,7 +684,12 @@ describe('usersRepository.findDisplayById — the PROJECTED counterparty read (B
     if (row === undefined) throw new Error('expected a display row');
     // The key SET is the invariant, not just the values: a future `select()` regression would
     // add keys here and fail loudly rather than leaking silently into a client-bound view.
-    expect(Object.keys(row).sort()).toEqual(['avatarUrl', 'firstName', 'id', 'lastName']);
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual([
+      'avatarUrl',
+      'firstName',
+      'id',
+      'lastName',
+    ]);
     expect(row).not.toHaveProperty('email');
     expect(row).not.toHaveProperty('workosId');
     expect(row).not.toHaveProperty('phone');
@@ -697,7 +716,7 @@ describe('usersRepository.findEmailById — the PROJECTED actor-address read (BA
     if (row === undefined) throw new Error('expected an email row');
     // The key SET is the invariant: this value crosses into a Stripe Customer payload, so a
     // widened projection must fail here rather than carry `workosId` off-platform.
-    expect(Object.keys(row).sort()).toEqual(['email', 'id']);
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual(['email', 'id']);
     expect(row.email).toBe(user.email);
     expect(row).not.toHaveProperty('workosId');
     expect(row).not.toHaveProperty('phone');
@@ -732,7 +751,7 @@ describe('usersRepository.findForSessionSync — widened projection (BAL-494 / B
     if (row === null) throw new Error('expected a session-sync row');
     // The key SET is the invariant: this row feeds the session cookie, so a future
     // `select()` regression must fail loudly here rather than leak silently.
-    expect(Object.keys(row).sort()).toEqual([
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual([
       'activeCompanyId',
       'activeMode',
       'deletedAt',
@@ -1389,5 +1408,71 @@ describe('usersRepository.updateName', () => {
       usersRepository.updateName({ userId: missing, firstName: 'Ada', lastName: 'Lovelace' })
     ).rejects.toThrow('updateName: user row not found');
     expect(await nameAudits(missing)).toHaveLength(0);
+  });
+});
+
+describe('usersRepository notifications seen cursor (BAL-619)', () => {
+  const T1 = new Date('2026-01-01T00:00:00.000Z');
+  const T2 = new Date('2026-01-02T00:00:00.000Z');
+
+  it('findNotificationsLastSeenAt returns null for a fresh user', async () => {
+    const user = await userFactory();
+    expect(await usersRepository.findNotificationsLastSeenAt(user.id)).toBeNull();
+  });
+
+  it('advance sets the cursor from null and returns the stored value', async () => {
+    const user = await userFactory();
+
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(stored?.toISOString()).toBe(T1.toISOString());
+    const read = await usersRepository.findNotificationsLastSeenAt(user.id);
+    expect(read?.toISOString()).toBe(T1.toISOString());
+  });
+
+  it('is monotonic: an older through never moves the cursor back', async () => {
+    const user = await userFactory();
+
+    await usersRepository.advanceNotificationsSeenThrough(user.id, T2);
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(stored?.toISOString()).toBe(T2.toISOString());
+    const read = await usersRepository.findNotificationsLastSeenAt(user.id);
+    expect(read?.toISOString()).toBe(T2.toISOString());
+  });
+
+  it('clamps a future through to NOW() (the transaction clock)', async () => {
+    const user = await userFactory();
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    const stored = await usersRepository.advanceNotificationsSeenThrough(user.id, future);
+
+    const rows = await db.execute<{ now: Date }>(sql`SELECT now() AS now`);
+    const dbNow = rows[0]?.now;
+    expect(dbNow).toBeDefined();
+    expect(stored?.getTime()).toBe(new Date(dbNow as Date).getTime());
+    expect(stored?.getTime()).toBeLessThan(future.getTime());
+  });
+
+  it('returns null and writes nothing for a soft-deleted user', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    expect(await usersRepository.advanceNotificationsSeenThrough(user.id, T1)).toBeNull();
+    expect(await usersRepository.findNotificationsLastSeenAt(user.id)).toBeNull();
+    const [row] = await db
+      .select({ seen: users.notificationsLastSeenAt })
+      .from(users)
+      .where(eq(users.id, user.id));
+    expect(row?.seen).toBeNull();
+  });
+
+  it("does not touch another user's cursor", async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+
+    await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
+
+    expect(await usersRepository.findNotificationsLastSeenAt(other.id)).toBeNull();
   });
 });

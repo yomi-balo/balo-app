@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
-import { userNotificationsRepository } from '@balo/db';
+import { userNotificationsRepository, usersRepository } from '@balo/db';
+
+// Read items shown after the unread ones in the panel.
+const PANEL_READ_LIMIT = 5;
 
 const querySchema = z.object({
   unread: z.enum(['true']).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
-  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -25,14 +28,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const { unread, limit, offset } = parsed.data;
+  const { unread, limit } = parsed.data;
 
   try {
-    const [rawNotifications, unreadCount] = await Promise.all([
+    const lastSeenAt = await usersRepository.findNotificationsLastSeenAt(user.id);
+    // A null cursor means "never initialised": nothing is unseen until the client seeds it.
+    const [rawNotifications, { unread: unreadCount, unseen: unseenCount }] = await Promise.all([
       unread === 'true'
         ? userNotificationsRepository.findUnreadByUserId(user.id, limit)
-        : userNotificationsRepository.findByUserId(user.id, limit, offset),
-      userNotificationsRepository.countUnreadByUserId(user.id),
+        : userNotificationsRepository.findPanelByUserId(user.id, {
+            unreadLimit: limit,
+            readLimit: PANEL_READ_LIMIT,
+          }),
+      userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, lastSeenAt),
     ]);
 
     // Project only client-needed fields (omit metadata, userId, updatedAt, deletedAt)
@@ -48,7 +56,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       })
     );
 
-    return NextResponse.json({ notifications, unreadCount });
+    return NextResponse.json({
+      notifications,
+      unreadCount,
+      lastSeenAt: lastSeenAt?.toISOString() ?? null,
+      unseenCount,
+      impersonating: isImpersonatedSession(user),
+    });
   } catch (error) {
     log.error('Failed to fetch notifications', {
       userId: user.id,

@@ -35,3 +35,34 @@ export interface NotificationServerEventMap {
     distinct_id: string;
   };
 }
+
+// -- Client events (fire from the notification bell via track) ------------------------
+export const NOTIFICATION_EVENTS = {
+  TOAST_SHOWN: 'notification_toast_shown',
+  TOAST_DISMISSED: 'notification_toast_dismissed',
+  PANEL_OPENED: 'notification_panel_opened',
+  CLICKED: 'notification_clicked',
+  AUTO_READ: 'notification_auto_read',
+} as const;
+
+export interface NotificationEventMap {
+  [NOTIFICATION_EVENTS.TOAST_SHOWN]: {
+    count: number;
+    trigger: 'load' | 'live';
+  };
+  [NOTIFICATION_EVENTS.TOAST_DISMISSED]: {
+    count: number;
+    reason: 'close' | 'timeout';
+  };
+  [NOTIFICATION_EVENTS.PANEL_OPENED]: {
+    unread_count: number;
+    source: 'bell' | 'toast';
+  };
+  [NOTIFICATION_EVENTS.CLICKED]: {
+    event: string;
+    source: 'panel' | 'toast';
+  };
+  [NOTIFICATION_EVENTS.AUTO_READ]: {
+    count: number;
+  };
+}

@@ -129,147 +129,77 @@ describe('userNotificationsRepository.findUnreadByUserId', () => {
   });
 });
 
-// ── findByUserId ────────────────────────────────────────────────────
+// ── findPanelByUserId ───────────────────────────────────────────────
 
-describe('userNotificationsRepository.findByUserId', () => {
-  it('returns all non-deleted notifications (read + unread) in desc order', async () => {
-    const user = await userFactory({ firstName: 'All', lastName: 'Test' });
+describe('userNotificationsRepository.findPanelByUserId', () => {
+  const insertAt = (userId: string, title: string, createdAt: Date) =>
+    userNotificationsRepository.insert({ userId, event: 'case.created', title, createdAt });
 
-    // Explicit, distinct createdAt so `ORDER BY created_at DESC` is deterministic
-    // (back-to-back inserts otherwise tie on created_at → flaky ordering in CI).
-    const first = await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.created',
-      title: 'First notification',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    });
-
-    const second = await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.assigned',
-      title: 'Second notification',
-      createdAt: new Date('2026-01-01T00:00:01.000Z'),
-    });
-
-    // Mark the first one as read
-    await userNotificationsRepository.markAsRead(first.id, user.id);
-
-    const results = await userNotificationsRepository.findByUserId(user.id);
-
-    expect(results).toHaveLength(2);
-    // Most recent first (desc order)
-    expect(results[0]!.id).toBe(second.id);
-    expect(results[1]!.id).toBe(first.id);
-    // First one should be read
-    expect(results[1]!.readAt).not.toBeNull();
-    // Second one should be unread
-    expect(results[0]!.readAt).toBeNull();
-  });
-
-  it('respects limit and offset', async () => {
-    const user = await userFactory({ firstName: 'Page', lastName: 'Test' });
-
-    for (let i = 0; i < 5; i++) {
-      await userNotificationsRepository.insert({
-        userId: user.id,
-        event: `event.${i}`,
-        title: `Notification ${i}`,
-      });
+  it('returns an older unread item even when 20 newer items are read', async () => {
+    const user = await userFactory();
+    const oldUnread = await insertAt(user.id, 'old-unread', new Date('2026-01-01T00:00:00.000Z'));
+    for (let i = 1; i <= 20; i++) {
+      const row = await insertAt(user.id, `read-${i}`, new Date(Date.UTC(2026, 0, 2, 0, 0, i)));
+      await userNotificationsRepository.markAsRead(row.id, user.id);
     }
 
-    const page1 = await userNotificationsRepository.findByUserId(user.id, 2, 0);
-    expect(page1).toHaveLength(2);
-
-    const page2 = await userNotificationsRepository.findByUserId(user.id, 2, 2);
-    expect(page2).toHaveLength(2);
-
-    // Pages should not overlap
-    const page1Ids = page1.map((n) => n.id);
-    const page2Ids = page2.map((n) => n.id);
-    expect(page1Ids.filter((id) => page2Ids.includes(id))).toHaveLength(0);
-  });
-
-  it('excludes soft-deleted notifications', async () => {
-    const user = await userFactory({ firstName: 'Soft', lastName: 'ByUser' });
-
-    const notif = await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.created',
-      title: 'Will be deleted',
+    const results = await userNotificationsRepository.findPanelByUserId(user.id, {
+      unreadLimit: 20,
+      readLimit: 5,
     });
 
-    // Soft-delete
+    expect(results.map((n) => n.id)).toContain(oldUnread.id);
+    const [first] = results;
+    expect(first?.id).toBe(oldUnread.id);
+    expect(results).toHaveLength(6);
+  });
+
+  it('returns unread newest first, then read newest first, each capped by its own limit', async () => {
+    const user = await userFactory();
+    await insertAt(user.id, 'u1', new Date('2026-01-01T00:00:01.000Z'));
+    await insertAt(user.id, 'u2', new Date('2026-01-01T00:00:02.000Z'));
+    await insertAt(user.id, 'u3', new Date('2026-01-01T00:00:03.000Z'));
+    for (const [title, second] of [
+      ['r1', 4],
+      ['r2', 5],
+      ['r3', 6],
+    ] as const) {
+      const row = await insertAt(user.id, title, new Date(Date.UTC(2026, 0, 1, 0, 0, second)));
+      await userNotificationsRepository.markAsRead(row.id, user.id);
+    }
+
+    const results = await userNotificationsRepository.findPanelByUserId(user.id, {
+      unreadLimit: 2,
+      readLimit: 2,
+    });
+
+    expect(results.map((n) => n.title)).toEqual(['u3', 'u2', 'r3', 'r2']);
+  });
+
+  it('excludes soft-deleted and other users rows', async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+    const deleted = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'case.created',
+      title: 'deleted',
+    });
+    await userNotificationsRepository.insert({
+      userId: other.id,
+      event: 'case.created',
+      title: 'other',
+    });
     await db
       .update(userNotifications)
       .set({ deletedAt: new Date() })
-      .where(eq(userNotifications.id, notif.id));
+      .where(eq(userNotifications.id, deleted.id));
 
-    const results = await userNotificationsRepository.findByUserId(user.id);
-    expect(results).toHaveLength(0);
-  });
-});
-
-// ── countUnreadByUserId ─────────────────────────────────────────────
-
-describe('userNotificationsRepository.countUnreadByUserId', () => {
-  it('returns correct count of unread notifications', async () => {
-    const user = await userFactory({ firstName: 'Count', lastName: 'Test' });
-
-    await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.created',
-      title: 'Unread 1',
-    });
-
-    await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.assigned',
-      title: 'Unread 2',
-    });
-
-    const unreadCount = await userNotificationsRepository.countUnreadByUserId(user.id);
-    expect(unreadCount).toBe(2);
-  });
-
-  it('returns 0 when all notifications are read', async () => {
-    const user = await userFactory({ firstName: 'AllRead', lastName: 'Test' });
-
-    await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.created',
-      title: 'Will be read',
-    });
-
-    await userNotificationsRepository.markAllAsRead(user.id);
-
-    const unreadCount = await userNotificationsRepository.countUnreadByUserId(user.id);
-    expect(unreadCount).toBe(0);
-  });
-
-  it('returns 0 when user has no notifications', async () => {
-    const user = await userFactory({ firstName: 'Empty', lastName: 'Test' });
-
-    const unreadCount = await userNotificationsRepository.countUnreadByUserId(user.id);
-    expect(unreadCount).toBe(0);
-  });
-
-  it('excludes soft-deleted notifications', async () => {
-    const user = await userFactory({ firstName: 'Soft', lastName: 'Count' });
-
-    const notif = await userNotificationsRepository.insert({
-      userId: user.id,
-      event: 'case.created',
-      title: 'Will be deleted',
-    });
-
-    // Soft-delete
-    await db
-      .update(userNotifications)
-      .set({ deletedAt: new Date() })
-      .where(eq(userNotifications.id, notif.id));
-
-    const unreadCount = await userNotificationsRepository.countUnreadByUserId(user.id);
-    expect(unreadCount).toBe(0);
+    expect(
+      await userNotificationsRepository.findPanelByUserId(user.id, {
+        unreadLimit: 20,
+        readLimit: 5,
+      })
+    ).toHaveLength(0);
   });
 });
 
@@ -381,8 +311,8 @@ describe('userNotificationsRepository.markAllAsRead', () => {
     expect(updatedCount).toBe(3);
 
     // Verify all are now read
-    const unreadCount = await userNotificationsRepository.countUnreadByUserId(user.id);
-    expect(unreadCount).toBe(0);
+    const stillUnread = await userNotificationsRepository.findUnreadByUserId(user.id);
+    expect(stillUnread).toHaveLength(0);
   });
 
   it('does not affect other users notifications', async () => {
@@ -404,8 +334,8 @@ describe('userNotificationsRepository.markAllAsRead', () => {
     await userNotificationsRepository.markAllAsRead(user1.id);
 
     // User2's notification should still be unread
-    const user2Unread = await userNotificationsRepository.countUnreadByUserId(user2.id);
-    expect(user2Unread).toBe(1);
+    const user2Unread = await userNotificationsRepository.findUnreadByUserId(user2.id);
+    expect(user2Unread).toHaveLength(1);
   });
 
   it('returns 0 if none are unread', async () => {
@@ -442,5 +372,174 @@ describe('userNotificationsRepository.markAllAsRead', () => {
 
     const updatedCount = await userNotificationsRepository.markAllAsRead(user.id);
     expect(updatedCount).toBe(0);
+  });
+});
+
+// ── countUnreadAndUnseenByUserId ────────────────────────────────────
+
+describe('userNotificationsRepository.countUnreadAndUnseenByUserId', () => {
+  const since = new Date('2026-01-01T00:00:00.000Z');
+
+  it('counts unseen strictly after since and unread overall; excludes read, deleted, other users and the boundary', async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+    const insert = (userId: string, title: string, createdAt: Date) =>
+      userNotificationsRepository.insert({ userId, event: 'case.created', title, createdAt });
+
+    await insert(user.id, 'counted-1', new Date('2026-01-01T00:00:01.000Z'));
+    await insert(user.id, 'counted-2', new Date('2026-01-01T00:00:02.000Z'));
+    await insert(user.id, 'boundary', since);
+    await insert(user.id, 'older', new Date('2025-12-31T00:00:00.000Z'));
+    const read = await insert(user.id, 'read', new Date('2026-01-01T00:00:03.000Z'));
+    const deleted = await insert(user.id, 'deleted', new Date('2026-01-01T00:00:04.000Z'));
+    await insert(other.id, 'other-user', new Date('2026-01-01T00:00:05.000Z'));
+
+    await userNotificationsRepository.markAsRead(read.id, user.id);
+    await db
+      .update(userNotifications)
+      .set({ deletedAt: new Date() })
+      .where(eq(userNotifications.id, deleted.id));
+
+    expect(await userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, since)).toEqual({
+      unread: 4,
+      unseen: 2,
+    });
+  });
+
+  it('returns zeros when the user has no notifications', async () => {
+    const user = await userFactory();
+    expect(await userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, since)).toEqual({
+      unread: 0,
+      unseen: 0,
+    });
+  });
+
+  it('returns unseen 0 and the real unread count when since is null', async () => {
+    const user = await userFactory();
+    await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'case.created',
+      title: 'unread',
+    });
+
+    expect(await userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, null)).toEqual({
+      unread: 1,
+      unseen: 0,
+    });
+  });
+
+  it('does not recount a row whose DB-default created_at is the cursor read back at ms precision', async () => {
+    const user = await userFactory();
+    const announced = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'case.created',
+      title: 'announced',
+    });
+
+    expect(
+      await userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, announced.createdAt)
+    ).toEqual({ unread: 1, unseen: 0 });
+
+    await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'case.created',
+      title: 'next',
+      createdAt: new Date(announced.createdAt.getTime() + 1),
+    });
+
+    expect(
+      await userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, announced.createdAt)
+    ).toEqual({ unread: 2, unseen: 1 });
+  });
+});
+
+// ── markReadByActionPath ────────────────────────────────────────────
+
+describe('userNotificationsRepository.markReadByActionPath', () => {
+  const insertWithUrl = (userId: string, actionUrl: string | null) =>
+    userNotificationsRepository.insert({
+      userId,
+      event: 'case.created',
+      title: `n ${actionUrl ?? 'null'}`,
+      actionUrl,
+    });
+
+  it('matches the path with or without a query string and returns the updated ids', async () => {
+    const user = await userFactory();
+    const withQuery = await insertWithUrl(user.id, '/projects/p1?from=x');
+    const bare = await insertWithUrl(user.id, '/projects/p1');
+
+    const ids = await userNotificationsRepository.markReadByActionPath(user.id, '/projects/p1');
+
+    expect(new Set(ids)).toEqual(new Set([withQuery.id, bare.id]));
+    const rows = await db
+      .select({ readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.userId, user.id));
+    expect(rows.every((r) => r.readAt !== null)).toBe(true);
+  });
+
+  it('does not match a longer path, a prefix-sharing sibling or a null action_url', async () => {
+    const user = await userFactory();
+    await insertWithUrl(user.id, '/projects/p1/files');
+    await insertWithUrl(user.id, '/projects/p10');
+    await insertWithUrl(user.id, null);
+
+    const ids = await userNotificationsRepository.markReadByActionPath(user.id, '/projects/p1');
+
+    expect(ids).toEqual([]);
+    const rows = await db
+      .select({ readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.userId, user.id));
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.readAt === null)).toBe(true);
+  });
+
+  it('leaves an already-read row read_at unchanged', async () => {
+    const user = await userFactory();
+    const n = await insertWithUrl(user.id, '/cases/c1');
+    const earlier = new Date('2026-01-01T00:00:00.000Z');
+    await db
+      .update(userNotifications)
+      .set({ readAt: earlier })
+      .where(eq(userNotifications.id, n.id));
+
+    const ids = await userNotificationsRepository.markReadByActionPath(user.id, '/cases/c1');
+
+    expect(ids).toEqual([]);
+    const [row] = await db
+      .select({ readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.id, n.id));
+    expect(row?.readAt?.toISOString()).toBe(earlier.toISOString());
+  });
+
+  it('skips soft-deleted rows', async () => {
+    const user = await userFactory();
+    const n = await insertWithUrl(user.id, '/cases/c1');
+    await db
+      .update(userNotifications)
+      .set({ deletedAt: new Date() })
+      .where(eq(userNotifications.id, n.id));
+
+    expect(await userNotificationsRepository.markReadByActionPath(user.id, '/cases/c1')).toEqual(
+      []
+    );
+  });
+
+  it("does not touch another user's rows", async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+    const theirs = await insertWithUrl(other.id, '/cases/c1');
+
+    expect(await userNotificationsRepository.markReadByActionPath(user.id, '/cases/c1')).toEqual(
+      []
+    );
+    const [row] = await db
+      .select({ readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.id, theirs.id));
+    expect(row?.readAt).toBeNull();
   });
 });

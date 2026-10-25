@@ -7,7 +7,7 @@ import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/
 import type { AvatarEventMap } from './events/avatar';
 import type { PhoneEventMap } from './events/phone';
 import type { CalendarEventMap, CalendarServerEventMap } from './events/calendar';
-import type { NotificationServerEventMap } from './events/notifications';
+import type { NotificationServerEventMap, NotificationEventMap } from './events/notifications';
 import type { SearchEventMap, SearchServerEventMap } from './events/search';
 import type { ExpertProfileEventMap } from './events/expert-profile';
 import type { ProjectEventMap, ProjectServerEventMap } from './events/project';
@@ -118,6 +118,9 @@ export type AllEvents = AuthEventMap &
   // BAL-500 — the ⌘K command palette's CLIENT family. `'navigate'` is deliberately absent; see
   // `./events/command-palette.ts`.
   CommandPaletteEventMap &
+  // BAL-619 — the notification bell's arrival toast / panel CLIENT family; see
+  // `./events/notifications.ts`.
+  NotificationEventMap &
   // BAL-597 — the public help centre's CLIENT family. `comment` is the first free-text property;
   // see `./events/help.ts`.
   HelpEventMap &

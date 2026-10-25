@@ -136,6 +136,8 @@ vi.mock('@/lib/analytics', async () => {
     COMMAND_PALETTE_EVENTS: events.COMMAND_PALETTE_EVENTS,
     COMMAND_PALETTE_OPEN_METHODS: events.COMMAND_PALETTE_OPEN_METHODS,
     COMMAND_PALETTE_ACTION_TYPES: events.COMMAND_PALETTE_ACTION_TYPES,
+    // BAL-619 — the notification bell's arrival toast / panel CLIENT events.
+    NOTIFICATION_EVENTS: events.NOTIFICATION_EVENTS,
     // BAL-597 — the public help centre's CLIENT event, vocabulary tuples and comment cap. ⚠ WITHOUT
     // THESE LINES every test whose module graph reaches a help component throws on an undefined
     // constant (memory `reference_web_analytics_test_mock_export_list`).

@@ -807,6 +807,36 @@ export const usersRepository = {
   },
 
   /**
+   * Read the in-app notification "seen" cursor. Projected select (no other column hydrates).
+   * Null when the cursor was never initialised or the user is soft-deleted.
+   */
+  findNotificationsLastSeenAt: async (userId: string): Promise<Date | null> => {
+    const [row] = await db
+      .select({ notificationsLastSeenAt: users.notificationsLastSeenAt })
+      .from(users)
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .limit(1);
+    return row?.notificationsLastSeenAt ?? null;
+  },
+
+  /**
+   * Advance the notification "seen" cursor to `through`, monotonically and never past NOW():
+   * `GREATEST(current, LEAST(through, NOW()))`. A stale or future `through` is clamped, never
+   * rejected. Returns the stored value, or null when no live user row matched.
+   * `through` is passed as an ISO string: a raw `Date` inside `sql` throws in postgres-js.
+   */
+  advanceNotificationsSeenThrough: async (userId: string, through: Date): Promise<Date | null> => {
+    const [row] = await db
+      .update(users)
+      .set({
+        notificationsLastSeenAt: sql`GREATEST(COALESCE(${users.notificationsLastSeenAt}, '-infinity'::timestamptz), LEAST(${through.toISOString()}::timestamptz, NOW()))`,
+      })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .returning({ notificationsLastSeenAt: users.notificationsLastSeenAt });
+    return row?.notificationsLastSeenAt ?? null;
+  },
+
+  /**
    * Batch NAME hydration (BAL-347) — projects id/firstName/lastName ONLY for a set
    * of user ids (never email/workosId/PII into a client-bound DTO). Excludes
    * soft-deleted users; returns `[]` for empty input (no query). Ordering is
