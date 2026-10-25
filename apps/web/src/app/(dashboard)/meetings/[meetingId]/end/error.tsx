@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { SectionError } from '@/components/balo/section/section-states';
 import { Button } from '@/components/ui/button';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { EndOfCallShell } from './_components/end-of-call-shell';
 
 /**
@@ -28,7 +29,7 @@ export default function EndOfCallError({
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border rounded-xl border p-6 shadow-sm">
+      <BaloCard className="rounded-xl p-6">
         <SectionError
           label="this page"
           onRetry={reset}
@@ -39,7 +40,7 @@ export default function EndOfCallError({
             <Link href="/dashboard">Back to your dashboard</Link>
           </Button>
         </div>
-      </div>
+      </BaloCard>
     </EndOfCallShell>
   );
 }

@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * The Your move rail's Suspense fallback, covering the rail and the project track below it. No
  * hooks and no client boundary: a presentational skeleton that mirrors both panels so nothing
@@ -24,16 +26,17 @@ export function YourMoveSkeleton(): React.JSX.Element {
         </div>
         <div className="mt-3.5 flex gap-3.5 overflow-hidden">
           {['a', 'b', 'c'].map((key) => (
-            <div
+            <BaloCard
               key={key}
-              className="bg-card border-border h-[190px] w-[292px] shrink-0 animate-pulse rounded-[14px] border motion-reduce:animate-none sm:w-[300px]"
+              className="h-[190px] w-[292px] shrink-0 animate-pulse rounded-[14px] motion-reduce:animate-none sm:w-[300px]"
             />
           ))}
         </div>
       </section>
-      <section
+      <BaloCard
+        as="section"
         aria-hidden="true"
-        className="bg-card border-border mb-4 rounded-2xl border px-4 py-[18px] shadow-sm md:px-[22px] md:pt-5 md:pb-[22px]"
+        className="mb-4 px-4 py-[18px] md:px-[22px] md:pt-5 md:pb-[22px]"
       >
         <div className="bg-muted h-5 w-48 animate-pulse rounded motion-reduce:animate-none" />
         <div className="mt-[18px] flex flex-col gap-4 md:grid md:grid-cols-5 md:gap-0">
@@ -44,7 +47,7 @@ export function YourMoveSkeleton(): React.JSX.Element {
             />
           ))}
         </div>
-      </section>
+      </BaloCard>
     </>
   );
 }

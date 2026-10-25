@@ -32,6 +32,13 @@ interface ReviewBannerActionsProps {
 
 type ClientModal = 'accept' | 'changes' | null;
 
+interface ChangeRequestDraft {
+  note: string;
+  milestoneIds: readonly string[];
+}
+
+const EMPTY_DRAFT: ChangeRequestDraft = { note: '', milestoneIds: [] };
+
 /**
  * The per-lens action row inside the `pending_acceptance` {@link ReviewBanner}. EXPERT →
  * "Withdraw request" (D4). CLIENT → the project-level decision: "Accept project" (sticky
@@ -50,6 +57,8 @@ export function ReviewBannerActions({
   const { isPending, run } = useEngagementLifecycleAction();
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [clientModal, setClientModal] = useState<ClientModal>(null);
+  // Held until the request lands, so a failed send doesn't cost the client their note.
+  const [draft, setDraft] = useState<ChangeRequestDraft>(EMPTY_DRAFT);
 
   // Auto-open from the email deep-link — once, client lens only. Strip `?action` so a
   // client-side back-nav can't re-trigger it (and a stale link after accept is inert
@@ -60,11 +69,9 @@ export function ReviewBannerActions({
     if (lens !== 'client' || clientDecision === null || initialAction === null) return;
     consumed.current = true;
     setClientModal(initialAction === 'accept' ? 'accept' : 'changes');
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('action');
-      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-    }
+    const url = new URL(globalThis.location.href);
+    url.searchParams.delete('action');
+    globalThis.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   }, [lens, clientDecision, initialAction]);
 
   const closeClientModal = useCallback((): void => setClientModal(null), []);
@@ -73,16 +80,21 @@ export function ReviewBannerActions({
     run(acceptProjectAction({ engagementId }), 'Project accepted 🎉', () => {
       // Arm the one-shot completed-banner celebration (survives the RSC refresh).
       try {
-        window.sessionStorage.setItem(celebrationStorageKey(engagementId), '1');
+        globalThis.sessionStorage.setItem(celebrationStorageKey(engagementId), '1');
       } catch {
         // sessionStorage unavailable (private mode) — no confetti, no error.
       }
     });
   }, [run, engagementId]);
   const handleChanges = useCallback(
-    (note: string): void => {
+    (note: string, milestoneIds: string[]): void => {
       setClientModal(null);
-      run(requestProjectChangesAction({ engagementId, note }), 'Change request sent');
+      setDraft({ note, milestoneIds });
+      run(
+        requestProjectChangesAction({ engagementId, note, milestoneIds }),
+        'Change request sent',
+        () => setDraft(EMPTY_DRAFT)
+      );
     },
     [run, engagementId]
   );
@@ -154,6 +166,10 @@ export function ReviewBannerActions({
         open={clientModal === 'changes'}
         intro={clientDecision.requestChangesIntro}
         fieldHint={clientDecision.requestChangesFieldHint}
+        milestoneOptions={clientDecision.milestoneOptions}
+        milestoneHelper={clientDecision.milestoneHelper}
+        initialNote={draft.note}
+        initialMilestoneIds={draft.milestoneIds}
         pending={isPending}
         onConfirm={handleChanges}
         onCancel={closeClientModal}

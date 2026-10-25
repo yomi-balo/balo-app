@@ -43,6 +43,8 @@ export interface CompletionRequestEmailProps {
   readonly requestedDate: string;
   readonly autoDate: string;
   readonly reviewDays: number;
+  /** True when the expert is marking the project ready again after a change request. */
+  readonly isResubmission?: boolean;
   readonly engagementUrl: string;
 }
 
@@ -60,23 +62,40 @@ export function CompletionRequestEmail({
   requestedDate,
   autoDate,
   reviewDays,
+  isResubmission = false,
   engagementUrl,
 }: Readonly<CompletionRequestEmailProps>) {
   const phrases = milestonePhrases(milestonesTotal);
   return (
     <ReviewEmailLayout
-      preview={`${actorExpert} ${phrases.previewLead}. Take a look and make it official — you have until ${autoDate}.`}
-      pill="🎉 Project delivered"
-      heading="Your project is complete!"
-      subtext={`${expertParty} has ${phrases.subtextLead} — the finishing touch is ${clientCompany}'s.`}
+      preview={
+        isResubmission
+          ? `${actorExpert} worked through your feedback. Take another look — you have until ${autoDate}.`
+          : `${actorExpert} ${phrases.previewLead}. Take a look and make it official — you have until ${autoDate}.`
+      }
+      pill={isResubmission ? 'Ready again' : '🎉 Project delivered'}
+      heading={isResubmission ? 'Ready for another look' : 'Your project is complete!'}
+      subtext={
+        isResubmission
+          ? `${expertParty} has worked through your feedback — the finishing touch is ${clientCompany}'s.`
+          : `${expertParty} has ${phrases.subtextLead} — the finishing touch is ${clientCompany}'s.`
+      }
     >
       <Text style={reviewStyles.greeting}>Hi {firstName},</Text>
-      <Text style={reviewStyles.bodyText}>
-        Great news — {actorExpert} marked <strong>{projectTitle}</strong> complete on{' '}
-        {requestedDate}
-        {phrases.bodyClause === '' ? '' : `, with ${phrases.bodyClause}`}. Nice work getting this
-        over the line together. The last step is yours: take a look and make it official.
-      </Text>
+      {isResubmission ? (
+        <Text style={reviewStyles.bodyText}>
+          {actorExpert} worked through your feedback and marked <strong>{projectTitle}</strong>{' '}
+          ready again on {requestedDate}. The last step is yours: take another look and make it
+          official.
+        </Text>
+      ) : (
+        <Text style={reviewStyles.bodyText}>
+          Great news — {actorExpert} marked <strong>{projectTitle}</strong> complete on{' '}
+          {requestedDate}
+          {phrases.bodyClause === '' ? '' : `, with ${phrases.bodyClause}`}. Nice work getting this
+          over the line together. The last step is yours: take a look and make it official.
+        </Text>
+      )}
 
       <ProjectSummary
         projectTitle={projectTitle}

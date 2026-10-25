@@ -2,6 +2,7 @@
 
 import { useState, type KeyboardEvent } from 'react';
 import Link from 'next/link';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import {
   ChevronDown,
@@ -30,6 +31,7 @@ import {
   PhoneOff,
   Gauge,
   Activity,
+  Briefcase,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -55,6 +57,7 @@ import { closeAdminAlert } from '../_actions/close-admin-alert';
  */
 const KIND_ICONS: Readonly<Record<string, LucideIcon>> = {
   'expert.application_pending': UserPlus,
+  'project.repeat_change_request': RotateCcw,
   'receivable.open': CreditCard,
   'session.settled_no_ledger_credit': Receipt,
   'topup.unresolved_pi': AlertTriangle,
@@ -83,6 +86,7 @@ const ENTITY_ICONS: Readonly<Record<string, LucideIcon>> = {
   recording: Video,
   transcript: FileText,
   calendar: CalendarClock,
+  engagement: Briefcase,
   sweep: Activity,
 };
 
@@ -360,7 +364,7 @@ export function AlertRow({
                 <Button
                   size="sm"
                   disabled={note.trim().length < ADMIN_ALERT_NOTE_MIN || pending}
-                  onClick={() => void handleClose()}
+                  onClick={() => handleClose().catch(Sentry.captureException)}
                 >
                   <Check className="size-3.5" aria-hidden="true" />
                   Close

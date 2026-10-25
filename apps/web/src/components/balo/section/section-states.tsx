@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { AlertTriangle, Info, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BaloCard } from '@/components/balo/card/balo-card';
 
 /**
  * Shared presentational primitives for section-shaped surfaces: the section shell, a compact
@@ -33,7 +34,7 @@ export function SectionCard({
   children,
 }: Readonly<SectionCardProps>): React.JSX.Element {
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 shadow-sm sm:p-7">
+    <BaloCard as="section" className="p-6 sm:p-7">
       <header className="mb-5 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="text-foreground text-base font-semibold tracking-tight">{title}</h2>
@@ -44,7 +45,7 @@ export function SectionCard({
         {headerRight}
       </header>
       {children}
-    </section>
+    </BaloCard>
   );
 }
 

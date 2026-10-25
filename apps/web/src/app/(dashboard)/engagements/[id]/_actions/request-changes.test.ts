@@ -21,16 +21,23 @@ vi.mock('@/lib/authz', () => ({
   CAPABILITIES: { PARTICIPATE: 'participate' },
 }));
 
-const { mockFindEngagement, mockRequestChanges, mockCountAudit, InvalidEngagementTransitionError } =
-  vi.hoisted(() => {
-    class InvalidEngagementTransitionError extends Error {}
-    return {
-      mockFindEngagement: vi.fn(),
-      mockRequestChanges: vi.fn(),
-      mockCountAudit: vi.fn(),
-      InvalidEngagementTransitionError,
-    };
-  });
+const {
+  mockFindEngagement,
+  mockRequestChanges,
+  mockCountAudit,
+  InvalidEngagementTransitionError,
+  ChangeRequestMilestoneMismatchError,
+} = vi.hoisted(() => {
+  class InvalidEngagementTransitionError extends Error {}
+  class ChangeRequestMilestoneMismatchError extends Error {}
+  return {
+    mockFindEngagement: vi.fn(),
+    mockRequestChanges: vi.fn(),
+    mockCountAudit: vi.fn(),
+    InvalidEngagementTransitionError,
+    ChangeRequestMilestoneMismatchError,
+  };
+});
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
@@ -42,6 +49,7 @@ vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
   MilestonesIncompleteError: class extends Error {},
   InvalidEngagementTransitionError,
+  ChangeRequestMilestoneMismatchError,
 }));
 
 const mockTrack = vi.fn();
@@ -61,11 +69,28 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+const mockRaiseAlert = vi.fn();
+vi.mock('@/lib/admin-alerts/raise-admin-alert', () => ({
+  raiseAdminAlert: (...a: unknown[]) => mockRaiseAlert(...a),
+}));
+
 import { requestProjectChangesAction } from './request-changes';
 import { revalidatePath } from 'next/cache';
 
 const NOTE = 'The report export is missing the Q3 totals.';
 const INPUT = { engagementId: ENGAGEMENT_ID, note: NOTE };
+const MS_BUILD = 'b0000000-0000-4000-8000-000000000001';
+const MS_LAUNCH = 'b0000000-0000-4000-8000-000000000002';
+
+function roundResult(over: Record<string, unknown> = {}) {
+  return {
+    id: 'cr-1',
+    roundNumber: 1,
+    taggedMilestones: [],
+    revertedMilestoneIds: [],
+    ...over,
+  };
+}
 
 function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
@@ -105,7 +130,9 @@ beforeEach(() => {
   mockRequestChanges.mockResolvedValue({
     status: 'active',
     changeRequestedAt: new Date('2026-07-06T09:00:00Z'),
+    changeRequest: roundResult(),
   });
+  mockRaiseAlert.mockResolvedValue(undefined);
   mockCountAudit.mockResolvedValue(2);
 });
 
@@ -136,6 +163,7 @@ describe('requestProjectChangesAction', () => {
       engagementId: ENGAGEMENT_ID,
       userId: 'client-1',
       note: NOTE,
+      milestoneIds: [],
     });
 
     expect(mockTrack).toHaveBeenCalledWith(
@@ -143,6 +171,8 @@ describe('requestProjectChangesAction', () => {
       expect.objectContaining({
         engagement_id: ENGAGEMENT_ID,
         review_cycle: 2,
+        round_number: 1,
+        tagged_milestone_count: 0,
         distinct_id: 'client-1',
         days_in_review: expect.any(Number),
       })
@@ -159,6 +189,8 @@ describe('requestProjectChangesAction', () => {
         note: NOTE,
         reviewDays: 7,
         reviewCycle: 2,
+        roundNumber: 1,
+        taggedMilestoneTitles: [],
       })
     );
 
@@ -175,6 +207,100 @@ describe('requestProjectChangesAction', () => {
     expect(await requestProjectChangesAction(INPUT)).toEqual({
       success: false,
       error: "This project's status changed. Refresh and try again.",
+    });
+  });
+
+  describe('tagged milestones', () => {
+    it('forwards the tags de-duplicated and publishes their titles in plan order', async () => {
+      mockRequestChanges.mockResolvedValue({
+        status: 'active',
+        changeRequestedAt: new Date('2026-07-06T09:00:00Z'),
+        changeRequest: roundResult({
+          taggedMilestones: [
+            { id: MS_BUILD, title: 'Build' },
+            { id: MS_LAUNCH, title: 'Launch' },
+          ],
+        }),
+      });
+      const result = await requestProjectChangesAction({
+        ...INPUT,
+        milestoneIds: [MS_BUILD, MS_LAUNCH, MS_BUILD],
+      });
+      expect(result).toEqual({ success: true });
+      expect(mockRequestChanges).toHaveBeenCalledWith({
+        engagementId: ENGAGEMENT_ID,
+        userId: 'client-1',
+        note: NOTE,
+        milestoneIds: [MS_BUILD, MS_LAUNCH],
+      });
+      expect(mockPublish).toHaveBeenCalledWith(
+        'engagement.changes_requested',
+        expect.objectContaining({ taggedMilestoneTitles: ['Build', 'Launch'] })
+      );
+      expect(mockTrack).toHaveBeenCalledWith(
+        'engagement_changes_requested',
+        expect.objectContaining({ tagged_milestone_count: 2 })
+      );
+    });
+
+    it('rejects a non-uuid milestone id as INVALID_REQUEST', async () => {
+      expect(await requestProjectChangesAction({ ...INPUT, milestoneIds: ['nope'] })).toEqual({
+        success: false,
+        error: 'Invalid request.',
+      });
+      expect(mockRequestChanges).not.toHaveBeenCalled();
+    });
+
+    it('maps a stale / foreign milestone id to PLAN_CHANGED and does nothing else', async () => {
+      mockRequestChanges.mockRejectedValue(new ChangeRequestMilestoneMismatchError('x'));
+      expect(await requestProjectChangesAction({ ...INPUT, milestoneIds: [MS_BUILD] })).toEqual({
+        success: false,
+        error: 'The delivery plan changed since you loaded the page. Refresh and try again.',
+      });
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockTrack).not.toHaveBeenCalled();
+      expect(mockRaiseAlert).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('repeat change request admin alert', () => {
+    function secondRound() {
+      mockRequestChanges.mockResolvedValue({
+        status: 'active',
+        changeRequestedAt: new Date('2026-07-06T09:00:00Z'),
+        changeRequest: roundResult({
+          roundNumber: 2,
+          taggedMilestones: [{ id: MS_BUILD, title: 'Build' }],
+        }),
+      });
+    }
+
+    it('raises no alert on the first round', async () => {
+      await requestProjectChangesAction(INPUT);
+      expect(mockRaiseAlert).not.toHaveBeenCalled();
+    });
+
+    it('raises exactly one alert from the second round, keyed on the engagement', async () => {
+      secondRound();
+      expect(await requestProjectChangesAction(INPUT)).toEqual({ success: true });
+      expect(mockRaiseAlert).toHaveBeenCalledTimes(1);
+      expect(mockRaiseAlert).toHaveBeenCalledWith({
+        kind: 'project.repeat_change_request',
+        entityType: 'engagement',
+        entityId: ENGAGEMENT_ID,
+        detail: expect.objectContaining({
+          title: 'Changes requested again on CPQ implementation',
+          evidence:
+            'Dana @ Northwind Industrial sent it back to CloudPeak Consulting for round 2 on 6 Jul.',
+        }),
+      });
+    });
+
+    it('never carries the client note into the alert', async () => {
+      secondRound();
+      await requestProjectChangesAction(INPUT);
+      expect(JSON.stringify(mockRaiseAlert.mock.calls)).not.toContain(NOTE);
     });
   });
 });

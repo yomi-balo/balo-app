@@ -7,9 +7,12 @@ import {
   auditEvents,
   companies,
   conversations,
+  engagementMilestones,
   engagements,
   expertProfiles,
   meetingContexts,
+  projectChangeRequestMilestones,
+  projectChangeRequests,
   projectEngagements,
   projectRequests,
   proposalMilestones,
@@ -17,6 +20,8 @@ import {
   proposals,
   requestExpertRelationships,
   type AuditEvent,
+  type EngagementMilestone,
+  type ProjectChangeRequest,
 } from '../schema';
 import {
   caseEngagementFactory,
@@ -39,7 +44,9 @@ import {
   KickoffGatesIncompleteError,
   InvalidEngagementTransitionError,
   MilestonesIncompleteError,
+  ChangeRequestMilestoneMismatchError,
 } from './project-engagements';
+import { engagementMilestonesRepository } from './engagement-milestones';
 import {
   projectDeliveryToEngagementStatus,
   EngagementTypeMismatchError,
@@ -1279,6 +1286,7 @@ describe('projectEngagementsRepository.requestCompletion', () => {
     expect(advanced.status).toBe('pending_acceptance');
     expect(advanced.completionRequestedByUserId).toBe(userId);
     expect(advanced.completionRequestedAt).toBeInstanceOf(Date);
+    expect(advanced.priorChangeRounds).toBe(0);
 
     const events = await auditEventsForEntity(engagementId);
     expect(events).toHaveLength(1);
@@ -1438,6 +1446,431 @@ describe('projectEngagementsRepository.requestChanges', () => {
     await expect(
       projectEngagementsRepository.requestChanges({ engagementId, userId, note: 'x' })
     ).rejects.toBeInstanceOf(InvalidEngagementTransitionError);
+  });
+});
+
+// ── BAL-621: change-request rounds + optional milestone tags ─────────────────
+
+/**
+ * A `pending_acceptance` project whose milestones are all `completed` (sort order =
+ * index) — the state `requestCompletion` leaves a project in.
+ */
+async function seedPendingWithCompletedMilestones(titles: readonly string[]): Promise<{
+  engagementId: string;
+  userId: string;
+  milestoneIds: string[];
+}> {
+  const { engagementId, userId } = await seedPendingAcceptanceEngagement();
+  const milestoneIds: string[] = [];
+  for (const [sortOrder, title] of titles.entries()) {
+    const { milestone } = await engagementMilestoneFactory({
+      engagementId,
+      values: {
+        title,
+        sortOrder,
+        status: 'completed',
+        completedByUserId: userId,
+        completedAt: new Date(),
+        completionNote: 'Done.',
+      },
+    });
+    milestoneIds.push(milestone.id);
+  }
+  return { engagementId, userId, milestoneIds };
+}
+
+/** Destructure-and-guard the first `n` ids of a seeded list (never `!`). */
+function takeIds(ids: readonly string[], n: 1): [string];
+function takeIds(ids: readonly string[], n: 2): [string, string];
+function takeIds(ids: readonly string[], n: 3): [string, string, string];
+function takeIds(ids: readonly string[], n: number): string[] {
+  const taken = ids.slice(0, n);
+  if (taken.length !== n) throw new Error(`expected ${n} seeded ids, got ${ids.length}`);
+  return taken;
+}
+
+async function milestoneById(id: string): Promise<EngagementMilestone> {
+  const [row] = await db.select().from(engagementMilestones).where(eq(engagementMilestones.id, id));
+  if (row === undefined) throw new Error(`milestone ${id} missing`);
+  return row;
+}
+
+async function roundsFor(engagementId: string): Promise<ProjectChangeRequest[]> {
+  return db
+    .select()
+    .from(projectChangeRequests)
+    .where(eq(projectChangeRequests.engagementId, engagementId))
+    .orderBy(asc(projectChangeRequests.requestedAt), asc(projectChangeRequests.id));
+}
+
+async function taggedIdsFor(changeRequestId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: projectChangeRequestMilestones.engagementMilestoneId })
+    .from(projectChangeRequestMilestones)
+    .where(eq(projectChangeRequestMilestones.changeRequestId, changeRequestId));
+  return rows.map((row) => row.id).sort((a, b) => a.localeCompare(b));
+}
+
+async function revertAuditsFor(milestoneId: string): Promise<AuditEvent[]> {
+  return (await auditEventsForEntity(milestoneId)).filter(
+    (event) => event.action === 'engagement_milestone.reverted'
+  );
+}
+
+describe('projectEngagementsRepository.requestChanges — rounds and milestone tags (BAL-621)', () => {
+  it('tagging one of three completed milestones reopens exactly that one, writes one round + one tag, and audits the revert with the round id', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+      'Launch',
+    ]);
+    const [discovery, build, launch] = takeIds(milestoneIds, 3);
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'The build needs another pass.',
+      milestoneIds: [build],
+    });
+
+    expect(advanced.status).toBe('active');
+    const rounds = await roundsFor(engagementId);
+    expect(rounds).toHaveLength(1);
+    const [round] = rounds;
+    if (round === undefined) throw new Error('round missing');
+    expect(round).toMatchObject({
+      id: advanced.changeRequest.id,
+      note: 'The build needs another pass.',
+      requestedByUserId: userId,
+      deletedAt: null,
+    });
+    expect(advanced.changeRequest).toEqual({
+      id: round.id,
+      roundNumber: 1,
+      taggedMilestones: [{ id: build, title: 'Build' }],
+      revertedMilestoneIds: [build],
+    });
+    expect(await taggedIdsFor(round.id)).toEqual([build]);
+
+    const reopened = await milestoneById(build);
+    expect(reopened.status).toBe('in_progress');
+    expect(reopened.completedAt).toBeNull();
+    expect(reopened.completedByUserId).toBeNull();
+    expect(reopened.completionNote).toBeNull();
+    expect((await milestoneById(discovery)).status).toBe('completed');
+    expect((await milestoneById(launch)).status).toBe('completed');
+
+    const reverts = await revertAuditsFor(build);
+    expect(reverts).toHaveLength(1);
+    expect(reverts[0]?.actorUserId).toBe(userId);
+    expect(reverts[0]?.metadata).toEqual({
+      from: 'completed',
+      to: 'in_progress',
+      change_request_id: round.id,
+      engagementId,
+    });
+    expect(await auditEventsForEntity(discovery)).toHaveLength(0);
+    expect(await auditEventsForEntity(launch)).toHaveLength(0);
+  });
+
+  it('an untagged round reopens nothing and writes no tag rows', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+    ]);
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Something is off — please take another look.',
+    });
+
+    expect(advanced.changeRequest).toEqual({
+      id: expect.any(String),
+      roundNumber: 1,
+      taggedMilestones: [],
+      revertedMilestoneIds: [],
+    });
+    expect(await roundsFor(engagementId)).toHaveLength(1);
+    expect(await taggedIdsFor(advanced.changeRequest.id)).toEqual([]);
+    expect(milestoneIds).toHaveLength(2);
+    for (const id of milestoneIds) {
+      expect((await milestoneById(id)).status).toBe('completed');
+      expect(await revertAuditsFor(id)).toHaveLength(0);
+    }
+  });
+
+  it('a tagged milestone that is not completed is tagged but not reverted (only completed rows reopen)', async () => {
+    // Not reachable through the lifecycle (`requestCompletion` requires every live
+    // milestone completed) — seeded directly to pin that only `completed` rows revert.
+    const { engagementId, userId } = await seedPendingAcceptanceEngagement();
+    const { milestone } = await engagementMilestoneFactory({
+      engagementId,
+      values: { title: 'Build', status: 'in_progress' },
+    });
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Keep going on the build.',
+      milestoneIds: [milestone.id],
+    });
+
+    expect(advanced.changeRequest.taggedMilestones).toEqual([{ id: milestone.id, title: 'Build' }]);
+    expect(advanced.changeRequest.revertedMilestoneIds).toEqual([]);
+    expect(await taggedIdsFor(advanced.changeRequest.id)).toEqual([milestone.id]);
+    expect((await milestoneById(milestone.id)).status).toBe('in_progress');
+    expect(await revertAuditsFor(milestone.id)).toHaveLength(0);
+  });
+
+  it('a foreign milestone id → ChangeRequestMilestoneMismatchError and NOTHING is written', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+    ]);
+    const [discovery] = takeIds(milestoneIds, 1);
+    const { milestone: foreign } = await engagementMilestoneFactory({
+      values: { status: 'completed' },
+    });
+
+    await expect(
+      projectEngagementsRepository.requestChanges({
+        engagementId,
+        userId,
+        note: 'x',
+        milestoneIds: [discovery, foreign.id],
+      })
+    ).rejects.toBeInstanceOf(ChangeRequestMilestoneMismatchError);
+
+    const reloaded = await projectEngagementsRepository.findWithMilestones(engagementId);
+    expect(reloaded?.status).toBe('pending_acceptance');
+    expect(reloaded?.changeRequestNote).toBeNull();
+    expect(reloaded?.completionRequestedAt).toBeInstanceOf(Date);
+    expect(await roundsFor(engagementId)).toHaveLength(0);
+    expect((await milestoneById(discovery)).status).toBe('completed');
+    expect((await milestoneById(foreign.id)).status).toBe('completed');
+    expect(await auditEventsForEntity(engagementId)).toHaveLength(0);
+    expect(await auditEventsForEntity(discovery)).toHaveLength(0);
+  });
+
+  it('a soft-deleted or unknown milestone id → ChangeRequestMilestoneMismatchError', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+    ]);
+    const [discovery] = takeIds(milestoneIds, 1);
+    const { milestone: removed } = await engagementMilestoneFactory({
+      engagementId,
+      values: { status: 'completed', sortOrder: 1, deletedAt: new Date() },
+    });
+
+    for (const stale of [removed.id, randomUUID()]) {
+      await expect(
+        projectEngagementsRepository.requestChanges({
+          engagementId,
+          userId,
+          note: 'x',
+          milestoneIds: [discovery, stale],
+        })
+      ).rejects.toBeInstanceOf(ChangeRequestMilestoneMismatchError);
+    }
+    expect(await roundsFor(engagementId)).toHaveLength(0);
+    expect((await milestoneById(discovery)).status).toBe('completed');
+  });
+
+  it('duplicate tagged ids collapse to one tag row and one revert', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+    ]);
+    const [discovery] = takeIds(milestoneIds, 1);
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Discovery again.',
+      milestoneIds: [discovery, discovery],
+    });
+
+    expect(advanced.changeRequest.taggedMilestones).toEqual([
+      { id: discovery, title: 'Discovery' },
+    ]);
+    expect(advanced.changeRequest.revertedMilestoneIds).toEqual([discovery]);
+    expect(await taggedIdsFor(advanced.changeRequest.id)).toEqual([discovery]);
+    expect(await revertAuditsFor(discovery)).toHaveLength(1);
+  });
+
+  it('the legacy change_request_* columns are the projection of the round: same note, requester and instant', async () => {
+    const { engagementId, userId } = await seedPendingWithCompletedMilestones(['Discovery']);
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Tighten the copy.',
+    });
+
+    const [round] = await roundsFor(engagementId);
+    if (round === undefined) throw new Error('round missing');
+    expect(advanced.changeRequestNote).toBe(round.note);
+    expect(advanced.changeRequestedByUserId).toBe(round.requestedByUserId);
+    expect(advanced.changeRequestedAt?.getTime()).toBe(round.requestedAt.getTime());
+  });
+
+  it('the changes_requested audit carries the round id, the id-ordered tags and the round number; the result lists tags in display order', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+      'Launch',
+    ]);
+    const [discovery, , launch] = takeIds(milestoneIds, 3);
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Revisit the bookends.',
+      milestoneIds: [launch, discovery],
+    });
+
+    const events = await auditEventsForEntity(engagementId);
+    const changeEvents = events.filter((e) => e.action === 'engagement.changes_requested');
+    expect(changeEvents).toHaveLength(1);
+    expect(changeEvents[0]?.metadata).toEqual({
+      from: 'pending_acceptance',
+      to: 'active',
+      note: 'Revisit the bookends.',
+      change_request_id: advanced.changeRequest.id,
+      tagged_milestone_ids: [discovery, launch].sort((a, b) => a.localeCompare(b)),
+      round_number: 1,
+      engagementId,
+    });
+    // Display order is sort_order, regardless of the order the client ticked them.
+    expect(advanced.changeRequest.taggedMilestones.map((m) => m.title)).toEqual([
+      'Discovery',
+      'Launch',
+    ]);
+  });
+
+  it('round_number counts only LIVE rounds', async () => {
+    const { engagementId, userId } = await seedPendingWithCompletedMilestones(['Discovery']);
+    await db.insert(projectChangeRequests).values({
+      engagementId,
+      note: 'A withdrawn round.',
+      requestedByUserId: userId,
+      requestedAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: new Date(),
+    });
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'The real first round.',
+    });
+    expect(advanced.changeRequest.roundNumber).toBe(1);
+  });
+});
+
+describe('projectEngagementsRepository.findWithMilestones — change-request rounds (BAL-621)', () => {
+  it('a project with no rounds hydrates [] / null / 0', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.changeRequestRounds).toEqual([]);
+    expect(hydrated?.latestChangeRequest).toBeNull();
+    expect(hydrated?.changeRequestRoundCount).toBe(0);
+  });
+
+  it('every round comes back oldest → newest and survives requestCompletion nulling the legacy note; the latest is the last round; the requester is a name only', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+    ]);
+    const [discovery] = takeIds(milestoneIds, 1);
+    const client = await userFactory({ firstName: 'Dana', lastName: 'Client' });
+
+    const first = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId: client.id,
+      note: 'Round one.',
+      milestoneIds: [discovery],
+    });
+    expect(first.changeRequest.roundNumber).toBe(1);
+
+    // The expert completes the reopened milestone and marks the project ready again.
+    await engagementMilestonesRepository.complete({ milestoneId: discovery, userId });
+    const resubmission = await projectEngagementsRepository.requestCompletion({
+      engagementId,
+      userId,
+    });
+    expect(resubmission.priorChangeRounds).toBe(1);
+    const resubmitted = await projectEngagementsRepository.findWithMilestones(engagementId);
+    expect(resubmitted?.changeRequestNote).toBeNull();
+    expect(resubmitted?.changeRequestRounds.map((r) => r.note)).toEqual(['Round one.']);
+    expect(resubmitted?.latestChangeRequest?.id).toBe(first.changeRequest.id);
+
+    const second = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId: client.id,
+      note: 'Round two.',
+    });
+    expect(second.changeRequest.roundNumber).toBe(2);
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagementId);
+    expect(hydrated?.changeRequestRoundCount).toBe(2);
+    expect(
+      hydrated?.changeRequestRounds.map((r) => ({
+        id: r.id,
+        note: r.note,
+        taggedMilestoneIds: r.taggedMilestoneIds,
+      }))
+    ).toEqual([
+      { id: first.changeRequest.id, note: 'Round one.', taggedMilestoneIds: [discovery] },
+      { id: second.changeRequest.id, note: 'Round two.', taggedMilestoneIds: [] },
+    ]);
+    expect(hydrated?.latestChangeRequest?.id).toBe(second.changeRequest.id);
+    expect(hydrated?.latestChangeRequest?.requestedAt).toBeInstanceOf(Date);
+    expect(hydrated?.latestChangeRequest?.requestedAt.getTime()).toBe(
+      second.changeRequestedAt?.getTime()
+    );
+
+    // PII: each round is projected to exactly these keys, and its requester to a name.
+    const rounds = hydrated?.changeRequestRounds ?? [];
+    expect(rounds).toHaveLength(2);
+    for (const round of rounds) {
+      expect(Object.keys(round).sort()).toEqual(
+        ['id', 'note', 'requestedAt', 'requestedBy', 'taggedMilestoneIds'].sort()
+      );
+      expect(round.requestedBy).toEqual({ id: client.id, firstName: 'Dana', lastName: 'Client' });
+    }
+  });
+
+  it('soft-deleted rounds and soft-deleted tag rows are filtered out', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+    ]);
+    const [discovery, build] = takeIds(milestoneIds, 2);
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Both need work.',
+      milestoneIds: [discovery, build],
+    });
+    await db
+      .update(projectChangeRequestMilestones)
+      .set({ deletedAt: new Date() })
+      .where(
+        and(
+          eq(projectChangeRequestMilestones.changeRequestId, advanced.changeRequest.id),
+          eq(projectChangeRequestMilestones.engagementMilestoneId, build)
+        )
+      );
+    await db.insert(projectChangeRequests).values({
+      engagementId,
+      note: 'A removed round.',
+      requestedByUserId: userId,
+      deletedAt: new Date(),
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagementId);
+    expect(hydrated?.changeRequestRoundCount).toBe(1);
+    expect(hydrated?.changeRequestRounds.map((r) => r.note)).toEqual(['Both need work.']);
+    expect(hydrated?.latestChangeRequest?.taggedMilestoneIds).toEqual([discovery]);
   });
 });
 

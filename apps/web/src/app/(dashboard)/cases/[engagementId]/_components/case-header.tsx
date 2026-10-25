@@ -5,6 +5,7 @@ import { CircleCheck } from 'lucide-react';
 import { InfoNote } from '@/components/balo/section/section-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import type { CaseHeaderView } from '@/lib/cases/case-view-types';
 
 /**
@@ -91,7 +92,7 @@ export function CaseHeader({
   }, [expanded, header.descriptionHtml]);
 
   return (
-    <header className="bg-card border-border rounded-xl border px-6 py-5 shadow-sm">
+    <header className={cn(baloCardClassName(), 'rounded-xl px-6 py-5')}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           {/* BAL-499 F5: h2 — the chrome's Breadcrumbs `<h1>` (breadcrumbs.tsx) already carries

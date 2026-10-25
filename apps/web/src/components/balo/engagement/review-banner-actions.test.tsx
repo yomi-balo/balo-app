@@ -29,11 +29,16 @@ const CLIENT_DECISION = {
   acceptModalBody: "Accepting confirms Priya delivered the project — it can't be un-accepted.",
   requestChangesIntro: 'The project goes back to active with your note attached.',
   requestChangesFieldHint: 'Be specific — this is exactly what Priya sees.',
+  milestoneOptions: [
+    { id: 'm-1', title: 'Discovery' },
+    { id: 'm-2', title: 'Build' },
+  ],
+  milestoneHelper: 'Milestones you pick go back to Priya with your feedback.',
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.sessionStorage.clear();
+  globalThis.sessionStorage.clear();
   withdrawMock.mockResolvedValue({ success: true });
   acceptMock.mockResolvedValue({ success: true });
   changesMock.mockResolvedValue({ success: true });
@@ -116,7 +121,7 @@ describe('ReviewBannerActions — client decision (D7)', () => {
       expect(acceptMock).toHaveBeenCalledWith({ engagementId: 'eng-1' });
     });
     expect(toast.success).toHaveBeenCalledWith('Project accepted 🎉');
-    expect(window.sessionStorage.getItem(celebrationStorageKey('eng-1'))).toBe('1');
+    expect(globalThis.sessionStorage.getItem(celebrationStorageKey('eng-1'))).toBe('1');
   });
 
   it('request changes: requires a note, then calls requestProjectChangesAction with it', async () => {
@@ -146,10 +151,109 @@ describe('ReviewBannerActions — client decision (D7)', () => {
       expect(changesMock).toHaveBeenCalledWith({
         engagementId: 'eng-1',
         note: 'Fix the export totals.',
+        milestoneIds: [],
       });
     });
     expect(toast.success).toHaveBeenCalledWith('Change request sent');
     expect(acceptMock).not.toHaveBeenCalled();
+  });
+
+  it('request changes: forwards the ticked milestones in plan order', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewBannerActions
+        lens="client"
+        engagementId="eng-1"
+        clientCompanyName="Northwind"
+        clientDecision={CLIENT_DECISION}
+        initialAction={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    await user.type(await screen.findByLabelText(/What needs to change/i), 'Fix both.');
+    await user.click(screen.getByRole('checkbox', { name: 'Build' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Discovery' }));
+    await user.click(screen.getByRole('button', { name: /Send change request/i }));
+
+    await waitFor(() => {
+      expect(changesMock).toHaveBeenCalledWith({
+        engagementId: 'eng-1',
+        note: 'Fix both.',
+        milestoneIds: ['m-1', 'm-2'],
+      });
+    });
+  });
+
+  it('request changes: surfaces a rejected request as an error toast', async () => {
+    changesMock.mockResolvedValue({ success: false, error: 'The delivery plan changed.' });
+    const user = userEvent.setup();
+    render(
+      <ReviewBannerActions
+        lens="client"
+        engagementId="eng-1"
+        clientCompanyName="Northwind"
+        clientDecision={CLIENT_DECISION}
+        initialAction={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    await user.type(await screen.findByLabelText(/What needs to change/i), 'Fix it.');
+    await user.click(screen.getByRole('button', { name: /Send change request/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('The delivery plan changed.');
+    });
+  });
+
+  it('request changes: a failed send restores the note and ticks on reopen', async () => {
+    changesMock.mockResolvedValue({ success: false, error: 'The delivery plan changed.' });
+    const user = userEvent.setup();
+    render(
+      <ReviewBannerActions
+        lens="client"
+        engagementId="eng-1"
+        clientCompanyName="Northwind"
+        clientDecision={CLIENT_DECISION}
+        initialAction={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    await user.type(await screen.findByLabelText(/What needs to change/i), 'Fix it.');
+    await user.click(screen.getByRole('checkbox', { name: 'Build' }));
+    await user.click(screen.getByRole('button', { name: /Send change request/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    expect(await screen.findByLabelText(/What needs to change/i)).toHaveValue('Fix it.');
+    expect(screen.getByRole('checkbox', { name: 'Build' })).toBeChecked();
+  });
+
+  it('request changes: a successful send leaves the form empty on reopen', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewBannerActions
+        lens="client"
+        engagementId="eng-1"
+        clientCompanyName="Northwind"
+        clientDecision={CLIENT_DECISION}
+        initialAction={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    await user.type(await screen.findByLabelText(/What needs to change/i), 'Fix it.');
+    await user.click(screen.getByRole('checkbox', { name: 'Build' }));
+    await user.click(screen.getByRole('button', { name: /Send change request/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Change request sent'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Request changes/i }));
+    expect(await screen.findByLabelText(/What needs to change/i)).toHaveValue('');
+    expect(screen.getByRole('checkbox', { name: 'Build' })).not.toBeChecked();
   });
 
   it('auto-opens the accept modal from the ?action=accept deep-link', async () => {

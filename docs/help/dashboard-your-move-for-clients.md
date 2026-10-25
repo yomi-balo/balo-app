@@ -17,7 +17,7 @@ cards, most pressing first. Scroll sideways to see them all.
 
 - A balance to settle. While it is outstanding, new bookings are on hold.
 - New times an expert has suggested for a call, for you to choose from.
-- Work an expert has marked complete, ready for your review.
+- A project an expert has marked ready for your review.
 - A kickoff that needs billing confirmed. If someone else on your team confirms billing, the card
   lets you view the kickoff instead.
 - An upfront invoice to pay, once Balo has sent it. The project kicks off as soon as Balo sees

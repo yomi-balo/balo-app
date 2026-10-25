@@ -10,6 +10,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof RequestCompletionM
   render(
     <RequestCompletionModal
       open
+      title="Mark project ready"
       modalBody="All 2 milestones are delivered. Northwind reviews the whole project…"
       clientCompanyName="Northwind"
       pending={false}
@@ -29,6 +30,11 @@ describe('RequestCompletionModal', () => {
     expect(
       screen.getByRole('button', { name: /Send for Northwind's review/i })
     ).toBeInTheDocument();
+  });
+
+  it('titles the dialog with the supplied label', () => {
+    setup({ title: 'Mark project ready again' });
+    expect(screen.getByRole('heading', { name: 'Mark project ready again' })).toBeInTheDocument();
   });
 
   it('calls onConfirm when the gradient CTA is clicked', async () => {

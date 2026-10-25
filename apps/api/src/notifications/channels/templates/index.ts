@@ -53,6 +53,7 @@ import {
   EngagementAutoAcceptedExpertEmail,
   EngagementChangesRequestedExpertEmail,
   EngagementReadyToInvoiceEmail,
+  readMilestoneTitles,
 } from './engagement-review-decision-emails.js';
 import {
   PartyMemberJoinedViaDomainEmail,
@@ -978,9 +979,11 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-334 (D4) completion requested — CLIENT owner email (VARIANT 1
   // CompletionRequestEmail). Subject celebrates first (BAL-329 warm tone); the body's
   // window block keeps the auto-accept date unmissable. `recipientName` is the client
-  // owner's first name (hydrated per-recipient in the delivery worker).
+  // owner's first name (hydrated per-recipient in the delivery worker). A resubmission
+  // (`isResubmission`) swaps in the "ready for your review again" subject and copy.
   'engagement-completion-requested-client': (data) => {
     const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const isResubmission = data.isResubmission === true;
     return {
       component: React.createElement(CompletionRequestEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -992,9 +995,12 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestedDate: (data.requestedDate as string) ?? '',
         autoDate: (data.autoDate as string) ?? '',
         reviewDays: numberCount(data.reviewDays),
+        isResubmission,
         engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
       }),
-      subject: `Great news — ${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
+      subject: isResubmission
+        ? `${sanitizeSubjectTitle(projectTitle)} is ready for your review again`
+        : `Great news — ${sanitizeSubjectTitle(projectTitle)} is complete 🎉`,
     };
   },
 
@@ -1065,6 +1071,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         actorClientLabel,
         projectTitle,
         note: (data.note as string) ?? '',
+        taggedMilestoneTitles: readMilestoneTitles(data.taggedMilestoneTitles),
         reviewDays: numberCount(data.reviewDays) || 7,
         engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
         baseUrl: BASE_URL,

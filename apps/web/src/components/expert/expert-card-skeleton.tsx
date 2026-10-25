@@ -7,7 +7,7 @@ interface ExpertCardSkeletonProps {
 function GridSkeleton(): React.JSX.Element {
   return (
     <Card
-      className="gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm"
+      className="gap-0 overflow-hidden rounded-2xl border py-0"
       role="status"
       aria-label="Loading expert card"
     >
@@ -73,7 +73,7 @@ function GridSkeleton(): React.JSX.Element {
 function ListSkeleton(): React.JSX.Element {
   return (
     <Card
-      className="flex gap-0 overflow-hidden rounded-2xl border py-0 shadow-sm"
+      className="flex gap-0 overflow-hidden rounded-2xl border py-0"
       role="status"
       aria-label="Loading expert card"
     >

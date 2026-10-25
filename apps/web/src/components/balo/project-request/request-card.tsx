@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+import { BaloCard } from '@/components/balo/card/balo-card';
 
 interface RequestCardProps {
   children: React.ReactNode;
@@ -8,11 +8,9 @@ interface RequestCardProps {
 }
 
 /**
- * Thin balo wrapper over a shadcn-style Card surface, using design-system radius /
- * border tokens (replaces the prototype's inline `Card`/`glow`). Flat by design —
- * the reference cards carry a border and no shadow. Every card on the
- * request-detail page composes this so the surface stays consistent in light +
- * dark mode.
+ * Request-detail card: a thin wrapper over {@link BaloCard}. Every card on the request-detail
+ * page composes this so the surface stays consistent in light + dark mode. `glow` swaps the
+ * border for the primary-tinted highlight.
  */
 export function RequestCard({
   children,
@@ -20,14 +18,8 @@ export function RequestCard({
   className,
 }: Readonly<RequestCardProps>): React.JSX.Element {
   return (
-    <div
-      className={cn(
-        'bg-card rounded-2xl border',
-        glow ? 'border-primary/40' : 'border-border',
-        className
-      )}
-    >
+    <BaloCard emphasis={glow ? 'highlight' : 'default'} className={className}>
       {children}
-    </div>
+    </BaloCard>
   );
 }

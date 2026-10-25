@@ -1,10 +1,24 @@
-import { and, asc, eq, gt, inArray, isNull, lte, notExists, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  notExists,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { upfrontDueCents } from '@balo/shared/project-requests';
 import { db } from '../client';
 import {
   engagementMilestones,
   engagements,
+  projectChangeRequestMilestones,
+  projectChangeRequests,
   projectEngagements,
   projectRequests,
   reviews,
@@ -26,7 +40,11 @@ import { conversationsRepository } from './conversations';
 import { reanchorRequestCallsToEngagementTx } from './meeting-contexts';
 import { listByProposalTx } from './proposal-milestones';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
-import { engagementMilestonesRepository, snapshotFromProposalTx } from './engagement-milestones';
+import {
+  engagementMilestonesRepository,
+  revertMilestoneTx,
+  snapshotFromProposalTx,
+} from './engagement-milestones';
 import { recordDeliveryAudit, recordEngagementCreated } from './_shared/delivery-audit';
 import {
   insertEngagementRowTx,
@@ -148,6 +166,31 @@ export class MilestonesIncompleteError extends Error {
     super(`Engagement ${engagementId} has ${outstanding} milestone(s) not yet completed`);
     this.name = 'MilestonesIncompleteError';
   }
+}
+
+/**
+ * Thrown by {@link projectEngagementsRepository.requestChanges} when a tagged milestone
+ * id is not a LIVE milestone of the engagement (a stale tab racing a removal, or a
+ * foreign / soft-deleted id). The whole round is rolled back — the project stays in
+ * `pending_acceptance`, no round or tag is written and no milestone is reopened.
+ */
+export class ChangeRequestMilestoneMismatchError extends Error {
+  constructor(public readonly engagementId: string) {
+    super(`Tagged milestones are not all live milestones of engagement ${engagementId}`);
+    this.name = 'ChangeRequestMilestoneMismatchError';
+  }
+}
+
+/** The round `requestChanges` just wrote, for the caller's analytics / payload / alert. */
+export interface ChangeRequestRoundResult {
+  /** `project_change_requests.id`. */
+  id: string;
+  /** Ordinal of this round = count of live rounds on the engagement, this one included. */
+  roundNumber: number;
+  /** The tagged milestones in display order (`sort_order`, ties by id). Empty = untagged. */
+  taggedMilestones: { id: string; title: string }[];
+  /** The tagged milestones that were `completed` and are now back `in_progress`. */
+  revertedMilestoneIds: string[];
 }
 
 /**
@@ -368,6 +411,20 @@ export async function advanceProjectDelivery(
   return toProjectRow(updatedParent, updatedChild);
 }
 
+/** Live change-request rounds on an engagement, read inside the caller's transaction. */
+async function countLiveChangeRequestsTx(tx: DbTx, engagementId: string): Promise<number> {
+  const [counted] = await tx
+    .select({ value: count() })
+    .from(projectChangeRequests)
+    .where(
+      and(
+        eq(projectChangeRequests.engagementId, engagementId),
+        isNull(projectChangeRequests.deletedAt)
+      )
+    );
+  return counted?.value ?? 0;
+}
+
 /**
  * Lock the LIVE project and validate that `→ to` is a legal move from its current
  * delivery status, returning the locked pair. Shared pre-step of the transitions that
@@ -385,6 +442,42 @@ async function lockProjectForTransition(
     throw new InvalidEngagementTransitionError(pair.child.deliveryStatus, to);
   }
   return pair;
+}
+
+/**
+ * Lock a change request's tagged milestones FOR UPDATE, ordered by id, and return
+ * them (id-ordered). Duplicate ids collapse to one. Every id must be a LIVE milestone
+ * of `engagementId`, else {@link ChangeRequestMilestoneMismatchError}.
+ *
+ * ⚠ CALL ONLY UNDER THE ENGAGEMENT LOCK (lock order engagement → child → milestones).
+ * Reading these rows before that lock would plan the reverts against a snapshot a
+ * concurrent lock-holder may already have changed.
+ */
+async function lockTaggedMilestonesTx(
+  tx: DbTx,
+  engagementId: string,
+  milestoneIds: readonly string[] | undefined
+): Promise<EngagementMilestone[]> {
+  const ids = [...new Set(milestoneIds ?? [])];
+  if (ids.length === 0) {
+    return [];
+  }
+  const rows = await tx
+    .select()
+    .from(engagementMilestones)
+    .where(
+      and(
+        eq(engagementMilestones.engagementId, engagementId),
+        inArray(engagementMilestones.id, ids),
+        isNull(engagementMilestones.deletedAt)
+      )
+    )
+    .orderBy(asc(engagementMilestones.id))
+    .for('update');
+  if (rows.length !== ids.length) {
+    throw new ChangeRequestMilestoneMismatchError(engagementId);
+  }
+  return rows;
 }
 
 // ── The three hydrated read graphs ───────────────────────────────────────
@@ -488,6 +581,21 @@ function queryProjectEngagementWithMilestones(id: string) {
           changeRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
         },
       },
+      // BAL-621: every LIVE change-request round, oldest → newest (ties by id), with the
+      // requester projected to a name only and the live tag rows reduced to milestone
+      // ids. Same PII discipline as the attribution relations above.
+      changeRequests: {
+        where: (cr, { isNull: roundIsNull }) => roundIsNull(cr.deletedAt),
+        orderBy: (cr, { asc: roundAsc }) => [roundAsc(cr.requestedAt), roundAsc(cr.id)],
+        columns: { id: true, note: true, requestedAt: true },
+        with: {
+          requestedBy: { columns: { id: true, firstName: true, lastName: true } },
+          taggedMilestones: {
+            where: (tag, { isNull: tagIsNull }) => tagIsNull(tag.deletedAt),
+            columns: { engagementMilestoneId: true },
+          },
+        },
+      },
     },
   });
 }
@@ -514,7 +622,7 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
   if (child === null) {
     throw new Error(`Project engagement child row missing: ${row.id}`);
   }
-  const { projectEngagement: _child, baloFeeBps, ...parent } = row;
+  const { projectEngagement: _child, baloFeeBps, changeRequests, ...parent } = row;
   // `engagements.balo_fee_bps` is NULLABLE-FOR-CASES (BAL-417 post-review), so this graph
   // types it `number | null`. `engagement_balo_fee_bps_case_null` forces it NOT NULL for
   // every non-case type and `queryProjectEngagementWithMilestones` filters
@@ -531,6 +639,15 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
     );
   }
   const { deliveryStatus, projectRequest, acceptedBy, changeRequestedBy, ...childScalars } = child;
+  // The change-request rounds are the durable history (the legacy `changeRequestNote` is
+  // nulled by `requestCompletion`), so every "latest round" surface reads these.
+  const changeRequestRounds = changeRequests.map((round) => ({
+    id: round.id,
+    note: round.note,
+    requestedAt: round.requestedAt,
+    requestedBy: round.requestedBy,
+    taggedMilestoneIds: round.taggedMilestones.map((tag) => tag.engagementMilestoneId),
+  }));
   return {
     ...parent,
     baloFeeBps,
@@ -538,12 +655,18 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
     projectRequest, // HOISTED grandchild
     acceptedBy, // HOISTED grandchild
     changeRequestedBy, // HOISTED grandchild
+    changeRequestRounds, // oldest → newest
+    latestChangeRequest: changeRequestRounds.at(-1) ?? null,
+    changeRequestRoundCount: changeRequestRounds.length,
     status: deliveryStatus, // LAST — see `toProjectRow`
   };
 }
 
 /** Live project + its live milestones + expert (user + nullable agency), FLATTENED. */
 export type ProjectEngagementWithMilestones = ReturnType<typeof foldWorkspaceRow>;
+
+/** One live change-request round on the workspace graph (requester projected to a name). */
+export type ChangeRequestRound = ProjectEngagementWithMilestones['changeRequestRounds'][number];
 
 /** Derived milestone-progress counts + a `lastActivityAt` proxy for one engagement. */
 interface MilestoneProgressAgg {
@@ -1450,14 +1573,15 @@ export const projectEngagementsRepository = {
    * `InvalidEngagementTransitionError`) AND every LIVE milestone is `completed`. A
    * ZERO-milestone project passes vacuously (the retainer/embedded seam) — this is
    * DELIBERATE. Any incomplete live milestone → `MilestonesIncompleteError` (nothing
-   * mutated). Clears any prior `change_request_note`.
+   * mutated). Clears any prior `change_request_note`. Returns the row plus
+   * `priorChangeRounds`, the live change-request rounds before this request (0 on a first submission), read under the lock.
    *
    * NOTE the parent does NOT change: `pending_acceptance` projects to `'active'`.
    */
   async requestCompletion(input: {
     engagementId: string;
     userId: string;
-  }): Promise<ProjectEngagementRow> {
+  }): Promise<ProjectEngagementRow & { priorChangeRounds: number }> {
     return db.transaction(async (tx) => {
       await lockProjectForTransition(tx, input.engagementId, 'pending_acceptance');
 
@@ -1496,7 +1620,8 @@ export const projectEngagementsRepository = {
         engagementId: input.engagementId,
         metadata: { from: 'active', to: 'pending_acceptance' },
       });
-      return advanced;
+      const priorChangeRounds = await countLiveChangeRequestsTx(tx, input.engagementId);
+      return { ...advanced, priorChangeRounds };
     });
   },
 
@@ -1571,17 +1696,36 @@ export const projectEngagementsRepository = {
   },
 
   /**
-   * The client requests changes instead of accepting (pending_acceptance → active).
-   * Stores the note + attribution and clears the completion-request stamps. `note`
-   * is required by the type (emptiness is validated at the web boundary). Illegal
-   * from any non-`pending_acceptance` delivery status.
+   * The client requests changes instead of accepting (pending_acceptance → active),
+   * writing one durable ROUND (BAL-621). Illegal from any non-`pending_acceptance`
+   * delivery status. `note` is required by the type (emptiness is validated at the web
+   * boundary). In ONE transaction:
+   *
+   *  1. Flip the project back to `active` (locks engagement → child) and write the
+   *     legacy `change_request_*` columns as the latest-round projection, clearing the
+   *     completion-request stamps.
+   *  2. Lock the tagged milestones (deduped) FOR UPDATE, ordered by id, under the
+   *     engagement lock. Any id that is not a LIVE milestone of this engagement →
+   *     {@link ChangeRequestMilestoneMismatchError} and the whole round rolls back.
+   *  3. Insert the round (`requested_at` = the legacy `change_requested_at`) and one
+   *     tag row per tagged milestone.
+   *  4. Audit `engagement.changes_requested` with the round id, tagged ids and round
+   *     number, then reopen every tagged milestone that is `completed`
+   *     (`revertMilestoneTx`, audited with `change_request_id`). An untagged round
+   *     reopens nothing.
+   *
+   * LOCK ORDER is the house order — engagement → child → milestones — so a concurrent
+   * milestone transition (which locks the engagement first) queues behind the round
+   * and sees the reopened rows.
    */
   async requestChanges(input: {
     engagementId: string;
     userId: string;
     note: string;
-  }): Promise<ProjectEngagementRow> {
+    milestoneIds?: readonly string[];
+  }): Promise<ProjectEngagementRow & { changeRequest: ChangeRequestRoundResult }> {
     return db.transaction(async (tx) => {
+      const now = new Date();
       const advanced = await advanceProjectDelivery(tx, {
         engagementId: input.engagementId,
         to: 'active',
@@ -1589,11 +1733,36 @@ export const projectEngagementsRepository = {
         set: {
           changeRequestNote: input.note,
           changeRequestedByUserId: input.userId,
-          changeRequestedAt: new Date(),
+          changeRequestedAt: now,
           completionRequestedByUserId: null,
           completionRequestedAt: null,
         },
       });
+
+      const tagged = await lockTaggedMilestonesTx(tx, input.engagementId, input.milestoneIds);
+
+      const [round] = await tx
+        .insert(projectChangeRequests)
+        .values({
+          engagementId: input.engagementId,
+          note: input.note,
+          requestedByUserId: input.userId,
+          requestedAt: now,
+        })
+        .returning({ id: projectChangeRequests.id });
+      if (round === undefined) {
+        throw new Error(`Failed to record change request: ${input.engagementId}`);
+      }
+      if (tagged.length > 0) {
+        await tx.insert(projectChangeRequestMilestones).values(
+          tagged.map((milestone) => ({
+            changeRequestId: round.id,
+            engagementMilestoneId: milestone.id,
+          }))
+        );
+      }
+
+      const roundNumber = await countLiveChangeRequestsTx(tx, input.engagementId);
 
       await recordDeliveryAudit(tx, {
         actorUserId: input.userId,
@@ -1601,9 +1770,37 @@ export const projectEngagementsRepository = {
         entityType: 'engagement',
         entityId: input.engagementId,
         engagementId: input.engagementId,
-        metadata: { from: 'pending_acceptance', to: 'active', note: input.note },
+        metadata: {
+          from: 'pending_acceptance',
+          to: 'active',
+          note: input.note,
+          change_request_id: round.id,
+          tagged_milestone_ids: tagged.map((milestone) => milestone.id),
+          round_number: roundNumber,
+        },
       });
-      return advanced;
+
+      const revertedMilestoneIds: string[] = [];
+      for (const milestone of tagged) {
+        if (milestone.status !== 'completed') continue;
+        await revertMilestoneTx(tx, {
+          milestone,
+          userId: input.userId,
+          extraMetadata: { change_request_id: round.id },
+        });
+        revertedMilestoneIds.push(milestone.id);
+      }
+
+      // Display order. `tagged` arrives id-ordered and the sort is stable, so ties on
+      // `sort_order` keep the id order — the same tie-break as every milestone list.
+      const taggedMilestones = [...tagged]
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((milestone) => ({ id: milestone.id, title: milestone.title }));
+
+      return {
+        ...advanced,
+        changeRequest: { id: round.id, roundNumber, taggedMilestones, revertedMilestoneIds },
+      };
     });
   },
 

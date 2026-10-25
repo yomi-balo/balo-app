@@ -118,9 +118,9 @@ async function auditRowsFor(
 
 async function closeTrack(
   relationshipId: string,
-  how: 'declined' | 'withdrawn' | 'not_selected'
+  how: 'declined' | 'withdrawn' | 'not_selected',
+  at: Date = new Date()
 ): Promise<void> {
-  const at = new Date();
   if (how === 'declined') {
     await db
       .update(requestExpertRelationships)
@@ -418,8 +418,10 @@ describe('a CLOSED track never gains new visibility', () => {
 
     await requestSharedFilesRepository.share(shareInput(seed, { fileName: 'shared-early.pdf' }));
 
-    // The loser closes AFTER the share.
-    await closeTrack(loser.relationshipId, 'not_selected');
+    // The loser closes AFTER the share. A second later, explicitly: `share()` stamps
+    // `sharedAt` with the wall clock too, and the read rule is a strict `sharedAt < closedAt`,
+    // so two `new Date()`s landing in the same millisecond would read as NOT before.
+    await closeTrack(loser.relationshipId, 'not_selected', new Date(Date.now() + 1000));
 
     const { engagement } = await engagementFactory({
       projectValues: {

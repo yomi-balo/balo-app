@@ -1,3 +1,5 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
+
 /**
  * BAL-442 — the resume segment's loading state.
  *
@@ -13,17 +15,15 @@
  * ⚠⚠ `aria-busy` SITS ON THE **DECORATIVE WRAPPER**, NEVER ON THE ELEMENT CARRYING THE
  * `sr-only` TEXT — the same rule as the lobby's own `loading.tsx`.
  */
+
 export default function LobbyResumeLoading(): React.JSX.Element {
   return (
     <output className="mx-auto block w-full max-w-md">
       <span className="sr-only">Loading…</span>
-      <div
-        aria-busy="true"
-        className="border-border bg-card w-full rounded-2xl border p-8 text-center shadow-sm"
-      >
+      <BaloCard aria-busy="true" className="w-full p-8 text-center">
         <div className="bg-muted mx-auto h-12 w-12 animate-pulse rounded-2xl" />
         <div className="bg-muted mx-auto mt-4 h-6 w-2/3 animate-pulse rounded" />
-      </div>
+      </BaloCard>
     </output>
   );
 }

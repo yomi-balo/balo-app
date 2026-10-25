@@ -2,17 +2,18 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE seventeen-row table (seventeen registered kinds,
+ * BAL-548 / ADR-1055 — the kind registry: THE eighteen-row table (eighteen registered kinds,
  * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ TEN FINDER KINDS, SIX EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * ⚠ TEN FINDER KINDS, SEVEN EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
  * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads;
  * `session.presence_stuck` is ONE kind consuming TWO (overrunning and unsettled).
  */
 export const ADMIN_ALERT_KIND_KEYS = [
   'expert.application_pending',
+  'project.repeat_change_request',
   'receivable.open',
   'session.settled_no_ledger_credit',
   'topup.unresolved_pi',
@@ -86,6 +87,11 @@ function targetCompanyCatalogue(): AdminAlertTarget {
   return { label: 'the company', href: '/admin/catalogue' };
 }
 
+/** `project.repeat_change_request` — keyed on `engagements.id`, which is the project's page. */
+function targetEngagement(input: AdminAlertTargetInput): AdminAlertTarget {
+  return { label: 'the project', href: `/engagements/${input.entityId}` };
+}
+
 function targetMeeting(input: AdminAlertTargetInput): AdminAlertTarget {
   return { label: 'the meeting', href: `/meetings/${input.entityId}` };
 }
@@ -154,6 +160,13 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     cadence: '1m',
     closes: 'Closes itself once the application is approved or rejected',
     target: targetExpertApplication,
+  },
+  'project.repeat_change_request': {
+    group: 'marketplace',
+    finder: null,
+    cadence: null,
+    closes: 'No row to re-check — closes with a note once someone has checked in with both sides',
+    target: targetEngagement,
   },
   'receivable.open': {
     group: 'money',

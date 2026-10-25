@@ -7,6 +7,7 @@ describe('GhostClientsCard', () => {
   it('carries the shared dashboard card chrome and grows as the last side card', () => {
     render(<GhostClientsCard />);
     const card = screen.getByText('Top Clients').closest('.rounded-2xl');
-    expect(card).toHaveClass('rounded-2xl', 'shadow-sm', 'lg:flex-1');
+    expect(card).toHaveClass('rounded-2xl', 'lg:flex-1');
+    expect(card?.className).not.toMatch(/\bshadow(\b|-)/);
   });
 });

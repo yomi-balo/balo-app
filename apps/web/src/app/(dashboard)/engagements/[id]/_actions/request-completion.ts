@@ -82,6 +82,8 @@ export async function requestCompletionAction(input: {
         userId: user.id,
       });
       const now = new Date();
+      const { priorChangeRounds } = updated;
+      const isResubmission = priorChangeRounds >= 1;
 
       // Two independent best-effort reads (each guards itself, degrading to its
       // own safe default) — run concurrently to drop the sequential round-trip.
@@ -95,6 +97,8 @@ export async function requestCompletionAction(input: {
         proposed_timeframe_weeks: proposedTimeframeWeeks,
         milestones_total: engagement.milestones.length,
         review_cycle: reviewCycle,
+        is_resubmission: isResubmission,
+        prior_change_rounds: priorChangeRounds,
         distinct_id: user.id,
       });
 
@@ -115,6 +119,8 @@ export async function requestCompletionAction(input: {
         requestedDate: formatShortUtc(requestedAt),
         autoDate: formatShortUtc(autoOn),
         reviewDays: AUTO_ACCEPT_DAYS,
+        isResubmission,
+        priorChangeRounds,
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });
@@ -123,6 +129,7 @@ export async function requestCompletionAction(input: {
         engagementId,
         userId: user.id,
         review_cycle: reviewCycle,
+        prior_change_rounds: priorChangeRounds,
       });
       return { success: true };
     }

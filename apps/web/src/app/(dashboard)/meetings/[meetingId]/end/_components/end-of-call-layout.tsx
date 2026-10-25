@@ -1,6 +1,7 @@
 import { Check, CircleDashed, Clock, ShieldCheck } from 'lucide-react';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { CaseClosedGlyph } from '@/components/balo/meetings/case-closed-glyph';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { EndOfCallRecapState } from '@/lib/meetings/end-of-call-view-types';
 import { EndOfCallShell } from './end-of-call-shell';
 
@@ -87,7 +88,7 @@ export function EndOfCallLayout({
 }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border w-full rounded-xl border p-8 text-center shadow-sm">
+      <BaloCard className="w-full rounded-xl p-8 text-center">
         <Reveal>
           <EndOfCallMark sessionHeld={sessionHeld} caseClosed={caseClosed} />
         </Reveal>
@@ -129,7 +130,7 @@ export function EndOfCallLayout({
             <p className="text-muted-foreground text-xs">Your recap is being prepared.</p>
           )}
         </Reveal>
-      </div>
+      </BaloCard>
     </EndOfCallShell>
   );
 }

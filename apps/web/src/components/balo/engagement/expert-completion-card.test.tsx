@@ -25,6 +25,7 @@ function card(overrides: Partial<CompletionCardView> = {}): CompletionCardView {
     canRequest: true,
     bodyCopy: 'Every milestone is delivered.',
     modalBody: 'All 2 milestones are delivered. Northwind reviews the whole project…',
+    ctaLabel: 'Mark project ready',
     ...overrides,
   };
 }
@@ -41,7 +42,22 @@ describe('ExpertCompletionCard', () => {
     );
     expect(screen.getByText('Finish the project')).toBeInTheDocument();
     expect(screen.getByText('Every milestone is delivered.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Mark project complete/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Mark project ready/i })).toBeEnabled();
+  });
+
+  it('labels the CTA and the dialog title from the view (a change request is behind it)', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertCompletionCard
+        engagementId="eng-1"
+        card={card({ ctaLabel: 'Mark project ready again' })}
+        clientCompanyName="Northwind"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Mark project ready again' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Mark project ready again' })
+    ).toBeInTheDocument();
   });
 
   it('disables the CTA when blocked (milestones remaining)', () => {
@@ -56,7 +72,7 @@ describe('ExpertCompletionCard', () => {
         clientCompanyName="Northwind"
       />
     );
-    expect(screen.getByRole('button', { name: /Mark project complete/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Mark project ready/i })).toBeDisabled();
   });
 
   it('fires the blocked-view analytics ONCE on mount when the card is disabled', () => {
@@ -87,7 +103,7 @@ describe('ExpertCompletionCard', () => {
       <ExpertCompletionCard engagementId="eng-1" card={card()} clientCompanyName="Northwind" />
     );
 
-    await user.click(screen.getByRole('button', { name: /Mark project complete/i }));
+    await user.click(screen.getByRole('button', { name: /Mark project ready/i }));
     const confirm = await screen.findByRole('button', { name: /Send for Northwind's review/i });
     await user.click(confirm);
 

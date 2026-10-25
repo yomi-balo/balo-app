@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { FileQuestion } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { EndOfCallShell } from './_components/end-of-call-shell';
 
 /**
@@ -21,7 +22,7 @@ import { EndOfCallShell } from './_components/end-of-call-shell';
 export default function EndOfCallNotFound(): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border rounded-xl border p-8 text-center shadow-sm">
+      <BaloCard className="rounded-xl p-8 text-center">
         <span
           aria-hidden="true"
           className="bg-muted text-muted-foreground mb-4 inline-grid h-13 w-13 place-items-center rounded-xl"
@@ -37,7 +38,7 @@ export default function EndOfCallNotFound(): React.JSX.Element {
             <Link href="/dashboard">Back to your dashboard</Link>
           </Button>
         </div>
-      </div>
+      </BaloCard>
     </EndOfCallShell>
   );
 }

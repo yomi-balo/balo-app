@@ -1,5 +1,7 @@
 'use client';
 
+import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -96,7 +98,7 @@ export function UpNextCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.24, ease: 'easeOut' }}
       aria-labelledby="up-next-heading"
-      className="bg-card border-border flex flex-col rounded-2xl border px-[18px] pt-[18px] pb-1.5 shadow-sm"
+      className={cn(baloCardClassName(), 'flex flex-col px-[18px] pt-[18px] pb-1.5')}
     >
       <h2 id="up-next-heading" className="text-foreground text-[17px] font-semibold tracking-tight">
         {UP_NEXT_TITLE}

@@ -1,4 +1,4 @@
-import { Check, Target } from 'lucide-react';
+import { Check, RotateCcw, Target } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { RICH_TEXT_CONTENT_CLASS } from '@/components/balo/rich-text/types';
@@ -62,7 +62,10 @@ interface MilestoneRowProps {
  * One milestone row on the delivery rail: node + gradient-fillable connector, title,
  * status pill, optional value pill, description, acceptance criteria ("Done when:"),
  * timing labels, and the success-tinted "Delivered:" completion note — plus an
- * optional `actions` slot at the foot.
+ * optional `actions` slot at the foot. When the latest change request tagged the milestone
+ * (`node.feedback`), it carries a "Changes requested" chip and the client's note until the
+ * milestone is completed again, then an "addressed" chip. Both read `node.status`, so an
+ * optimistic transition on the expert rail updates them without a refresh.
  *
  * CLIENT-SAFE and SHARED: it carries NO `'use client'` and NO server-only imports.
  * The description is injected via `dangerouslySetInnerHTML` inside a div carrying
@@ -110,6 +113,18 @@ export function MilestoneRow({
           <Badge variant="outline" className={cn('shrink-0', STATUS_PILL[node.nodeVariant])}>
             {node.statusLabel}
           </Badge>
+          {node.feedback !== null && node.status !== 'completed' && (
+            <Badge variant="outline" className="border-warning/25 bg-warning/10 shrink-0">
+              <RotateCcw className="size-3" aria-hidden />
+              Changes requested
+            </Badge>
+          )}
+          {node.feedback !== null && node.status === 'completed' && (
+            <Badge variant="outline" className="border-info/25 bg-info/10 shrink-0">
+              <Check className="size-3" aria-hidden />
+              {node.feedback.addressedLabel}
+            </Badge>
+          )}
           {node.valueLabel !== null && (
             <Badge
               variant="outline"
@@ -146,6 +161,15 @@ export function MilestoneRow({
 
         {timing.length > 0 && (
           <p className="text-muted-foreground mt-2 text-xs">{timing.join(' · ')}</p>
+        )}
+
+        {node.feedback !== null && node.status !== 'completed' && (
+          <div className="border-warning/20 bg-warning/10 mt-2.5 rounded-xl border px-3 py-2.5">
+            <p className="text-muted-foreground text-xs font-medium">
+              {node.feedback.calloutHeading}
+            </p>
+            <p className="text-foreground mt-1 text-sm leading-relaxed">{node.feedback.note}</p>
+          </div>
         )}
 
         {node.completionNote !== null && (

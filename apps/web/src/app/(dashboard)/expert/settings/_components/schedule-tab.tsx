@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { track, SCHEDULE_EVENTS, EXPERT_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { CalendarConnectionsSection } from './calendar-connections-section';
 import { DateOverridesCard } from './date-overrides-card';
 import { ScheduleDayRow } from './schedule-day-row';
@@ -682,7 +683,12 @@ function ScheduleActions({
 /** Placeholder shaped like `WorkAvailabilityCard` (icon tile, title + description, switch). */
 function WorkAvailabilitySkeleton(): React.JSX.Element {
   return (
-    <output className="border-border bg-card flex items-start gap-3.5 rounded-[14px] border px-[22px] py-[18px] shadow-xs">
+    <output
+      className={cn(
+        baloCardClassName(),
+        'flex items-start gap-3.5 rounded-[14px] px-[22px] py-[18px]'
+      )}
+    >
       <span className="sr-only">Loading your availability status</span>
       <div
         aria-hidden="true"

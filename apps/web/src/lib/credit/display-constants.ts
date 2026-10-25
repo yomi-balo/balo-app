@@ -31,23 +31,21 @@ export const LOW_BALANCE_MINOR = 5_000;
  * loading skeleton and error state), the member nudge (`MemberWalletNudge`) and therefore the
  * dashboard Suspense fallback. Holder and member never render together (the capability lens is
  * XOR) but they render into the SAME slot on `/dashboard` and `/settings/billing`, so a
- * divergent max-width or elevation reads as two different components in one place.
+ * divergent max-width or surface reads as two different components in one place.
  *
- * Surface + width + radius + border + padding + elevation ONLY. The BORDER COLOUR is NOT here —
- * each lens applies its own (`restingBorderClass` / the nudge's `isLow` amber), and the widget
- * adds `relative overflow-hidden` for its `session` gradient rail.
+ * Surface + width + radius + border + padding ONLY; the card is flat, with no shadow. The
+ * BORDER COLOUR is NOT here — each lens applies its own (`restingBorderClass` / the nudge's
+ * `isLow` amber), and the widget adds `relative overflow-hidden` for its `session` gradient rail.
  */
-export const WALLET_CARD_CHROME =
-  'bg-card w-full max-w-[380px] rounded-2xl border p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04),0_6px_20px_rgba(15,23,41,0.04)]';
+export const WALLET_CARD_CHROME = 'bg-card w-full max-w-[380px] rounded-2xl border p-5';
 
 /**
  * Dashboard-only override passed as `className` over {@link WALLET_CARD_CHROME}: `cn`/twMerge
- * resolves `max-w-none` over the 380px cap and `shadow-sm` over the arbitrary shadow, so the
- * wallet fills its column and shares the dashboard card elevation, and `lg:flex-1` lets the last
+ * resolves `max-w-none` over the 380px cap so the wallet fills its column, and `lg:flex-1` lets the last
  * side-column card grow to the Up next card's height on desktop. Used by the loading and error
  * states, which stay block layouts. `/settings/billing` never passes it.
  */
-export const DASHBOARD_WALLET_SLOT_CLASS = 'max-w-none shadow-sm lg:flex-1';
+export const DASHBOARD_WALLET_SLOT_CLASS = 'max-w-none lg:flex-1';
 
 /** {@link DASHBOARD_WALLET_SLOT_CLASS} plus a flex column, for the resting (holder/member) cards. */
 export const DASHBOARD_WALLET_RESTING_SLOT_CLASS = `flex flex-col ${DASHBOARD_WALLET_SLOT_CLASS}`;

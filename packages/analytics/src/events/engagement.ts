@@ -133,6 +133,10 @@ export interface EngagementServerEventMap {
     milestones_total: number;
     /** Prior `engagement.completion_requested` audit rows incl. this one (1, 2 after a withdraw→re-request). */
     review_cycle: number;
+    /** True when at least one change-request round precedes this request. */
+    is_resubmission: boolean;
+    /** Live change-request rounds before this request (0 on a first submission). */
+    prior_change_rounds: number;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN]: {
@@ -173,6 +177,10 @@ export interface EngagementServerEventMap {
     days_in_review: number;
     /** nth completion request for this engagement (the review cycle being bounced). */
     review_cycle: number;
+    /** Ordinal of this change-request round (live rounds, this one included), int ≥1. */
+    round_number: number;
+    /** Milestones the client tagged on this round; 0 for an untagged round. */
+    tagged_milestone_count: number;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.REVIEW_REMINDER_SENT]: {

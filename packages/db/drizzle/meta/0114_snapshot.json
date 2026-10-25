@@ -1,5 +1,5 @@
 {
-  "id": "71d86c9b-f104-4e2d-b830-eb375cc1101a",
+  "id": "2f421e54-143d-4305-96d3-56b5dbcc8bb7",
   "prevId": "b7ecac4d-ef2f-4333-b655-a99f54923c92",
   "version": "7",
   "dialect": "postgresql",
@@ -129,12 +129,6 @@
         "active_company_id": {
           "name": "active_company_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "notifications_last_seen_at": {
-          "name": "notifications_last_seen_at",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -9845,6 +9839,222 @@
           "value": "\"engagement_milestones\".\"sort_order\" >= 0"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.project_change_request_milestones": {
+      "name": "project_change_request_milestones",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "change_request_id": {
+          "name": "change_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "engagement_milestone_id": {
+          "name": "engagement_milestone_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "project_change_request_milestone_pair_uq": {
+          "name": "project_change_request_milestone_pair_uq",
+          "columns": [
+            {
+              "expression": "change_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "engagement_milestone_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"project_change_request_milestones\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_change_request_milestone_milestone_idx": {
+          "name": "project_change_request_milestone_milestone_idx",
+          "columns": [
+            {
+              "expression": "engagement_milestone_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_change_request_milestones_change_request_id_project_change_requests_id_fk": {
+          "name": "project_change_request_milestones_change_request_id_project_change_requests_id_fk",
+          "tableFrom": "project_change_request_milestones",
+          "tableTo": "project_change_requests",
+          "columnsFrom": ["change_request_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_change_request_milestones_engagement_milestone_id_engagement_milestones_id_fk": {
+          "name": "project_change_request_milestones_engagement_milestone_id_engagement_milestones_id_fk",
+          "tableFrom": "project_change_request_milestones",
+          "tableTo": "engagement_milestones",
+          "columnsFrom": ["engagement_milestone_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.project_change_requests": {
+      "name": "project_change_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "engagement_id": {
+          "name": "engagement_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by_user_id": {
+          "name": "requested_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_at": {
+          "name": "requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "project_change_request_engagement_requested_idx": {
+          "name": "project_change_request_engagement_requested_idx",
+          "columns": [
+            {
+              "expression": "engagement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"project_change_requests\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_change_requests_engagement_id_engagements_id_fk": {
+          "name": "project_change_requests_engagement_id_engagements_id_fk",
+          "tableFrom": "project_change_requests",
+          "tableTo": "engagements",
+          "columnsFrom": ["engagement_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_change_requests_requested_by_user_id_users_id_fk": {
+          "name": "project_change_requests_requested_by_user_id_users_id_fk",
+          "tableFrom": "project_change_requests",
+          "tableTo": "users",
+          "columnsFrom": ["requested_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.action_items": {

@@ -95,6 +95,12 @@ export * from './case-surface';
  */
 export * from './case-closed';
 
+/**
+ * Change-request round helpers (`joinTitles`, `REPEAT_CHANGE_REQUEST_MIN_ROUND`,
+ * `isRepeatChangeRequestRound`), re-exported so `@balo/shared/engagements` stays ONE subpath.
+ */
+export * from './change-requests';
+
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;
 

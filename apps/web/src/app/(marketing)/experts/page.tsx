@@ -1,3 +1,4 @@
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { log } from '@/lib/logging';
@@ -97,7 +98,7 @@ export default async function ExpertsPage({
         <div className="flex items-start gap-8">
           {/* Desktop filter rail */}
           <aside className="hidden w-[300px] shrink-0 md:block">
-            <div className="bg-card border-border rounded-2xl border p-5 shadow-sm">
+            <BaloCard className="p-5">
               <FacetControls
                 mode="committed"
                 taxonomy={taxonomy}
@@ -108,7 +109,7 @@ export default async function ExpertsPage({
                 refineSurface="rail"
                 productSurface="rail"
               />
-            </div>
+            </BaloCard>
           </aside>
 
           {/* Results column */}

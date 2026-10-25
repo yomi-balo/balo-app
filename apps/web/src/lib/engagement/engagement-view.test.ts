@@ -89,6 +89,9 @@ function makeEngagement(
     projectRequest: { id: 'req-1', title: 'CPQ implementation to replace legacy quoting tool' },
     acceptedBy: null,
     changeRequestedBy: null,
+    changeRequestRounds: [],
+    latestChangeRequest: null,
+    changeRequestRoundCount: 0,
     ...over,
   } as ProjectEngagementWithMilestones;
 }
@@ -307,6 +310,29 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     expect(view.progress.reviewCopy).toContain('accept, or request changes within 7 days');
   });
 
+  it('client reviewCopy steps aside while a change request is outstanding', () => {
+    const latest = {
+      id: 'cr-1',
+      note: 'Tighten the discount logic.',
+      requestedAt: KICKOFF,
+      requestedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
+      taggedMilestoneIds: [],
+    };
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        status: 'active',
+        milestones: [makeMilestone()],
+        changeRequestRounds: [latest],
+        latestChangeRequest: latest,
+        changeRequestRoundCount: 1,
+      } as Partial<ProjectEngagementWithMilestones>),
+      ctxFor('client'),
+      NOW
+    );
+    expect(view.changeRequestBanner).toMatchObject({ variant: 'client_waiting' });
+    expect(view.progress.reviewCopy).toBeNull();
+  });
+
   it('client reviewCopy is null on a completed engagement (no stale forward-looking caption)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
@@ -432,7 +458,7 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
       ctxFor('client'),
       NOW
     );
-    expect(view.reviewBanner?.title).toBe('Priya has marked the project complete');
+    expect(view.reviewBanner?.title).toBe('Priya says the project is ready');
     // requested 4 Jul + 7 days = 11 Jul; now = 7 Jul → 4 days remaining.
     expect(view.reviewBanner?.countdown).toEqual({
       autoOnDate: '11 Jul 2026',
@@ -509,42 +535,143 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
   });
 });
 
-describe('mapEngagementToWorkspaceView — change-request banner', () => {
-  it('is null for the client lens (client already knows)', () => {
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ status: 'active', changeRequestNote: 'Tighten the discount logic.' }),
-      ctxFor('client'),
-      NOW
-    );
+describe('mapEngagementToWorkspaceView — change-request wiring', () => {
+  const DANA = { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' };
+  const REQUESTED_AT = new Date('2026-07-04T00:00:00.000Z');
+
+  function round(over: Record<string, unknown> = {}) {
+    return {
+      id: 'cr-1',
+      note: 'Tighten the discount logic.',
+      requestedAt: REQUESTED_AT,
+      requestedBy: DANA,
+      taggedMilestoneIds: ['ms-2'],
+      ...over,
+    };
+  }
+
+  function afterRound(over: Partial<ProjectEngagementWithMilestones> = {}) {
+    const latest = round();
+    return makeEngagement({
+      status: 'active',
+      changeRequestRounds: [latest],
+      latestChangeRequest: latest,
+      changeRequestRoundCount: 1,
+      milestones: [
+        makeMilestone({ id: 'ms-1', title: 'Discovery', status: 'completed' }),
+        makeMilestone({ id: 'ms-2', title: 'Build', status: 'in_progress' }),
+      ],
+      ...over,
+    } as Partial<ProjectEngagementWithMilestones>);
+  }
+
+  it('has no banner, pill or feedback before any round', () => {
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), NOW);
     expect(view.changeRequestBanner).toBeNull();
+    expect(view.progress.reviewPill).toBeNull();
+    expect(view.milestones.every((m) => m.feedback === null)).toBe(true);
   });
 
-  it('attributes the requester @ company for the expert lens and adds the nudge', () => {
+  it('reads the latest round, not the legacy column, for the expert banner', () => {
     const view = mapEngagementToWorkspaceView(
-      makeEngagement({
-        status: 'active',
-        changeRequestNote: 'Tighten the discount logic.',
-        changeRequestedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
-      }),
+      afterRound({ changeRequestNote: null, changeRequestedBy: null }),
       ctxFor('expert'),
       NOW
     );
-    expect(view.changeRequestBanner?.attribution).toBe('Dana @ Northwind Industrial');
-    expect(view.changeRequestBanner?.note).toBe('Tighten the discount logic.');
-    expect(view.changeRequestBanner?.expertNudge).toContain('mark the project complete again');
+    expect(view.changeRequestBanner).toMatchObject({
+      variant: 'work_outstanding',
+      headline: 'Dana @ Northwind Industrial requested changes on Build.',
+      quote: 'Tighten the discount logic.',
+    });
   });
 
-  it('admin sees attribution but no expert nudge', () => {
+  it('client sees their own waiting banner; admin sees the banner without guidance', () => {
+    expect(
+      mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), NOW).changeRequestBanner
+    ).toMatchObject({ variant: 'client_waiting' });
+    expect(
+      mapEngagementToWorkspaceView(afterRound(), ctxFor('admin'), NOW).changeRequestBanner
+    ).toMatchObject({ variant: 'work_outstanding', guidance: null });
+  });
+
+  it('wires the pill, the reopened segment and the tagged milestone feedback', () => {
+    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), NOW);
+    expect(view.progress.reviewPill).toEqual({ label: 'Changes requested', tone: 'warning' });
+    expect(view.progress.segments.map((segment) => segment.tone)).toEqual([
+      'completed',
+      'reopened',
+    ]);
+    const [discovery, build] = view.milestones;
+    expect(discovery?.feedback).toBeNull();
+    expect(build?.feedback).toMatchObject({
+      calloutHeading: 'Your feedback · 4 Jul',
+      note: 'Tighten the discount logic.',
+      addressedLabel: 'Updated after your feedback',
+    });
+  });
+
+  it('the completion card steps aside when the changes_made banner owns the control', () => {
+    const done = afterRound({
+      milestones: [
+        makeMilestone({ id: 'ms-1', status: 'completed' }),
+        makeMilestone({ id: 'ms-2', status: 'completed' }),
+      ],
+    });
+    const view = mapEngagementToWorkspaceView(done, ctxFor('expert'), NOW);
+    expect(view.changeRequestBanner).toMatchObject({ variant: 'changes_made' });
+    expect(view.completionCard).toBeNull();
+  });
+
+  it('work_outstanding keeps the card as the single control, labelled "again"', () => {
+    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('expert'), NOW);
+    expect(view.changeRequestBanner).toMatchObject({ variant: 'work_outstanding' });
+    expect(view.completionCard?.ctaLabel).toBe('Mark project ready again');
+  });
+
+  it('the first submission labels the card "Mark project ready"', () => {
     const view = mapEngagementToWorkspaceView(
-      makeEngagement({
-        status: 'active',
-        changeRequestNote: 'Tighten the discount logic.',
-        changeRequestedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
-      }),
-      ctxFor('admin'),
+      makeEngagement({ milestones: [makeMilestone({ status: 'completed' })] }),
+      ctxFor('expert'),
       NOW
     );
-    expect(view.changeRequestBanner?.expertNudge).toBeNull();
+    expect(view.completionCard?.ctaLabel).toBe('Mark project ready');
+  });
+
+  it('the client review banner quotes the previous round and offers the live milestones', () => {
+    const latest = round();
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        status: 'pending_acceptance',
+        completionRequestedAt: NOW,
+        changeRequestRounds: [latest],
+        latestChangeRequest: latest,
+        changeRequestRoundCount: 1,
+        milestones: [
+          makeMilestone({ id: 'ms-1', title: 'Discovery', status: 'completed' }),
+          makeMilestone({ id: 'ms-2', title: 'Build', status: 'completed' }),
+        ],
+      } as Partial<ProjectEngagementWithMilestones>),
+      ctxFor('client'),
+      NOW
+    );
+    expect(view.reviewBanner?.lastRequest).toEqual({
+      heading: 'Your last request · 4 Jul',
+      note: 'Tighten the discount logic.',
+    });
+    expect(view.reviewBanner?.clientDecision?.milestoneOptions).toEqual([
+      { id: 'ms-1', title: 'Discovery' },
+      { id: 'ms-2', title: 'Build' },
+    ]);
+    expect(view.reviewBanner?.clientDecision?.milestoneHelper).toContain('Priya');
+  });
+
+  it('expert and admin review banners carry no last-request quote or milestone picker', () => {
+    const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
+    for (const lens of ['expert', 'admin'] as const) {
+      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), NOW).reviewBanner;
+      expect(banner?.lastRequest).toBeNull();
+      expect(banner?.clientDecision).toBeNull();
+    }
   });
 });
 

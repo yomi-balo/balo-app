@@ -38,29 +38,29 @@ apps/web/src/components/
 
 **Default to shadcnspace.** Only fall back to plain shadcn when no enhanced variant exists or the component is purely structural.
 
-| Scenario                               | Use                                            | Why                                        |
-| -------------------------------------- | ---------------------------------------------- | ------------------------------------------ |
-| Any text input in a form               | `@shadcn-space/input-09` (floating label)      | Polished, saves space, animates on focus   |
-| Input that needs validation feedback   | `@shadcn-space/input-04`                       | Integrated error/success color transitions |
-| Input with error state                 | `@shadcn-space/input-14`                       | Pre-styled destructive color error input   |
-| Required field indicator               | `@shadcn-space/input-15`                       | Integrated asterisk + label styling        |
-| Bio/description with length limit      | `@shadcn-space/input-06`                       | Built-in character counter                 |
-| Password field                         | `@shadcn-space/input-04` (password + strength) | Show/hide toggle + strength indicator      |
-| Search field with clear                | `@shadcn-space/input-10`                       | Clear button, works with search patterns   |
-| URL/domain input                       | `@shadcn-space/input-08`                       | https:// prefix, .com suffix add-ons       |
-| Clickable card (expert, pricing)       | shadcnspace Card + Motion hover                | Hover lift + shadow = feels interactive    |
-| Auth forms (login, signup)             | shadcnspace Auth blocks                        | Social buttons, dividers, layout polish    |
-| Stat/metric display                    | shadcnspace Stats blocks                       | Trend arrows, sparklines, comparison       |
-| Empty states                           | shadcnspace Empty state blocks                 | Illustration + CTA, consistent pattern     |
-| File/image upload                      | `@shadcn-space/file-upload-01`                 | Drag-and-drop, preview, progress bar       |
-| Animated counter (credits, stats)      | `@magicui/number-ticker`                       | Smooth count-up animation                  |
-| Glowing card border (premium feel)     | `@magicui/border-beam`                         | Animated border glow effect                |
-| Simple label-only input (rare)         | shadcn `Input`                                 | Only if floating label is genuinely wrong  |
-| Static info card (no interaction)      | shadcn `Card`                                  | No click/hover behavior needed             |
-| Basic dropdown                         | shadcn `Select`                                | Standard behavior, no enhanced needed      |
-| Multi-select with search               | shadcn `Combobox` (Command)                    | Skill selection — no shadcnspace equiv     |
-| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker)             | Date-only picking                          |
-| Consultation booking                   | `@shadcn-space/calendar-03`                    | Date + available time slots side by side   |
+| Scenario                               | Use                                            | Why                                          |
+| -------------------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| Any text input in a form               | `@shadcn-space/input-09` (floating label)      | Polished, saves space, animates on focus     |
+| Input that needs validation feedback   | `@shadcn-space/input-04`                       | Integrated error/success color transitions   |
+| Input with error state                 | `@shadcn-space/input-14`                       | Pre-styled destructive color error input     |
+| Required field indicator               | `@shadcn-space/input-15`                       | Integrated asterisk + label styling          |
+| Bio/description with length limit      | `@shadcn-space/input-06`                       | Built-in character counter                   |
+| Password field                         | `@shadcn-space/input-04` (password + strength) | Show/hide toggle + strength indicator        |
+| Search field with clear                | `@shadcn-space/input-10`                       | Clear button, works with search patterns     |
+| URL/domain input                       | `@shadcn-space/input-08`                       | https:// prefix, .com suffix add-ons         |
+| Clickable card (expert, pricing)       | `BaloCard` + Motion hover                      | Hover lift + border tint = feels interactive |
+| Auth forms (login, signup)             | shadcnspace Auth blocks                        | Social buttons, dividers, layout polish      |
+| Stat/metric display                    | shadcnspace Stats blocks                       | Trend arrows, sparklines, comparison         |
+| Empty states                           | shadcnspace Empty state blocks                 | Illustration + CTA, consistent pattern       |
+| File/image upload                      | `@shadcn-space/file-upload-01`                 | Drag-and-drop, preview, progress bar         |
+| Animated counter (credits, stats)      | `@magicui/number-ticker`                       | Smooth count-up animation                    |
+| Glowing card border (premium feel)     | `@magicui/border-beam`                         | Animated border glow effect                  |
+| Simple label-only input (rare)         | shadcn `Input`                                 | Only if floating label is genuinely wrong    |
+| Static info card (no interaction)      | shadcn `Card`                                  | No click/hover behavior needed               |
+| Basic dropdown                         | shadcn `Select`                                | Standard behavior, no enhanced needed        |
+| Multi-select with search               | shadcn `Combobox` (Command)                    | Skill selection — no shadcnspace equiv       |
+| Simple date field (due dates, filters) | shadcn Calendar (react-day-picker)             | Date-only picking                            |
+| Consultation booking                   | `@shadcn-space/calendar-03`                    | Date + available time slots side by side     |
 
 ### Installing Shadcnspace Components
 
@@ -154,14 +154,9 @@ font-light  → font-normal    (light is too thin)
 text-[13px] → text-sm        (use Tailwind scale, not arbitrary)
 ```
 
-#### Shadows — Subtle, Not Heavy
+#### Shadows — Floating Layers Only
 
-```
-shadow-lg (on resting cards) → shadow-sm or shadow
-shadow-xl → shadow-md (reserve for hover states)
-```
-
-Resting state: `shadow-sm`. Hover: `shadow-lg`. Never `shadow-xl` or `shadow-2xl`.
+Cards are flat: border, no shadow, at rest and on hover. The hover cue is a border tint and/or a translate. Shadows are for floating layers (popovers, menus, dialogs), buttons and chips. Never `shadow-xl` or `shadow-2xl`.
 
 #### Focus & Accessibility
 
@@ -242,7 +237,7 @@ export function ExpertCard({ expert, onClick }: ExpertCardProps) {
       onClick={onClick}
       className="cursor-pointer"
     >
-      <Card className="dark:hover:shadow-primary/5 border-border border p-5 transition-shadow duration-200 hover:shadow-lg">
+      <BaloCard className="hover:border-primary/30 p-5 transition-colors duration-200">
         {/* Header: Avatar + Name */}
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -297,7 +292,7 @@ export function ExpertCard({ expert, onClick }: ExpertCardProps) {
               : expert.nextAvailableSlot || 'Check availability'}
           </span>
         </div>
-      </Card>
+      </BaloCard>
     </motion.div>
   );
 }

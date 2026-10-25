@@ -1,4 +1,5 @@
 import { Users } from 'lucide-react';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import type { RecapNotHeldView } from '@/lib/meetings/recap-view-types';
 
 /**
@@ -22,7 +23,7 @@ export function NotHeldPanel({
   notHeld,
 }: Readonly<{ notHeld: RecapNotHeldView }>): React.JSX.Element {
   return (
-    <section className="bg-card border-border rounded-2xl border p-6 text-center shadow-sm">
+    <BaloCard as="section" className="p-6 text-center">
       <span
         aria-hidden="true"
         className="bg-muted text-muted-foreground mb-3.5 inline-grid h-13 w-13 place-items-center rounded-xl"
@@ -33,6 +34,6 @@ export function NotHeldPanel({
       <p className="text-muted-foreground mx-auto mt-1.5 max-w-sm text-sm leading-relaxed">
         {notHeld.body}
       </p>
-    </section>
+    </BaloCard>
   );
 }

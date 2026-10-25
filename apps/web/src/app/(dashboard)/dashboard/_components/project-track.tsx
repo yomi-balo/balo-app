@@ -1,5 +1,6 @@
 'use client';
 
+import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { useCallback, useId, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
@@ -247,7 +248,7 @@ export function ProjectTrack({ view }: Readonly<{ view: ProjectTrackView }>): Re
       transition={{ duration: 0.24, ease: 'easeOut' }}
       aria-labelledby="project-track-heading"
       data-track={workspaceType}
-      className="bg-card border-border mb-4 rounded-2xl border px-4 py-[18px] shadow-sm md:px-[22px] md:pt-5 md:pb-[22px]"
+      className={cn(baloCardClassName(), 'mb-4 px-4 py-[18px] md:px-[22px] md:pt-5 md:pb-[22px]')}
     >
       <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3">
         <div>

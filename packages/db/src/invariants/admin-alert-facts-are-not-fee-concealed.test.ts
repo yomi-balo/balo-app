@@ -16,9 +16,10 @@ import { scanMentioningFiles, stripComments, type ScannedFile } from '@balo/shar
  * `stripMoney` exists to close. Inert today — no shipped producer writes `detail.money` at
  * all — so this invariant exists to hold the line for the FIRST one that does.
  *
- * SCOPE: `apps/api/src` and `packages/db/src` only — `packages/shared` writes no `facts` (it
- * only types the shape), and `apps/web` is a READ-side consumer, never a producer of
- * `admin_alerts.detail`.
+ * SCOPE: `apps/api/src`, `packages/db/src` and `apps/web/src` — `packages/shared` writes no
+ * `facts` (it only types the shape). `apps/web` is mostly a READ-side consumer of
+ * `admin_alerts.detail`, but its server actions raise event-driven kinds, so its producers are
+ * fenced too.
  *
  * MECHANICS: `@balo/shared/testing`'s shared `scanMentioningFiles` walker (extracted for THIS
  * invariant — see that module's docblock: a third inline copy of the walker
@@ -32,7 +33,11 @@ const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const SELF_PATH = fileURLToPath(import.meta.url);
 
 const ADMIN_ALERT_MENTIONING_FILES: ScannedFile[] = scanMentioningFiles(
-  { repoRoot: REPO_ROOT, rootNames: ['packages/db/src', 'apps/api/src'], selfPath: SELF_PATH },
+  {
+    repoRoot: REPO_ROOT,
+    rootNames: ['packages/db/src', 'apps/api/src', 'apps/web/src'],
+    selfPath: SELF_PATH,
+  },
   'adminalert',
   stripComments
 );

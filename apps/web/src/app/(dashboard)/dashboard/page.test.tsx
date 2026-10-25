@@ -162,7 +162,8 @@ describe('DashboardPage — company branch', () => {
     render(await DashboardPage());
 
     const fallback = screen.getByLabelText('Loading wallet balance');
-    expect(fallback).toHaveClass('max-w-none', 'shadow-sm');
+    expect(fallback).toHaveClass('max-w-none');
+    expect(fallback.className).not.toMatch(/\bshadow(\b|-)/);
     expect(fallback).not.toHaveClass('max-w-[380px]');
     expect(fallback).not.toHaveClass('flex-col');
     expect(screen.queryByText('Have a promo code?')).toBeNull();

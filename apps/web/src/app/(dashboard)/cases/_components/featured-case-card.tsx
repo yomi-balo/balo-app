@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Clock, ListChecks, MessageSquare, Video } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BaloCard } from '@/components/balo/card/balo-card';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
 import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
@@ -88,9 +89,11 @@ export function FeaturedCaseCard({
   }, [handleTrack]);
 
   return (
-    <article
+    <BaloCard
+      as="article"
+      emphasis="highlight"
       className={cn(
-        'border-border bg-card relative grid overflow-hidden rounded-2xl border shadow-md',
+        'relative grid overflow-hidden',
         'grid-cols-1 md:grid-cols-[minmax(0,1fr)_250px]'
       )}
     >
@@ -218,7 +221,7 @@ export function FeaturedCaseCard({
           onJoin={handleJoin}
         />
       </div>
-    </article>
+    </BaloCard>
   );
 }
 

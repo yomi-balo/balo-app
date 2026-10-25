@@ -9,7 +9,7 @@ interface PathCardProps {
 
 /**
  * Entry-path selector card on the `start` step. The enabled (manual) variant is
- * a clickable button with a hover lift; the disabled (AI) variant is inert,
+ * a clickable button with a border/bg tint on hover; the disabled (AI) variant is inert,
  * dimmed + `cursor-not-allowed` with no click handler, and surfaces its reason
  * for being unavailable as a visible muted "Coming soon" cue beside the badge
  * plus an `aria-label` so it's announced to assistive tech.
@@ -32,7 +32,7 @@ export function PathCard({ path, onClick }: Readonly<PathCardProps>): React.JSX.
         'border-border bg-card focus-visible:ring-ring group flex w-full items-center gap-4 rounded-2xl border p-[18px] text-left transition-all focus-visible:ring-2 focus-visible:outline-none',
         disabled
           ? 'cursor-not-allowed opacity-60'
-          : 'hover:border-primary/40 hover:bg-primary/[0.04] hover:shadow-[0_4px_18px_rgba(99,102,241,0.1)]'
+          : 'hover:border-primary/40 hover:bg-primary/[0.04]'
       )}
     >
       <span className="border-primary/25 bg-primary/10 text-primary flex h-12 w-12 shrink-0 items-center justify-center rounded-[13px] border">
