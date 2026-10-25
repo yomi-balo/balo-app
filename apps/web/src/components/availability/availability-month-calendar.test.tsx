@@ -137,7 +137,7 @@ describe('AvailabilityMonthCalendar', () => {
     expect(screen.getByText(/July 2026/)).toBeInTheDocument();
   });
 
-  it('fits the month into the 640px dialog column and keeps 44px touch cells', () => {
+  it('fits the month into the 640px dialog column and keeps 44px-tall cells', () => {
     const { container } = render(
       <AvailabilityMonthCalendar
         selectedDayKey={null}
@@ -153,7 +153,8 @@ describe('AvailabilityMonthCalendar', () => {
     const root = container.querySelector('[data-slot="calendar"]');
     expect(root).toHaveClass('p-0', 'md:[--cell-size:--spacing(7)]');
     expect(screen.getByRole('button', { name: /June 5th, 2026/ })).toHaveClass(
-      'pointer-coarse:h-11'
+      'aspect-auto',
+      'h-11'
     );
   });
 
