@@ -6,6 +6,7 @@ import { expertProfiles } from './experts';
 import { engagementMilestones } from './engagement-milestones';
 import { projectEngagements } from './project-engagements';
 import { caseEngagements } from './case-engagements';
+import { projectChangeRequests } from './project-change-requests';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -245,6 +246,9 @@ export const engagementsRelations = relations(engagements, ({ one, many }) => ({
   // passes `{ requireType: 'project' }` to `lockActiveEngagement` (a Case is not
   // milestone-shaped and `aggregateMilestoneProgress` must never count Case milestones).
   milestones: many(engagementMilestones),
+  // Client change-request ROUNDS (BAL-621) FK the SUPERTYPE like milestones; written only
+  // by the project `requestChanges` transaction.
+  changeRequests: many(projectChangeRequests),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

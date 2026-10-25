@@ -11,6 +11,17 @@ import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import { pricingMethodLabel } from '@/components/balo/project-request/proposal/proposal-summary-cells';
 import {
+  completionModalBody,
+  MARK_READY_AGAIN_LABEL,
+  deriveChangeRequestBanner,
+  deriveChangeRequestState,
+  deriveLastRequest,
+  deriveMilestoneFeedback,
+  deriveReviewPill,
+  deriveSegments,
+  type ChangeRequestState,
+} from './change-request-view';
+import {
   deriveEngagementParties,
   engagementHeaderLine,
   personAtCompany,
@@ -110,13 +121,40 @@ export interface EngagementHeaderView {
   backHref: string;
 }
 
+/** The project-level review pill beside the progress count. */
+export interface ReviewPillView {
+  label: string;
+  tone: 'warning' | 'violet' | 'success';
+}
+
+/** One milestone's segment in the progress bar. `reopened` = tagged by the open change request. */
+export interface ProgressSegmentView {
+  id: string;
+  tone: 'completed' | 'in_progress' | 'pending' | 'reopened';
+  /** Accessible name + tooltip, e.g. "Build: Changes requested". */
+  label: string;
+}
+
 export interface EngagementProgressView {
   done: number;
   total: number;
-  /** 0..100, rounded. */
+  /** 0..100, rounded. Feeds the accessible `<progress>` only — never rendered as text. */
   pct: number;
   /** Client-lens whole-project review explainer; null for expert/admin. */
   reviewCopy: string | null;
+  /** Null when the project is neither in change-request, in review nor accepted. */
+  reviewPill: ReviewPillView | null;
+  /** One per live milestone, in plan order. */
+  segments: ProgressSegmentView[];
+}
+
+/** The client's feedback on a milestone the latest change request tagged. */
+export interface MilestoneFeedbackView {
+  /** "Your feedback · 6 Jul" | "Dana @ Northwind requested changes · 6 Jul". */
+  calloutHeading: string;
+  note: string;
+  /** Chip text once the milestone is completed again. */
+  addressedLabel: string;
 }
 
 export interface MilestoneNodeView {
@@ -145,6 +183,8 @@ export interface MilestoneNodeView {
   completedLabel: string | null;
   /** The "Delivered:" trust artifact; null unless completed with a note. */
   completionNote: string | null;
+  /** Set when the latest change-request round tagged this milestone; null otherwise. */
+  feedback: MilestoneFeedbackView | null;
 }
 
 export interface CountdownView {
@@ -169,6 +209,10 @@ export interface ReviewClientDecisionView {
   requestChangesIntro: string;
   /** The note-field hint, party-named ("…exactly what {expert} sees"). */
   requestChangesFieldHint: string;
+  /** The live milestones the client may tag on a change request. */
+  milestoneOptions: { id: string; title: string }[];
+  /** The helper line under the milestone picker, party-named. */
+  milestoneHelper: string;
 }
 
 export interface ReviewBannerView {
@@ -178,15 +222,27 @@ export interface ReviewBannerView {
   countdown: CountdownView | null;
   /** Client-lens only: the accept / request-changes decision copy; null for expert/admin. */
   clientDecision: ReviewClientDecisionView | null;
+  /** Client lens, after a change request: the previous round's note. Null otherwise. */
+  lastRequest: { heading: string; note: string } | null;
 }
 
-export interface ChangeRequestBannerView {
-  /** `personAtCompany(changeRequestedBy)`, e.g. "Dana @ Northwind Industrial". */
-  attribution: string;
-  note: string;
-  /** Expert-lens trailing nudge; null for admin. */
-  expertNudge: string | null;
-}
+/**
+ * The open change request, as a status banner on an `active` project. Derived from the
+ * LATEST round (never the legacy `change_request_note`, which `requestCompletion` nulls).
+ *  - `work_outstanding` — the expert (or admin) still has work to do; carries no CTA.
+ *  - `changes_made`     — every tagged milestone is done again; carries the one CTA.
+ *  - `client_waiting`   — the client's own view of the same state.
+ */
+export type ChangeRequestBannerView =
+  | { variant: 'work_outstanding'; headline: string; quote: string; guidance: string | null }
+  | {
+      variant: 'changes_made';
+      headline: string;
+      reminder: string;
+      ctaLabel: string;
+      modalBody: string;
+    }
+  | { variant: 'client_waiting'; body: string };
 
 /**
  * BAL-338 (D7) — the client's next-step CTAs on the completed banner: "Start your next
@@ -243,6 +299,8 @@ export interface CompletionCardView {
   bodyCopy: string;
   /** Pre-derived request-completion modal body (window + plan-lock + invoice copy). */
   modalBody: string;
+  /** "Mark project ready" | "Mark project ready again" (a change request is behind it). */
+  ctaLabel: string;
 }
 
 export interface EngagementWorkspaceView {
@@ -393,7 +451,8 @@ function deriveTermsStrip(
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
-  lens: EngagementLens
+  lens: EngagementLens,
+  crState: ChangeRequestState
 ): MilestoneNodeView[] {
   const statusLabels: Record<MilestoneNodeVariant, string> = {
     pending: 'Not started',
@@ -447,6 +506,7 @@ function deriveMilestones(
         isCompleted && m.completionNote !== null && m.completionNote.trim() !== ''
           ? m.completionNote
           : null,
+      feedback: deriveMilestoneFeedback(engagement, crState, m.id, lens),
     };
   });
 }
@@ -454,7 +514,8 @@ function deriveMilestones(
 function deriveProgress(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
-  parties: EngagementParties
+  parties: EngagementParties,
+  crState: ChangeRequestState
 ): EngagementProgressView {
   const total = engagement.milestones.length;
   const done = engagement.milestones.filter((m) => m.status === 'completed').length;
@@ -466,10 +527,17 @@ function deriveProgress(
   const isNonTerminal =
     engagement.status === 'active' || engagement.status === 'pending_acceptance';
   const reviewCopy =
-    lens === 'client' && isNonTerminal
+    lens === 'client' && isNonTerminal && !crState.outstanding
       ? `${parties.expertPartyShort} marks each milestone as it's delivered. When the whole project is done, you review it — accept, or request changes within ${AUTO_ACCEPT_DAYS} days.`
       : null;
-  return { done, total, pct, reviewCopy };
+  return {
+    done,
+    total,
+    pct,
+    reviewCopy,
+    reviewPill: deriveReviewPill(engagement, lens, parties, crState),
+    segments: deriveSegments(engagement, crState),
+  };
 }
 
 function deriveReviewBanner(
@@ -499,13 +567,16 @@ function deriveReviewBanner(
   if (lens === 'client') {
     const expertShort = parties.expertPersonShort;
     return {
-      title: `${parties.expertRetroFirstMention} has marked the project complete`,
-      body: `Review the delivery plan below, then accept the project or request changes. If no one responds, the project is accepted automatically on ${autoOnLabel} so delivery isn't left hanging.`,
+      title: `${parties.expertRetroFirstMention} says the project is ready`,
+      body: `Have a look through the milestones below, then accept the project or request changes. If there's nothing to change, the project will be marked accepted on ${autoOnLabel}.`,
       countdown,
+      lastRequest: deriveLastRequest(engagement),
       clientDecision: {
         acceptModalBody: `Accepting confirms ${expertShort} delivered the project as agreed — it can't be un-accepted afterwards, and Balo raises the final invoice from here. If something's not right, request changes instead. ${expertShort} and the Balo team are notified.`,
-        requestChangesIntro: `The project goes back to active with your note attached — ${expertShort} and the Balo team are notified, and the project is marked complete again once it's fixed. The ${AUTO_ACCEPT_DAYS}-day review window restarts then.`,
+        requestChangesIntro: `The project goes back to active with your note attached — ${expertShort} and the Balo team are notified, and the project is marked ready again once it's fixed. The ${AUTO_ACCEPT_DAYS}-day review window restarts then.`,
         requestChangesFieldHint: `Be specific — this is exactly what ${expertShort} sees.`,
+        milestoneOptions: engagement.milestones.map((m) => ({ id: m.id, title: m.title })),
+        milestoneHelper: `Milestones you pick go back to ${parties.expertPartyShort} with your feedback. If you don't pick any, ${parties.expertPartyShort} works out what needs to change.`,
       },
     };
   }
@@ -515,6 +586,7 @@ function deriveReviewBanner(
       body: `Requested ${requestedAtLabel}. ${parties.clientCompanyName} has ${AUTO_ACCEPT_DAYS} days to accept or request changes — after that the project is accepted automatically. The delivery plan is locked while the project is in review.`,
       countdown,
       clientDecision: null,
+      lastRequest: null,
     };
   }
   return {
@@ -522,24 +594,7 @@ function deriveReviewBanner(
     body: `Requested ${requestedAtLabel} by ${parties.expertRetroFirstMention}. Auto-accepts ${autoOnLabel} unless ${parties.clientCompanyName} responds. Final invoice raises once accepted.`,
     countdown,
     clientDecision: null,
-  };
-}
-
-function deriveChangeRequestBanner(
-  engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens,
-  parties: EngagementParties
-): ChangeRequestBannerView | null {
-  // Client already knows they requested changes → null for the client lens.
-  if (lens === 'client') return null;
-  if (engagement.status !== 'active') return null;
-  const note = engagement.changeRequestNote;
-  if (note === null || note.trim() === '') return null;
-  return {
-    attribution: personAtCompany(engagement.changeRequestedBy, parties.clientCompanyName),
-    note,
-    expertNudge:
-      lens === 'expert' ? '— fix it up and mark the project complete again when ready.' : null,
+    lastRequest: null,
   };
 }
 
@@ -644,7 +699,7 @@ function deriveEmptyState(
     return {
       icon: 'Flag',
       title: 'Shape the delivery plan',
-      body: `Add your first milestone so ${parties.clientCompanyName} can follow progress. When everything is delivered, you mark the project complete and ${parties.clientCompanyName} reviews it as a whole.`,
+      body: `Add your first milestone so ${parties.clientCompanyName} can follow progress. When everything is delivered, you mark the project ready and ${parties.clientCompanyName} reviews it as a whole.`,
     };
   }
   if (lens === 'client') {
@@ -707,10 +762,14 @@ function deriveAdminOversight(
 function deriveCompletionCard(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
-  parties: EngagementParties
+  parties: EngagementParties,
+  crState: ChangeRequestState
 ): CompletionCardView | null {
   if (lens !== 'expert') return null;
   if (engagement.status !== 'active') return null;
+  // The `changes_made` banner carries the one "Mark project ready again" control, so the
+  // card steps aside rather than offering a second identical button.
+  if (crState.changesMade) return null;
 
   const total = engagement.milestones.length;
   const done = engagement.milestones.filter((m) => m.status === 'completed').length;
@@ -724,21 +783,12 @@ function deriveCompletionCard(
   if (total === 0) {
     bodyCopy = `This project has no milestones — you can still send it for ${client}'s review, but a visible plan builds trust.`;
   } else if (allDone) {
-    bodyCopy = `Every milestone is delivered. Marking complete sends the project to ${client} for review — ${client} can accept or request changes within ${AUTO_ACCEPT_DAYS} days, after which it's accepted automatically.`;
+    bodyCopy = `Every milestone is delivered. Marking it ready sends the project to ${client} for review — ${client} can accept or request changes within ${AUTO_ACCEPT_DAYS} days, after which it's accepted automatically.`;
   } else {
     bodyCopy = `${remaining} of ${total} milestone${total === 1 ? '' : 's'} still to complete before the project can be sent for ${client}'s review.`;
   }
 
-  let modalOpening: string;
-  if (total === 0) {
-    modalOpening =
-      "This project has no milestones, so there's nothing blocking completion — but only send it if delivery is genuinely done. ";
-  } else if (total === 1) {
-    modalOpening = 'The milestone is delivered. ';
-  } else {
-    modalOpening = `All ${total} milestones are delivered. `;
-  }
-  const modalBody = `${modalOpening}${client} reviews the whole project and can accept it or request changes within ${AUTO_ACCEPT_DAYS} days — after that it's accepted automatically. The delivery plan is locked while the project is in review, and Balo raises the final invoice once accepted.`;
+  const modalBody = completionModalBody(total, client);
 
   return {
     hasMilestones,
@@ -747,6 +797,7 @@ function deriveCompletionCard(
     canRequest,
     bodyCopy,
     modalBody,
+    ctaLabel: crState.latest === null ? 'Mark project ready' : MARK_READY_AGAIN_LABEL,
   };
 }
 
@@ -776,6 +827,8 @@ export function mapEngagementToWorkspaceView(
           href: `/projects/${engagement.projectRequest.id}`,
         };
 
+  const crState = deriveChangeRequestState(engagement, parties);
+
   const header: EngagementHeaderView = {
     engagementTitle,
     headerLine: engagementHeaderLine(ctx.lens, parties),
@@ -794,15 +847,15 @@ export function mapEngagementToWorkspaceView(
     isDeliveringExpert: ctx.isDeliveringExpert,
     header,
     parties,
-    progress: deriveProgress(engagement, ctx.lens, parties),
-    milestones: deriveMilestones(engagement, parties, ctx.lens),
+    progress: deriveProgress(engagement, ctx.lens, parties, crState),
+    milestones: deriveMilestones(engagement, parties, ctx.lens, crState),
     hasMilestones: engagement.milestones.length > 0,
     reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now),
-    changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties),
+    changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
     completedBanner: deriveCompletedBanner(engagement, ctx.lens, parties),
     cancelledBanner: deriveCancelledBanner(engagement),
     emptyState: deriveEmptyState(engagement, ctx.lens, parties),
     adminOversight: deriveAdminOversight(engagement, ctx.lens, parties, now),
-    completionCard: deriveCompletionCard(engagement, ctx.lens, parties),
+    completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState),
   };
 }

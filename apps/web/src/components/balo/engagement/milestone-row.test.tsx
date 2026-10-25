@@ -20,6 +20,7 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     startedLabel: null,
     completedLabel: null,
     completionNote: null,
+    feedback: null,
     ...overrides,
   };
 }
@@ -106,5 +107,54 @@ describe('MilestoneRow', () => {
     const connector = container.querySelector('div.w-\\[2\\.5px\\]');
     expect(connector).not.toBeNull();
     expect(connector?.className).toContain('from-primary');
+  });
+
+  describe('change-request feedback', () => {
+    const feedback = {
+      calloutHeading: 'Dana @ Northwind requested changes · 6 Jul',
+      note: 'The export is missing Q3.',
+      addressedLabel: 'Feedback addressed',
+    };
+
+    it('shows the "Changes requested" chip and the quoted callout while the milestone is open', () => {
+      render(
+        <MilestoneRow
+          node={makeNode({
+            status: 'in_progress',
+            nodeVariant: 'in_progress',
+            statusLabel: 'In progress',
+            feedback,
+          })}
+          isLast
+        />
+      );
+      expect(screen.getByText('Changes requested')).toBeInTheDocument();
+      expect(screen.getByText(feedback.calloutHeading)).toBeInTheDocument();
+      expect(screen.getByText(feedback.note)).toBeInTheDocument();
+      expect(screen.queryByText('Feedback addressed')).not.toBeInTheDocument();
+    });
+
+    it('swaps to the addressed chip, with no callout, once the milestone is completed', () => {
+      render(
+        <MilestoneRow
+          node={makeNode({
+            status: 'completed',
+            nodeVariant: 'completed',
+            statusLabel: 'Completed',
+            feedback,
+          })}
+          isLast
+        />
+      );
+      expect(screen.getByText('Feedback addressed')).toBeInTheDocument();
+      expect(screen.queryByText('Changes requested')).not.toBeInTheDocument();
+      expect(screen.queryByText(feedback.note)).not.toBeInTheDocument();
+    });
+
+    it('renders neither chip nor callout when the milestone carries no feedback', () => {
+      render(<MilestoneRow node={makeNode()} isLast />);
+      expect(screen.queryByText('Changes requested')).not.toBeInTheDocument();
+      expect(screen.queryByText('Feedback addressed')).not.toBeInTheDocument();
+    });
   });
 });

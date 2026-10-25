@@ -424,6 +424,8 @@ const engagementCompletionRequestedPayload = z.object({
   requestedDate: z.string().min(1).max(40),
   autoDate: z.string().min(1).max(40),
   reviewDays: z.number().int().nonnegative(),
+  isResubmission: z.boolean().optional(),
+  roundNumber: z.number().int().nonnegative().optional(),
 });
 
 // BAL-334 (D4) expert withdrew the completion request (expert → client owner + admins).
@@ -531,6 +533,8 @@ const engagementChangesRequestedPayload = z.object({
   note: z.string().min(1).max(2000),
   reviewDays: z.number().int().nonnegative(),
   reviewCycle: z.number().int().positive(),
+  roundNumber: z.number().int().positive().optional(),
+  taggedMilestoneTitles: z.array(z.string().min(1).max(200)).max(100).optional(),
 });
 
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the

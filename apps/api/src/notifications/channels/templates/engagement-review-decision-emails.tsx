@@ -10,6 +10,7 @@ import {
   SupportFooter,
 } from './shared.js';
 import { milestonePhrases } from './review-email-shared.js';
+import { joinTitles } from '@balo/shared/engagements';
 
 /**
  * BAL-338 (D7) — the EXPERT- and ADMIN-facing project-review-decision emails, built
@@ -183,9 +184,17 @@ export interface EngagementChangesRequestedExpertEmailProps {
   readonly actorClientLabel: string;
   readonly projectTitle: string;
   readonly note: string;
+  /** Titles of the milestones the client tagged, in sort order; empty for an untagged round. */
+  readonly taggedMilestoneTitles: readonly string[];
   readonly reviewDays: number;
   readonly engagementUrl: string;
   readonly baseUrl: string;
+}
+
+/** Narrows a payload value to the string titles it holds; anything else reads as no titles. */
+export function readMilestoneTitles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item !== '');
 }
 
 export function EngagementChangesRequestedExpertEmail({
@@ -193,10 +202,13 @@ export function EngagementChangesRequestedExpertEmail({
   actorClientLabel = 'The client',
   projectTitle = 'your project',
   note = '',
+  taggedMilestoneTitles = [],
   reviewDays = 7,
   engagementUrl,
   baseUrl,
 }: Readonly<EngagementChangesRequestedExpertEmailProps>) {
+  const tagged = taggedMilestoneTitles.length > 0;
+  const verb = taggedMilestoneTitles.length === 1 ? 'is' : 'are';
   return (
     <NoticeShell
       previewText={`${actorClientLabel} requested changes on ${projectTitle} before accepting.`}
@@ -218,11 +230,16 @@ export function EngagementChangesRequestedExpertEmail({
         borderColor={colors.border}
         headingColor={colors.text}
       />
+      <Text style={shared.bodyText}>
+        {tagged
+          ? `They tagged ${joinTitles(taggedMilestoneTitles)}, which ${verb} back in progress.`
+          : "They didn't tag particular milestones, so reopen whatever needs work."}
+      </Text>
       <Text style={{ ...shared.bodyText, margin: 0 }}>
-        The project is active again — mark it complete when it&apos;s fixed; the {reviewDays}-day
+        The project is active again — mark it ready again when it&apos;s fixed; the {reviewDays}-day
         review window restarts then.
       </Text>
-      <ViewProjectCta engagementUrl={engagementUrl} label="View what needs to change →" />
+      <ViewProjectCta engagementUrl={engagementUrl} label="Open project →" />
       <SupportFooter prefix="Questions?" />
     </NoticeShell>
   );

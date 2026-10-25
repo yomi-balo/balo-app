@@ -110,7 +110,7 @@ beforeEach(() => {
     isClientOwner: false,
     isDeliveringExpert: true,
   });
-  mockRequestCompletion.mockResolvedValue({ completionRequestedAt: REQUESTED_AT });
+  mockRequestCompletion.mockResolvedValue({ completionRequestedAt: REQUESTED_AT, roundNumber: 0 });
   mockCountByEntityAndAction.mockResolvedValue(1);
   mockProposalFindById.mockResolvedValue({ timeframeWeeks: 10 });
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
@@ -197,6 +197,8 @@ describe('requestCompletionAction', () => {
         proposed_timeframe_weeks: 10,
         milestones_total: 2,
         review_cycle: 1,
+        is_resubmission: false,
+        round_number: 0,
         distinct_id: 'user-1',
         days_since_kickoff: expect.any(Number),
       })
@@ -214,9 +216,28 @@ describe('requestCompletionAction', () => {
       requestedDate: '4 Jul',
       autoDate: '11 Jul',
       reviewDays: 7,
+      isResubmission: false,
+      roundNumber: 0,
     });
 
     expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
+  });
+
+  it('flags a resubmission after a change request: round_number from the locked write, is_resubmission true', async () => {
+    mockRequestCompletion.mockResolvedValue({
+      completionRequestedAt: REQUESTED_AT,
+      roundNumber: 2,
+    });
+    const result = await requestCompletionAction(INPUT);
+    expect(result).toEqual({ success: true });
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_completion_requested',
+      expect.objectContaining({ is_resubmission: true, round_number: 2 })
+    );
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.completion_requested',
+      expect.objectContaining({ isResubmission: true, roundNumber: 2 })
+    );
   });
 
   it('degrades review_cycle to 1 when the audit count read throws', async () => {

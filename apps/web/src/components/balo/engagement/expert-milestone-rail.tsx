@@ -269,6 +269,7 @@ export function ExpertMilestoneRail({
         startedLabel: null,
         completedLabel: null,
         completionNote: null,
+        feedback: null,
       };
       startTransition(async () => {
         applyOptimistic({ kind: 'add', node: optimisticNode });
@@ -532,9 +533,7 @@ export function ExpertMilestoneRail({
   if (optimistic.length === 0) {
     return (
       <>
-        {emptyState !== null ? (
-          <MilestoneEmptyState emptyState={emptyState} />
-        ) : (
+        {emptyState === null ? (
           <Card className="border-border bg-card px-8 py-12 text-center">
             <div className="bg-primary/10 text-primary mx-auto mb-4 flex size-[54px] items-center justify-center rounded-[15px]">
               <Flag className="size-6" aria-hidden />
@@ -544,6 +543,8 @@ export function ExpertMilestoneRail({
               Add your first milestone so {clientCompanyName} can follow progress.
             </p>
           </Card>
+        ) : (
+          <MilestoneEmptyState emptyState={emptyState} />
         )}
         <div className="mt-4 flex justify-center">
           <button

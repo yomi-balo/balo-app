@@ -1084,6 +1084,64 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.completion_requested resubmission fields', () => {
+    const base = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:completion_requested:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestonesTotal: 4,
+      requestedDate: '4 Jul',
+      autoDate: '11 Jul',
+      reviewDays: 7,
+    };
+    const parse = (payload: Record<string, unknown>) =>
+      publishBodySchema.safeParse({ event: 'engagement.completion_requested', payload }).success;
+
+    it('accepts the payload with and without isResubmission / roundNumber', () => {
+      expect(parse(base)).toBe(true);
+      expect(parse({ ...base, isResubmission: true, roundNumber: 2 })).toBe(true);
+      expect(parse({ ...base, isResubmission: false, roundNumber: 0 })).toBe(true);
+    });
+
+    it('rejects a non-boolean isResubmission and a negative roundNumber', () => {
+      expect(parse({ ...base, isResubmission: 'yes' })).toBe(false);
+      expect(parse({ ...base, roundNumber: -1 })).toBe(false);
+    });
+  });
+
+  describe('engagement.changes_requested round fields', () => {
+    const base = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:changes_requested:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      note: 'The report export is missing the Q3 totals.',
+      reviewDays: 7,
+      reviewCycle: 1,
+    };
+    const parse = (payload: Record<string, unknown>) =>
+      publishBodySchema.safeParse({ event: 'engagement.changes_requested', payload }).success;
+
+    it('accepts the payload with and without roundNumber / taggedMilestoneTitles', () => {
+      expect(parse(base)).toBe(true);
+      expect(
+        parse({ ...base, roundNumber: 2, taggedMilestoneTitles: ['Discovery', 'Build'] })
+      ).toBe(true);
+      expect(parse({ ...base, roundNumber: 1, taggedMilestoneTitles: [] })).toBe(true);
+    });
+
+    it('rejects a non-positive roundNumber and malformed title lists', () => {
+      expect(parse({ ...base, roundNumber: 0 })).toBe(false);
+      expect(parse({ ...base, taggedMilestoneTitles: [''] })).toBe(false);
+      expect(parse({ ...base, taggedMilestoneTitles: ['x'.repeat(201)] })).toBe(false);
+      expect(parse({ ...base, taggedMilestoneTitles: Array(101).fill('A') })).toBe(false);
+    });
+  });
+
   describe('engagement.completion_withdrawn (BAL-334)', () => {
     const valid = {
       correlationId: '550e8400-e29b-41d4-a716-446655440001:completion_withdrawn:1719705600000',

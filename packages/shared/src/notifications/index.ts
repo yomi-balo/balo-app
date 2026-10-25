@@ -264,6 +264,9 @@ export interface EngagementCompletionRequestedPayload {
   requestedDate: string; // "4 Jul" (pre-formatted, UTC)
   autoDate: string; // "11 Jul" (pre-formatted, UTC) — the auto-accept date
   reviewDays: number; // AUTO_ACCEPT_DAYS — the review window length
+  // Optional on both the TS and Zod sides so a Vercel-ahead or Railway-ahead deploy still validates.
+  isResubmission?: boolean; // true when at least one change-request round precedes this request
+  roundNumber?: number; // count of live change-request rounds so far (0 on a first submission)
 }
 
 // BAL-334 (D4) expert withdrew the completion request (pending_acceptance → active).
@@ -355,6 +358,9 @@ export interface EngagementChangesRequestedPayload {
   note: string; // the client's change note, verbatim — email body
   reviewDays: number; // {days} = AUTO_ACCEPT_DAYS — "the {days}-day review window restarts"
   reviewCycle: number; // {n} — admin in-app body ("review cycle {n}")
+  // Optional on both the TS and Zod sides so a Vercel-ahead or Railway-ahead deploy still validates.
+  roundNumber?: number; // change-request round ordinal (count of live rounds, this one included)
+  taggedMilestoneTitles?: string[]; // titles in sort order the client tagged; empty = untagged round
 }
 
 // BAL-338 (D7) auto-accept: the review window elapsed with no client decision, so the

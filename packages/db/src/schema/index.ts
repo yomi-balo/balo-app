@@ -34,6 +34,8 @@ export * from './project-engagements';
 export * from './case-engagements';
 export * from './case-engagement-products';
 export * from './engagement-milestones';
+// BAL-621 — client change-request rounds on a project, and their optional milestone tags.
+export * from './project-change-requests';
 export * from './action-items';
 export * from './transcripts';
 export * from './meetings';

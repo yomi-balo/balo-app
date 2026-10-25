@@ -20,14 +20,17 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/request-changes', () => ({
 import { ReviewBanner } from './review-banner';
 
 const banner: ReviewBannerView = {
-  title: 'Priya @ CloudPeak Consulting has marked the project complete',
-  body: 'Review the delivery plan below, then accept the project or request changes.',
+  title: 'Priya @ CloudPeak Consulting says the project is ready',
+  body: 'Have a look through the milestones below, then accept the project or request changes.',
   countdown: { autoOnDate: '11 Jul 2026', daysRemaining: 5, autoInLabel: 'Auto-accepts in 5 days' },
   clientDecision: {
     acceptModalBody: 'Accepting confirms the delivery as agreed.',
     requestChangesIntro: 'The project goes back to active with your note.',
     requestChangesFieldHint: 'Be specific.',
+    milestoneOptions: [{ id: 'm-1', title: 'Build' }],
+    milestoneHelper: 'Milestones you pick go back to CloudPeak with your feedback.',
   },
+  lastRequest: null,
 };
 
 const baseProps = {
@@ -41,10 +44,30 @@ describe('ReviewBanner', () => {
   it('renders the title, body, and informational countdown pill', () => {
     render(<ReviewBanner {...baseProps} lens="client" />);
     expect(
-      screen.getByText('Priya @ CloudPeak Consulting has marked the project complete')
+      screen.getByText('Priya @ CloudPeak Consulting says the project is ready')
     ).toBeInTheDocument();
-    expect(screen.getByText(/Review the delivery plan below/)).toBeInTheDocument();
+    expect(screen.getByText(/Have a look through the milestones below/)).toBeInTheDocument();
     expect(screen.getByText('Auto-accepts in 5 days')).toBeInTheDocument();
+  });
+
+  it('quotes the previous change request under the body when there was one', () => {
+    render(
+      <ReviewBanner
+        {...baseProps}
+        lens="client"
+        banner={{
+          ...banner,
+          lastRequest: { heading: 'Your last request · 6 Jul', note: 'Fix the totals.' },
+        }}
+      />
+    );
+    expect(screen.getByText('Your last request · 6 Jul')).toBeInTheDocument();
+    expect(screen.getByText('Fix the totals.')).toBeInTheDocument();
+  });
+
+  it('renders no quote block on a first submission', () => {
+    render(<ReviewBanner {...baseProps} lens="client" />);
+    expect(screen.queryByText(/Your last request/)).not.toBeInTheDocument();
   });
 
   it('omits the countdown pill when countdown is null', () => {

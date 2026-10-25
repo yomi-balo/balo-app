@@ -202,6 +202,39 @@ export async function snapshotFromProposalTx(
     .returning();
 }
 
+/**
+ * Revert a completed milestone (completed → in_progress) INSIDE THE CALLER'S
+ * TRANSACTION. CLEARS `completed_by_user_id` / `completed_at` / `completion_note`;
+ * KEEPS `started_*`. Audits `engagement_milestone.reverted` with
+ * `{ from, to, ...extraMetadata }`. Throws `InvalidMilestoneTransitionError` unless
+ * `milestone.status` is `completed`.
+ *
+ * ⚠ PRECONDITION — THE CALLER ALREADY HOLDS THE LOCKS. The parent engagement row must
+ * be locked FOR UPDATE in `tx`, and `milestone` must be the row read FOR UPDATE under
+ * that lock (lock order engagement → milestone). This helper takes no lock and does
+ * NOT run `lockActiveEngagement`: `projectEngagementsRepository.requestChanges` calls
+ * it after flipping a `pending_acceptance` project back to `active` under its own
+ * lock. The public {@link engagementMilestonesRepository.revert} wraps it with the
+ * full lock dance.
+ */
+export async function revertMilestoneTx(
+  tx: DbTx,
+  input: {
+    milestone: EngagementMilestone;
+    userId: string;
+    extraMetadata?: Record<string, unknown>;
+  }
+): Promise<EngagementMilestone> {
+  return advanceMilestoneStatus(tx, {
+    milestone: input.milestone,
+    to: 'in_progress',
+    userId: input.userId,
+    action: 'engagement_milestone.reverted',
+    set: { completedByUserId: null, completedAt: null, completionNote: null },
+    extraMetadata: input.extraMetadata,
+  });
+}
+
 export const engagementMilestonesRepository = {
   /**
    * Start a milestone (pending → in_progress). Stamps `started_by_user_id` /
@@ -251,18 +284,13 @@ export const engagementMilestonesRepository = {
   /**
    * Revert a completed milestone (completed → in_progress). CLEARS
    * `completed_by_user_id` / `completed_at` / `completion_note`; KEEPS `started_*`.
-   * Audits `engagement_milestone.reverted`.
+   * Audits `engagement_milestone.reverted`. Locks engagement (active) → milestone,
+   * then delegates to {@link revertMilestoneTx}.
    */
   async revert(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
-      return advanceMilestoneStatus(tx, {
-        milestone,
-        to: 'in_progress',
-        userId: input.userId,
-        action: 'engagement_milestone.reverted',
-        set: { completedByUserId: null, completedAt: null, completionNote: null },
-      });
+      return revertMilestoneTx(tx, { milestone, userId: input.userId });
     });
   },
 

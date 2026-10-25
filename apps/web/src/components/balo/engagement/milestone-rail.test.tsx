@@ -20,6 +20,7 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     startedLabel: null,
     completedLabel: null,
     completionNote: null,
+    feedback: null,
     ...overrides,
   };
 }

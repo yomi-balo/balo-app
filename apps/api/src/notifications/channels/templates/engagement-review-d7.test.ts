@@ -126,6 +126,48 @@ describe('getEmailTemplate — BAL-338 D7 emails', () => {
     const html = await render(out.component);
     expect(html).toContain('The report export is missing the Q3 totals.');
     expect(html).toContain('review window restarts');
+    expect(html).toContain('Open project');
+    expect(html).toContain('mark it ready again');
+    expect(html).toContain('didn&#x27;t tag particular milestones');
+  });
+
+  it('changes-requested-expert: tagged titles are listed as back in progress', async () => {
+    const base = {
+      recipientName: 'Priya',
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      note: 'Fix the export.',
+      reviewDays: 7,
+      engagementId: 'eng-1',
+    };
+    const many = await render(
+      getEmailTemplate('engagement-changes-requested-expert', {
+        ...base,
+        taggedMilestoneTitles: ['Discovery', 'Build', 'Launch'],
+      }).component
+    );
+    expect(many).toContain('They tagged Discovery, Build and Launch, which are back in progress.');
+    expect(many).not.toContain('tag particular milestones');
+    const one = await render(
+      getEmailTemplate('engagement-changes-requested-expert', {
+        ...base,
+        taggedMilestoneTitles: ['Discovery'],
+      }).component
+    );
+    expect(one).toContain('They tagged Discovery, which is back in progress.');
+  });
+
+  it('changes-requested-expert: a non-array taggedMilestoneTitles reads as untagged', async () => {
+    const out = getEmailTemplate('engagement-changes-requested-expert', {
+      recipientName: 'Priya',
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      note: 'Fix the export.',
+      taggedMilestoneTitles: 'Discovery',
+      engagementId: 'eng-1',
+    });
+    const html = await render(out.component);
+    expect(html).toContain('tag particular milestones');
   });
 
   it('auto-accepted-client: the VARIANT 3 email, "is complete" subject', () => {
@@ -215,7 +257,28 @@ describe('getInAppTemplate — BAL-338 D7 factories', () => {
       engagementId,
     });
     expect(out.title).toBe('Changes requested');
-    expect(out.body).toContain('the project is active again');
+    expect(out.body).toBe(
+      "Dana @ Northwind Industrial requested changes on 'CPQ implementation'. Mark it ready again when it's fixed."
+    );
+  });
+
+  it('changes-requested-expert → names the tagged milestones that are back in progress', () => {
+    const one = getInAppTemplate('engagement-changes-requested-expert', {
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      taggedMilestoneTitles: ['Discovery'],
+      engagementId,
+    });
+    expect(one.body).toBe(
+      "Dana @ Northwind Industrial requested changes on 'CPQ implementation' — Discovery is back in progress. Mark it ready again when it's fixed."
+    );
+    const two = getInAppTemplate('engagement-changes-requested-expert', {
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      taggedMilestoneTitles: ['Discovery', 'Build'],
+      engagementId,
+    });
+    expect(two.body).toContain('— Discovery and Build are back in progress.');
   });
 
   it('changes-requested-admin → review-cycle ops signal', () => {
@@ -226,6 +289,18 @@ describe('getInAppTemplate — BAL-338 D7 factories', () => {
       engagementId,
     });
     expect(out.body).toContain('(review cycle 2)');
+  });
+
+  it('changes-requested-admin → prefers the round ordinal over the review cycle', () => {
+    const out = getInAppTemplate('engagement-changes-requested-admin', {
+      actorClientLabel: 'Dana @ Northwind Industrial',
+      projectTitle: 'CPQ implementation',
+      reviewCycle: 2,
+      roundNumber: 3,
+      engagementId,
+    });
+    expect(out.body).toContain('(round 3 of changes)');
+    expect(out.body).not.toContain('review cycle');
   });
 
   it('auto-accepted-client → wrapped-up-as-delivered', () => {
