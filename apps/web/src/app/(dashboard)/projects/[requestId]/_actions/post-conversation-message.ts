@@ -34,8 +34,11 @@ export type PostConversationMessageResult =
 /**
  * Post a conversation message (BAL-271 / A4).
  *
- * THE ONLY `conversation_messages` insert path on the platform — strictly
- * user-triggered (BAL-212: nothing auto-posts). IDOR-safe via
+ * THE ONLY `conversation_messages` insert path for TYPED messages — strictly
+ * user-triggered (BAL-212: nothing auto-posts). The one other insert is the request-share card,
+ * posted inside `requestSharedFilesRepository.share()` and reached only from
+ * `confirmRequestFileUploadAction`; it is just as user-triggered (the sharer pressed Share) and
+ * carries `request_shared_file_id`, which every other reader excludes. IDOR-safe via
  * `resolveConversationAccess` (the relationshipId is a CLAIM, validated against
  * the server-loaded graph + lens). The composer's plain text is converted to
  * minimal HTML and sanitised BEFORE persist (D4).

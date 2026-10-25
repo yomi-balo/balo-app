@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within, act } from '@/test/utils';
+import { render, screen, waitFor, within, act, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { track, CONVERSATION_EVENTS, DASHBOARD_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
+import {
+  track,
+  CONVERSATION_EVENTS,
+  DASHBOARD_EVENTS,
+  PROJECT_EVENTS,
+  REQUEST_FILE_EVENTS,
+} from '@/lib/analytics';
 import {
   ExpertCallBridgeProvider,
   useClientBookCall,
@@ -47,7 +53,17 @@ const {
   mockShareAvailability,
   mockBookIntroCall,
   mockRequestProposal,
+  mockPresign,
+  mockConfirm,
+  mockDiscard,
+  mockPut,
+  mockDownload,
 } = vi.hoisted(() => ({
+  mockPresign: vi.fn(),
+  mockConfirm: vi.fn(),
+  mockDiscard: vi.fn(),
+  mockPut: vi.fn(),
+  mockDownload: vi.fn(),
   mockPostMessage: vi.fn(),
   mockMarkRead: vi.fn(),
   mockFetchThread: vi.fn(),
@@ -118,11 +134,31 @@ vi.mock('@/components/availability', () => ({
   ),
 }));
 
-// `MessageList` (a shared leaf) still imports `formatBytes` for its file bubbles, so the module
-// stays stubbed even though this surface renders no files. `putWithProgress` is gone with the
-// composer attach pipeline (BAL-431 / OSD-2).
+// BAL-617 — the share pipeline: presign → PUT (progress) → confirm, plus the cancel-side discard
+// and the preview/download mint. All five actions are mocked at the module level so their
+// `@balo/db` / auth / R2 transitive imports never load in this jsdom suite.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-shared-file-upload', () => ({
+  requestSharedFileUploadAction: (...args: unknown[]) => mockPresign(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-request-file-upload', () => ({
+  confirmRequestFileUploadAction: (...args: unknown[]) => mockConfirm(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/discard-request-file-upload', () => ({
+  discardRequestFileUploadAction: (...args: unknown[]) => mockDiscard(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-request-file-download', () => ({
+  getRequestFileDownloadAction: (...args: unknown[]) => mockDownload(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/revoke-request-file-grant', () => ({
+  revokeRequestFileGrantAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/delete-request-file', () => ({
+  deleteRequestFileAction: vi.fn(),
+}));
+vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 vi.mock('@/components/balo/document-uploader/upload-file', () => ({
   formatBytes: (bytes: number) => `${bytes} B`,
+  putWithProgress: (...args: unknown[]) => mockPut(...args),
 }));
 
 // Capture the realtime wiring so tests can inject incoming events, status and a typing view.
@@ -132,6 +168,7 @@ interface RealtimeInput {
   conversationIds: string[];
   onMessage: (m: unknown) => void;
   onFile: (f: unknown) => void;
+  onFileShared?: (p: unknown) => void;
   typingConversationId?: string | null;
   sendTyping?: (conversationId: string, signal: 'started' | 'stopped') => Promise<unknown>;
 }
@@ -159,6 +196,8 @@ vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
 }));
 
 import { ConversationStage } from './conversation-stage';
+import { RequestFilesProvider } from '../files/request-files-provider';
+import type { RequestFilesView } from '@/lib/request-files/load-request-files';
 import { thread as baseThread } from '@/test/fixtures/conversation';
 import type {
   ConversationThreadView,
@@ -258,6 +297,10 @@ beforeEach(() => {
     guestInviteFailed: false,
     contextType: 'request_interaction',
   });
+  mockPresign.mockResolvedValue({ success: true, presignedUrl: 'https://r2/put', key: 'k1' });
+  mockPut.mockResolvedValue(undefined);
+  mockDiscard.mockResolvedValue({ success: true });
+  mockDownload.mockResolvedValue({ success: true, url: 'https://r2/get', contentType: 'x' });
   mockRequestProposal.mockResolvedValue({
     success: true,
     transitioned: true,
@@ -803,24 +846,14 @@ describe('ConversationStage — load earlier', () => {
 });
 
 /**
- * ⚠⚠ BAL-431 (OSD-2) — THE RETIREMENT GUARD, AND WHAT IT REPLACED.
- *
- * This surface used to have a SECOND file home: a composer attach button, a header Files pill,
- * a mobile paperclip, a `ThreadFilesPanel` drawer, file bubbles in the timeline, and Ably file
- * ingestion. ADR-1048 rejected two homes and the ruling retired THIS one, so the suites that
- * covered it — `file share (presign → PUT → confirm)` (6 cases) and the download + realtime-file
- * half of `downloads + load earlier + realtime files` (5 cases) — were DELETED because the
- * behaviour they described is genuinely gone, not because they had started failing. The three
- * Server Actions they drove no longer exist, so there was nothing left to assert about them.
- *
- * These cases stand in their place: they assert the ABSENCE positively, so re-introducing the
- * affordance (or shipping a shared leaf that renders it unconditionally) fails here rather than
- * quietly recreating the shape the ADR rejected. The request-level file home has its own
- * coverage in `request-files-panel.test.tsx`, and the CASE surface keeps its in-thread files
- * and its own suite, both untouched.
+ * ⚠⚠ CONVERSATION FILES ARE STILL RETIRED ON THIS SURFACE (BAL-431 / OSD-2). Sharing a file is a
+ * REQUEST-level act (BAL-617): the paperclip opens the share dialog and the file is stored on the
+ * request, never as a `conversation_files` row. Without a file lens (no provider) there is
+ * nothing to share into, so these cases assert the ABSENCE of the old affordances, and that a
+ * legacy conversation-file event or row is never rendered.
  */
-describe('ConversationStage — the in-thread file affordance is RETIRED', () => {
-  it('renders no composer attach control and no file input at all', () => {
+describe('ConversationStage — no conversation files on the request surface', () => {
+  it('renders no composer attach control and no file input without a file lens', () => {
     renderStage(view());
     expect(screen.queryByRole('button', { name: 'Attach a file' })).not.toBeInTheDocument();
     expect(document.querySelector('input[type="file"]')).toBeNull();
@@ -1788,5 +1821,487 @@ describe('ConversationStage — a closed request reads as a record (BAL-616)', (
       CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
       expect.objectContaining({ upcoming_count: 0, route: 'profile', request_status: 'accepted' })
     );
+  });
+});
+
+/**
+ * BAL-617 — sharing a file from the conversation. The paperclip and a drop open the share dialog
+ * at once (nothing is staged in the composer); the audience is written on Share; the cards the
+ * share posted appear in the open thread.
+ */
+describe('ConversationStage — sharing a file from the conversation (BAL-617)', () => {
+  const PRIYA_REL = 'rel-1';
+  const MARCUS_REL = 'rel-2';
+
+  const CLIENT_FILES: RequestFilesView = {
+    lens: 'client',
+    files: [],
+    liveTracks: [
+      { relationshipId: PRIYA_REL, trackName: 'Priya Nair' },
+      { relationshipId: MARCUS_REL, trackName: 'Marcus Chen' },
+    ],
+    requestKind: 'matched',
+  };
+  const EXPERT_FILES: RequestFilesView = {
+    lens: 'expert',
+    files: [],
+    requestKind: 'matched',
+    clientPartyName: 'Acme Corp',
+    closedReason: null,
+  };
+
+  const CLIENT_FILE_VIEW = {
+    id: 'file-1',
+    fileName: 'nda.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 5,
+    source: 'client' as const,
+    uploadedByName: 'Sarah @ Northwind',
+    createdAtIso: '2026-06-09T12:00:00.000Z',
+    audience: {
+      type: 'grants' as const,
+      grants: [{ relationshipId: PRIYA_REL, trackName: 'Priya Nair' }],
+    },
+    visibleToLiveTrackIds: [PRIYA_REL],
+    canDelete: true,
+  };
+
+  function cardMessage(
+    id: string,
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    return {
+      id,
+      conversationId: 'conv-1',
+      bodyHtml: '<p>Here is the NDA</p>',
+      senderUserId: VIEWER_ID,
+      senderName: 'Sarah Chen',
+      createdAtIso: '2026-06-09T12:00:00.000Z',
+      requestSharedFile: { kind: 'client', file: CLIENT_FILE_VIEW },
+      ...overrides,
+    };
+  }
+
+  function twoThreads(): ConversationView {
+    return view({
+      threads: [
+        thread(),
+        thread({
+          relationshipId: MARCUS_REL,
+          conversationId: 'conv-2',
+          expertFirstName: 'Marcus',
+          expertName: 'Marcus Chen',
+          expertInitials: 'MC',
+        }),
+      ],
+    });
+  }
+
+  function renderWithFiles(
+    v: ConversationView,
+    filesView: RequestFilesView | null,
+    options: { lens?: 'client' | 'expert'; status?: ProjectRequestStatus } = {}
+  ): void {
+    render(
+      <RequestFilesProvider requestId={REQUEST_ID} initialView={filesView} brief={null}>
+        <ConversationStage
+          requestId={REQUEST_ID}
+          lens={options.lens ?? 'client'}
+          requestStatus={options.status ?? 'eoi_submitted'}
+          view={v}
+          requestTitle="CPQ implementation"
+          clientCompanyName="Northwind Industrial"
+          viewerEmailDomain="northwind.example"
+        />
+      </RequestFilesProvider>
+    );
+  }
+
+  const nda = (): File => new File(['hello'], 'nda.pdf', { type: 'application/pdf' });
+
+  async function pickViaPaperclip(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    const input = document.querySelector('input[type="file"]');
+    if (input === null) throw new Error('no file input');
+    await user.upload(input as HTMLInputElement, nda());
+  }
+
+  // `hidden`: Radix marks the page behind an open dialog aria-hidden.
+  const composerBox = (): HTMLElement =>
+    screen.getByRole('textbox', { name: 'Message Priya', hidden: true });
+  const shareButton = (): HTMLElement =>
+    within(screen.getByRole('dialog')).getByRole('button', { name: /^Share with|^Sharing/ });
+
+  beforeEach(() => {
+    mockConfirm.mockResolvedValue({
+      success: true,
+      view: CLIENT_FILE_VIEW,
+      threadMessages: [{ relationshipId: PRIYA_REL, message: cardMessage('m-card') }],
+    });
+  });
+
+  describe('the entry points', () => {
+    /** AC1 — the paperclip opens the dialog straight away, "{name} only" first and preselected. */
+    it('opens the share dialog with "{name} only" preselected on a paperclip pick, staging nothing', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      expect(screen.getByRole('button', { name: 'Share a file' })).toBeInTheDocument();
+      await pickViaPaperclip(user);
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading', { name: 'Share a file' })).toBeInTheDocument();
+      expect(within(dialog).getByText('nda.pdf')).toBeInTheDocument();
+      const radios = within(dialog).getAllByRole('radio');
+      expect(radios[0]).toHaveTextContent('Priya only');
+      expect(radios[0]).toHaveAttribute('aria-checked', 'true');
+      expect(shareButton()).toHaveTextContent('Share with Priya');
+      // Nothing staged in the composer: no upload strip, draft untouched.
+      expect(screen.queryByText(/^Sharing nda\.pdf/)).not.toBeInTheDocument();
+      expect(composerBox()).toHaveValue('');
+      expect(mockTrack).toHaveBeenCalledWith(REQUEST_FILE_EVENTS.SHARE_DIALOG_OPENED, {
+        entry_point: 'composer',
+      });
+      expect(mockPresign).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: REQUEST_ID, fileName: 'nda.pdf' })
+      );
+    });
+
+    /** AC8 — the drop overlay, then the same dialog. */
+    it('shows the drop overlay on dragover and opens the dialog on drop', async () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+      fireEvent.dragOver(composerBox(), { dataTransfer: { types: ['Files'], files: [] } });
+      expect(screen.getByText('Drop to share a file')).toBeInTheDocument();
+
+      fireEvent.drop(composerBox(), { dataTransfer: { types: ['Files'], files: [nda()] } });
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('nda.pdf')).toBeInTheDocument();
+      expect(mockTrack).toHaveBeenCalledWith(REQUEST_FILE_EVENTS.SHARE_DIALOG_OPENED, {
+        entry_point: 'drop',
+      });
+    });
+
+    it('ignores a drag and a drop while the share dialog is open, so the upload is not restarted', async () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      fireEvent.drop(composerBox(), { dataTransfer: { types: ['Files'], files: [nda()] } });
+      await screen.findByRole('dialog');
+      expect(mockPresign).toHaveBeenCalledTimes(1);
+
+      fireEvent.dragOver(composerBox(), { dataTransfer: { types: ['Files'], files: [] } });
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+      fireEvent.drop(composerBox(), {
+        dataTransfer: {
+          types: ['Files'],
+          files: [new File(['y'], 'other.pdf', { type: 'application/pdf' })],
+        },
+      });
+      expect(mockPresign).toHaveBeenCalledTimes(1);
+      expect(within(screen.getByRole('dialog')).getByText('nda.pdf')).toBeInTheDocument();
+    });
+
+    it('hides the overlay when the drag leaves', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      fireEvent.dragOver(composerBox(), { dataTransfer: { types: ['Files'], files: [] } });
+      fireEvent.dragLeave(composerBox());
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+    });
+
+    it('ignores a drag that carries no files', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      fireEvent.dragOver(composerBox(), { dataTransfer: { types: ['text/plain'], files: [] } });
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+    });
+
+    it('carries the composer draft into the note', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await user.type(composerBox(), 'Here is the NDA');
+      await pickViaPaperclip(user);
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('textbox', { name: 'Note (optional)' })).toHaveValue(
+        'Here is the NDA'
+      );
+    });
+  });
+
+  describe('where sharing is not offered', () => {
+    it('offers no paperclip and no drop zone without a file lens', () => {
+      renderWithFiles(twoThreads(), null);
+      expect(screen.queryByRole('button', { name: 'Share a file' })).not.toBeInTheDocument();
+      fireEvent.dragOver(composerBox(), { dataTransfer: { types: ['Files'], files: [] } });
+      expect(screen.queryByText('Drop to share a file')).not.toBeInTheDocument();
+    });
+
+    it('offers none on a thread whose track is no longer live', () => {
+      renderWithFiles(view(), {
+        ...CLIENT_FILES,
+        liveTracks: [{ relationshipId: MARCUS_REL, trackName: 'Marcus Chen' }],
+      } as RequestFilesView);
+      expect(screen.queryByRole('button', { name: 'Share a file' })).not.toBeInTheDocument();
+    });
+
+    it('offers none to an expert whose track has closed', () => {
+      renderWithFiles(
+        view(),
+        { ...EXPERT_FILES, closedReason: 'not_selected' } as RequestFilesView,
+        {
+          lens: 'expert',
+        }
+      );
+      expect(screen.queryByRole('button', { name: 'Share a file' })).not.toBeInTheDocument();
+    });
+
+    it('offers none on a closed request, and a drop does nothing', async () => {
+      renderWithFiles(view(), CLIENT_FILES, { status: 'closed' });
+      expect(screen.queryByRole('button', { name: 'Share a file' })).not.toBeInTheDocument();
+      fireEvent.drop(screen.getByRole('textbox'), {
+        dataTransfer: { types: ['Files'], files: [nda()] },
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    /** AC12 — the header and tab strip carry no Files control. */
+    it('renders no Files control in the header or the tab strip', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      expect(screen.queryByRole('button', { name: /files/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('the dialog by audience', () => {
+    /** AC4 — one recipient on a direct request, and for the expert. */
+    it('offers no options on a direct request, and shares to that one expert', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(view(), { ...CLIENT_FILES, requestKind: 'direct' } as RequestFilesView);
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+      await user.click(shareButton());
+      await waitFor(() => expect(mockConfirm).toHaveBeenCalled());
+      expect(mockConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          share: { mode: 'grants', relationshipIds: [PRIYA_REL] },
+          origin: { entryPoint: 'composer', audienceChoice: 'this_thread' },
+        })
+      );
+    });
+
+    it('offers the expert no options and names the client party', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(view(), EXPERT_FILES, { lens: 'expert' });
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+      expect(shareButton()).toHaveTextContent('Share with Acme Corp');
+    });
+  });
+
+  describe('sharing', () => {
+    /** AC1 — Share writes one grants share and the card appears in this thread. */
+    it('shares to just this expert, shows the card, clears the draft and toasts', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await user.type(composerBox(), 'Here is the NDA');
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      await user.click(shareButton());
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(mockConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: REQUEST_ID,
+          key: 'k1',
+          share: { mode: 'grants', relationshipIds: [PRIYA_REL] },
+          note: 'Here is the NDA',
+          origin: { entryPoint: 'composer', audienceChoice: 'this_thread' },
+        })
+      );
+      expect(screen.getByRole('button', { name: 'Open nda.pdf' })).toBeInTheDocument();
+      expect(screen.getByText('Priya Nair only')).toBeInTheDocument();
+      expect(composerBox()).toHaveValue('');
+      expect(mockToast.success).toHaveBeenCalledWith('Shared with Priya Nair.');
+    });
+
+    it('puts a card posted to ANOTHER thread into that thread, not this one', async () => {
+      const user = userEvent.setup();
+      mockConfirm.mockResolvedValue({
+        success: true,
+        view: CLIENT_FILE_VIEW,
+        threadMessages: [
+          {
+            relationshipId: MARCUS_REL,
+            message: cardMessage('m-other', { conversationId: 'conv-2' }),
+          },
+        ],
+      });
+      mockFetchThread.mockResolvedValue({
+        success: true,
+        messages: [cardMessage('m-other', { conversationId: 'conv-2' })],
+        hasEarlier: false,
+      });
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      await user.click(
+        within(screen.getByRole('dialog')).getByRole('radio', { name: /All interested/ })
+      );
+      await user.click(shareButton());
+      await waitFor(() => expect(mockConfirm).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Open nda.pdf' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Marcus' }));
+      expect(await screen.findByRole('button', { name: 'Open nda.pdf' })).toBeInTheDocument();
+    });
+
+    /** AC3 — Share pressed mid-upload completes on its own. */
+    it('completes a Share pressed mid-upload once the upload lands', async () => {
+      const user = userEvent.setup();
+      let finish: () => void = () => {};
+      mockPut.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+      );
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      await user.click(shareButton());
+      expect(shareButton()).toHaveTextContent('Sharing…');
+      expect(mockConfirm).not.toHaveBeenCalled();
+      await act(async () => finish());
+      await waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    /** AC3 — Cancel discards the upload and keeps the draft. */
+    it('discards the upload and keeps the draft on Cancel', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await user.type(composerBox(), 'Keep me');
+      await pickViaPaperclip(user);
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(mockPut).toHaveBeenCalled());
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(mockDiscard).toHaveBeenCalledWith({ requestId: REQUEST_ID, key: 'k1' });
+      expect(mockConfirm).not.toHaveBeenCalled();
+      expect(composerBox()).toHaveValue('Keep me');
+      expect(mockTrack).toHaveBeenCalledWith(REQUEST_FILE_EVENTS.SHARE_DIALOG_CANCELLED, {
+        entry_point: 'composer',
+        upload_complete: true,
+      });
+    });
+
+    it('keeps the dialog open and toasts when the share is refused', async () => {
+      const user = userEvent.setup();
+      mockConfirm.mockResolvedValueOnce({ success: false, error: 'This file was already shared.' });
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      await pickViaPaperclip(user);
+      await screen.findByRole('dialog');
+      await user.click(shareButton());
+      await waitFor(() =>
+        expect(mockToast.error).toHaveBeenCalledWith('This file was already shared.')
+      );
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(within(screen.getByRole('dialog')).getByRole('alert')).toHaveTextContent(
+        'This file was already shared.'
+      );
+    });
+  });
+
+  describe('file cards in the thread', () => {
+    it('renders a share message as a card, with the client’s audience badge', () => {
+      renderWithFiles(view({ initialMessages: [cardMessage('m-card') as never] }), CLIENT_FILES);
+      expect(screen.getByRole('button', { name: 'Open nda.pdf' })).toBeInTheDocument();
+      expect(screen.getByText('Priya Nair only')).toBeInTheDocument();
+      expect(screen.getByText('Here is the NDA')).toBeInTheDocument();
+    });
+
+    /** AC4 — the expert's card carries no audience. */
+    it('renders the expert’s card without any audience wording', () => {
+      const expertCard = cardMessage('m-card', {
+        senderUserId: 'user-client',
+        requestSharedFile: {
+          kind: 'expert',
+          file: {
+            id: 'file-1',
+            fileName: 'nda.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 5,
+            source: 'client',
+            uploadedByName: 'Northwind Industrial',
+            createdAtIso: '2026-06-09T12:00:00.000Z',
+            sharedBeforeYouJoined: false,
+            canDelete: false,
+          },
+        },
+      });
+      renderWithFiles(view({ initialMessages: [expertCard as never] }), EXPERT_FILES, {
+        lens: 'expert',
+      });
+      expect(screen.getByRole('button', { name: 'Open nda.pdf' })).toBeInTheDocument();
+      expect(screen.queryByText(/only$/)).not.toBeInTheDocument();
+    });
+
+    it('previews the file when its card is clicked', async () => {
+      const user = userEvent.setup();
+      renderWithFiles(view({ initialMessages: [cardMessage('m-card') as never] }), CLIENT_FILES);
+      await user.click(screen.getByRole('button', { name: 'Open nda.pdf' }));
+      expect(mockDownload).toHaveBeenCalledWith({
+        requestId: REQUEST_ID,
+        fileId: 'file-1',
+        purpose: 'preview',
+      });
+    });
+  });
+
+  describe('a card landing in a thread (the file_shared ping)', () => {
+    const ping = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      conversationId: 'conv-1',
+      messageId: 'm-ping',
+      senderUserId: 'user-expert',
+      createdAtIso: '2026-06-09T13:00:00.000Z',
+      ...overrides,
+    });
+
+    it('refetches the newest page and shows the card, naming the share in the tab preview', async () => {
+      mockFetchThread.mockResolvedValue({
+        success: true,
+        messages: [cardMessage('m-ping', { senderUserId: 'user-expert' })],
+        hasEarlier: false,
+      });
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      mockFetchThread.mockClear();
+      act(() => realtimeCapture.input?.onFileShared?.(ping()));
+      await waitFor(() =>
+        expect(mockFetchThread).toHaveBeenCalledWith({
+          requestId: REQUEST_ID,
+          relationshipId: PRIYA_REL,
+          includeFiles: false,
+        })
+      );
+      expect(await screen.findByRole('button', { name: 'Open nda.pdf' })).toBeInTheDocument();
+    });
+
+    it('flags another thread unread without opening it', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      act(() => realtimeCapture.input?.onFileShared?.(ping({ conversationId: 'conv-2' })));
+      expect(screen.getByText('Unread activity')).toBeInTheDocument();
+      expect(mockFetchThread).not.toHaveBeenCalled();
+    });
+
+    it('does not refetch for the viewer’s own share — the confirm result already added it', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      mockFetchThread.mockClear();
+      act(() => realtimeCapture.input?.onFileShared?.(ping({ senderUserId: VIEWER_ID })));
+      expect(mockFetchThread).not.toHaveBeenCalled();
+    });
+
+    it('ignores a ping for a conversation this page does not show', () => {
+      renderWithFiles(twoThreads(), CLIENT_FILES);
+      mockFetchThread.mockClear();
+      act(() => realtimeCapture.input?.onFileShared?.(ping({ conversationId: 'conv-elsewhere' })));
+      expect(mockFetchThread).not.toHaveBeenCalled();
+      expect(screen.queryByText('Unread activity')).not.toBeInTheDocument();
+    });
   });
 });

@@ -1,0 +1,4 @@
+ALTER TABLE "conversation_messages" ADD COLUMN "request_shared_file_id" uuid;--> statement-breakpoint
+ALTER TABLE "conversation_messages" ADD CONSTRAINT "conversation_messages_request_shared_file_id_request_shared_files_id_fk" FOREIGN KEY ("request_shared_file_id") REFERENCES "public"."request_shared_files"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "conversation_message_shared_file_idx" ON "conversation_messages" USING btree ("request_shared_file_id");--> statement-breakpoint
+ALTER TABLE "conversation_messages" ADD CONSTRAINT "conversation_message_body_or_file" CHECK ("conversation_messages"."body" <> '' OR "conversation_messages"."request_shared_file_id" IS NOT NULL);

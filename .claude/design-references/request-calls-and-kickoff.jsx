@@ -21,8 +21,21 @@
  *     actions render only on the current step (no disabled future buttons). The kickoff call
  *     row is optional and never gates approval. The subtitle is gone.
  *
+ *  5. FILE SHARING FROM THE CHAT (the "Whole page" prototype tab, which also shows 1–4
+ *     together). The composer paperclip returns on project requests and writes the SAME
+ *     request-file row as before (ADR-1048). The bottom "Files on this request" panel goes.
+ *     Files live in the REQUEST PANEL: the "Request documents" card becomes "Files" (the brief
+ *     plus the two most recent shares) and "All files · n" opens a sheet; the client can filter
+ *     it to what one expert can see. Nothing file-related sits in the thread header or the tab
+ *     strip — the header is for actions with this expert (calls, proposal, decline). Picking or dropping a file opens the reused share dialog at once, with a
+ *     note field and a primary button that names the audience. Client, matched request:
+ *     "{name} only" leads and is preselected. Direct request and expert: no options. Expert:
+ *     own conversation only, and no audience shown anywhere.
+ *     A share posts a file card (carrying the note) into every thread it reaches at share
+ *     time; a track that opens later finds "All interested experts" files in Files only.
+ *
  * Out of scope here: the multi-expert stepper / per-tab status chips (waiting on the
- * multi-EOI test run), the page StatusStepper, request context, files panel.
+ * multi-EOI test run), the page StatusStepper, request context.
  *
  * ── Implementation map (real code, verified 2026-10-23) ─────────────────────────────────
  *  · apps/web/src/components/balo/project-request/conversation/thread-actions.ts
@@ -45,12 +58,25 @@
  *      booking for the profile route (`/experts/{username}?book=1&src=request_thread`).
  *  · API work (separate ticket): project-level meeting context after acceptance; relax
  *      `assertNoLiveIntroCall` so a second call can be booked before acceptance.
+ *  · Change 5 (files): `conversation/message-composer.tsx` — pass `onAttach` again on the
+ *      project-request surface (it was dropped by BAL-431 / OSD-2); it, and a drop on the
+ *      thread, open the share dialog. Upload on pick via `request-shared-file-upload.ts`;
+ *      write the audience on Share via `confirm-request-file-upload.ts` (immutable once
+ *      created). `files/share-file-sheet.tsx` gains a thread mode (file preselected, no
+ *      picker, leading "{name} only" option, or no options for direct / expert), a note field
+ *      in both modes, an audience-named primary, the picked file shown as plain content (no
+ *      outline, so it never reads as an option), and the description "Choose who can see it."
+ *      replaced by a "Who can see it" label above the options. Choosing "Only specific
+ *      experts" expands the checklist inside that same card, not in a second box below it. `files/request-files-panel.tsx`'s list, `request-file-row.tsx`
+ *      and `request-file-audience-badges.tsx` move into the All files sheet, opened from the
+ *      request panel's Files card (the renamed "Request documents" card in the shell). A file
+ *      message in the conversation, referencing the request file, is new.
  *  · Buttons: solid `--primary` throughout. This is a dashboard surface, so the blue→violet
  *      gradient comes off the composer send button, the thread nudge's PRIMARY_CLASS and the
  *      header's Request / Build proposal CTAs (`from-primary bg-gradient-to-r to-violet-600`).
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   BadgeCheck,
   Banknote,
@@ -59,12 +85,20 @@ import {
   CalendarPlus,
   Check,
   Clock,
+  File as FileIcon,
+  FileSpreadsheet,
   FileText,
+  Lock,
   MessageSquare,
+  Paperclip,
   PartyPopper,
   Receipt,
+  RotateCcw,
   Send,
+  Upload,
   User,
+  UserPlus,
+  Users,
   Video,
   X,
   Zap,
@@ -413,7 +447,7 @@ function JoinSlot({ join, mobile }) {
 
 // ── Thread header ───────────────────────────────────────────────────────────────────────────
 
-function CallGroup({ slot, mobile }) {
+function CallGroup({ slot, mobile, expert = EXPERT }) {
   if (slot.kind === 'none') return null;
   if (slot.kind === 'propose') {
     return (
@@ -432,7 +466,7 @@ function CallGroup({ slot, mobile }) {
         data-route={slot.route}
         title={
           slot.route === 'profile'
-            ? `Opens ${EXPERT.first}'s profile to book a consultation`
+            ? `Opens ${expert.first}'s profile to book a consultation`
             : undefined
         }
       >
@@ -470,7 +504,7 @@ function NextCallLine({ slot }) {
   );
 }
 
-function ThreadHeader({ lens, stage, slot, mobile }) {
+function ThreadHeader({ lens, stage, slot, mobile, expert = EXPERT }) {
   const showViewProposal = stage === 'active';
   const showDecline = lens === 'client' && stage === 'active';
   const name = (
@@ -486,7 +520,7 @@ function ThreadHeader({ lens, stage, slot, mobile }) {
           textOverflow: 'ellipsis',
         }}
       >
-        {EXPERT.name}
+        {expert.name}
         {lens === 'expert' && (
           <span style={{ marginLeft: 6, fontSize: 11, color: c.muted, fontWeight: 400 }}>
             (you)
@@ -516,7 +550,7 @@ function ThreadHeader({ lens, stage, slot, mobile }) {
   const decline = showDecline ? (
     <button
       type="button"
-      aria-label={`Decline ${EXPERT.name}`}
+      aria-label={`Decline ${expert.name}`}
       style={{
         ...btnBase,
         width: 36,
@@ -544,13 +578,13 @@ function ThreadHeader({ lens, stage, slot, mobile }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Avatar initials={EXPERT.initials} />
+          <Avatar initials={expert.initials} />
           {name}
           {decline}
         </div>
         {(slot.kind !== 'none' || proposal) && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <CallGroup slot={slot} mobile />
+            <CallGroup slot={slot} mobile expert={expert} />
             {proposal}
           </div>
         )}
@@ -569,9 +603,9 @@ function ThreadHeader({ lens, stage, slot, mobile }) {
         gap: 10,
       }}
     >
-      <Avatar initials={EXPERT.initials} />
+      <Avatar initials={expert.initials} />
       {name}
-      <CallGroup slot={slot} />
+      <CallGroup slot={slot} expert={expert} />
       {proposal}
       {decline}
     </div>
@@ -580,7 +614,7 @@ function ThreadHeader({ lens, stage, slot, mobile }) {
 
 // ── Thread nudge (the live edge at the top of the thread) ───────────────────────────────────
 
-function threadNudgeFor(lens, requestStatus, stage) {
+function threadNudgeFor(lens, requestStatus, stage, expert = EXPERT) {
   if (lens === 'client') {
     if (requestStatus === 'closed')
       return {
@@ -593,19 +627,19 @@ function threadNudgeFor(lens, requestStatus, stage) {
       return {
         variant: 'done',
         icon: MessageSquare,
-        headline: `You didn't select ${EXPERT.first}`,
+        headline: `You didn't select ${expert.first}`,
         sub: "They've been notified graciously. The conversation stays here for your records.",
       };
     // CHANGED — accepted, won thread: nothing to do here, so it is an event, not a nudge.
     if (requestStatus === 'accepted')
-      return { variant: 'event', headline: `You chose ${EXPERT.first} for this project` };
+      return { variant: 'event', headline: `You chose ${expert.first} for this project` };
     // CHANGED — the workspace link is live (was `stub`, always disabled).
     if (requestStatus === 'kickoff_approved')
       return {
         variant: 'done',
         icon: Zap,
         headline: 'Your project is underway',
-        sub: `Milestones, files and updates from ${EXPERT.first} live in the workspace.`,
+        sub: `Milestones, files and updates from ${expert.first} live in the workspace.`,
         primary: {
           label: 'Open project workspace',
           icon: Briefcase,
@@ -615,9 +649,9 @@ function threadNudgeFor(lens, requestStatus, stage) {
     return {
       variant: 'commit',
       icon: Check,
-      headline: `${EXPERT.first}'s proposal is ready`,
+      headline: `${expert.first}'s proposal is ready`,
       sub: 'Read it in full, then accept it or ask for changes.',
-      primary: { label: `Accept ${EXPERT.first}'s proposal`, icon: Check },
+      primary: { label: `Accept ${expert.first}'s proposal`, icon: Check },
       secondary: { label: 'View full proposal', icon: FileText },
     };
   }
@@ -1262,6 +1296,1684 @@ function Notes() {
   );
 }
 
+// ── Change 5 — file sharing from the chat ───────────────────────────────────────────────────
+//
+// One store (request files, ADR-1048), two ways in: the composer paperclip (new on project
+// requests, plus drag and drop onto the conversation) and the "All files" sheet (replaces the
+// bottom "Files on this request" panel). Picking or dropping a file opens the share dialog at
+// once; nothing waits in the composer.
+//
+//  · Client, matched request: three options, "{name} only" leading and preselected.
+//  · Client, direct request, and the expert lens: no options (one recipient). Experts never
+//    see an audience anywhere (ADR-1048's concealment rule: the expert view has no audience).
+//  · The primary button names the audience. The upload runs while the dialog is open; Share
+//    during the upload shows progress and completes on its own. The audience is written on
+//    Share (it is immutable once created).
+//  · A share posts a file card (carrying the note) into every thread it reaches AT SHARE TIME.
+//    A track that opens later finds "All interested experts" files in its Files list only.
+
+const FS_EXPERTS = {
+  r1: { id: 'r1', name: 'Charles Akintunde', first: 'Charles', initials: 'CA' },
+  r2: { id: 'r2', name: 'Priya Raman', first: 'Priya', initials: 'PR' },
+  r3: { id: 'r3', name: 'Sam Okafor', first: 'Sam', initials: 'SO' },
+};
+const FS_LATE_JOINER = 'r3';
+
+export function initialFileState(kind) {
+  const threads = kind === 'direct' ? ['r1'] : ['r1', 'r2'];
+  const files = [
+    {
+      id: 'f1',
+      name: 'Security questionnaire.xlsx',
+      size: '48 KB',
+      from: 'client',
+      audience: { type: 'all' },
+      note: null,
+      when: '2 days ago',
+    },
+    {
+      id: 'f2',
+      name: 'Approach overview.pdf',
+      size: '1.2 MB',
+      from: 'r1',
+      audience: { type: 'own', id: 'r1' },
+      note: null,
+      when: 'yesterday',
+    },
+  ];
+  const messages = {
+    r1: [
+      { id: 'm1', kind: 'file', fileId: 'f1', from: 'client' },
+      {
+        id: 'm2',
+        kind: 'text',
+        from: 'r1',
+        text: 'Thanks for the brief. Could you send the current lead-flow export?',
+      },
+      { id: 'm3', kind: 'file', fileId: 'f2', from: 'r1' },
+    ],
+    r2: [
+      { id: 'm4', kind: 'file', fileId: 'f1', from: 'client' },
+      {
+        id: 'm5',
+        kind: 'text',
+        from: 'r2',
+        text: 'Happy to look at the Marketing Cloud side too.',
+      },
+    ],
+    r3: [],
+  };
+  return { kind, threads, files, messages, seq: 10 };
+}
+
+/** Which live threads a share reaches right now. */
+export function receivingThreads(audience, liveThreads) {
+  if (audience.type === 'all') return [...liveThreads];
+  if (audience.type === 'some') return audience.ids.filter((id) => liveThreads.includes(id));
+  return [audience.id];
+}
+
+/** Whether a thread's expert can see a file. "all" is dynamic: a later track sees it too. */
+export function canSee(file, threadId, liveThreads) {
+  if (file.audience.type === 'all') return liveThreads.includes(threadId);
+  if (file.audience.type === 'some') return file.audience.ids.includes(threadId);
+  return file.audience.id === threadId;
+}
+
+export function defaultAudience(lens, threadId) {
+  return lens === 'client' ? { type: 'some', ids: [threadId] } : { type: 'own', id: threadId };
+}
+
+export function canChangeAudience(lens, kind) {
+  return lens === 'client' && kind === 'matched';
+}
+
+const joinNames = (names) =>
+  names.length <= 1
+    ? names.join('')
+    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
+/** Client and admin copy only — the expert lens never renders an audience. */
+export function audienceText(audience, liveThreads) {
+  if (audience.type === 'all') return `All interested experts · ${liveThreads.length}`;
+  if (audience.type === 'own') return 'Their conversation only';
+  if (audience.ids.length === 0) return 'No experts have access';
+  if (audience.ids.length === 1) return `${FS_EXPERTS[audience.ids[0]].first} only`;
+  return joinNames(audience.ids.map((id) => FS_EXPERTS[id].first));
+}
+
+/** Share a file: one store row, plus a card (with the note) in every thread it reaches now. */
+export function shareFile(state, { name, size, audience, note, from }) {
+  const seq = state.seq + 1;
+  const fileId = `f${seq}`;
+  const file = { id: fileId, name, size, from, audience, note: note || null, when: 'just now' };
+  const messages = { ...state.messages };
+  for (const t of receivingThreads(audience, state.threads)) {
+    messages[t] = [
+      ...(messages[t] ?? []),
+      { id: `m${seq}-${t}`, kind: 'file', fileId, from, note: note || null },
+    ];
+  }
+  return { ...state, seq, files: [...state.files, file], messages };
+}
+
+export function postText(state, threadId, from, text) {
+  const seq = state.seq + 1;
+  return {
+    ...state,
+    seq,
+    messages: {
+      ...state.messages,
+      [threadId]: [
+        ...(state.messages[threadId] ?? []),
+        { id: `m${seq}`, kind: 'text', from, text },
+      ],
+    },
+  };
+}
+
+/** A new expert expresses interest. Their thread starts empty: no back-filled cards. */
+export function addLateExpert(state) {
+  if (state.threads.includes(FS_LATE_JOINER)) return state;
+  return { ...state, threads: [...state.threads, FS_LATE_JOINER] };
+}
+
+/** Remove one expert's access to a "specific experts" file (the shipped revoke). */
+export function revokeGrant(state, fileId, threadId) {
+  return {
+    ...state,
+    files: state.files.map((f) =>
+      f.id === fileId && f.audience.type === 'some'
+        ? { ...f, audience: { type: 'some', ids: f.audience.ids.filter((id) => id !== threadId) } }
+        : f
+    ),
+  };
+}
+
+const fmtSize = (bytes) =>
+  bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+function FileGlyph({ name, size = 18, color = c.muted }) {
+  const Icon = /\.(xlsx|xls|csv)$/i.test(name)
+    ? FileSpreadsheet
+    : /\.(pdf|docx?|txt|md)$/i.test(name)
+      ? FileText
+      : FileIcon;
+  return <Icon size={size} color={color} aria-hidden="true" />;
+}
+
+function AudienceBadge({ audience, liveThreads, onRevoke }) {
+  if (audience.type === 'some' && audience.ids.length > 0 && onRevoke) {
+    return (
+      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+        {audience.ids.map((id) => (
+          <span
+            key={id}
+            data-badge="grant"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 2,
+              fontSize: 11.5,
+              fontWeight: 500,
+              padding: '2px 4px 2px 8px',
+              borderRadius: 999,
+              background: 'rgba(124, 58, 237, 0.08)',
+              color: '#6d28d9',
+            }}
+          >
+            {FS_EXPERTS[id].first} only
+            <button
+              type="button"
+              aria-label={`Remove access for ${FS_EXPERTS[id].first}`}
+              onClick={() => onRevoke(id)}
+              style={{
+                border: 'none',
+                background: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                padding: '0 4px',
+                display: 'inline-flex',
+              }}
+            >
+              <X size={11} aria-hidden="true" />
+            </button>
+          </span>
+        ))}
+      </span>
+    );
+  }
+  const isAll = audience.type === 'all';
+  return (
+    <span
+      data-badge={audience.type}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        fontSize: 11.5,
+        fontWeight: 500,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: isAll
+          ? 'rgba(37, 99, 235, 0.08)'
+          : audience.type === 'some'
+            ? 'rgba(124, 58, 237, 0.08)'
+            : c.bubbleTheirs,
+        color: isAll ? '#1d4ed8' : audience.type === 'some' ? '#6d28d9' : c.muted,
+      }}
+    >
+      {isAll ? <Users size={11} aria-hidden="true" /> : <Lock size={11} aria-hidden="true" />}
+      {audienceText(audience, liveThreads)}
+    </span>
+  );
+}
+
+// ── The share dialog — opens the moment a file is picked or dropped ─────────────────────────
+
+/** The primary button names the audience, so the commit says exactly what it does. */
+export function shareLabel(lens, audience) {
+  if (lens === 'expert') return `Share with ${COMPANY}`;
+  if (audience.type === 'all') return 'Share with all interested experts';
+  if (audience.ids.length === 1) return `Share with ${FS_EXPERTS[audience.ids[0]].first}`;
+  if (audience.ids.length === 0) return 'Share';
+  return `Share with ${audience.ids.length} experts`;
+}
+
+/**
+ * One choice in the dialog. The card is the container; the radio is its header row. When a
+ * choice has follow-up input (the expert checklist), it expands INSIDE the same card rather
+ * than opening a second box below it. Checkboxes sit beside the radio button, never inside it
+ * (no interactive content nested in a <button>).
+ */
+function OptionCard({ selected, icon: Icon, title, sub, onClick, value, children }) {
+  return (
+    <div
+      data-option-card={value}
+      style={{
+        borderRadius: 10,
+        border: `1px solid ${selected ? c.primary : c.border}`,
+        background: selected ? c.primarySoft : c.card,
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        data-option={value}
+        onClick={onClick}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          width: '100%',
+          textAlign: 'left',
+          padding: '10px 12px',
+          cursor: 'pointer',
+          fontFamily: FONT,
+          border: 'none',
+          background: 'none',
+        }}
+      >
+        <Icon
+          size={16}
+          color={c.primary}
+          style={{ marginTop: 2, flexShrink: 0 }}
+          aria-hidden="true"
+        />
+        <span>
+          <span style={{ display: 'block', fontSize: 14, fontWeight: 500, color: c.text }}>
+            {title}
+          </span>
+          <span style={{ display: 'block', fontSize: 12.5, color: c.muted, marginTop: 1 }}>
+            {sub}
+          </span>
+        </span>
+      </button>
+      {selected && children}
+    </div>
+  );
+}
+
+/**
+ * The shipped share dialog, reused for both ways in.
+ *  · mode 'thread' — opened by the composer paperclip or a drop on the thread. The file is
+ *    already picked and uploading. Client on a matched request gets three options with
+ *    "{name} only" leading and preselected. Direct requests and the expert lens get no
+ *    options: one recipient, nothing to choose.
+ *  · mode 'new' — "Share with several experts" in All files: file picker, the two shipped
+ *    options, "All interested experts" preselected.
+ * Both carry a note field (the caption) and a primary button named by the audience. Pressing
+ * it during the upload shows progress and completes on its own; Cancel discards the upload.
+ */
+export function ShareDialog({
+  mode,
+  lens,
+  kind,
+  threadId,
+  liveThreads,
+  upload,
+  pending,
+  initialAudience,
+  initialNote = '',
+  onCancel,
+  onShare,
+  mobile,
+}) {
+  const showOptions = mode === 'new' || canChangeAudience(lens, kind);
+  const seed =
+    initialAudience ?? (mode === 'new' ? { type: 'all' } : defaultAudience(lens, threadId));
+  const seedChoice =
+    seed.type === 'all'
+      ? 'all'
+      : seed.type === 'own'
+        ? 'own'
+        : seed.ids.length === 1 && seed.ids[0] === threadId
+          ? 'this'
+          : 'some';
+  const [choice, setChoice] = useState(seedChoice);
+  const [picks, setPicks] = useState(seed.type === 'some' ? seed.ids : threadId ? [threadId] : []);
+  const [note, setNote] = useState(initialNote);
+  const [newFile, setNewFile] = useState(null);
+  const [error, setError] = useState(null);
+  const toggle = (id) => setPicks((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const audience =
+    choice === 'own'
+      ? { type: 'own', id: threadId }
+      : choice === 'this'
+        ? { type: 'some', ids: [threadId] }
+        : choice === 'all'
+          ? { type: 'all' }
+          : { type: 'some', ids: picks };
+  const reaches = receivingThreads(audience, liveThreads);
+  const file = mode === 'new' ? newFile : upload;
+
+  const share = () => {
+    if (pending) return;
+    if (mode === 'new' && newFile === null) return setError('Choose a file to share.');
+    if (audience.type === 'some' && audience.ids.length === 0)
+      return setError('Pick at least one expert.');
+    onShare(audience, note.trim(), newFile);
+  };
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(15, 23, 42, 0.35)',
+        display: 'flex',
+        alignItems: mobile ? 'flex-end' : 'center',
+        justifyContent: 'center',
+        padding: mobile ? 0 : 24,
+        zIndex: 30,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-title"
+        data-dialog={mode}
+        style={{
+          background: c.card,
+          width: '100%',
+          maxWidth: mobile ? '100%' : 460,
+          maxHeight: '100%',
+          overflowY: 'auto',
+          borderRadius: mobile ? '16px 16px 0 0' : 14,
+          padding: 20,
+          boxShadow: '0 12px 40px rgba(15, 23, 42, 0.18)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 12,
+          }}
+        >
+          <div>
+            <h3
+              id="share-title"
+              style={{ margin: 0, fontSize: 17, fontWeight: 600, color: c.text }}
+            >
+              Share a file
+            </h3>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onCancel}
+            style={{
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              color: c.muted,
+              padding: 4,
+            }}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        {mode === 'thread' ? (
+          <div
+            data-dialog-file=""
+            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '2px 0' }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 10,
+                background: c.bubbleTheirs,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <FileGlyph name={upload.name} size={19} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 13.5,
+                  fontWeight: 500,
+                  color: c.text,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {upload.name}
+              </p>
+              {upload.progress < 100 ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  <span
+                    style={{
+                      flex: 1,
+                      height: 4,
+                      borderRadius: 2,
+                      background: c.border,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        height: '100%',
+                        width: `${upload.progress}%`,
+                        background: c.primary,
+                      }}
+                    />
+                  </span>
+                  <span
+                    style={{ fontSize: 11.5, color: c.muted, fontVariantNumeric: 'tabular-nums' }}
+                  >
+                    {upload.progress}%
+                  </span>
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: 12, color: c.muted }}>{upload.size}</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label htmlFor="fs-new-file" style={{ fontSize: 12, fontWeight: 500, color: c.muted }}>
+              File
+            </label>
+            <input
+              id="fs-new-file"
+              type="file"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) setNewFile({ name: f.name, size: fmtSize(f.size) });
+                setError(null);
+              }}
+              style={{
+                border: `1px solid ${c.border}`,
+                borderRadius: 8,
+                padding: '6px 10px',
+                fontSize: 13,
+                fontFamily: FONT,
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setNewFile({ name: 'Org data model export.csv', size: '220 KB' });
+                setError(null);
+              }}
+              style={{
+                alignSelf: 'flex-start',
+                border: 'none',
+                background: 'none',
+                padding: 0,
+                color: c.primary,
+                fontSize: 12.5,
+                cursor: 'pointer',
+                fontFamily: FONT,
+              }}
+            >
+              {newFile ? `Selected: ${newFile.name}` : 'Prototype: use a sample file'}
+            </button>
+          </div>
+        )}
+
+        {showOptions && (
+          <div
+            role="radiogroup"
+            aria-labelledby="share-audience-label"
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}
+          >
+            <span
+              id="share-audience-label"
+              data-audience-label=""
+              style={{ fontSize: 12, fontWeight: 500, color: c.muted }}
+            >
+              Who can see it
+            </span>
+            {mode === 'thread' && (
+              <OptionCard
+                value="this"
+                selected={choice === 'this'}
+                icon={Lock}
+                title={`${FS_EXPERTS[threadId].first} only`}
+                sub="Just this conversation."
+                onClick={() => {
+                  setChoice('this');
+                  setError(null);
+                }}
+              />
+            )}
+            <OptionCard
+              value="all"
+              selected={choice === 'all'}
+              icon={Users}
+              title={`All interested experts · ${liveThreads.length}`}
+              sub="Experts who express interest later will also see this file."
+              onClick={() => {
+                setChoice('all');
+                setError(null);
+              }}
+            />
+            <OptionCard
+              value="some"
+              selected={choice === 'some'}
+              icon={Lock}
+              title="Only specific experts"
+              sub="For sensitive documents — an NDA-gated contract, for example."
+              onClick={() => {
+                setChoice('some');
+                setError(null);
+              }}
+            >
+              {/* Indented to the title's left edge: 12px card padding + 16px icon + 10px gap. */}
+              <div
+                role="group"
+                aria-label="Experts who can see it"
+                data-expert-picks=""
+                style={{ padding: '0 12px 8px 38px', display: 'flex', flexDirection: 'column' }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    height: 1,
+                    background: c.primaryBorder,
+                    opacity: 0.5,
+                    margin: '0 0 4px',
+                  }}
+                />
+                {liveThreads.map((id) => (
+                  <label
+                    key={id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      minHeight: mobile ? 44 : 36,
+                      fontSize: 14,
+                      color: c.text,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={picks.includes(id)}
+                      onChange={() => {
+                        toggle(id);
+                        setError(null);
+                      }}
+                      style={{ width: 16, height: 16, accentColor: c.primary, margin: 0 }}
+                    />
+                    {FS_EXPERTS[id].name}
+                    {id === threadId && (
+                      <span style={{ fontSize: 12, color: c.muted }}>this conversation</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+            </OptionCard>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label htmlFor="fs-note" style={{ fontSize: 12, fontWeight: 500, color: c.muted }}>
+            Note (optional)
+          </label>
+          <textarea
+            id="fs-note"
+            data-note=""
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Add a note to go with the file"
+            style={{
+              resize: 'vertical',
+              border: `1px solid ${c.border}`,
+              borderRadius: 10,
+              padding: '9px 12px',
+              fontSize: 14,
+              fontFamily: FONT,
+              color: c.text,
+            }}
+          />
+        </div>
+
+        {lens === 'client' &&
+          mode === 'thread' &&
+          showOptions &&
+          !reaches.includes(threadId) &&
+          reaches.length > 0 && (
+            <p data-hint="excluded" style={{ margin: 0, fontSize: 12.5, color: c.warning }}>
+              This file won't appear in this conversation. Only{' '}
+              {joinNames(reaches.map((t) => FS_EXPERTS[t].first))} will see it.
+            </p>
+          )}
+        {lens === 'client' && showOptions && reaches.length > 1 && (
+          <p data-hint="note-travels" style={{ margin: 0, fontSize: 12.5, color: c.muted }}>
+            Your note goes with the file to everyone it's shared with.
+          </p>
+        )}
+        {error && (
+          <p role="alert" style={{ margin: 0, fontSize: 12.5, color: '#dc2626' }}>
+            {error}
+          </p>
+        )}
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8,
+            marginTop: 4,
+            flexWrap: 'wrap',
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              ...btnBase,
+              padding: '0 14px',
+              border: `1px solid ${c.border}`,
+              background: c.card,
+              color: c.text,
+              fontWeight: 500,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-dialog-confirm=""
+            aria-busy={pending || undefined}
+            onClick={share}
+            style={{
+              ...btnBase,
+              padding: '0 14px',
+              border: 'none',
+              background: c.primary,
+              color: '#fff',
+            }}
+          >
+            {pending ? `Sharing… ${file?.progress ?? 100}%` : shareLabel(lens, audience)}
+            {!pending && <Check size={14} aria-hidden="true" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Files: one card in the request panel, one sheet ─────────────────────────────────────────
+//
+// Files live in the request panel, not the thread header or the tab strip: the header is for
+// actions you take with THIS expert (calls, the proposal, declining). The card replaces
+// "Request documents" — the brief plus recently shared files — and "All files · n" opens the
+// sheet. On mobile the panel sits in the request sheet.
+
+const BRIEF = { id: 'brief', name: '210601 - NDC CRM Brief vF.pdf', size: '260 KB' };
+
+function BriefRow({ compact }) {
+  return (
+    <li
+      data-brief=""
+      style={{
+        display: 'flex',
+        gap: 10,
+        padding: compact ? '8px 0' : '10px 10px',
+        alignItems: 'center',
+      }}
+    >
+      <span
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 8,
+          background: 'rgba(220, 38, 38, 0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <FileText size={17} color="#dc2626" aria-hidden="true" />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p
+          style={{
+            margin: 0,
+            fontSize: 13.5,
+            fontWeight: 500,
+            color: c.text,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {BRIEF.name}
+        </p>
+        <p style={{ margin: 0, fontSize: 12, color: c.muted }}>Request brief · {BRIEF.size}</p>
+      </div>
+    </li>
+  );
+}
+
+function SharedFileRow({ f, lens, viewerThread, liveThreads, onRevoke, compact }) {
+  const by =
+    lens === 'client'
+      ? f.from === 'client'
+        ? 'Shared by you'
+        : `From ${FS_EXPERTS[f.from].first}`
+      : f.from === viewerThread
+        ? 'Shared by you'
+        : `From ${COMPANY}`;
+  return (
+    <li
+      data-file-row={f.id}
+      style={{ display: 'flex', gap: 10, padding: compact ? '8px 0' : '10px 10px' }}
+    >
+      <span
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 8,
+          background: c.bubbleTheirs,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <FileGlyph name={f.name} size={17} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <p
+          style={{
+            margin: 0,
+            fontSize: 13.5,
+            fontWeight: 500,
+            color: c.text,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {f.name}
+        </p>
+        <p style={{ margin: 0, fontSize: 12, color: c.muted }}>
+          {by} · {f.when}
+          {compact ? '' : ` · ${f.size}`}
+        </p>
+        {/* Client only — the expert lens has no audience field (ADR-1048). */}
+        {lens === 'client' && (
+          <AudienceBadge
+            audience={f.audience}
+            liveThreads={liveThreads}
+            onRevoke={
+              onRevoke && f.audience.type === 'some' ? (id) => onRevoke(f.id, id) : undefined
+            }
+          />
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** The request panel's Files card (was "Request documents"). */
+function FilesCard({ lens, files, viewerThread, liveThreads, onOpenAll }) {
+  const recent = [...files].reverse().slice(0, 2);
+  return (
+    <section
+      aria-label="Files"
+      data-files-card=""
+      style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 16, padding: 18 }}
+    >
+      <h3
+        style={{
+          margin: '0 0 6px',
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: c.muted,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <Paperclip size={13} aria-hidden="true" />
+        Files
+      </h3>
+      <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        <BriefRow compact />
+        {recent.map((f) => (
+          <SharedFileRow
+            key={f.id}
+            f={f}
+            lens={lens}
+            viewerThread={viewerThread}
+            liveThreads={liveThreads}
+            compact
+          />
+        ))}
+      </ul>
+      <button
+        type="button"
+        data-files-card-all=""
+        onClick={onOpenAll}
+        style={{
+          ...btnBase,
+          width: '100%',
+          marginTop: 8,
+          border: `1px solid ${c.border}`,
+          background: c.card,
+          color: c.text,
+          fontWeight: 500,
+        }}
+      >
+        All files · {files.length + 1}
+      </button>
+    </section>
+  );
+}
+
+/** The full list. Client on a matched request can filter to what one expert can see. */
+function FilesSheet({
+  files,
+  lens,
+  viewerThread,
+  liveThreads,
+  onClose,
+  onRevoke,
+  onShareNew,
+  mobile,
+  initialFilter = 'all',
+}) {
+  const [filter, setFilter] = useState(initialFilter);
+  const showFilter = lens === 'client' && liveThreads.length > 1;
+  const shown = filter === 'all' ? files : files.filter((f) => canSee(f, filter, liveThreads));
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(15, 23, 42, 0.25)',
+        display: 'flex',
+        justifyContent: 'flex-end',
+        alignItems: mobile ? 'flex-end' : 'stretch',
+        zIndex: 25,
+      }}
+    >
+      <aside
+        role="dialog"
+        aria-label="All files on this request"
+        data-files-sheet=""
+        style={{
+          background: c.card,
+          width: mobile ? '100%' : 420,
+          maxHeight: mobile ? '85%' : '100%',
+          borderRadius: mobile ? '16px 16px 0 0' : '0',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '-8px 0 30px rgba(15, 23, 42, 0.12)',
+        }}
+      >
+        <div
+          style={{
+            padding: '16px 18px 12px',
+            borderBottom: `1px solid ${c.border}`,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: c.text }}>
+                {lens === 'client' ? 'All files on this request' : 'Files'}
+              </h3>
+              {lens === 'client' && (
+                <p style={{ margin: '2px 0 0', fontSize: 12.5, color: c.muted }}>
+                  You see every file. Experts see only what is shared with them.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label="Close files"
+              onClick={onClose}
+              style={{
+                border: 'none',
+                background: 'none',
+                cursor: 'pointer',
+                color: c.muted,
+                padding: 4,
+              }}
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+          {showFilter && (
+            <div
+              role="radiogroup"
+              aria-label="Show files"
+              data-files-filter=""
+              style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}
+            >
+              {[
+                ['all', 'All'],
+                ...liveThreads.map((id) => [id, `${FS_EXPERTS[id].first} can see`]),
+              ].map(([v, l]) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={filter === v}
+                  data-filter={v}
+                  onClick={() => setFilter(v)}
+                  style={{
+                    ...btnBase,
+                    minHeight: 30,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    padding: '0 10px',
+                    borderRadius: 999,
+                    border: `1px solid ${filter === v ? c.primaryBorder : c.border}`,
+                    background: filter === v ? c.primarySoft : c.card,
+                    color: filter === v ? c.primary : c.muted,
+                  }}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 8, overflowY: 'auto', flex: 1 }}>
+          <BriefRow />
+          {shown.map((f) => (
+            <SharedFileRow
+              key={f.id}
+              f={f}
+              lens={lens}
+              viewerThread={viewerThread}
+              liveThreads={liveThreads}
+              onRevoke={onRevoke}
+            />
+          ))}
+          {shown.length === 0 && (
+            <li style={{ padding: 12, fontSize: 13, color: c.faint }}>No shared files yet.</li>
+          )}
+        </ul>
+        {onShareNew && (
+          <div style={{ padding: 14, borderTop: `1px solid ${c.border}` }}>
+            <button
+              type="button"
+              data-share-new=""
+              onClick={onShareNew}
+              style={{
+                ...btnBase,
+                width: '100%',
+                minHeight: 40,
+                border: `1px solid ${c.border}`,
+                background: c.card,
+                color: c.text,
+              }}
+            >
+              <Upload size={14} aria-hidden="true" />
+              Share with several experts
+            </button>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+// ── Thread pieces ───────────────────────────────────────────────────────────────────────────
+
+function FileCard({ file, mine, lens, liveThreads, note }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: mine ? 'flex-end' : 'flex-start',
+        gap: 4,
+      }}
+    >
+      <div
+        data-file-card={file.id}
+        style={{
+          maxWidth: '78%',
+          border: `1px solid ${mine ? c.primaryBorder : c.border}`,
+          background: mine ? c.bubbleMine : c.card,
+          borderRadius: 14,
+          padding: '10px 12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <FileGlyph name={file.name} size={20} color={mine ? c.primary : c.muted} />
+          <div style={{ minWidth: 0 }}>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13.5,
+                fontWeight: 500,
+                color: c.text,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {file.name}
+            </p>
+            <p style={{ margin: 0, fontSize: 12, color: c.muted }}>{file.size}</p>
+          </div>
+        </div>
+        {note && <p style={{ margin: 0, fontSize: 14, color: c.text, lineHeight: 1.5 }}>{note}</p>}
+      </div>
+      {/* Client lens only. The expert lens has no audience field (ADR-1048 concealment). */}
+      {lens === 'client' && <AudienceBadge audience={file.audience} liveThreads={liveThreads} />}
+    </div>
+  );
+}
+
+// ── The whole page: calls, kickoff and files together ───────────────────────────────────────
+
+function RequestBriefCard() {
+  return (
+    <section
+      aria-label="The request"
+      style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 16, padding: 18 }}
+    >
+      <h3
+        style={{
+          margin: '0 0 8px',
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: c.muted,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <FileText size={13} aria-hidden="true" />
+        The request
+      </h3>
+      <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: c.text, lineHeight: 1.35 }}>
+        National Dental Care — CRM and Marketing Automation Implementation
+      </p>
+      <p style={{ margin: '8px 0 0', fontSize: 13, color: c.faint }}>
+        Snapshot and details, unchanged.
+      </p>
+    </section>
+  );
+}
+
+export function RequestPageView({
+  lens = 'client',
+  kind = 'matched',
+  viewport = 'desktop',
+  requestStatus = 'accepted',
+  call = 'd1',
+  initial,
+}) {
+  const mobile = viewport === 'mobile';
+  const [state, setState] = useState(() => initial?.state ?? initialFileState(kind));
+  const viewerThread = 'r1'; // the expert lens views as Charles
+  const [current, setCurrent] = useState(initial?.current ?? 'r1');
+  const [upload, setUpload] = useState(initial?.upload ?? null);
+  const [pending, setPending] = useState(initial?.pending ?? null);
+  const [draft, setDraft] = useState(initial?.draft ?? '');
+  const [dialog, setDialog] = useState(initial?.dialog ?? null); // null | 'thread' | 'new'
+  const [sheet, setSheet] = useState(initial?.sheet ?? false);
+  const [railOpen, setRailOpen] = useState(initial?.railOpen ?? false); // mobile request sheet
+  const [dragging, setDragging] = useState(false);
+  const fileInput = useRef(null);
+
+  const threadId = lens === 'expert' ? viewerThread : current;
+  const live = state.threads;
+  const expert = FS_EXPERTS[threadId];
+  const showTabs = lens === 'client' && state.kind === 'matched' && live.length > 1;
+  const from = lens === 'client' ? 'client' : viewerThread;
+  const panelFiles =
+    lens === 'client' ? state.files : state.files.filter((f) => canSee(f, viewerThread, live));
+
+  // Calls and stage, per thread: Charles is the expert who wins at acceptance.
+  const decided = requestStatus !== 'proposal_submitted';
+  const stage = !decided ? 'active' : threadId === 'r1' ? 'won' : 'not_selected';
+  const beforeKickoff = requestStatus !== 'kickoff_approved';
+  const slot = deriveCallSlot({
+    lens,
+    stage,
+    calls: threadId === 'r1' ? CALL_SCENARIOS[call].calls : [],
+    beforeKickoff,
+  });
+  const nudge = threadNudgeFor(lens, requestStatus, stage, expert);
+  const showBoard = decided && (lens !== 'expert' || stage === 'won');
+
+  useEffect(() => {
+    if (!upload || upload.progress >= 100) return undefined;
+    const t = setTimeout(
+      () => setUpload((u) => (u ? { ...u, progress: Math.min(100, u.progress + 20) } : u)),
+      260
+    );
+    return () => clearTimeout(t);
+  }, [upload]);
+  const close = () => {
+    setUpload(null);
+    setPending(null);
+    setDialog(null);
+  };
+  const commit = (audience, note, file) => {
+    setState((s) => shareFile(s, { name: file.name, size: file.size, audience, note, from }));
+    setDraft('');
+    close();
+  };
+  useEffect(() => {
+    if (pending && upload && upload.progress >= 100) commit(pending.audience, pending.note, upload);
+  }, [pending, upload]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (name, size) => {
+    setUpload({ name, size, progress: 0 });
+    setPending(null);
+    setDialog('thread');
+  };
+  const sendText = () => {
+    if (!draft.trim()) return;
+    setState((s) => postText(s, threadId, from, draft.trim()));
+    setDraft('');
+  };
+
+  const conversation = (
+    <section
+      aria-label="Conversation"
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) pick(f.name, fmtSize(f.size));
+      }}
+      style={{
+        position: 'relative',
+        background: c.card,
+        border: `1px solid ${c.border}`,
+        borderRadius: 16,
+        overflow: 'hidden',
+      }}
+    >
+      {showTabs && (
+        <div
+          role="tablist"
+          aria-label="Experts"
+          data-tabstrip=""
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            borderBottom: `1px solid ${c.border}`,
+            overflowX: 'auto',
+          }}
+        >
+          {live.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={current === id}
+              data-tab={id}
+              onClick={() => {
+                setCurrent(id);
+                setDraft('');
+              }}
+              style={{
+                ...btnBase,
+                borderRadius: 0,
+                minHeight: 44,
+                padding: '0 14px',
+                border: 'none',
+                borderBottom: `2px solid ${current === id ? c.primary : 'transparent'}`,
+                background: 'none',
+                color: current === id ? c.text : c.muted,
+                fontWeight: current === id ? 600 : 500,
+              }}
+            >
+              <Avatar initials={FS_EXPERTS[id].initials} size={22} />
+              {mobile ? FS_EXPERTS[id].first : FS_EXPERTS[id].name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <ThreadHeader lens={lens} stage={stage} slot={slot} mobile={mobile} expert={expert} />
+
+      <div
+        data-thread={threadId}
+        style={{
+          padding: mobile ? 14 : 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          minHeight: mobile ? 240 : 300,
+        }}
+      >
+        {nudge && <ThreadNudge nudge={nudge} />}
+        {(state.messages[threadId] ?? []).length === 0 && (
+          <p
+            data-empty-thread=""
+            style={{ margin: 'auto', fontSize: 13, color: c.faint, textAlign: 'center' }}
+          >
+            {expert.first} just expressed interest. Files shared with all interested experts are in
+            Files.
+          </p>
+        )}
+        {(state.messages[threadId] ?? []).map((m) => {
+          const mine = lens === 'client' ? m.from === 'client' : m.from === viewerThread;
+          if (m.kind === 'text')
+            return (
+              <Bubble key={m.id} mine={mine}>
+                {m.text}
+              </Bubble>
+            );
+          const file = state.files.find((f) => f.id === m.fileId);
+          return (
+            <FileCard
+              key={m.id}
+              file={file}
+              mine={mine}
+              lens={lens}
+              liveThreads={live}
+              note={m.note}
+            />
+          );
+        })}
+      </div>
+
+      <div
+        style={{
+          borderTop: `1px solid ${c.border}`,
+          padding: 12,
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-end',
+        }}
+      >
+        <input
+          ref={fileInput}
+          type="file"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) pick(f.name, fmtSize(f.size));
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Share a file"
+          title="Share a file"
+          data-attach=""
+          onClick={() => fileInput.current?.click()}
+          style={{
+            ...btnBase,
+            width: 44,
+            height: 44,
+            padding: 0,
+            border: `1px solid ${c.border}`,
+            background: c.card,
+            color: c.muted,
+          }}
+        >
+          <Paperclip size={16} aria-hidden="true" />
+        </button>
+        <textarea
+          aria-label={lens === 'client' ? `Message ${expert.first}` : `Message ${COMPANY}`}
+          rows={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              sendText();
+            }
+          }}
+          placeholder={lens === 'client' ? `Message ${expert.first}…` : `Message ${COMPANY}…`}
+          style={{
+            flex: 1,
+            minHeight: 44,
+            resize: 'none',
+            border: `1px solid ${c.border}`,
+            borderRadius: 10,
+            padding: '11px 12px',
+            fontSize: 14,
+            fontFamily: FONT,
+            color: c.text,
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Send message"
+          data-send=""
+          onClick={sendText}
+          aria-disabled={!draft.trim() || undefined}
+          style={{
+            ...btnBase,
+            width: 44,
+            height: 44,
+            padding: 0,
+            border: 'none',
+            background: c.primary,
+            color: '#fff',
+            opacity: draft.trim() ? 1 : 0.5,
+          }}
+        >
+          <Send size={16} aria-hidden="true" />
+        </button>
+      </div>
+
+      {dragging && (
+        <div
+          data-drop-zone=""
+          style={{
+            position: 'absolute',
+            inset: 8,
+            border: `2px dashed ${c.primary}`,
+            borderRadius: 12,
+            background: 'rgba(37, 99, 235, 0.06)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600, color: c.primary }}>
+            Drop to share a file
+          </span>
+        </div>
+      )}
+    </section>
+  );
+
+  const rail = (
+    <div data-rail="" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {showBoard && (
+        <BeforeKickoff
+          lens={lens}
+          progress={requestStatus === 'kickoff_approved' ? 'payment' : 'invoice'}
+          hasUpfront
+          approved={requestStatus === 'kickoff_approved'}
+          member={false}
+          slot={stage === 'won' ? slot : { kind: 'none' }}
+          mobile={mobile}
+        />
+      )}
+      <RequestBriefCard />
+      <FilesCard
+        lens={lens}
+        files={panelFiles}
+        viewerThread={viewerThread}
+        liveThreads={live}
+        onOpenAll={() => setSheet(true)}
+      />
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'relative', minHeight: 640 }}>
+      {mobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Mirrors mobile-request-sheet: the panel is one tap away. */}
+          <button
+            type="button"
+            data-open-rail=""
+            onClick={() => setRailOpen(true)}
+            style={{
+              ...btnBase,
+              minHeight: 44,
+              justifyContent: 'space-between',
+              padding: '0 14px',
+              border: `1px solid ${c.border}`,
+              background: c.card,
+              color: c.text,
+              fontWeight: 500,
+            }}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <FileText size={15} aria-hidden="true" />
+              Request, kickoff and files
+            </span>
+            <span style={{ fontSize: 12, color: c.muted }}>{panelFiles.length + 1} files</span>
+          </button>
+          {conversation}
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1.7fr) minmax(0, 1fr)',
+            gap: 20,
+            alignItems: 'start',
+          }}
+        >
+          {conversation}
+          {rail}
+        </div>
+      )}
+
+      {mobile && railOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.25)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            zIndex: 20,
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label="Request, kickoff and files"
+            data-rail-sheet=""
+            style={{
+              background: c.page,
+              width: '100%',
+              maxHeight: '90%',
+              overflowY: 'auto',
+              borderRadius: '16px 16px 0 0',
+              padding: 14,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setRailOpen(false)}
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  cursor: 'pointer',
+                  color: c.muted,
+                  padding: 4,
+                }}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            {rail}
+          </div>
+        </div>
+      )}
+
+      {sheet && (
+        <FilesSheet
+          files={panelFiles}
+          lens={lens}
+          viewerThread={viewerThread}
+          liveThreads={live}
+          mobile={mobile}
+          initialFilter={initial?.sheetFilter}
+          onClose={() => setSheet(false)}
+          onRevoke={(fileId, id) => setState((s) => revokeGrant(s, fileId, id))}
+          onShareNew={
+            lens === 'client' && state.kind === 'matched' ? () => setDialog('new') : undefined
+          }
+        />
+      )}
+
+      {dialog === 'thread' && upload && (
+        <ShareDialog
+          mode="thread"
+          lens={lens}
+          kind={state.kind}
+          threadId={threadId}
+          liveThreads={live}
+          upload={upload}
+          pending={pending !== null}
+          initialAudience={initial?.audience}
+          initialNote={draft}
+          mobile={mobile}
+          onCancel={close}
+          onShare={(audience, note) =>
+            upload.progress >= 100 ? commit(audience, note, upload) : setPending({ audience, note })
+          }
+        />
+      )}
+      {dialog === 'new' && (
+        <ShareDialog
+          mode="new"
+          lens={lens}
+          kind={state.kind}
+          threadId={null}
+          liveThreads={live}
+          initialNote=""
+          mobile={mobile}
+          onCancel={() => setDialog(null)}
+          onShare={(audience, note, file) => commit(audience, note, file)}
+        />
+      )}
+
+      <div
+        data-proto-helpers=""
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}
+      >
+        <OutlineButton
+          icon={FileIcon}
+          onClick={() =>
+            pick(
+              lens === 'client' ? 'Lead flow export.csv' : 'Discovery questions.docx',
+              lens === 'client' ? '380 KB' : '64 KB'
+            )
+          }
+        >
+          Prototype: pick a sample file
+        </OutlineButton>
+        {state.kind === 'matched' && !live.includes(FS_LATE_JOINER) && (
+          <OutlineButton icon={UserPlus} onClick={() => setState((s) => addLateExpert(s))}>
+            Prototype: Sam expresses interest
+          </OutlineButton>
+        )}
+        <OutlineButton
+          icon={RotateCcw}
+          onClick={() => {
+            setState(initialFileState(state.kind));
+            close();
+            setDraft('');
+            setCurrent('r1');
+            setSheet(false);
+            setRailOpen(false);
+          }}
+        >
+          Reset
+        </OutlineButton>
+      </div>
+    </div>
+  );
+}
+
+function PageNotes() {
+  const items = [
+    [
+      'Where things live',
+      'The thread header holds only actions with this expert: calls, the proposal, declining. Files moved to the request panel: the “Request documents” card becomes “Files” (the brief plus recent shares), and “All files · n” opens the sheet. The tab strip holds only tabs, and the bottom panel is gone.',
+    ],
+    [
+      'All files sheet',
+      'The client sees every file, with audience badges and remove-access, and on a matched request can filter to what one expert can see (“Charles can see”). “Share with several experts” stays here. Experts see only their files, with no audience.',
+    ],
+    [
+      'Sharing from the chat',
+      'The paperclip, or a drop on the conversation, opens the share dialog at once: “{name} only” preselected on a matched request, no options on a direct request or for an expert, a note field, and a button that names the audience.',
+    ],
+    [
+      'Threads',
+      'A share posts a file card, with the note, into every thread it reaches at that moment. A track that opens later finds shared-with-all files in Files only. Try “Sam expresses interest”.',
+    ],
+    [
+      'Mobile',
+      'The panel sits behind “Request, kickoff and files” (mirroring the shipped request sheet). The header keeps Join and Book another call; the composer keeps the paperclip.',
+    ],
+  ];
+  return (
+    <section
+      aria-label="Whole page notes"
+      style={{
+        background: c.card,
+        border: `1px dashed ${c.borderStrong}`,
+        borderRadius: 16,
+        padding: 20,
+      }}
+    >
+      <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: c.text }}>
+        Spec notes: the whole page
+      </h3>
+      <dl
+        style={{
+          margin: 0,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 170px) minmax(0, 1fr)',
+          gap: '10px 16px',
+        }}
+      >
+        {items.map(([k, v]) => (
+          <React.Fragment key={k}>
+            <dt style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{k}</dt>
+            <dd style={{ margin: 0, fontSize: 13, color: c.muted, lineHeight: 1.55 }}>{v}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────────────────────
 
 export function RequestCallsAndKickoffView({
@@ -1351,6 +3063,7 @@ export function RequestCallsAndKickoffView({
 }
 
 export default function RequestCallsAndKickoff() {
+  const [section, setSection] = useState('page');
   const [lens, setLens] = useState('client');
   const [requestStatus, setRequestStatus] = useState('accepted');
   const [outcome, setOutcome] = useState('won');
@@ -1358,8 +3071,17 @@ export default function RequestCallsAndKickoff() {
   const [progress, setProgress] = useState('invoice');
   const [hasUpfront, setHasUpfront] = useState('yes');
   const [viewport, setViewport] = useState('desktop');
+  const [fsLens, setFsLens] = useState('client');
+  const [fsKind, setFsKind] = useState('matched');
+  const [pgStatus, setPgStatus] = useState('accepted');
+  const [pgCall, setPgCall] = useState('d1');
 
   const decided = requestStatus === 'accepted' || requestStatus === 'kickoff_approved';
+  const narrow = {
+    maxWidth: viewport === 'mobile' ? 390 : undefined,
+    width: '100%',
+    margin: viewport === 'mobile' ? '0 auto' : undefined,
+  };
   return (
     <div
       style={{
@@ -1384,8 +3106,9 @@ export default function RequestCallsAndKickoff() {
             National Dental Care — CRM and marketing automation
           </h1>
           <p style={{ margin: 0, fontSize: 13, color: c.muted }}>
-            Request page: booking, Join, nudges and the Before kickoff thread. “Now” is Tue 27 Oct,
-            10:00 am.
+            {section === 'calls'
+              ? 'Request page: booking, Join, nudges and the Before kickoff thread. “Now” is Tue 27 Oct, 10:00 am.'
+              : 'The whole request page: calls in the header, kickoff and files in the panel, sharing from the chat. “Now” is Tue 27 Oct, 10:00 am.'}
           </p>
         </header>
 
@@ -1401,68 +3124,123 @@ export default function RequestCallsAndKickoff() {
           }}
         >
           <Segmented
-            label="Lens"
-            value={lens}
-            onChange={setLens}
+            label="Prototype"
+            value={section}
+            onChange={setSection}
             options={[
-              ['client', 'Client'],
-              ['expert', 'Expert'],
-              ['admin', 'Admin'],
+              ['page', 'Whole page'],
+              ['calls', 'Calls and kickoff states'],
             ]}
           />
-          <Segmented
-            label="Request"
-            value={requestStatus}
-            onChange={setRequestStatus}
-            options={[
-              ['proposal_submitted', 'Choosing'],
-              ['accepted', 'Accepted'],
-              ['kickoff_approved', 'Kicked off'],
-              ['closed', 'Closed'],
-            ]}
-          />
-          {decided && lens !== 'admin' && (
-            <Segmented
-              label="This thread"
-              value={outcome}
-              onChange={setOutcome}
-              options={[
-                ['won', 'Won'],
-                ['not_selected', 'Not selected'],
-              ]}
-            />
-          )}
-          {lens !== 'admin' && (
-            <Segmented
-              label="Calls"
-              value={call}
-              onChange={setCall}
-              options={Object.entries(CALL_SCENARIOS).map(([k, v]) => [k, v.label])}
-            />
-          )}
-          {requestStatus === 'accepted' && (
-            <Segmented
-              label="Kickoff"
-              value={progress}
-              onChange={setProgress}
-              options={[
-                ['billing', 'Billing pending'],
-                ['billing_member', 'Billing, member'],
-                ['invoice', 'Invoice pending'],
-                ['payment', 'Payment pending'],
-              ]}
-            />
-          )}
-          {decided && (
-            <Segmented
-              label="Upfront due"
-              value={hasUpfront}
-              onChange={setHasUpfront}
-              options={[
-                ['yes', 'Yes'],
-                ['no', 'No'],
-              ]}
-            />
+          {section === 'calls' ? (
+            <>
+              <Segmented
+                label="Lens"
+                value={lens}
+                onChange={setLens}
+                options={[
+                  ['client', 'Client'],
+                  ['expert', 'Expert'],
+                  ['admin', 'Admin'],
+                ]}
+              />
+              <Segmented
+                label="Request"
+                value={requestStatus}
+                onChange={setRequestStatus}
+                options={[
+                  ['proposal_submitted', 'Choosing'],
+                  ['accepted', 'Accepted'],
+                  ['kickoff_approved', 'Kicked off'],
+                  ['closed', 'Closed'],
+                ]}
+              />
+              {decided && lens !== 'admin' && (
+                <Segmented
+                  label="This thread"
+                  value={outcome}
+                  onChange={setOutcome}
+                  options={[
+                    ['won', 'Won'],
+                    ['not_selected', 'Not selected'],
+                  ]}
+                />
+              )}
+              {lens !== 'admin' && (
+                <Segmented
+                  label="Calls"
+                  value={call}
+                  onChange={setCall}
+                  options={Object.entries(CALL_SCENARIOS).map(([k, v]) => [k, v.label])}
+                />
+              )}
+              {requestStatus === 'accepted' && (
+                <Segmented
+                  label="Kickoff"
+                  value={progress}
+                  onChange={setProgress}
+                  options={[
+                    ['billing', 'Billing pending'],
+                    ['billing_member', 'Billing, member'],
+                    ['invoice', 'Invoice pending'],
+                    ['payment', 'Payment pending'],
+                  ]}
+                />
+              )}
+              {decided && (
+                <Segmented
+                  label="Upfront due"
+                  value={hasUpfront}
+                  onChange={setHasUpfront}
+                  options={[
+                    ['yes', 'Yes'],
+                    ['no', 'No'],
+                  ]}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              <Segmented
+                label="Lens"
+                value={fsLens}
+                onChange={setFsLens}
+                options={[
+                  ['client', 'Client'],
+                  ['expert', 'Expert (Charles)'],
+                ]}
+              />
+              <Segmented
+                label="Request"
+                value={fsKind}
+                onChange={setFsKind}
+                options={[
+                  ['matched', 'Matched, 2 experts'],
+                  ['direct', 'Direct, 1 expert'],
+                ]}
+              />
+              <Segmented
+                label="Stage"
+                value={pgStatus}
+                onChange={setPgStatus}
+                options={[
+                  ['proposal_submitted', 'Choosing'],
+                  ['accepted', 'Accepted'],
+                  ['kickoff_approved', 'Kicked off'],
+                ]}
+              />
+              <Segmented
+                label="Calls with Charles"
+                value={pgCall}
+                onChange={setPgCall}
+                options={[
+                  ['none', 'Nothing booked'],
+                  ['d1', 'Tomorrow'],
+                  ['window', 'Window open'],
+                  ['two', 'Two booked'],
+                ]}
+              />
+            </>
           )}
           <Segmented
             label="Viewport"
@@ -1475,26 +3253,37 @@ export default function RequestCallsAndKickoff() {
           />
         </div>
 
-        <div
-          style={{
-            maxWidth: viewport === 'mobile' ? 390 : undefined,
-            width: '100%',
-            margin: viewport === 'mobile' ? '0 auto' : undefined,
-          }}
-        >
-          <RequestCallsAndKickoffView
-            lens={lens}
-            requestStatus={requestStatus}
-            outcome={outcome}
-            call={call}
-            progress={progress === 'billing_member' ? 'billing' : progress}
-            member={progress === 'billing_member'}
-            hasUpfront={hasUpfront === 'yes'}
-            viewport={viewport}
-          />
-        </div>
-
-        <Notes />
+        {section === 'calls' ? (
+          <>
+            <div style={narrow}>
+              <RequestCallsAndKickoffView
+                lens={lens}
+                requestStatus={requestStatus}
+                outcome={outcome}
+                call={call}
+                progress={progress === 'billing_member' ? 'billing' : progress}
+                member={progress === 'billing_member'}
+                hasUpfront={hasUpfront === 'yes'}
+                viewport={viewport}
+              />
+            </div>
+            <Notes />
+          </>
+        ) : (
+          <>
+            <div style={narrow}>
+              <RequestPageView
+                key={`${fsLens}-${fsKind}`}
+                lens={fsLens}
+                kind={fsKind}
+                viewport={viewport}
+                requestStatus={pgStatus}
+                call={pgCall}
+              />
+            </div>
+            <PageNotes />
+          </>
+        )}
       </div>
     </div>
   );

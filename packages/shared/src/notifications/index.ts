@@ -1831,6 +1831,8 @@ export interface RequestFileSharedWithExpertPayload {
   /** Retrospective — a NAME with "@ company" on first mention, never an address. */
   sharedByPersonLabel: string;
   fileName: string;
+  /** Plain-text, truncated preview of the sender's note. Message content, never an audience field. */
+  noteExcerpt?: string;
 }
 
 /**
@@ -1853,6 +1855,8 @@ export interface RequestFileSharedWithClientPayload {
   /** Retrospective — the person, "@ agency" on first mention. */
   expertPersonLabel: string;
   fileName: string;
+  /** Plain-text, truncated preview of the sender's note. Message content, never an audience field. */
+  noteExcerpt?: string;
 }
 
 /**

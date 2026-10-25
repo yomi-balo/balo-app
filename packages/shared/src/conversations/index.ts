@@ -181,14 +181,42 @@ export type EngagementStatusLabel = 'active' | 'completed' | 'cancelled';
  * `active | completed | cancelled`; `caseEngagementsRepository.close()` writes `completed`
  * and nothing ever clears it, so a closed case is permanently read-only.
  *
- * ⚠ THE RELATIONSHIP ARM IS NOT ROUTED THROUGH HERE. Project threads keep their shipped
- * `THREAD_OPEN_RELATIONSHIP_STATUSES` gate in `conversation-view-types.ts`; the two rules
- * have different subjects (a relationship lifecycle vs an engagement lifecycle) and unifying
- * them is BAL-421's call once both surfaces exist.
+ * ⚠ THE RELATIONSHIP ARM IS NOT ROUTED THROUGH HERE. Project threads use
+ * {@link isThreadOpenStatus} below; the two rules have different subjects (a relationship
+ * lifecycle vs an engagement lifecycle) and unifying them is BAL-421's call once both surfaces
+ * exist.
  *
  * ⚠ READ-ONLY MEANS THE WRITE PATH REFUSES. It does not mean the thread disappears: history
  * stays fully readable, which is the entire point of anchoring it to the engagement.
  */
 export function engagementConversationIsWritable(status: EngagementStatusLabel): boolean {
   return status === 'active';
+}
+
+/**
+ * Relationship statuses whose REQUEST THREAD IS OPEN — listed, subscribable, postable. These
+ * are `request_expert_relationship_status` labels, HAND-RESTATED for the same reason as
+ * {@link ConversationContextTypeLabel}: `packages/shared` cannot import a pgEnum.
+ *
+ * ⚠ `invited` IS EXCLUDED, DELIBERATELY. An invited expert has no open thread until they
+ * express interest, so nothing — a message, a share card — is ever posted into one.
+ * `declined` is excluded because the track is over.
+ *
+ * ONE DEFINITION for both apps and `@balo/db`: the web request loaders re-export it, and
+ * `requestSharedFilesRepository.share()` reads it to decide which tracks receive a share
+ * card. `@balo/db` pins every literal here against the schema enum with an `AssertNever`
+ * drift guard (`repositories/request-shared-files.ts`).
+ */
+export const THREAD_OPEN_RELATIONSHIP_STATUSES = [
+  'eoi_submitted',
+  'proposal_requested',
+  'proposal_submitted',
+  'accepted',
+] as const;
+
+export type ThreadOpenRelationshipStatus = (typeof THREAD_OPEN_RELATIONSHIP_STATUSES)[number];
+
+/** Whether a relationship in `status` has an open request thread. */
+export function isThreadOpenStatus(status: string): boolean {
+  return (THREAD_OPEN_RELATIONSHIP_STATUSES as readonly string[]).includes(status);
 }

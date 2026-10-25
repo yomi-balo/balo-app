@@ -67,6 +67,26 @@ export function isConversationFilePayload(data: unknown): data is ConversationFi
   );
 }
 
+/**
+ * The `file_shared` ping (BAL-617): the thread, the card message's id and sender, and when it
+ * landed. CONTENT-FREE by contract — no file name, no audience, no body — because the card is
+ * resolved per viewer on read; the receiver refetches the newest page rather than trusting
+ * anything on the wire.
+ */
+export interface ConversationFileSharedPayload {
+  conversationId: string;
+  messageId: string;
+  senderUserId: string;
+  createdAtIso: string;
+}
+
+/** Structural guard over the {@link ConversationFileSharedPayload} ping. */
+export function isConversationFileSharedPayload(
+  data: unknown
+): data is ConversationFileSharedPayload {
+  return hasStringFields(data, ['conversationId', 'messageId', 'senderUserId', 'createdAtIso']);
+}
+
 /** The only tags a realtime message body may carry (what the server emits). */
 const REALTIME_ALLOWED_TAG = /^<(?:\/?p|br\s*\/?)>$/i;
 

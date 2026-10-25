@@ -22,6 +22,18 @@ function renderBadges(
   return { onRevoke };
 }
 
+describe('RequestFileAudienceBadges — read-only', () => {
+  it('shows who has access with no remove control when no revoke handler is given', () => {
+    render(
+      <RequestFileAudienceBadges
+        audience={{ type: 'grants', grants: [{ relationshipId: REL_ID, trackName: 'Wei Zhang' }] }}
+      />
+    );
+    expect(screen.getByText('Wei Zhang only')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+});
+
 describe('RequestFileAudienceBadges', () => {
   describe('expert_own_track', () => {
     /**

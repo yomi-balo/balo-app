@@ -903,6 +903,7 @@ const requestFileSharedWithExpertPayload = z.object({
   clientCompanyName: z.string().min(1).max(200),
   sharedByPersonLabel: z.string().min(1).max(200),
   fileName: z.string().min(1).max(255),
+  noteExcerpt: z.string().min(1).max(200).optional(),
 });
 
 const requestFileSharedWithClientPayload = z.object({
@@ -915,6 +916,7 @@ const requestFileSharedWithClientPayload = z.object({
   expertPartyLabel: z.string().min(1).max(200),
   expertPersonLabel: z.string().min(1).max(200),
   fileName: z.string().min(1).max(255),
+  noteExcerpt: z.string().min(1).max(200).optional(),
 });
 
 // BAL-540 — the request was closed. `correlationId` is the `project_request.closed` audit row

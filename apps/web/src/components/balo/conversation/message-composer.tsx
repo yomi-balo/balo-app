@@ -26,14 +26,16 @@ interface MessageComposerProps {
    * In-thread file sharing. **OMITTED ⇒ the attach button and its file input are not rendered
    * at all** — the surface has no in-thread file home.
    *
-   * ⚠ OPTIONAL SINCE BAL-431 (OSD-2), AND THE DEFAULT IS DELIBERATELY "RENDER IT". The CASE
-   * surface still shares files in-thread and passes this; the PROJECT-REQUEST surface retired
-   * its in-thread file affordance in favour of the request-level `RequestFilesPanel` and passes
-   * nothing. The alternative — keeping the prop required and passing a no-op — would leave a
-   * live paperclip that silently swallows the user's file, which is worse than the two homes
-   * it was retiring. Absence of a handler is what hides the control; there is no second flag.
+   * ⚠ OPTIONAL, AND THE DEFAULT IS DELIBERATELY "RENDER IT" ONLY WHEN A HANDLER IS GIVEN. The
+   * CASE surface shares files in-thread through its own upload pipeline; the PROJECT-REQUEST
+   * surface passes a handler that opens the share dialog with the picked file (BAL-617) — and
+   * passes nothing while the viewer cannot share into the open thread. Keeping the prop
+   * required and passing a no-op would leave a live paperclip that silently swallows the
+   * user's file. Absence of a handler is what hides the control; there is no second flag.
    */
   onAttach?: (file: File) => void;
+  /** The paperclip's accessible name. Defaults to "Attach a file"; the request surface says "Share a file". */
+  attachLabel?: string;
   onFocusChange?: (focused: boolean) => void;
   /**
    * The "typing…" signal's two composer hooks — both OPTIONAL, and omitting them changes
@@ -71,6 +73,7 @@ export function MessageComposer({
   onChange,
   onSend,
   onAttach,
+  attachLabel = 'Attach a file',
   onFocusChange,
   onTyping,
   onTypingStopped,
@@ -187,7 +190,7 @@ export function MessageComposer({
               type="button"
               onClick={handleAttachClick}
               disabled={disabled || isUploading}
-              aria-label="Attach a file"
+              aria-label={attachLabel}
               className="border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
             >
               <Paperclip className="h-4 w-4" aria-hidden="true" />

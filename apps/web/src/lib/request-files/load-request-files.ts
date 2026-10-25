@@ -40,16 +40,28 @@ import {
 /** WHY a track is closed — a DISPLAY LABEL, never a liveness input. */
 export type RequestTrackClosedReason = 'declined' | 'not_selected';
 
+/**
+ * How the request was routed: `matched` (Balo matched experts to it) or `direct` (the client
+ * sent it to one named expert). Drives dialog copy only — never an authorization input.
+ */
+export type RequestFileRequestKind = 'matched' | 'direct';
+
+export function requestKindOf(request: { sendTo: string }): RequestFileRequestKind {
+  return request.sendTo === 'direct' ? 'direct' : 'matched';
+}
+
 export type RequestFilesView =
   | {
       lens: 'client';
       files: ClientRequestFileView[];
       /** Live tracks only — the share picker's offerable target list. */
       liveTracks: { relationshipId: string; trackName: string }[];
+      requestKind: RequestFileRequestKind;
     }
   | {
       lens: 'expert';
       files: ExpertRequestFileView[];
+      requestKind: RequestFileRequestKind;
       /**
        * The CLIENT PARTY's display name, for the "Visible to {Client} only" reassurance on the
        * expert's own uploads (ADR-1048 §1 — an expert upload is hard-fixed to its own track;
@@ -85,6 +97,23 @@ export function fullName(
  */
 export function clientUploaderLabel(personName: string, clientCompanyName: string): string {
   return `${personName} @ ${clientCompanyName}`;
+}
+
+/**
+ * THE ONE uploader attribution for a client/admin-facing file row: the person "@ company" for a
+ * client-side upload, the track's display name for an expert-side one. Shared by the list loader
+ * and the thread cards so a file reads identically in both.
+ */
+export function uploaderLabelOf(
+  file: Pick<RequestSharedFile, 'side' | 'uploadedByUserId' | 'expertRelationshipId'>,
+  tracks: readonly RequestFileSerializerTrack[],
+  nameOf: ReadonlyMap<string, string>,
+  clientCompanyName: string
+): string {
+  if (file.side === 'client') {
+    return clientUploaderLabel(nameOf.get(file.uploadedByUserId) ?? 'Someone', clientCompanyName);
+  }
+  return tracks.find((t) => t.relationshipId === file.expertRelationshipId)?.trackName ?? 'Expert';
 }
 
 export function toSerializerFile(row: RequestSharedFile): RequestFileSerializerFile {
@@ -232,6 +261,7 @@ export async function loadRequestFiles(
     return {
       lens: 'expert',
       files,
+      requestKind: requestKindOf(scope.request),
       clientPartyName: clientCompanyName,
       closedReason: closedReasonOf(scope.viewer.standing),
     };
@@ -248,16 +278,13 @@ export async function loadRequestFiles(
         toSerializerFile(file),
         new Set(grants.map((g) => g.relationshipId)),
         tracks,
-        file.side === 'client'
-          ? clientUploaderLabel(nameOf.get(file.uploadedByUserId) ?? 'Someone', clientCompanyName)
-          : (tracks.find((t) => t.relationshipId === file.expertRelationshipId)?.trackName ??
-              'Expert')
+        uploaderLabelOf(file, tracks, nameOf, clientCompanyName)
       )
     );
     const liveTracks = tracks
       .filter((t) => t.access.kind === 'live')
       .map((t) => ({ relationshipId: t.relationshipId, trackName: t.trackName }));
-    return { lens: 'client', files, liveTracks };
+    return { lens: 'client', files, liveTracks, requestKind: requestKindOf(scope.request) };
   }
 
   // scope.side === 'admin' — the read-only, all-files, tombstones-included lens.
@@ -270,11 +297,7 @@ export async function loadRequestFiles(
         tracks.find((t) => t.relationshipId === entry.relationshipId)?.trackName ?? 'Expert',
       via: entry.via,
     }));
-    const uploaderName =
-      file.side === 'client'
-        ? clientUploaderLabel(nameOf.get(file.uploadedByUserId) ?? 'Someone', clientCompanyName)
-        : (tracks.find((t) => t.relationshipId === file.expertRelationshipId)?.trackName ??
-          'Expert');
+    const uploaderName = uploaderLabelOf(file, tracks, nameOf, clientCompanyName);
     const deletedByName =
       file.deletedByUserId === null ? null : (nameOf.get(file.deletedByUserId) ?? 'Someone');
     return toAdminRequestFileView(serialized, uploaderName, visibleTo, deletedByName);

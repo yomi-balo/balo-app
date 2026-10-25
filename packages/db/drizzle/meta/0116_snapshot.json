@@ -1,5 +1,5 @@
 {
-  "id": "9f1c466a-748d-4ff8-abc9-8ddbe8fbf62d",
+  "id": "41f12188-4c14-41ef-8ad8-f1e81a80061e",
   "prevId": "f9de61d4-2880-4fda-9394-54cef9a4272e",
   "version": "7",
   "dialect": "postgresql",
@@ -10063,476 +10063,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.engagement_change_order_lines": {
-      "name": "engagement_change_order_lines",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "change_order_id": {
-          "name": "change_order_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "op": {
-          "name": "op",
-          "type": "engagement_change_order_line_op",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "engagement_milestone_id": {
-          "name": "engagement_milestone_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description_html": {
-          "name": "description_html",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "acceptance_criteria": {
-          "name": "acceptance_criteria",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "value_cents": {
-          "name": "value_cents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "estimated_minutes": {
-          "name": "estimated_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "before_title": {
-          "name": "before_title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "before_description_html": {
-          "name": "before_description_html",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "before_estimated_minutes": {
-          "name": "before_estimated_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sort_order": {
-          "name": "sort_order",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "engagement_change_order_line_order_idx": {
-          "name": "engagement_change_order_line_order_idx",
-          "columns": [
-            {
-              "expression": "change_order_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sort_order",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"engagement_change_order_lines\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "engagement_change_order_line_milestone_idx": {
-          "name": "engagement_change_order_line_milestone_idx",
-          "columns": [
-            {
-              "expression": "engagement_milestone_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"engagement_change_order_lines\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "engagement_change_order_lines_change_order_id_engagement_change_orders_id_fk": {
-          "name": "engagement_change_order_lines_change_order_id_engagement_change_orders_id_fk",
-          "tableFrom": "engagement_change_order_lines",
-          "tableTo": "engagement_change_orders",
-          "columnsFrom": ["change_order_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "engagement_change_order_lines_engagement_milestone_id_engagement_milestones_id_fk": {
-          "name": "engagement_change_order_lines_engagement_milestone_id_engagement_milestones_id_fk",
-          "tableFrom": "engagement_change_order_lines",
-          "tableTo": "engagement_milestones",
-          "columnsFrom": ["engagement_milestone_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "engagement_change_order_line_target": {
-          "name": "engagement_change_order_line_target",
-          "value": "\"engagement_change_order_lines\".\"op\" = 'add' OR \"engagement_change_order_lines\".\"engagement_milestone_id\" IS NOT NULL"
-        },
-        "engagement_change_order_line_value_nonneg": {
-          "name": "engagement_change_order_line_value_nonneg",
-          "value": "\"engagement_change_order_lines\".\"value_cents\" IS NULL OR \"engagement_change_order_lines\".\"value_cents\" >= 0"
-        },
-        "engagement_change_order_line_estimate_nonneg": {
-          "name": "engagement_change_order_line_estimate_nonneg",
-          "value": "\"engagement_change_order_lines\".\"estimated_minutes\" IS NULL OR \"engagement_change_order_lines\".\"estimated_minutes\" >= 0"
-        },
-        "engagement_change_order_line_sort_nonneg": {
-          "name": "engagement_change_order_line_sort_nonneg",
-          "value": "\"engagement_change_order_lines\".\"sort_order\" >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.engagement_change_orders": {
-      "name": "engagement_change_orders",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "engagement_id": {
-          "name": "engagement_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "engagement_change_order_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "request_note": {
-          "name": "request_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "price_delta_cents": {
-          "name": "price_delta_cents",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_by_user_id": {
-          "name": "requested_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requested_at": {
-          "name": "requested_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_user_id": {
-          "name": "created_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sent_by_user_id": {
-          "name": "sent_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sent_at": {
-          "name": "sent_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decided_by_user_id": {
-          "name": "decided_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decided_at": {
-          "name": "decided_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "withdrawn_by_user_id": {
-          "name": "withdrawn_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "withdrawn_at": {
-          "name": "withdrawn_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "decline_reason": {
-          "name": "decline_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "engagement_change_order_one_open_idx": {
-          "name": "engagement_change_order_one_open_idx",
-          "columns": [
-            {
-              "expression": "engagement_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"engagement_change_orders\".\"decided_at\" IS NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NULL AND \"engagement_change_orders\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "engagement_change_order_engagement_idx": {
-          "name": "engagement_change_order_engagement_idx",
-          "columns": [
-            {
-              "expression": "engagement_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"engagement_change_orders\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "engagement_change_order_open_sent_idx": {
-          "name": "engagement_change_order_open_sent_idx",
-          "columns": [
-            {
-              "expression": "sent_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"engagement_change_orders\".\"decided_at\" IS NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NULL AND \"engagement_change_orders\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "engagement_change_orders_engagement_id_engagements_id_fk": {
-          "name": "engagement_change_orders_engagement_id_engagements_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "engagements",
-          "columnsFrom": ["engagement_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "engagement_change_orders_requested_by_user_id_users_id_fk": {
-          "name": "engagement_change_orders_requested_by_user_id_users_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "users",
-          "columnsFrom": ["requested_by_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "engagement_change_orders_created_by_user_id_users_id_fk": {
-          "name": "engagement_change_orders_created_by_user_id_users_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "users",
-          "columnsFrom": ["created_by_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "engagement_change_orders_sent_by_user_id_users_id_fk": {
-          "name": "engagement_change_orders_sent_by_user_id_users_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "users",
-          "columnsFrom": ["sent_by_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "engagement_change_orders_decided_by_user_id_users_id_fk": {
-          "name": "engagement_change_orders_decided_by_user_id_users_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "users",
-          "columnsFrom": ["decided_by_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "engagement_change_orders_withdrawn_by_user_id_users_id_fk": {
-          "name": "engagement_change_orders_withdrawn_by_user_id_users_id_fk",
-          "tableFrom": "engagement_change_orders",
-          "tableTo": "users",
-          "columnsFrom": ["withdrawn_by_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "engagement_change_order_requested_pair": {
-          "name": "engagement_change_order_requested_pair",
-          "value": "(\"engagement_change_orders\".\"requested_at\" IS NULL) = (\"engagement_change_orders\".\"requested_by_user_id\" IS NULL)"
-        },
-        "engagement_change_order_sent_pair": {
-          "name": "engagement_change_order_sent_pair",
-          "value": "(\"engagement_change_orders\".\"sent_at\" IS NULL) = (\"engagement_change_orders\".\"sent_by_user_id\" IS NULL)"
-        },
-        "engagement_change_order_decided_pair": {
-          "name": "engagement_change_order_decided_pair",
-          "value": "(\"engagement_change_orders\".\"decided_at\" IS NULL) = (\"engagement_change_orders\".\"decided_by_user_id\" IS NULL)"
-        },
-        "engagement_change_order_withdrawn_pair": {
-          "name": "engagement_change_order_withdrawn_pair",
-          "value": "(\"engagement_change_orders\".\"withdrawn_at\" IS NULL) = (\"engagement_change_orders\".\"withdrawn_by_user_id\" IS NULL)"
-        },
-        "engagement_change_order_decided_xor_withdrawn": {
-          "name": "engagement_change_order_decided_xor_withdrawn",
-          "value": "NOT (\"engagement_change_orders\".\"decided_at\" IS NOT NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NOT NULL)"
-        },
-        "engagement_change_order_decided_stamped": {
-          "name": "engagement_change_order_decided_stamped",
-          "value": "(\"engagement_change_orders\".\"status\" <> 'approved' AND \"engagement_change_orders\".\"status\" <> 'declined') OR (\"engagement_change_orders\".\"decided_at\" IS NOT NULL AND \"engagement_change_orders\".\"decided_by_user_id\" IS NOT NULL)"
-        },
-        "engagement_change_order_withdrawn_stamped": {
-          "name": "engagement_change_order_withdrawn_stamped",
-          "value": "\"engagement_change_orders\".\"status\" <> 'withdrawn' OR \"engagement_change_orders\".\"withdrawn_at\" IS NOT NULL"
-        },
-        "engagement_change_order_sent_stamped": {
-          "name": "engagement_change_order_sent_stamped",
-          "value": "(\"engagement_change_orders\".\"status\" <> 'sent' AND \"engagement_change_orders\".\"status\" <> 'approved') OR \"engagement_change_orders\".\"sent_at\" IS NOT NULL"
-        },
-        "engagement_change_order_open_unstamped": {
-          "name": "engagement_change_order_open_unstamped",
-          "value": "(\"engagement_change_orders\".\"status\" <> 'requested' AND \"engagement_change_orders\".\"status\" <> 'draft' AND \"engagement_change_orders\".\"status\" <> 'sent') OR (\"engagement_change_orders\".\"decided_at\" IS NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NULL)"
-        },
-        "engagement_change_order_requested_stamped": {
-          "name": "engagement_change_order_requested_stamped",
-          "value": "\"engagement_change_orders\".\"status\" <> 'requested' OR \"engagement_change_orders\".\"requested_at\" IS NOT NULL"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.action_items": {
       "name": "action_items",
       "schema": "",
@@ -11599,6 +11129,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "request_shared_file_id": {
+          "name": "request_shared_file_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "body": {
           "name": "body",
           "type": "text",
@@ -11700,6 +11236,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "conversation_message_shared_file_idx": {
+          "name": "conversation_message_shared_file_idx",
+          "columns": [
+            {
+              "expression": "request_shared_file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -11729,12 +11280,26 @@
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "conversation_messages_request_shared_file_id_request_shared_files_id_fk": {
+          "name": "conversation_messages_request_shared_file_id_request_shared_files_id_fk",
+          "tableFrom": "conversation_messages",
+          "tableTo": "request_shared_files",
+          "columnsFrom": ["request_shared_file_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "conversation_message_body_or_file": {
+          "name": "conversation_message_body_or_file",
+          "value": "\"conversation_messages\".\"body\" <> '' OR \"conversation_messages\".\"request_shared_file_id\" IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.conversation_read_states": {
@@ -17479,16 +17044,6 @@
       "name": "engagement_acceptance_method",
       "schema": "public",
       "values": ["client", "auto"]
-    },
-    "public.engagement_change_order_line_op": {
-      "name": "engagement_change_order_line_op",
-      "schema": "public",
-      "values": ["add", "edit", "remove"]
-    },
-    "public.engagement_change_order_status": {
-      "name": "engagement_change_order_status",
-      "schema": "public",
-      "values": ["requested", "draft", "sent", "approved", "declined", "withdrawn"]
     },
     "public.engagement_milestone_status": {
       "name": "engagement_milestone_status",

@@ -116,6 +116,24 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/delete-internal-note', 
 
 // useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-request-file-download', () => ({
+  getRequestFileDownloadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/revoke-request-file-grant', () => ({
+  revokeRequestFileGrantAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/delete-request-file', () => ({
+  deleteRequestFileAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-shared-file-upload', () => ({
+  requestSharedFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-request-file-upload', () => ({
+  confirmRequestFileUploadAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/discard-request-file-upload', () => ({
+  discardRequestFileUploadAction: vi.fn(),
+}));
 
 // EoiEntry mounts the code-split TipTap editor — mock the public module so the
 // shell renders in JSDOM. A minimal contract is enough for shell-level assertions.
@@ -137,6 +155,7 @@ import { BaloPanel } from './balo-panel';
 import { thread as conversationThread } from '@/test/fixtures/conversation';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import type { RequestFilesView } from '@/lib/request-files/load-request-files';
 
 function conversation(overrides: Partial<ConversationView> = {}): ConversationView {
   return {
@@ -245,6 +264,70 @@ function findStage(node: unknown): React.ReactElement<{ deliveryEngagementId?: s
   return findStage(el.props?.children);
 }
 
+describe('RequestDetailShell — files (BAL-617)', () => {
+  const FILES_VIEW: RequestFilesView = {
+    lens: 'client',
+    files: [],
+    liveTracks: [{ relationshipId: 'rel-1', trackName: 'Priya Nair' }],
+    requestKind: 'matched',
+  };
+
+  it('has no bottom "Files on this request" panel for any lens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'eoi_submitted' })}
+        ctx={ctx()}
+        conversation={conversation()}
+        requestFilesView={FILES_VIEW}
+      />
+    );
+    expect(screen.queryByText('Files on this request')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Share a file with the experts on this request')
+    ).not.toBeInTheDocument();
+  });
+
+  it('replaces "Request documents" with the Files card, which opens All files', async () => {
+    const user = userEvent.setup();
+    render(
+      <RequestDetailShell
+        view={view({ status: 'eoi_submitted' })}
+        ctx={ctx()}
+        conversation={conversation()}
+        requestFilesView={FILES_VIEW}
+      />
+    );
+    expect(screen.queryByText('Request documents')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'All files · 0' }));
+    expect(await screen.findByText('All files on this request')).toBeInTheDocument();
+  });
+
+  it('keeps today’s documents card when the viewer has no file lens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'eoi_submitted' })}
+        ctx={ctx()}
+        conversation={conversation()}
+        requestFilesView={null}
+      />
+    );
+    expect(screen.getByText('Request documents')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /All files/ })).not.toBeInTheDocument();
+  });
+
+  it('puts the Files card in the hero before the conversation opens', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'requested' })}
+        ctx={ctx()}
+        requestFilesView={FILES_VIEW}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'All files · 0' })).toBeInTheDocument();
+    expect(screen.queryByText('Attached documents')).not.toBeInTheDocument();
+  });
+});
+
 describe('RequestDetailShell — Lens × Status matrix', () => {
   it('client before Phase 2 renders the full hero (no conversation)', () => {
     render(<RequestDetailShell view={view({ status: 'requested' })} ctx={ctx()} />);
@@ -340,7 +423,7 @@ describe('RequestDetailShell — Lens × Status matrix', () => {
       />
     );
     expect(
-      screen.getByRole('button', { name: 'Request details: CPQ implementation' })
+      screen.getByRole('button', { name: 'Request, kickoff and files: CPQ implementation' })
     ).toBeInTheDocument();
   });
 

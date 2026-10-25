@@ -206,6 +206,53 @@ describe('loadClientPortfolio', () => {
     });
   });
 
+  it('previews a note-less request-share card as "Shared a file" in the signal', async () => {
+    const quiet = requestRow({ id: 'quiet', status: 'experts_invited', updatedAt: day(1) });
+    const needs = requestRow({
+      id: 'needs',
+      status: 'eoi_submitted',
+      updatedAt: day(5),
+      relationships: [
+        {
+          id: 'rel-needs',
+          expertProfileId: 'e1',
+          status: 'eoi_submitted',
+          invitedAt: day(5),
+          updatedAt: day(5),
+          proposalRequestedAt: null,
+          expressionsOfInterest: [],
+          conversationMessages: [{ id: 'm1', createdAt: day(1) }],
+        },
+      ],
+    });
+    mockListByCompany.mockResolvedValue([quiet, needs]);
+    mockListThreadSummaries.mockResolvedValue([
+      {
+        conversationId: convIdFor('rel-needs'),
+        latestMessage: {
+          id: 'm1',
+          body: '',
+          requestSharedFileId: 'file-1',
+          createdAt: day(1),
+          senderUserId: 'other-user',
+          senderFirstName: 'Priya',
+        },
+        latestInboundActivityAt: day(1),
+        latestOutboundMessageAt: null,
+        fileCount: 0,
+        lastReadAt: null,
+      },
+    ]);
+
+    const dto = await loadClientPortfolio(USER, ['client', 'admin'], NOW);
+
+    expect(dto.rows[0]?.id).toBe('needs');
+    expect(dto.rows[0]?.needsYou).toBe(true);
+    expect(dto.rows[0]?.unread).toBe(true);
+    expect(dto.rows[0]?.signal?.messagePreview).toBe('Shared a file');
+    expect(dto.rows[0]?.signal?.from).toBe('Priya');
+  });
+
   it('ranks needs-you rows first, then recency desc; folds the unread signal', async () => {
     const quiet = requestRow({ id: 'quiet', status: 'experts_invited', updatedAt: day(1) });
     const needs = requestRow({
@@ -233,6 +280,7 @@ describe('loadClientPortfolio', () => {
           id: 'm1',
           body: '<p>Are you keeping Zendesk?</p>',
           createdAt: day(1),
+          requestSharedFileId: null,
           senderUserId: 'other-user',
           senderFirstName: 'Priya',
         },
@@ -290,6 +338,7 @@ describe('loadClientPortfolio', () => {
           id: 'm1',
           body: '<p>Are you keeping Zendesk?</p>',
           createdAt: day(1),
+          requestSharedFileId: null,
           senderUserId: 'other-user',
           senderFirstName: null,
         },
@@ -819,6 +868,7 @@ function summaryFor(
       id: `m-${relationshipId}`,
       body: `<p>Note from ${relationshipId}</p>`,
       createdAt: day(inboundDaysAgo),
+      requestSharedFileId: null,
       senderUserId: sender,
       senderFirstName: 'Priya',
     },

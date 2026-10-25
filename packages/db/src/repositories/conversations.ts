@@ -117,11 +117,17 @@ export interface ConversationThreadSummary {
   /** Newest LIVE message in the thread, any sender. Null for an empty thread. */
   latestMessage: {
     id: string;
+    /** `''` when the newest message is a request-share card with no note. */
     body: string;
     createdAt: Date;
     senderUserId: string;
     /** The sender's first name (joined from `users`); null if unset. */
     senderFirstName: string | null;
+    /**
+     * Set when the newest message is a request-share card. The id only — the caller must not
+     * name the file in a preview without applying the file's audience rule.
+     */
+    requestSharedFileId: string | null;
   } | null;
   /**
    * Newest LIVE activity NOT authored by the viewer:
@@ -162,6 +168,8 @@ export interface ConversationUnreadSummary {
   latestInboundSenderUserId: string | null;
   /** Body of the newest inbound MESSAGE, or null when the newest activity is a file. */
   latestInboundBody: string | null;
+  /** True when the newest inbound MESSAGE is a request-file share card (its body is only the optional note). */
+  latestInboundIsRequestFileShare: boolean;
   /** File name of the newest inbound FILE, or null when the newest activity is a message. */
   latestInboundFileName: string | null;
 }
@@ -178,6 +186,30 @@ function messageScopePredicate(scope: ConversationReadScope): SQL | undefined {
   return scope.kind === 'meeting'
     ? eq(conversationMessages.sentDuringMeetingId, scope.meetingId)
     : undefined;
+}
+
+/**
+ * Opt-in for request-share card messages on the message reads. The literal `true` (not
+ * `boolean`) so no call site can pass a computed value that silently widens a read.
+ */
+export interface IncludeRequestFileSharesOption {
+  includeRequestFileShares?: true;
+}
+
+/**
+ * ⚠ FAIL-CLOSED: request-share card messages (`request_shared_file_id IS NOT NULL`) are
+ * EXCLUDED unless the caller opts in. A card is only safe to show by a reader that applies the
+ * file's audience rule per viewer, and only the request surface does. The case panel, the
+ * in-call panel, the guest meeting thread and the AI brief read the same thread after kickoff
+ * carry-over; defaulting to exclusion keeps every one of them from rendering a blank bubble or
+ * leaking a file card, with no change at their call sites.
+ */
+function requestFileSharePredicate(
+  opts: IncludeRequestFileSharesOption | undefined
+): SQL | undefined {
+  return opts?.includeRequestFileShares === true
+    ? undefined
+    : isNull(conversationMessages.requestSharedFileId);
 }
 
 export const conversationsRepository = {
@@ -420,36 +452,58 @@ export const conversationsRepository = {
   /**
    * Post a message to a conversation.
    *
-   * CONTRACT — bare INSERT, no error isolation. A single un-wrapped `db.insert(...)` that
-   * can throw a raw FK violation (23503) for an unknown `conversationId` (ON DELETE cascade),
-   * `senderUserId` (ON DELETE restrict) or `sentDuringMeetingId` (ON DELETE set null); this
-   * table has no unique constraint. If called INSIDE an open `db.transaction(...)`, that
-   * error ABORTS the transaction (25P02) — every later statement fails until rollback. The
-   * caller MUST isolate this insert in its own SAVEPOINT (nested `tx.transaction(...)`) so a
-   * bad id can't poison a wider transaction.
+   * The INSERT can throw a raw FK violation (23503) for an unknown `conversationId` (ON DELETE
+   * cascade), `senderUserId` (ON DELETE restrict), `sentDuringMeetingId` (ON DELETE set null)
+   * or `requestSharedFileId` (ON DELETE cascade), and a raw 23514 when `body` is `''` with no
+   * `requestSharedFileId` (`conversation_message_body_or_file`). The table has no unique
+   * constraint.
+   *
+   * TWO MODES:
+   *  - NO EXECUTOR — a bare `db.insert(...)` in its own implicit transaction; a failure
+   *    throws and leaves nothing behind.
+   *  - WITH `exec` — the insert runs inside `exec.transaction(...)`, i.e. its own SAVEPOINT
+   *    within the caller's transaction. A failed insert rolls back to that savepoint, so the
+   *    caller's transaction is still usable (no `25P02`) if it chooses to catch. The error
+   *    still PROPAGATES: a caller that does not catch it rolls its whole transaction back,
+   *    which is what `requestSharedFilesRepository.share()` relies on.
+   *
+   * `requestSharedFileId` is set ONLY by the request-share path; see the column docblock in
+   * `schema/conversations.ts` for why readers exclude those rows by default.
    */
-  async postMessage(input: {
-    conversationId: string;
-    senderUserId: string;
-    body: string;
-    /** BAL-418 seam — set ONLY when the message was sent from the in-call panel. */
-    sentDuringMeetingId?: string;
-  }): Promise<ConversationMessage> {
-    const [row] = await db
-      .insert(conversationMessages)
-      .values({
-        conversationId: input.conversationId,
-        senderUserId: input.senderUserId,
-        body: input.body,
-        ...(input.sentDuringMeetingId === undefined
-          ? {}
-          : { sentDuringMeetingId: input.sentDuringMeetingId }),
-      })
-      .returning();
-    if (row === undefined) {
-      throw new Error('Failed to create conversation message');
-    }
-    return row;
+  async postMessage(
+    input: {
+      conversationId: string;
+      senderUserId: string;
+      body: string;
+      /** BAL-418 seam — set ONLY when the message was sent from the in-call panel. */
+      sentDuringMeetingId?: string;
+      /** Set ONLY by `requestSharedFilesRepository.share()` — the card's file. */
+      requestSharedFileId?: string;
+    },
+    exec?: DbExecutor
+  ): Promise<ConversationMessage> {
+    const insert = async (tx: DbExecutor): Promise<ConversationMessage> => {
+      const [row] = await tx
+        .insert(conversationMessages)
+        .values({
+          conversationId: input.conversationId,
+          senderUserId: input.senderUserId,
+          body: input.body,
+          ...(input.sentDuringMeetingId === undefined
+            ? {}
+            : { sentDuringMeetingId: input.sentDuringMeetingId }),
+          ...(input.requestSharedFileId === undefined
+            ? {}
+            : { requestSharedFileId: input.requestSharedFileId }),
+        })
+        .returning();
+      if (row === undefined) {
+        throw new Error('Failed to create conversation message');
+      }
+      return row;
+    };
+
+    return exec === undefined ? insert(db) : exec.transaction(insert);
   },
 
   /**
@@ -459,10 +513,14 @@ export const conversationsRepository = {
    * must never see a message that was not sent during their call. An optional parameter
    * would default to "show everything" and the filter would be one forgotten argument away
    * from a disclosure. Every party call site states `{ kind: 'full' }` explicitly.
+   *
+   * ⚠ REQUEST-SHARE CARDS ARE EXCLUDED unless `opts.includeRequestFileShares` is set — see
+   * `requestFileSharePredicate`.
    */
   async listMessages(
     conversationId: string,
-    scope: ConversationReadScope
+    scope: ConversationReadScope,
+    opts?: IncludeRequestFileSharesOption
   ): Promise<ConversationMessage[]> {
     return db
       .select()
@@ -471,7 +529,8 @@ export const conversationsRepository = {
         and(
           eq(conversationMessages.conversationId, conversationId),
           isNull(conversationMessages.deletedAt),
-          messageScopePredicate(scope)
+          messageScopePredicate(scope),
+          requestFileSharePredicate(opts)
         )
       )
       .orderBy(asc(conversationMessages.createdAt));
@@ -490,14 +549,20 @@ export const conversationsRepository = {
    * ⚠ `scope` IS REQUIRED — see `listMessages`. A `{ kind: 'meeting' }` scope also EXCLUDES
    * every message whose `sent_during_meeting_id IS NULL`, by construction (see
    * `messageScopePredicate`).
+   *
+   * ⚠ REQUEST-SHARE CARDS ARE EXCLUDED unless `includeRequestFileShares` is set — see
+   * `requestFileSharePredicate`. Only the request surface opts in, and it resolves each card
+   * against the file's audience before rendering.
    */
-  async listMessagesPage(input: {
-    conversationId: string;
-    scope: ConversationReadScope;
-    /** Exclusive cursor — the OLDEST message of the previously loaded page. */
-    before?: { createdAt: Date; id: string };
-    limit: number;
-  }): Promise<{
+  async listMessagesPage(
+    input: {
+      conversationId: string;
+      scope: ConversationReadScope;
+      /** Exclusive cursor — the OLDEST message of the previously loaded page. */
+      before?: { createdAt: Date; id: string };
+      limit: number;
+    } & IncludeRequestFileSharesOption
+  ): Promise<{
     messages: Array<
       ConversationMessage & { senderFirstName: string | null; senderLastName: string | null }
     >;
@@ -516,6 +581,7 @@ export const conversationsRepository = {
           eq(conversationMessages.conversationId, input.conversationId),
           isNull(conversationMessages.deletedAt),
           messageScopePredicate(input.scope),
+          requestFileSharePredicate(input),
           input.before === undefined
             ? undefined
             : or(
@@ -755,7 +821,9 @@ export const conversationsRepository = {
    * Batch per-thread summary for the tab strip / default-tab logic — ONE round trip for any
    * number of threads. Every leg filters `deleted_at IS NULL`:
    *
-   * - `latestMessage`  — newest live message, ANY sender (tab preview);
+   * - `latestMessage`  — newest live message, ANY sender (tab preview). Request-share cards
+   *   count here (and in the inbound/outbound legs) — a share is thread activity — so the
+   *   caller renders a share-aware preview from `requestSharedFileId`, never the empty body;
    * - `latestInboundActivityAt` — max(newest live message NOT from the viewer, newest live
    *   file NOT from the viewer): the viewer's own activity never makes a thread unread, and
    *   a file can arrive without a message (nothing auto-posts), so files count toward
@@ -789,6 +857,7 @@ export const conversationsRepository = {
         body: conversationMessages.body,
         createdAt: conversationMessages.createdAt,
         senderUserId: conversationMessages.senderUserId,
+        requestSharedFileId: conversationMessages.requestSharedFileId,
       })
       .from(conversationMessages)
       .where(
@@ -897,6 +966,7 @@ export const conversationsRepository = {
         latestMessageCreatedAt: latestMessageSq.createdAt,
         latestMessageSenderUserId: latestMessageSq.senderUserId,
         latestMessageSenderFirstName: users.firstName,
+        latestMessageRequestSharedFileId: latestMessageSq.requestSharedFileId,
         latestInboundMessageAt: inboundMessageSq.latestAt,
         latestInboundFileAt: inboundFileSq.latestAt,
         latestOutboundMessageAt: outboundMessageSq.latestAt,
@@ -932,6 +1002,7 @@ export const conversationsRepository = {
               createdAt: row.latestMessageCreatedAt,
               senderUserId: row.latestMessageSenderUserId,
               senderFirstName: row.latestMessageSenderFirstName,
+              requestSharedFileId: row.latestMessageRequestSharedFileId,
             }
           : null;
       return {
@@ -1018,6 +1089,7 @@ export const conversationsRepository = {
         .select({
           id: conversationMessages.id,
           body: conversationMessages.body,
+          requestSharedFileId: conversationMessages.requestSharedFileId,
           createdAt: conversationMessages.createdAt,
           senderUserId: conversationMessages.senderUserId,
         })
@@ -1061,6 +1133,7 @@ export const conversationsRepository = {
     // (it carries the richer preview).
     let latestInboundSenderUserId: string | null = null;
     let latestInboundBody: string | null = null;
+    let latestInboundIsRequestFileShare = false;
     let latestInboundFileName: string | null = null;
     if (
       newestMessage !== undefined &&
@@ -1069,6 +1142,7 @@ export const conversationsRepository = {
     ) {
       latestInboundSenderUserId = newestMessage.senderUserId;
       latestInboundBody = newestMessage.body;
+      latestInboundIsRequestFileShare = newestMessage.requestSharedFileId !== null;
     } else if (newestFile !== undefined) {
       latestInboundSenderUserId = newestFile.uploadedByUserId;
       latestInboundFileName = newestFile.fileName;
@@ -1081,6 +1155,7 @@ export const conversationsRepository = {
       latestInboundAt: laterOf(newestMessage?.createdAt ?? null, newestFile?.createdAt ?? null),
       latestInboundSenderUserId,
       latestInboundBody,
+      latestInboundIsRequestFileShare,
       latestInboundFileName,
     };
   },

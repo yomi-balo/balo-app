@@ -28,8 +28,9 @@ function annotationText(
 
 interface RequestFileAudienceBadgesProps {
   audience: ClientRequestFileAudience;
-  onRevoke: (relationshipId: string, trackName: string) => void;
-  revokingRelationshipId: string | null;
+  /** Absent ⇒ a read-only badge row: the grant chips show who has access but offer no remove. */
+  onRevoke?: (relationshipId: string, trackName: string) => void;
+  revokingRelationshipId?: string | null;
 }
 
 /**
@@ -40,7 +41,7 @@ interface RequestFileAudienceBadgesProps {
 export function RequestFileAudienceBadges({
   audience,
   onRevoke,
-  revokingRelationshipId,
+  revokingRelationshipId = null,
 }: Readonly<RequestFileAudienceBadgesProps>): React.JSX.Element {
   if (audience.type === 'expert_own_track') {
     return (
@@ -89,15 +90,17 @@ export function RequestFileAudienceBadges({
             change the badge's layout. Without it the target was ~14px — unhittable with a thumb
             on a row of grant badges, and revoke is a silent, unnotified access change.
           */}
-          <button
-            type="button"
-            onClick={() => onRevoke(g.relationshipId, g.trackName)}
-            disabled={revokingRelationshipId === g.relationshipId}
-            aria-label={`Remove access for ${g.trackName}`}
-            className="focus-visible:ring-ring -my-3 -mr-2 flex h-11 w-11 items-center justify-center rounded-full hover:bg-violet-100 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 dark:hover:bg-violet-900"
-          >
-            <X className="h-2.5 w-2.5" aria-hidden="true" />
-          </button>
+          {onRevoke !== undefined && (
+            <button
+              type="button"
+              onClick={() => onRevoke(g.relationshipId, g.trackName)}
+              disabled={revokingRelationshipId === g.relationshipId}
+              aria-label={`Remove access for ${g.trackName}`}
+              className="focus-visible:ring-ring -my-3 -mr-2 flex h-11 w-11 items-center justify-center rounded-full hover:bg-violet-100 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 dark:hover:bg-violet-900"
+            >
+              <X className="h-2.5 w-2.5" aria-hidden="true" />
+            </button>
+          )}
         </Badge>
       ))}
     </>

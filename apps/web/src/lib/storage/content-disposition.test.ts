@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attachmentDisposition } from './content-disposition';
+import { attachmentDisposition, inlineDisposition } from './content-disposition';
 
 describe('attachmentDisposition', () => {
   it('emits a plain quoted filename for an ASCII name', () => {
@@ -45,5 +45,22 @@ describe('attachmentDisposition', () => {
 
   it('keeps every header value on one line', () => {
     expect(attachmentDisposition('a\r\nSet-Cookie: x=1 – ü.pdf')).not.toMatch(/[\r\n]/);
+  });
+});
+
+describe('inlineDisposition', () => {
+  it('emits an inline disposition with a plain quoted filename for an ASCII name', () => {
+    expect(inlineDisposition('brief.pdf')).toBe('inline; filename="brief.pdf"');
+  });
+
+  it('applies the same header-injection hardening as the attachment form', () => {
+    const crafted = ['a', '"', 'b', '\\', 'c', '\r', '\n', 'd.pdf'].join('');
+    expect(inlineDisposition(crafted)).toBe('inline; filename="a_b_c__d.pdf"');
+  });
+
+  it('adds a UTF-8 filename* with an ASCII fallback for a non-ASCII name', () => {
+    expect(inlineDisposition('Brief – NDC.pdf')).toBe(
+      `inline; filename="Brief _ NDC.pdf"; filename*=UTF-8''Brief%20%E2%80%93%20NDC.pdf`
+    );
   });
 });

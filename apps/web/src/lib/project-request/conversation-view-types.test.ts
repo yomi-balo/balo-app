@@ -6,6 +6,8 @@ import {
   isThreadOpenStatus,
   isUpcomingContextMeeting,
   mergeUpcomingCalls,
+  messagePreviewText,
+  SHARED_FILE_PREVIEW,
   pickDefaultThread,
   previewOfHtml,
   previewOfPlainText,
@@ -30,6 +32,37 @@ describe('isThreadOpenStatus', () => {
     expect(isThreadOpenStatus('eoi_submitted')).toBe(true);
     expect(isThreadOpenStatus('invited')).toBe(false);
     expect(isThreadOpenStatus('declined')).toBe(false);
+  });
+});
+
+describe('thread-open definition is the shared one', () => {
+  it('re-exports the same constant and predicate as @balo/shared/conversations', async () => {
+    const shared = await import('@balo/shared/conversations');
+    expect(THREAD_OPEN_RELATIONSHIP_STATUSES).toBe(shared.THREAD_OPEN_RELATIONSHIP_STATUSES);
+    expect(isThreadOpenStatus).toBe(shared.isThreadOpenStatus);
+  });
+});
+
+describe('messagePreviewText', () => {
+  it('previews the plain text of an ordinary message', () => {
+    expect(messagePreviewText('<p>Hello there</p>', null)).toBe('Hello there');
+  });
+
+  it('is null for an empty ordinary message', () => {
+    expect(messagePreviewText('', null)).toBeNull();
+  });
+
+  it('falls back to "Shared a file" for a note-less share card', () => {
+    expect(SHARED_FILE_PREVIEW).toBe('Shared a file');
+    expect(messagePreviewText('', 'file-1')).toBe('Shared a file');
+  });
+
+  it('never previews the note of a share card', () => {
+    expect(messagePreviewText('<p>The spec</p>', 'file-1')).toBe('Shared a file');
+  });
+
+  it('names no file and no audience in the fallback', () => {
+    expect(messagePreviewText('', 'file-1')).not.toMatch(/\.|expert|everyone/i);
   });
 });
 

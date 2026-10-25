@@ -330,6 +330,14 @@ function changeRoundLabel(round: number | undefined, cycle: number | undefined):
   return cycle ? ` (review cycle ${cycle})` : '';
 }
 
+/** File-share body: names the file and quotes the sender's note when one rode along. */
+function fileShareBody(party: string, data: Record<string, unknown>): string {
+  const noteExcerpt = data.noteExcerpt as string | undefined;
+  if (!noteExcerpt) return `${party} shared a file on this request.`;
+  const fileName = (data.fileName as string | undefined) ?? 'a file';
+  return `${party} shared ${fileName}: “${noteExcerpt}”`;
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   // BAL-400 (D4) — a consultation was booked into a case. The CLIENT in-app notice: prospective
   // copy names the PARTY (`expertPartyLabel`), never a pronoun. Deep-links to the case, never to
@@ -527,7 +535,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const requestId = data.requestId as string | undefined;
     return {
       title: 'New file shared',
-      body: `${clientCompanyName} shared a file on this request.`,
+      body: fileShareBody(clientCompanyName, data),
       actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },
@@ -538,7 +546,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const requestId = data.requestId as string | undefined;
     return {
       title: `New file from ${expertPartyLabel}`,
-      body: `${expertPartyLabel} shared a file on this request.`,
+      body: fileShareBody(expertPartyLabel, data),
       actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },
