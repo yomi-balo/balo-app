@@ -20,6 +20,7 @@ import {
   daysToDecision,
   gateChangeOrderExpert,
   payloadBase,
+  requesterPayload,
 } from './change-order-action-shared';
 
 const answerChangeRequestSchema = z
@@ -81,6 +82,7 @@ export async function answerChangeRequestAction(input: {
         recipientId,
         actorExpertLabel: parties.expertRetroFirstMention,
         answer,
+        ...(await requesterPayload(order.requestedByUserId, recipientId, engagement.company.id)),
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });

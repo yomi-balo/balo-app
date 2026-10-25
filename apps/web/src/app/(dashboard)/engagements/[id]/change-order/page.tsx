@@ -135,6 +135,7 @@ export default async function ChangeOrderComposerPage({
         projectTitle={projectTitle}
         currency={engagement.currency}
         currentPriceCents={effectiveExpertPriceCents(engagement.priceCents, orders)}
+        hourlyRateCents={engagement.rateCents}
         milestones={milestones}
         order={order}
       />

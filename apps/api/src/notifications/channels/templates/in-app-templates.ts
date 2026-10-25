@@ -297,6 +297,33 @@ function changeOrderLineCounts(data: Record<string, unknown>): string {
   return parts.length > 0 ? parts.join(' · ') : 'No milestone changes';
 }
 
+/** BAL-622 — verbatim user text as a curly-quoted lead-in for a following sentence; "" when blank. */
+function quotedLeadIn(text: unknown): string {
+  return typeof text === 'string' && text.trim().length > 0 ? `“${text.trim()}” ` : '';
+}
+
+/**
+ * BAL-622 — what a T&M change order moved on the plan. The cap is a price figure, so a T&M
+ * payload carrying a price label means the cap moved; the estimate label always rides alongside.
+ */
+function changeOrderChangeClause(data: Record<string, unknown>, priceKey: string): string {
+  const price = data[priceKey];
+  const estimate = data.estimateChangeLabel;
+  return [price, estimate]
+    .filter((label): label is string => typeof label === 'string' && label.length > 0)
+    .map((label) => ` ${label}.`)
+    .join('');
+}
+
+/** BAL-622 — the pricing-aware "what was updated" phrase on an approved change. */
+function approvedUpdateClause(data: Record<string, unknown>): string {
+  if (data.pricingMethod !== 'tm') return 'The plan and price are updated.';
+  const capMoved = typeof data.expertPriceChangeLabel === 'string';
+  return capMoved
+    ? 'The plan, estimates and cap are updated.'
+    : 'The plan and estimates are updated.';
+}
+
 /** Admin changes-requested suffix: the round ordinal when present, else the legacy review cycle. */
 function changeRoundLabel(round: number | undefined, cycle: number | undefined): string {
   if (round) return ` (round ${round} of changes)`;
@@ -999,10 +1026,9 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'change-order-requested-expert': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
     const title = (data.projectTitle as string) ?? 'the project';
-    const note = (data.note as string) ?? '';
     return engagementNotice(
       `${actor} asked for a change to ${title}`,
-      `${note} Propose a change if it affects scope or price, or answer it from the project page.`.trim(),
+      `${quotedLeadIn(data.note)}Propose a change if it affects scope or price, or answer it from the project page.`,
       data
     );
   },
@@ -1024,8 +1050,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'change-order-sent-client': (data) => {
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
     const title = (data.projectTitle as string) ?? 'your project';
-    const change = (data.clientPriceChangeLabel ?? data.estimateChangeLabel) as string | undefined;
-    const changeClause = change ? ` ${change}.` : '';
+    const changeClause = changeOrderChangeClause(data, 'clientPriceChangeLabel');
     return engagementNotice(
       `${actor} proposed a change to ${title}`,
       `${changeOrderLineCounts(data)}.${changeClause} Nothing changes unless you approve it.`,
@@ -1043,14 +1068,12 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-622 change order approved — EXPERT (warm milestone). Expert figures only.
   'change-order-approved-expert': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
-    const client = (data.clientCompanyName as string) ?? 'The client';
     const title = (data.projectTitle as string) ?? 'the project';
     const on = (data.approvedOn as string) ?? 'today';
-    const change = (data.expertPriceChangeLabel ?? data.estimateChangeLabel) as string | undefined;
-    const changeClause = change ? ` ${change}.` : '';
+    const changeClause = changeOrderChangeClause(data, 'expertPriceChangeLabel');
     return engagementNotice(
-      `${client} approved your change to ${title}`,
-      `${actor} approved it on ${on}. The plan and price are updated.${changeClause}`,
+      `${actor} approved your change to ${title}`,
+      `Approved on ${on}. ${approvedUpdateClause(data)}${changeClause}`,
       data
     );
   },
@@ -1059,10 +1082,9 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'change-order-declined-expert': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
     const title = (data.projectTitle as string) ?? 'the project';
-    const reason = (data.reason as string) ?? '';
     return engagementNotice(
       `${actor} declined the change to ${title}`,
-      `${reason} You can propose a different change from the project page.`.trim(),
+      `${quotedLeadIn(data.reason)}You can propose a different change from the project page.`,
       data
     );
   },
@@ -1077,10 +1099,9 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-622 change order answered — CLIENT. The expert's answer verbatim.
   'change-order-answered-client': (data) => {
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
-    const answer = (data.answer as string) ?? '';
     return engagementNotice(
       `${actor} answered your change request`,
-      `${answer} Nothing on the project changed.`.trim(),
+      `${quotedLeadIn(data.answer)}Nothing on the project changed.`,
       data
     );
   },

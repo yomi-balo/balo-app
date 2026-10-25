@@ -92,15 +92,17 @@ describe('ChangeOrderAdminPanel · time and materials', () => {
             { label: 'Accepted estimate', value: '56 hrs', strong: false },
             { label: 'Change approved 20 Oct', value: '+10 hrs', strong: false },
             { label: 'Current estimate', value: '66 hrs', strong: true },
+            { label: 'Current cap', value: 'A$10,000 expert · A$12,500 client', strong: true },
           ],
           pendingNote: null,
           footnote: 'Billed each period from logged time.',
         }}
       />
     );
-    expect(screen.getByRole('heading', { name: 'Hours and changes' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Hours, cap and changes' })).toBeInTheDocument();
     expect(screen.getByText('Current estimate')).toBeInTheDocument();
     expect(screen.getByText('66 hrs')).toBeInTheDocument();
+    expect(screen.getByText('A$10,000 expert · A$12,500 client')).toBeInTheDocument();
     expect(screen.queryByText('Final invoice')).not.toBeInTheDocument();
     expect(screen.queryByText('Balo margin')).not.toBeInTheDocument();
     expect(screen.getByText('Billed each period from logged time.')).toBeInTheDocument();

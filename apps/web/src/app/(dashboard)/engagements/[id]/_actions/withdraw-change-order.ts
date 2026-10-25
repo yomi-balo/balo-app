@@ -20,6 +20,7 @@ import {
   daysToDecision,
   gateChangeOrderExpert,
   payloadBase,
+  requesterPayload,
 } from './change-order-action-shared';
 
 const withdrawChangeOrderSchema = z.object({ engagementId: z.uuid(), orderId: z.uuid() }).strict();
@@ -69,6 +70,7 @@ export async function withdrawChangeOrderAction(input: {
         ...payloadBase('withdrawn', order, engagement, parties),
         recipientId,
         actorExpertLabel: parties.expertRetroFirstMention,
+        ...(await requesterPayload(order.requestedByUserId, recipientId, engagement.company.id)),
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });

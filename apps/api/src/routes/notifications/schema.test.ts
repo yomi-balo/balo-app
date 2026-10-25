@@ -2033,6 +2033,17 @@ describe('publishBodySchema — BAL-622 change orders', () => {
     );
   });
 
+  it.each(['change_order.sent', 'change_order.answered', 'change_order.withdrawn'])(
+    '%s accepts an optional requestedByUserId and rejects one that is not a uuid',
+    (event) => {
+      expect(parse(event)).toBe(true);
+      expect(parse(event, { requestedByUserId: '550e8400-e29b-41d4-a716-446655440006' })).toBe(
+        true
+      );
+      expect(parse(event, { requestedByUserId: 'dana' })).toBe(false);
+    }
+  );
+
   it('rejects an empty note, reason and answer, a negative line count and a bad pricing method', () => {
     expect(parse('change_order.requested', { note: '' })).toBe(false);
     expect(parse('change_order.declined', { reason: '' })).toBe(false);

@@ -1,5 +1,5 @@
 interface ChangeOrderPriceEffectProps {
-  effect: { text: string; hint: string | null };
+  effect: { text: string; capText?: string; hint: string | null };
 }
 
 /**
@@ -13,6 +13,7 @@ export function ChangeOrderPriceEffect({
   return (
     <div className="bg-muted/60 mt-4 rounded-xl p-3 text-sm">
       <p className="text-foreground">{effect.text}</p>
+      {effect.capText !== undefined && <p className="text-foreground mt-1">{effect.capText}</p>}
       {effect.hint !== null && <p className="text-muted-foreground mt-1">{effect.hint}</p>}
     </div>
   );

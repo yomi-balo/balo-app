@@ -390,7 +390,8 @@ export interface ChangeOrderRequestedPayload extends ChangeOrderPayloadBase {
 }
 
 // The expert sent a proposed change. Fans out to the CLIENT owner (recipient:'client' via
-// `recipientId`; email + in-app) and the Balo ADMINS (in-app only; no amounts).
+// `recipientId`; email + in-app), the REQUESTER when distinct (recipient:'requester' via
+// `requestedByUserId`) and the Balo ADMINS (in-app only; no amounts).
 export interface ChangeOrderSentPayload extends ChangeOrderPayloadBase {
   recipientId?: string; // client owner; absent ⇒ the client rules skip
   actorExpertLabel: string; // retrospective person ("Charles @ CloudPeak"; independent: bare name)
@@ -400,8 +401,9 @@ export interface ChangeOrderSentPayload extends ChangeOrderPayloadBase {
   linesAdded: number;
   linesEdited: number;
   linesRemoved: number;
-  clientPriceChangeLabel?: string; // fixed: "A$15,625 → A$18,125 (+A$2,500)" — CLIENT figures
+  clientPriceChangeLabel?: string; // fixed price, or the T&M cap when it moved — CLIENT figures
   estimateChangeLabel?: string; // tm: "56 hrs → 66 hrs (+10 hrs)"
+  requestedByUserId?: string; // the requester when the order answers a request ⇒ a second recipient
 }
 
 // The client approved. Fans out to the delivering EXPERT (email + in-app) and the Balo ADMINS
@@ -412,7 +414,7 @@ export interface ChangeOrderApprovedPayload extends ChangeOrderPayloadBase {
   clientCompanyName: string;
   pricingMethod: 'fixed' | 'tm';
   approvedOn: string; // pre-formatted UTC date
-  expertPriceChangeLabel?: string; // fixed — EXPERT figures
+  expertPriceChangeLabel?: string; // fixed price, or the T&M cap when it moved — EXPERT figures
   estimateChangeLabel?: string; // tm
   expertPartyLabel?: string; // admin email body — "a change from {expertParty}"
 }
@@ -430,6 +432,7 @@ export interface ChangeOrderDeclinedPayload extends ChangeOrderPayloadBase {
 // (recipient:'client' via `recipientId`; email + in-app).
 export interface ChangeOrderAnsweredPayload extends ChangeOrderPayloadBase {
   recipientId?: string;
+  requestedByUserId?: string; // the requester ⇒ a second recipient when not the owner
   actorExpertLabel: string;
   answer: string; // verbatim
 }
@@ -437,6 +440,7 @@ export interface ChangeOrderAnsweredPayload extends ChangeOrderPayloadBase {
 // The expert withdrew a sent change. Notifies the CLIENT owner only (in-app).
 export interface ChangeOrderWithdrawnPayload extends ChangeOrderPayloadBase {
   recipientId?: string;
+  requestedByUserId?: string; // the requester ⇒ a second recipient when not the owner
   actorExpertLabel: string;
 }
 

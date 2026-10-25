@@ -36,14 +36,14 @@ const LABEL_CELL = 'py-2 pr-3';
 
 /**
  * The Balo-staff money panel: both sides of every amount, the margin, the current price and the
- * final-invoice figure (fixed price), or the estimate telescope (time and materials). Server
+ * final-invoice figure (fixed price), or the estimate and cap (time and materials). Server
  * safe and presentational. The caller renders it only behind the platform capability; nothing
  * here reads a role.
  */
 export function ChangeOrderAdminPanel({
   money,
 }: Readonly<ChangeOrderAdminPanelProps>): React.JSX.Element {
-  const title = money.kind === 'fixed' ? 'Price and final invoice' : 'Hours and changes';
+  const title = money.kind === 'fixed' ? 'Price and final invoice' : 'Hours, cap and changes';
   return (
     <BaloCard as="section" aria-label={title} className="border-foreground/20 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">

@@ -83,13 +83,28 @@ describe('assertChangeOrderCoherent', () => {
     ['duplicate_target', fixed({ lines: [editLine(), { ...editLine(), op: 'remove' }] })],
     ['fixed_line_has_estimate', fixed({ lines: [addLine({ estimatedMinutes: 60 })] })],
     ['effective_price_negative', fixed({ priceDeltaCents: -500_001 })],
-    ['price_delta_on_tm', tm({ priceDeltaCents: 0 })],
+    [
+      'effective_price_negative',
+      tm({ currentEffectivePriceCents: 900_000, priceDeltaCents: -900_001 }),
+    ],
     ['tm_line_has_value', tm({ lines: [addLine({ estimatedMinutes: 60, valueCents: 1 })] })],
     ['tm_add_missing_estimate', tm({ lines: [addLine()] })],
     ['tm_add_missing_estimate', tm({ lines: [addLine({ estimatedMinutes: 0 })] })],
     ['tm_edit_missing_estimate', tm({ lines: [editLine()] })],
   ])('rejects %s', (rule, snapshot) => {
     expect(ruleOf(snapshot)).toBe(rule);
+  });
+
+  it('accepts a T&M cap delta, raising or lowering the cap to zero', () => {
+    expect(
+      ruleOf(tm({ currentEffectivePriceCents: 900_000, priceDeltaCents: 300_000 }))
+    ).toBeNull();
+    expect(
+      ruleOf(tm({ currentEffectivePriceCents: 900_000, priceDeltaCents: -900_000 }))
+    ).toBeNull();
+    expect(
+      ruleOf(tm({ lines: [], currentEffectivePriceCents: 900_000, priceDeltaCents: 1 }))
+    ).toBeNull();
   });
 
   it('allows a remove line with no estimate on T&M', () => {

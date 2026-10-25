@@ -1659,7 +1659,7 @@ describe('getInAppTemplate', () => {
         getInAppTemplate('change-order-requested-expert', { ...data, note: 'Add a report' })
       ).toEqual({
         title: 'Dana @ Northwind asked for a change to CPQ implementation',
-        body: 'Add a report Propose a change if it affects scope or price, or answer it from the project page.',
+        body: '“Add a report” Propose a change if it affects scope or price, or answer it from the project page.',
         actionUrl: url,
       });
     });
@@ -1704,9 +1704,40 @@ describe('getInAppTemplate', () => {
         approvedOn: '15 Oct',
         expertPriceChangeLabel: 'A$12,500 → A$14,000',
       });
-      expect(result.title).toBe('Northwind approved your change to CPQ implementation');
+      expect(result.title).toBe('Dana @ Northwind approved your change to CPQ implementation');
       expect(result.body).toBe(
-        'Dana @ Northwind approved it on 15 Oct. The plan and price are updated. A$12,500 → A$14,000.'
+        'Approved on 15 Oct. The plan and price are updated. A$12,500 → A$14,000.'
+      );
+    });
+
+    it('approved-expert on T&M says estimates, and the cap only when it moved', () => {
+      const base = { ...data, approvedOn: '15 Oct', pricingMethod: 'tm' };
+      expect(
+        getInAppTemplate('change-order-approved-expert', {
+          ...base,
+          estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+        }).body
+      ).toBe('Approved on 15 Oct. The plan and estimates are updated. 56 hrs → 66 hrs (+10 hrs).');
+      expect(
+        getInAppTemplate('change-order-approved-expert', {
+          ...base,
+          expertPriceChangeLabel: 'Cap A$10,000 → A$12,000',
+          estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+        }).body
+      ).toBe(
+        'Approved on 15 Oct. The plan, estimates and cap are updated. Cap A$10,000 → A$12,000. 56 hrs → 66 hrs (+10 hrs).'
+      );
+    });
+
+    it('sent-client on T&M shows the cap figure beside the estimate change', () => {
+      const result = getInAppTemplate('change-order-sent-client', {
+        ...data,
+        pricingMethod: 'tm',
+        clientPriceChangeLabel: 'New cap A$12,500 (+A$2,500)',
+        estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+      });
+      expect(result.body).toBe(
+        'No milestone changes. New cap A$12,500 (+A$2,500). 56 hrs → 66 hrs (+10 hrs). Nothing changes unless you approve it.'
       );
     });
 
@@ -1717,7 +1748,7 @@ describe('getInAppTemplate', () => {
       });
       expect(expert.title).toBe('Dana @ Northwind declined the change to CPQ implementation');
       expect(expert.body).toBe(
-        'Too costly. You can propose a different change from the project page.'
+        '“Too costly.” You can propose a different change from the project page.'
       );
       expect(getInAppTemplate('change-order-declined-admin', data)).toEqual({
         title: 'Change declined',
@@ -1732,7 +1763,7 @@ describe('getInAppTemplate', () => {
         answer: 'Covered already.',
       });
       expect(answered.title).toBe('Charles @ CloudPeak answered your change request');
-      expect(answered.body).toBe('Covered already. Nothing on the project changed.');
+      expect(answered.body).toBe('“Covered already.” Nothing on the project changed.');
       expect(getInAppTemplate('change-order-withdrawn-client', data)).toEqual({
         title: 'Change withdrawn',
         body: 'Charles @ CloudPeak withdrew the proposed change to CPQ implementation. Nothing changed.',

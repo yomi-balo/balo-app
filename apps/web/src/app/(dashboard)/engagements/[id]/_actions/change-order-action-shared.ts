@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import {
+  companiesRepository,
   projectEngagementsRepository,
   type ChangeOrderLineInput,
   type ChangeOrderRecord,
@@ -108,6 +109,35 @@ export async function gateChangeOrderExpert(
     return { ok: false, error: NOT_ACTIVE };
   }
   return { ok: true, engagement };
+}
+
+/**
+ * What `saveChangeOrderAction` returns: the lifecycle result plus the id of the order it
+ * saved, on success and on a failure that came after the save (a send that was refused), so a
+ * retry reuses that order instead of opening another.
+ */
+export type SaveChangeOrderResult =
+  | { success: true; changeOrderId?: string }
+  | { success: false; error: string; changeOrderId?: string };
+
+/**
+ * The `requestedByUserId` payload key for an order that came from a client request: present
+ * only when the requester is not the owner (who already gets the notice) and is still a live
+ * member of the client company. A lookup failure leaves it out.
+ */
+export async function requesterPayload(
+  requestedByUserId: string | null,
+  ownerId: string | undefined,
+  companyId: string
+): Promise<{ requestedByUserId?: string }> {
+  if (requestedByUserId === null || requestedByUserId === ownerId) return {};
+  try {
+    const company = await companiesRepository.findWithMembers(companyId);
+    const isMember = company?.members.some((m) => m.userId === requestedByUserId) ?? false;
+    return isMember ? { requestedByUserId } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** The most lines one change order may carry. */

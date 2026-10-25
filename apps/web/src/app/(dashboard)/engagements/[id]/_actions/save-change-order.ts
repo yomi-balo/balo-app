@@ -3,6 +3,7 @@
 import 'server-only';
 
 import { z } from 'zod';
+import { revalidatePath } from 'next/cache';
 import {
   engagementChangeOrdersRepository,
   type ChangeOrderRecord,
@@ -10,6 +11,7 @@ import {
 } from '@balo/db';
 import { changeOrderMinutesDelta, clientPriceChangeCents } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { effectiveExpertPriceCents } from '@/lib/engagement/change-order-view';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { formatHours, signedHours, signedMoney } from '@/lib/engagement/change-order-view';
 import { formatWholeCurrency } from '@/lib/utils/currency';
@@ -22,7 +24,6 @@ import {
   requireSignedInUser,
   resolveClientRecipientId,
   runEngagementLifecycleAction,
-  type EngagementActionResult,
 } from './engagement-lifecycle-shared';
 import {
   CHANGE_ALREADY_OPEN,
@@ -31,7 +32,9 @@ import {
   gateChangeOrderExpert,
   lineDraftSchema,
   payloadBase,
+  requesterPayload,
   toLineInputs,
+  type SaveChangeOrderResult,
 } from './change-order-action-shared';
 
 /** The largest total the integer price columns hold. */
@@ -98,13 +101,17 @@ async function publishSent(
   const lineCount = (op: 'add' | 'edit' | 'remove'): number =>
     sent.lines.filter((line) => line.op === op).length;
 
+  const capDeltaCents = sent.priceDeltaCents ?? 0;
+  const toExpert = effectiveCents + capDeltaCents;
+  const clientDelta = clientPriceChangeCents(effectiveCents, toExpert, baloFeeBps);
   let clientPriceChangeLabel: string | undefined;
   let estimateChangeLabel: string | undefined;
   if (isFixed) {
-    const toExpert = effectiveCents + (sent.priceDeltaCents ?? 0);
-    const delta = clientPriceChangeCents(effectiveCents, toExpert, baloFeeBps);
-    clientPriceChangeLabel = `${formatWholeCurrency(applyBaloFee(effectiveCents, baloFeeBps), currency)} → ${formatWholeCurrency(applyBaloFee(toExpert, baloFeeBps), currency)} (${signedMoney(delta, currency)})`;
+    clientPriceChangeLabel = `${formatWholeCurrency(applyBaloFee(effectiveCents, baloFeeBps), currency)} → ${formatWholeCurrency(applyBaloFee(toExpert, baloFeeBps), currency)} (${signedMoney(clientDelta, currency)})`;
   } else {
+    if (capDeltaCents !== 0) {
+      clientPriceChangeLabel = `Cap ${formatWholeCurrency(applyBaloFee(effectiveCents, baloFeeBps), currency)} → ${formatWholeCurrency(applyBaloFee(toExpert, baloFeeBps), currency)} (${signedMoney(clientDelta, currency)})`;
+    }
     const before = engagement.milestones.reduce((sum, m) => sum + (m.estimatedMinutes ?? 0), 0);
     const delta = changeOrderMinutesDelta(sent.lines);
     estimateChangeLabel = `${formatHours(before)} → ${formatHours(before + delta)} (${signedHours(delta)})`;
@@ -120,6 +127,7 @@ async function publishSent(
     linesAdded: lineCount('add'),
     linesEdited: lineCount('edit'),
     linesRemoved: lineCount('remove'),
+    ...(await requesterPayload(sent.requestedByUserId, recipientId, engagement.company.id)),
     ...(clientPriceChangeLabel === undefined ? {} : { clientPriceChangeLabel }),
     ...(estimateChangeLabel === undefined ? {} : { estimateChangeLabel }),
   }).catch(() => {
@@ -131,15 +139,15 @@ async function publishSent(
  * The expert saves a change as a draft, or saves and sends it. Gated on the engagement
  * capability `manage_engagement`. With no open order a fresh draft is opened; an open client
  * `requested` order becomes the draft; an open draft has its lines replaced. A fixed-price
- * change carries the signed expert-side delta between the entered total and the current
- * effective price; a T&M change carries none. Sending runs the repository's coherence
+ * change carries the entered total (the price, or the cap on T&M) and the repository turns it
+ * into the signed expert-side delta under the engagement lock. Sending runs the repository's coherence
  * check: a failure leaves the saved draft and returns the rule's message. Fires
  * `CHANGE_ORDER_SENT` and publishes `change_order.sent` on send only. The note is never
  * logged.
  */
 export async function saveChangeOrderAction(
   input: SaveChangeOrderInput
-): Promise<EngagementActionResult> {
+): Promise<SaveChangeOrderResult> {
   const auth = await requireSignedInUser();
   if (!auth.ok) {
     return { success: false, error: auth.error };
@@ -151,40 +159,35 @@ export async function saveChangeOrderAction(
   const { engagementId, orderId, note, newTotalCents, lines: drafts, send } = parsed.data;
   const { user } = auth;
 
-  return runEngagementLifecycleAction(
+  let savedId: string | undefined;
+  const outcome = await runEngagementLifecycleAction(
     engagementId,
     { userId: user.id, send },
     'Failed to save change order',
     () => gateChangeOrderExpert(user, engagementId),
     async (engagement) => {
-      const isFixed = engagement.pricingMethod === 'fixed';
-      if (!isFixed && newTotalCents !== undefined) {
-        return { success: false, error: INVALID_REQUEST };
-      }
       const built = toLineInputs(drafts, engagement);
       if (!built.ok) {
         return { success: false, error: built.error };
       }
 
       const repo = engagementChangeOrdersRepository;
-      const effectiveCents = await repo.effectivePriceCents(engagementId);
-      const delta = newTotalCents === undefined ? 0 : newTotalCents - effectiveCents;
       const content = {
         engagementId,
         userId: user.id,
         note: note === '' ? null : note,
-        priceDeltaCents: isFixed && delta !== 0 ? delta : null,
+        newTotalCents: newTotalCents ?? null,
         lines: built.lines,
       };
 
-      const open = (await repo.listForEngagement(engagementId)).find(
-        (order) => order.decidedAt === null && order.withdrawnAt === null
-      );
+      const orders = await repo.listForEngagement(engagementId);
+      const open = orders.find((order) => order.decidedAt === null && order.withdrawnAt === null);
       const persisted = await persistDraft(open, orderId, content);
       if (!persisted.ok) {
         return { success: false, error: persisted.error };
       }
       const { saved } = persisted;
+      savedId = saved.id;
 
       if (!send) {
         log.info('Change order draft saved', {
@@ -202,7 +205,7 @@ export async function saveChangeOrderAction(
         ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT,
         changeOrderLinesProps(sent, engagement.pricingMethod, user.id)
       );
-      await publishSent(engagement, sent, effectiveCents);
+      await publishSent(engagement, sent, effectiveExpertPriceCents(engagement.priceCents, orders));
 
       log.info('Change order sent', {
         engagementId,
@@ -214,4 +217,10 @@ export async function saveChangeOrderAction(
       return { success: true };
     }
   );
+  if (!outcome.success && savedId !== undefined) {
+    revalidatePath(`/engagements/${engagementId}`);
+  }
+  return outcome.success
+    ? { success: true, ...(savedId === undefined ? {} : { changeOrderId: savedId }) }
+    : { ...outcome, ...(savedId === undefined ? {} : { changeOrderId: savedId }) };
 }

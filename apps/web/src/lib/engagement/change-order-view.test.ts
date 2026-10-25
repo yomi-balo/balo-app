@@ -291,6 +291,36 @@ describe('mapChangeOrdersToView — time and materials', () => {
     expect(expert.open?.deltaChip).toBe('+12 hrs');
   });
 
+  it('shows a cap change beside the estimate: client figures for the client, expert figures otherwise', () => {
+    const withCap = makeOrder({ ...sentTm, priceDeltaCents: 100_000 });
+    const client = view([withCap], 'client', tm);
+    const expert = view([withCap], 'expert', tm);
+    expect(client.open?.priceEffect).toEqual({
+      text: 'Estimate 56 hrs → 68 hrs (+12 hrs)',
+      capText: 'Cap A$12,500 → A$13,750 (+A$1,250)',
+      hint: "You're billed for the time logged, as now. The cap is the most that can be billed.",
+    });
+    expect(client.open?.deltaChip).toBe('+12 hrs · cap +A$1,250');
+    expect(expert.open?.priceEffect?.capText).toBe('Cap A$10,000 → A$11,000 (+A$1,000)');
+    expect(expert.open?.deltaChip).toBe('+12 hrs · cap +A$1,000');
+    expect(JSON.stringify(client)).not.toContain('A$11,000');
+  });
+
+  it('words the approved outcome by whether the cap moved', () => {
+    const approvedBase = {
+      ...sentTm,
+      status: 'approved' as const,
+      decidedAt: new Date('2026-10-20T00:00:00Z'),
+      decidedByUserId: DANA.id,
+    };
+    expect(view([makeOrder(approvedBase)], 'client', tm).outcome?.text).toContain(
+      'The plan and estimates are updated.'
+    );
+    expect(
+      view([makeOrder({ ...approvedBase, priceDeltaCents: 100_000 })], 'expert', tm).outcome?.text
+    ).toContain('The plan, estimates and cap are updated.');
+  });
+
   it('carries estimates on lines, with the before state of an edit', () => {
     const lines = view([sentTm], 'expert', tm).open?.lines;
     expect(lines?.[0]).toMatchObject({ op: 'add', estimateLabel: '10 hrs', before: null });

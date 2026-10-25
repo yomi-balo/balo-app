@@ -180,8 +180,7 @@ function deriveExpertLabel(item: AdminProjectEngagementListItem): string {
 
 /**
  * "Fixed · A$40,000" or "T&M · A$220/hr · cap A$40,000", from the effective price
- * (`price_cents` plus approved change orders). On T&M that is the cap, which no change
- * order moves.
+ * (`price_cents` plus approved change orders). On T&M that is the cap.
  */
 function derivePricingLabel(item: AdminProjectEngagementListItem): string {
   const effective = money(item.effectivePriceCents, item.currency);

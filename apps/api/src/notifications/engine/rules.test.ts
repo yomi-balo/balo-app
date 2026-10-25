@@ -1848,6 +1848,8 @@ describe('change order rules (BAL-622)', () => {
       'admin_users:in-app:change-order-sent-admin',
       'client:email:change-order-sent-client',
       'client:in-app:change-order-sent-client',
+      'requester:email:change-order-sent-client',
+      'requester:in-app:change-order-sent-client',
     ]);
   });
 
@@ -1871,14 +1873,37 @@ describe('change order rules (BAL-622)', () => {
     expect(summarise('change_order.answered')).toEqual([
       'client:email:change-order-answered-client',
       'client:in-app:change-order-answered-client',
+      'requester:email:change-order-answered-client',
+      'requester:in-app:change-order-answered-client',
     ]);
   });
 
   it('change_order.withdrawn: client in-app only', () => {
     expect(summarise('change_order.withdrawn')).toEqual([
       'client:in-app:change-order-withdrawn-client',
+      'requester:in-app:change-order-withdrawn-client',
     ]);
   });
+
+  it.each(['change_order.sent', 'change_order.answered', 'change_order.withdrawn'])(
+    '%s requester rules fire only when the requester is not the owner',
+    (event) => {
+      const requesterRules = rulesFor(event).filter((r) => r.recipient === 'requester');
+      expect(requesterRules.length).toBeGreaterThan(0);
+      for (const rule of requesterRules) {
+        const base = { event, data: {} };
+        const distinct = { recipientId: 'owner-1', requestedByUserId: 'req-1' };
+        expect(rule.condition?.({ ...base, payload: distinct })).toBe(true);
+        expect(
+          rule.condition?.({
+            ...base,
+            payload: { recipientId: 'owner-1', requestedByUserId: 'owner-1' },
+          })
+        ).toBe(false);
+        expect(rule.condition?.({ ...base, payload: { recipientId: 'owner-1' } })).toBe(false);
+      }
+    }
+  );
 
   it.each(['change_order.sent', 'change_order.answered', 'change_order.withdrawn'])(
     '%s client rules are gated on payload.recipientId',

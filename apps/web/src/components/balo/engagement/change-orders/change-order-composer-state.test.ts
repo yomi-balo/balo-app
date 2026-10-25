@@ -261,7 +261,7 @@ describe('composerIssues', () => {
     ]);
   });
 
-  it('flags an invalid fixed price but not on T&M', () => {
+  it('flags an invalid price on fixed and an invalid cap on T&M', () => {
     expect(composerIssues({ ...base, priceValid: false })).toEqual([
       'Enter a project price of zero or more.',
     ]);
@@ -272,6 +272,12 @@ describe('composerIssues', () => {
         lines: [{ op: 'remove', milestoneId: 'm1', title: 'x' }],
         priceValid: false,
       })
-    ).toEqual([]);
+    ).toEqual(['Enter a cap of zero or more.']);
+  });
+
+  it('counts a cap change as a change on T&M', () => {
+    expect(composerIssues({ ...base, pricing: 'tm', lines: [], priceDeltaCents: 50_000 })).toEqual(
+      []
+    );
   });
 });

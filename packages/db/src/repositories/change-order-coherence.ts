@@ -6,10 +6,10 @@
  * calls {@link assertChangeOrderCoherent} at `send` and again at `approve`. Drafts are
  * deliberately unvalidated: an expert may save an incomplete change.
  *
- * The rules follow the pricing method. On a fixed-price project the money moves through
- * the order's `priceDeltaCents` and lines carry no estimates; on T&M the money follows the
- * estimates, so lines carry no values, there is no price delta, and every added or edited
- * milestone states its estimate.
+ * The rules follow the pricing method. On a fixed-price project the order's
+ * `priceDeltaCents` moves the price and lines carry no estimates; on T&M it moves the cap,
+ * lines carry no values, and every added or edited milestone states its estimate. On both,
+ * the effective price (or cap) after the delta stays at or above zero.
  */
 
 type CoherencePricingMethod = 'fixed' | 'tm';
@@ -21,8 +21,7 @@ export type ChangeOrderCoherenceRule =
   | 'tm_add_missing_estimate' // tm ⇒ every add line has estimatedMinutes > 0
   | 'tm_edit_missing_estimate' // tm ⇒ every edit line has estimatedMinutes present
   | 'fixed_line_has_estimate' // fixed ⇒ no line carries estimatedMinutes
-  | 'price_delta_on_tm' // tm ⇒ priceDeltaCents is null
-  | 'effective_price_negative' // fixed ⇒ current effective price + delta >= 0
+  | 'effective_price_negative' // current effective price (or cap) + delta >= 0
   | 'line_target_not_live' // edit/remove ⇒ the target is a live milestone of the engagement
   | 'add_has_target' // add ⇒ no target milestone
   | 'duplicate_target' // a milestone is targeted by at most one line
@@ -45,7 +44,10 @@ export interface ChangeOrderCoherenceLine {
 
 export interface ChangeOrderCoherenceSnapshot {
   pricingMethod: CoherencePricingMethod;
-  /** `price_cents` plus every approved delta, read under the engagement lock. */
+  /**
+   * `price_cents` (the price, or the cap on T&M) plus every approved delta, read under the
+   * engagement lock.
+   */
   currentEffectivePriceCents: number;
   priceDeltaCents: number | null;
   note: string | null;
@@ -73,16 +75,15 @@ function checkTargets(lines: readonly ChangeOrderCoherenceLine[], live: Readonly
 
 function checkPricing(snapshot: ChangeOrderCoherenceSnapshot): void {
   const { lines } = snapshot;
+  if (snapshot.currentEffectivePriceCents + (snapshot.priceDeltaCents ?? 0) < 0) {
+    throw new ChangeOrderCoherenceError('effective_price_negative');
+  }
   if (snapshot.pricingMethod === 'fixed') {
     if (lines.some((l) => l.estimatedMinutes !== null)) {
       throw new ChangeOrderCoherenceError('fixed_line_has_estimate');
     }
-    if (snapshot.currentEffectivePriceCents + (snapshot.priceDeltaCents ?? 0) < 0) {
-      throw new ChangeOrderCoherenceError('effective_price_negative');
-    }
     return;
   }
-  if (snapshot.priceDeltaCents !== null) throw new ChangeOrderCoherenceError('price_delta_on_tm');
   if (lines.some((l) => l.valueCents !== null)) {
     throw new ChangeOrderCoherenceError('tm_line_has_value');
   }

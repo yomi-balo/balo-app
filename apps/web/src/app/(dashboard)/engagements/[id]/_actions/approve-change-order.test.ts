@@ -258,6 +258,8 @@ describe('approveChangeOrderAction', () => {
           decidedAt: new Date('2026-10-15T09:00:00Z'),
           lines: [makeLine({ op: 'add', estimatedMinutes: 600 })],
         }),
+        previousEffectivePriceCents: 1_000_000,
+        effectivePriceCents: 1_000_000,
       })
     );
 
@@ -273,6 +275,28 @@ describe('approveChangeOrderAction', () => {
     expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('expertPriceChangeLabel');
     expect(mockLoadSettlement).not.toHaveBeenCalled();
     expect(mockRaiseAlert).not.toHaveBeenCalled();
+  });
+
+  it('time and materials: a cap that moved reads as the new cap, in expert figures', async () => {
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        milestones: [makeMilestone({ estimatedMinutes: 3000 })],
+      })
+    );
+    mockApprove.mockResolvedValue(approval());
+
+    await approveChangeOrderAction(INPUT);
+
+    expect(mockPublish).toHaveBeenCalledWith(
+      'change_order.approved',
+      expect.objectContaining({
+        pricingMethod: 'tm',
+        estimateChangeLabel: '50 hrs → 60 hrs (+10 hrs)',
+        expertPriceChangeLabel: 'Cap A$10,000 → A$11,000 (+A$1,000)',
+      })
+    );
+    expect(mockLoadSettlement).not.toHaveBeenCalled();
   });
 
   it('maps a stale line (coherence re-check at approval) to its message and writes nothing else', async () => {

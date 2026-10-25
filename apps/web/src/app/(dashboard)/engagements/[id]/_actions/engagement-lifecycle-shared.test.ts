@@ -288,7 +288,7 @@ describe('runEngagementLifecycleAction', () => {
     [
       'ChangeOrderCoherenceError (effective_price_negative)',
       () => new ChangeOrderCoherenceError('effective_price_negative'),
-      'Enter a project price of A$0 or more.',
+      'Enter a price or cap of zero or more.',
     ],
     [
       'ChangeOrderCoherenceError (empty_change)',

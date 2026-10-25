@@ -44,8 +44,17 @@ import type { PricingMethod } from './proposal-types';
  *
  * MONEY IS EXPERT-SIDE. `price_delta_cents` and every figure returned here is the
  * expert's; the client figure is derived through `applyBaloFee` by the read layer. The
- * project's `price_cents` is never rewritten — the effective price is `price_cents` plus
- * the approved deltas ({@link engagementChangeOrdersRepository.effectivePriceCents}).
+ * project's `price_cents` (the price on fixed, the cap on T&M) is never rewritten — the
+ * effective price is `price_cents` plus the approved deltas
+ * ({@link engagementChangeOrdersRepository.effectivePriceCents}).
+ *
+ * THE DELTA IS DERIVED UNDER THE LOCK. Callers pass the intended new total
+ * (`newTotalCents`); `createDraft` / `replaceLines` store `newTotalCents − effective`,
+ * with the effective price read after the engagement lock is taken, so an approval that
+ * lands between the caller's read and the lock cannot skew it. The stored delta then
+ * stays exact through `send` and `approve` without recomputation: the effective price
+ * only moves when an order is approved, and the one-open-order index means no other
+ * order can be approved while this one is open.
  *
  * NEVER NOTIFIES — the caller publishes after commit (`repositories-never-notify.test.ts`).
  */
@@ -361,6 +370,20 @@ async function effectivePriceCentsTx(exec: DbExecutor, engagementId: string): Pr
   return priceCents + Number(approved?.total ?? 0);
 }
 
+/**
+ * The delta that takes the current effective price to `newTotalCents`, read inside the
+ * caller's locked transaction. `null` in, or a zero delta, stores `null` (no price change).
+ */
+async function priceDeltaForNewTotalTx(
+  tx: DbTx,
+  engagementId: string,
+  newTotalCents: number | null
+): Promise<number | null> {
+  if (newTotalCents === null) return null;
+  const delta = newTotalCents - (await effectivePriceCentsTx(tx, engagementId));
+  return delta === 0 ? null : delta;
+}
+
 async function liveMilestonesTx(tx: DbTx, engagementId: string): Promise<EngagementMilestone[]> {
   return tx
     .select()
@@ -633,14 +656,16 @@ export const engagementChangeOrdersRepository = {
    * The expert drafts a change. With `fromOrderId`, the open `requested` order becomes
    * the draft (`requested → draft`); without, a fresh draft is opened (refused while
    * another order is open). Drafts are NOT coherence-checked — they may be incomplete.
-   * Audits `engagement.change_order_drafted`.
+   * `newTotalCents` is the intended expert-side price (fixed) or cap (T&M) after the
+   * change, `null` for no price change; the stored delta is derived from it under the
+   * lock. Audits `engagement.change_order_drafted`.
    */
   async createDraft(input: {
     engagementId: string;
     userId: string;
     fromOrderId?: string;
     note: string | null;
-    priceDeltaCents: number | null;
+    newTotalCents: number | null;
     lines: readonly ChangeOrderLineInput[];
   }): Promise<ChangeOrderRecord> {
     const fromOrderId = input.fromOrderId;
@@ -652,7 +677,11 @@ export const engagementChangeOrdersRepository = {
         const order = await updateOrderTx(tx, current.id, {
           status: 'draft',
           note: input.note,
-          priceDeltaCents: input.priceDeltaCents,
+          priceDeltaCents: await priceDeltaForNewTotalTx(
+            tx,
+            input.engagementId,
+            input.newTotalCents
+          ),
         });
         await softDeleteLinesTx(tx, order.id);
         await insertLinesTx(tx, order.id, input.lines);
@@ -674,7 +703,7 @@ export const engagementChangeOrdersRepository = {
         engagementId: input.engagementId,
         status: 'draft',
         note: input.note,
-        priceDeltaCents: input.priceDeltaCents,
+        priceDeltaCents: await priceDeltaForNewTotalTx(tx, input.engagementId, input.newTotalCents),
         createdByUserId: input.userId,
       });
       await insertLinesTx(tx, order.id, input.lines);
@@ -689,16 +718,16 @@ export const engagementChangeOrdersRepository = {
   },
 
   /**
-   * Replace a draft's note, price delta and lines (the old lines are soft-deleted).
-   * Draft only — anything else is {@link InvalidChangeOrderTransitionError}. Audits
-   * `engagement.change_order_lines_replaced`.
+   * Replace a draft's note, price change and lines (the old lines are soft-deleted).
+   * `newTotalCents` follows {@link createDraft}. Draft only — anything else is
+   * {@link InvalidChangeOrderTransitionError}. Audits `engagement.change_order_lines_replaced`.
    */
   async replaceLines(input: {
     engagementId: string;
     orderId: string;
     userId: string;
     note: string | null;
-    priceDeltaCents: number | null;
+    newTotalCents: number | null;
     lines: readonly ChangeOrderLineInput[];
   }): Promise<ChangeOrderRecord> {
     return db.transaction(async (tx) => {
@@ -709,7 +738,7 @@ export const engagementChangeOrdersRepository = {
 
       const order = await updateOrderTx(tx, current.id, {
         note: input.note,
-        priceDeltaCents: input.priceDeltaCents,
+        priceDeltaCents: await priceDeltaForNewTotalTx(tx, input.engagementId, input.newTotalCents),
       });
       await softDeleteLinesTx(tx, order.id);
       await insertLinesTx(tx, order.id, input.lines);

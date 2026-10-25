@@ -64,12 +64,11 @@ export const CHANGE_ORDER_PENDING =
 const COHERENCE_MESSAGES: Record<ChangeOrderCoherenceRule, string> = {
   note_missing: "Add a short summary of what's changing and why.",
   empty_change: 'Change at least one milestone or the price.',
-  effective_price_negative: 'Enter a project price of A$0 or more.',
+  effective_price_negative: 'Enter a price or cap of zero or more.',
   tm_add_missing_estimate: 'Add an estimate in hours for each new milestone.',
   tm_edit_missing_estimate: 'Add an estimate in hours for each milestone you change.',
   tm_line_has_value: 'Milestone values are not used on a time and materials project.',
   fixed_line_has_estimate: 'Estimates are not used on a fixed-price project.',
-  price_delta_on_tm: 'The price does not change on a time and materials project.',
   add_has_target: PLAN_CHANGED,
   duplicate_target: 'Each milestone can appear in the change once.',
   line_target_not_live: PLAN_CHANGED,

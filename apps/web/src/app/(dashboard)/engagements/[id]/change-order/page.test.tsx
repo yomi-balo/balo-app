@@ -253,6 +253,14 @@ describe('change-order composer page · props', () => {
     expect(composerProps().currentPriceCents).toBe(6_050_000);
   });
 
+  it('hands the composer the hourly rate for the T&M cap check', async () => {
+    mockFindWithMilestones.mockResolvedValue(
+      engagement({ pricingMethod: 'tm', rateCents: 22_000 })
+    );
+    await renderPage();
+    expect(composerProps().hourlyRateCents).toBe(22_000);
+  });
+
   it('carries a client request into the composer with its heading and note', async () => {
     mockListChangeOrders.mockResolvedValue([
       order({

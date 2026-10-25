@@ -310,6 +310,11 @@ function resolveRecipient(
       const id = context.payload.ownerUserId;
       return typeof id === 'string' ? id : undefined;
     }
+    case 'requester': {
+      // BAL-622: the change-order requester, a single payload id (NOT a fan-out).
+      const id = context.payload.requestedByUserId;
+      return typeof id === 'string' ? id : undefined;
+    }
     case 'admin':
       // Future: resolve admin user IDs from config or DB
       return undefined;

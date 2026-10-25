@@ -325,7 +325,27 @@ describe('ChangeOrderPanel · client', () => {
     await user.click(screen.getByRole('button', { name: 'Approve change' }));
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
-        'Change approved — the plan and estimate are updated.'
+        'Change approved — the plan and estimates are updated.'
+      )
+    );
+  });
+
+  it('toasts the cap copy when a time-and-materials change moves the cap', async () => {
+    const user = userEvent.setup();
+    const tm = item({
+      pricingMethod: 'tm',
+      priceEffect: {
+        text: 'Estimate 56 hrs → 66 hrs (+10 hrs)',
+        capText: 'Cap A$12,500 → A$13,750 (+A$1,250)',
+        hint: null,
+      },
+    });
+    renderPanel('client', view({ open: tm, affordances: { ...NO_AFFORDANCES, decide: true } }));
+    expect(screen.getByText('Cap A$12,500 → A$13,750 (+A$1,250)')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Approve change' }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        'Change approved — the plan, estimates and cap are updated.'
       )
     );
   });

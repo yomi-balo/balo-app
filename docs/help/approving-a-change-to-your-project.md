@@ -24,15 +24,17 @@ with a plain answer if no change is needed. A project can have one change open a
 Your expert explains what's changing and why, and lists each milestone that would be added,
 edited or removed, with what it says now next to what it would say after the change. If the price
 moves, you see how much your price would go up or down and the new project total. Any difference
-is settled on the final invoice, so nothing is charged on its own when you approve.
+is settled on the final invoice, so nothing is charged on its own when you approve. On a time and
+materials project, a change can also raise or lower the cap, which is the most you can be billed. You see
+the new cap and how much it moves. You're still billed for the time logged, up to that cap.
 
 Nothing changes until your company approves. While a change is waiting for you, the milestones it
 touches are marked **Change pending** and can't be edited.
 
 ## Approving
 
-Choose **Approve change**. The milestones and the price update straight away, and your expert
-is told. Approving is a decision for your company, so anyone who can approve proposals for it can
+Choose **Approve change**. The milestones and the price (or the estimates and cap, on time and
+materials) update straight away, and your expert is told. Approving is a decision for your company, so anyone who can approve proposals for it can
 do it.
 
 ## Declining

@@ -229,13 +229,22 @@ export function estimateTotals(
   return { currentMinutes, nextMinutes };
 }
 
+/**
+ * T&M: what the rate comes to over the estimate after the change, rounded up to whole currency
+ * units, or null when the rate is unknown or nothing is estimated.
+ */
+export function estimateCostCents(rateCents: number | null, nextMinutes: number): number | null {
+  if (rateCents === null || rateCents <= 0 || nextMinutes <= 0) return null;
+  return Math.ceil((rateCents * nextMinutes) / 6000) * 100;
+}
+
 interface ComposerIssueInput {
   pricing: ComposerPricing;
   note: string;
   lines: readonly ComposerLineDraft[];
-  /** Fixed price: the typed total minus the current total (0 on T&M). */
+  /** The typed price (or T&M cap) minus the current one. */
   priceDeltaCents: number;
-  /** Fixed price: whether the typed total parses to a non-negative amount. */
+  /** Whether the typed price (or T&M cap) parses to a non-negative amount. */
   priceValid: boolean;
 }
 
@@ -260,6 +269,12 @@ export function composerIssues(input: ComposerIssueInput): string[] {
     issues.push('Change at least one milestone or the price.');
   }
   for (const line of lines) issues.push(...lineIssues(line, pricing));
-  if (pricing === 'fixed' && !priceValid) issues.push('Enter a project price of zero or more.');
+  if (!priceValid) {
+    issues.push(
+      pricing === 'fixed'
+        ? 'Enter a project price of zero or more.'
+        : 'Enter a cap of zero or more.'
+    );
+  }
   return [...new Set(issues)];
 }

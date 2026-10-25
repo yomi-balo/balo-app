@@ -6,8 +6,8 @@ import { axe } from '@/test/axe';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+const { push, refresh } = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }));
 
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/save-change-order', () => ({
   saveChangeOrderAction: vi.fn(),
@@ -41,6 +41,7 @@ interface Overrides {
   pricingMethod?: 'fixed' | 'tm';
   milestones?: ComposerMilestone[];
   order?: ChangeOrderComposerOrder | null;
+  hourlyRateCents?: number | null;
 }
 
 function renderComposer(overrides: Overrides = {}): ReturnType<typeof render> {
@@ -52,6 +53,7 @@ function renderComposer(overrides: Overrides = {}): ReturnType<typeof render> {
       projectTitle="CRM rollout"
       currency="aud"
       currentPriceCents={1250000}
+      hourlyRateCents={overrides.hourlyRateCents ?? null}
       milestones={overrides.milestones ?? MILESTONES}
       order={overrides.order ?? null}
     />
@@ -171,6 +173,7 @@ describe('ChangeOrderComposer', () => {
     expect(saveMock).toHaveBeenCalledWith({
       engagementId: 'eng-1',
       note: 'More build time',
+      newTotalCents: 1250000,
       lines: [
         {
           op: 'edit',
@@ -182,6 +185,76 @@ describe('ChangeOrderComposer', () => {
       ],
       send: true,
     });
+  });
+
+  it('T&M: pre-fills the current cap and sends a raised cap', async () => {
+    const user = userEvent.setup();
+    renderComposer({ pricingMethod: 'tm' });
+    const cap = screen.getByLabelText('Cap');
+    expect(cap).toHaveValue(12500);
+    expect(
+      screen.getByText(/Currently A\$12,500\. Leave it to keep the cap\./)
+    ).toBeInTheDocument();
+    await user.clear(cap);
+    await user.type(cap, '14000');
+    expect(screen.getByText(/That's \+A\$1,500\./)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1));
+    expect(saveMock.mock.calls[0]?.[0]).toMatchObject({ newTotalCents: 1400000, send: false });
+  });
+
+  it('T&M: warns when the estimate at the rate passes the cap, and raises it in one click', async () => {
+    const user = userEvent.setup();
+    renderComposer({ pricingMethod: 'tm', hourlyRateCents: 50000 });
+    expect(
+      screen.getByText(
+        /At A\$500\/hr the new estimate comes to A\$15,000, above the A\$12,500 cap\./
+      )
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Raise cap to A$15,000' }));
+    expect(screen.getByLabelText('Cap')).toHaveValue(15000);
+    expect(screen.queryByRole('button', { name: /Raise cap to/ })).not.toBeInTheDocument();
+  });
+
+  it('T&M: shows a rate that is not a whole amount with cents', () => {
+    renderComposer({ pricingMethod: 'tm', hourlyRateCents: 50050 });
+    expect(screen.getByText(/At A\$500\.50\/hr/)).toBeInTheDocument();
+  });
+
+  it('T&M: no cap warning while the estimate fits under the cap', () => {
+    renderComposer({ pricingMethod: 'tm', hourlyRateCents: 12000 });
+    expect(screen.queryByText(/above the/)).not.toBeInTheDocument();
+  });
+
+  it('tells the client reads the note word for word and to leave amounts to the price box', () => {
+    renderComposer();
+    expect(
+      screen.getByText(
+        /Northwind reads this word for word\. Describe the change, and leave amounts/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('a send that fails after the save keeps the saved order, so a retry sends it instead of opening another', async () => {
+    const user = userEvent.setup();
+    saveMock.mockResolvedValueOnce({
+      success: false,
+      error: "Add a short summary of what's changing and why.",
+      changeOrderId: 'saved-1',
+    });
+    renderComposer();
+    await user.type(screen.getByLabelText(/What's changing and why/), 'Needs a dashboard');
+    await user.click(screen.getByRole('button', { name: 'Add a milestone' }));
+    await user.type(screen.getAllByLabelText('Milestone name')[2]!, 'Dashboard');
+    await user.click(screen.getByRole('button', { name: /Send to Northwind/ }));
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(saveMock.mock.calls[0]?.[0]).not.toHaveProperty('orderId');
+
+    await user.click(screen.getByRole('button', { name: /Send to Northwind/ }));
+    await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(2));
+    expect(saveMock.mock.calls[1]?.[0]).toMatchObject({ orderId: 'saved-1', send: true });
   });
 
   it('saves a draft without running the send checks, carrying the order id', async () => {

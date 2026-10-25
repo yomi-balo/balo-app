@@ -36,7 +36,7 @@ vi.mock('@/lib/authz/engagement', () => ({
 const {
   mockFindEngagement,
   mockFindOwner,
-  mockEffectivePrice,
+  mockFindMembers,
   mockList,
   mockCreateDraft,
   mockReplaceLines,
@@ -51,7 +51,7 @@ const {
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
-    mockEffectivePrice: vi.fn(),
+    mockFindMembers: vi.fn(),
     mockList: vi.fn(),
     mockCreateDraft: vi.fn(),
     mockReplaceLines: vi.fn(),
@@ -65,13 +65,15 @@ vi.mock('@balo/db', () => ({
     findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   engagementChangeOrdersRepository: {
-    effectivePriceCents: (...a: unknown[]) => mockEffectivePrice(...a),
     listForEngagement: (...a: unknown[]) => mockList(...a),
     createDraft: (...a: unknown[]) => mockCreateDraft(...a),
     replaceLines: (...a: unknown[]) => mockReplaceLines(...a),
     send: (...a: unknown[]) => mockSend(...a),
   },
-  companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
+  companiesRepository: {
+    findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a),
+    findWithMembers: (...a: unknown[]) => mockFindMembers(...a),
+  },
   ChangeOrderCoherenceError,
   ChangeOrderAlreadyOpenError: class extends Error {},
   ChangeOrderNotFoundError: class extends Error {},
@@ -147,12 +149,12 @@ beforeEach(() => {
   );
   mockResolveLens.mockReturnValue({ lens: 'expert', archetype: 'participant' });
   mockHasExpertCapability.mockResolvedValue(true);
-  mockEffectivePrice.mockResolvedValue(1_000_000);
   mockList.mockResolvedValue([]);
   mockCreateDraft.mockResolvedValue(saved);
   mockReplaceLines.mockResolvedValue(saved);
   mockSend.mockResolvedValue(sent);
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+  mockFindMembers.mockResolvedValue({ members: [{ userId: DANA.id }] });
 });
 
 describe('saveChangeOrderAction — input and gate', () => {
@@ -179,12 +181,13 @@ describe('saveChangeOrderAction — input and gate', () => {
     expect(mockCreateDraft).not.toHaveBeenCalled();
   });
 
-  it('rejects a new total on a time and materials project', async () => {
+  it('passes a new cap on a time and materials project, which the repository turns into a delta', async () => {
     mockFindEngagement.mockResolvedValue(makeProject({ pricingMethod: 'tm' }));
     expect(await saveChangeOrderAction({ ...base, newTotalCents: 1_100_000 })).toEqual({
-      success: false,
-      error: 'Invalid request.',
+      success: true,
+      changeOrderId: ORDER_ID,
     });
+    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ newTotalCents: 1_100_000 });
   });
 });
 
@@ -292,18 +295,19 @@ describe('saveChangeOrderAction — edit descriptions', () => {
 });
 
 describe('saveChangeOrderAction — saving a draft', () => {
-  it('opens a fresh draft with the signed expert-side delta from the effective price', async () => {
+  it('opens a fresh draft and hands the repository the intended total, not a delta', async () => {
     const result = await saveChangeOrderAction({ ...base, newTotalCents: 1_100_000 });
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, changeOrderId: ORDER_ID });
     expect(mockCreateDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         engagementId: ENGAGEMENT_ID,
         userId: CHARLES.id,
         note: NOTE,
-        priceDeltaCents: 100_000,
+        newTotalCents: 1_100_000,
       })
     );
+    expect(mockCreateDraft.mock.calls[0]?.[0]).not.toHaveProperty('priceDeltaCents');
     expect(mockCreateDraft.mock.calls[0]?.[0]).not.toHaveProperty('fromOrderId');
     expect(mockSend).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
@@ -311,18 +315,14 @@ describe('saveChangeOrderAction — saving a draft', () => {
     expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}/change-order`);
   });
 
-  it('stores no delta when the total is unchanged or absent, and a blank note as null', async () => {
-    await saveChangeOrderAction({ ...base, note: '', newTotalCents: 1_000_000 });
-    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ note: null, priceDeltaCents: null });
-
-    mockCreateDraft.mockClear();
-    await saveChangeOrderAction(base);
-    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ priceDeltaCents: null });
+  it('passes no total when none is entered, and a blank note as null', async () => {
+    await saveChangeOrderAction({ ...base, note: '' });
+    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ note: null, newTotalCents: null });
   });
 
-  it('stores a price cut as a negative delta', async () => {
+  it('passes a lower total as entered', async () => {
     await saveChangeOrderAction({ ...base, newTotalCents: 800_000 });
-    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ priceDeltaCents: -200_000 });
+    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ newTotalCents: 800_000 });
   });
 
   it('turns an open client request into the draft', async () => {
@@ -378,7 +378,7 @@ describe('saveChangeOrderAction — sending', () => {
   it('sends, tracks without amounts, and tells the client CLIENT figures only', async () => {
     const result = await saveChangeOrderAction({ ...base, newTotalCents: 1_100_000, send: true });
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, changeOrderId: ORDER_ID });
     expect(mockSend).toHaveBeenCalledWith({
       engagementId: ENGAGEMENT_ID,
       orderId: ORDER_ID,
@@ -410,6 +410,7 @@ describe('saveChangeOrderAction — sending', () => {
       linesRemoved: 1,
       clientPriceChangeLabel: 'A$12,500 → A$13,750 (+A$1,250)',
     });
+    expect(JSON.stringify(mockPublish.mock.calls)).not.toContain('requestedByUserId');
     const payload = JSON.stringify(mockPublish.mock.calls);
     expect(payload).not.toContain('A$10,000');
     expect(payload).not.toContain('A$11,000');
@@ -444,7 +445,57 @@ describe('saveChangeOrderAction — sending', () => {
       estimateChangeLabel: '50 hrs → 60 hrs (+10 hrs)',
     });
     expect(payload).not.toHaveProperty('clientPriceChangeLabel');
-    expect(mockCreateDraft.mock.calls[0]?.[0]).toMatchObject({ priceDeltaCents: null });
+  });
+
+  it('time and materials: a cap change reads as the new cap in client figures', async () => {
+    mockFindEngagement.mockResolvedValue(makeProject({ pricingMethod: 'tm' }));
+    mockSend.mockResolvedValue(
+      makeOrder({
+        id: ORDER_ID,
+        status: 'sent',
+        note: NOTE,
+        sentAt: new Date(),
+        priceDeltaCents: 100_000,
+        lines: [makeLine({ op: 'add', estimatedMinutes: 600 })],
+      })
+    );
+
+    await saveChangeOrderAction({
+      ...base,
+      newTotalCents: 1_100_000,
+      lines: [{ ...ADD_LINE, estimatedMinutes: 600 }],
+      send: true,
+    });
+
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({
+      pricingMethod: 'tm',
+      clientPriceChangeLabel: 'Cap A$12,500 → A$13,750 (+A$1,250)',
+    });
+  });
+
+  it('leaves the requester out when they have left the company or are the owner', async () => {
+    mockSend.mockResolvedValue({ ...sent, requestedByUserId: DANA.id });
+    mockFindMembers.mockResolvedValue({ members: [] });
+    await saveChangeOrderAction({ ...base, send: true });
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
+
+    mockPublish.mockClear();
+    mockFindMembers.mockResolvedValue({ members: [{ userId: DANA.id }] });
+    mockFindOwner.mockResolvedValue({ id: DANA.id });
+    await saveChangeOrderAction({ ...base, send: true });
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
+  });
+
+  it('revalidates the project page when a send fails after the save', async () => {
+    mockSend.mockRejectedValue(new ChangeOrderCoherenceError('note_missing'));
+    await saveChangeOrderAction({ ...base, send: true });
+    expect(revalidatePath).toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}`);
+  });
+
+  it('tells the requester too when the order answers a request', async () => {
+    mockSend.mockResolvedValue({ ...sent, requestedByUserId: DANA.id });
+    await saveChangeOrderAction({ ...base, send: true });
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ requestedByUserId: DANA.id });
   });
 
   it('a send that fails coherence keeps the saved draft and returns the rule message', async () => {
@@ -453,16 +504,20 @@ describe('saveChangeOrderAction — sending', () => {
     expect(await saveChangeOrderAction({ ...base, send: true })).toEqual({
       success: false,
       error: "Add a short summary of what's changing and why.",
+      changeOrderId: ORDER_ID,
     });
     expect(mockCreateDraft).toHaveBeenCalledTimes(1);
     expect(mockTrack).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
-    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalledWith(`/engagements/${ENGAGEMENT_ID}/change-order`);
   });
 
   it('still succeeds when the client owner cannot be found (client rules skip)', async () => {
     mockFindOwner.mockRejectedValue(new Error('no owner'));
-    expect(await saveChangeOrderAction({ ...base, send: true })).toEqual({ success: true });
+    expect(await saveChangeOrderAction({ ...base, send: true })).toEqual({
+      success: true,
+      changeOrderId: ORDER_ID,
+    });
     expect(mockPublish).toHaveBeenCalledWith(
       'change_order.sent',
       expect.objectContaining({ recipientId: undefined })

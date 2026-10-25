@@ -14,6 +14,9 @@ export interface NotificationRule {
     | 'party_admins'
     | 'company_billing_admins'
     | 'owner'
+    // BAL-622 — the user who raised a change request (`payload.requestedByUserId`); a single
+    // publisher-resolved id like `billing_creator`, so it flows the single-recipient path.
+    | 'requester'
     // BAL-408 — the live participants of ONE SIDE of a meeting. None of the shipped kinds
     // expressed "the same-party members of this meeting": `party_admins` is admin-only and
     // party-scoped, `client`/`expert` are single recipients. The id list is resolved by the
@@ -75,6 +78,11 @@ const hasPartyRecipients: NonNullable<NotificationRule['condition']> = (ctx) =>
 const creatorIsDistinctMember: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.creatorUserId === 'string' &&
   ctx.payload.creatorUserId !== ctx.payload.recipientId;
+
+/** The change-order requester is notified only when they are not already the owner recipient. */
+const requesterIsDistinctFromOwner: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.requestedByUserId === 'string' &&
+  ctx.payload.requestedByUserId !== ctx.payload.recipientId;
 
 /** SMS gate: the recipient has a verified phone (mirrors `booking-confirmed-sms`). */
 const recipientPhoneVerified: NonNullable<NotificationRule['condition']> = (ctx) => {
@@ -911,6 +919,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   ],
   'change_order.sent': [
     ...emailAndInApp('client', 'change-order-sent-client', hasRecipientId),
+    ...emailAndInApp('requester', 'change-order-sent-client', requesterIsDistinctFromOwner),
     {
       channel: 'in-app',
       recipient: 'admin_users',
@@ -936,7 +945,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
-  'change_order.answered': emailAndInApp('client', 'change-order-answered-client', hasRecipientId),
+  'change_order.answered': [
+    ...emailAndInApp('client', 'change-order-answered-client', hasRecipientId),
+    ...emailAndInApp('requester', 'change-order-answered-client', requesterIsDistinctFromOwner),
+  ],
   'change_order.withdrawn': [
     {
       channel: 'in-app',
@@ -944,6 +956,13 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'change-order-withdrawn-client',
       timing: 'immediate',
       condition: hasRecipientId,
+    },
+    {
+      channel: 'in-app',
+      recipient: 'requester',
+      template: 'change-order-withdrawn-client',
+      timing: 'immediate',
+      condition: requesterIsDistinctFromOwner,
     },
   ],
   // BAL-338 (D7): the review window elapsed with no client decision — the D7 sweep

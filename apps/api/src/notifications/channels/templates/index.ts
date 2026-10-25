@@ -194,6 +194,12 @@ function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/** BAL-622 — the present pre-formatted change labels joined on one line; undefined when none. */
+function joinLabels(...labels: unknown[]): string | undefined {
+  const present = labels.filter((l): l is string => typeof l === 'string' && l.length > 0);
+  return present.length > 0 ? present.join(' · ') : undefined;
+}
+
 /**
  * BAL-410 — narrow the merged payload's `cancelledBy` to its union.
  *
@@ -1120,9 +1126,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         linesAdded: numberCount(data.linesAdded),
         linesEdited: numberCount(data.linesEdited),
         linesRemoved: numberCount(data.linesRemoved),
-        changeLabel: (data.clientPriceChangeLabel ?? data.estimateChangeLabel) as
-          | string
-          | undefined,
+        changeLabel: joinLabels(data.clientPriceChangeLabel, data.estimateChangeLabel),
         engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
         baseUrl: BASE_URL,
       }),
@@ -1140,9 +1144,9 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         actorClientLabel,
         projectTitle,
         approvedOn: (data.approvedOn as string) ?? '',
-        changeLabel: (data.expertPriceChangeLabel ?? data.estimateChangeLabel) as
-          | string
-          | undefined,
+        pricingMethod: data.pricingMethod === 'tm' ? 'tm' : 'fixed',
+        capMoved: typeof data.expertPriceChangeLabel === 'string',
+        changeLabel: joinLabels(data.expertPriceChangeLabel, data.estimateChangeLabel),
         engagementUrl: `${BASE_URL}/engagements/${(data.engagementId as string) ?? ''}`,
         baseUrl: BASE_URL,
       }),

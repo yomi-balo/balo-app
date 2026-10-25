@@ -137,6 +137,7 @@ function minutesOf(order: ChangeOrderWithLines): number {
 }
 
 function tmView(
+  settlement: ProjectSettlement,
   orders: readonly ChangeOrderWithLines[],
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties
@@ -144,6 +145,11 @@ function tmView(
   const approved = approvedInDecisionOrder(orders);
   const current = engagement.milestones.reduce((sum, m) => sum + (m.estimatedMinutes ?? 0), 0);
   const approvedMinutes = approved.reduce((sum, order) => sum + minutesOf(order), 0);
+  const { currency } = engagement;
+  const bothSides = (expertCents: number, clientCents: number, signed: boolean): string => {
+    const format = signed ? signedMoney : formatWholeCurrency;
+    return `${format(expertCents, currency)} expert · ${format(clientCents, currency)} client`;
+  };
 
   const rows = [
     { label: 'Accepted estimate', value: formatHours(current - approvedMinutes), strong: false },
@@ -153,18 +159,49 @@ function tmView(
       strong: false,
     })),
     { label: 'Current estimate', value: formatHours(current), strong: true },
+    {
+      label: 'Accepted cap',
+      value: bothSides(settlement.accepted.expertCents, settlement.accepted.clientCents, false),
+      strong: false,
+    },
+    ...settlement.approved
+      .map((delta, index) => ({ delta, order: approved[index] }))
+      .filter(({ delta }) => delta.expertDeltaCents !== 0)
+      .map(({ delta, order }) => ({
+        label: `Cap change approved${decidedOn(order)}`,
+        value: bothSides(delta.expertDeltaCents, delta.clientDeltaCents, true),
+        strong: false,
+      })),
+    {
+      label: 'Current cap',
+      value: bothSides(settlement.current.expertCents, settlement.current.clientCents, false),
+      strong: true,
+    },
   ];
 
   const sent = sentOrder(orders);
+  let pendingNote: string | null = null;
+  if (sent !== undefined) {
+    const capDelta = sent.priceDeltaCents ?? 0;
+    const capClause =
+      capDelta === 0
+        ? ''
+        : `, cap ${signedMoney(capDelta, currency)} expert, ${signedMoney(
+            clientPriceChangeCents(
+              settlement.current.expertCents,
+              settlement.current.expertCents + capDelta,
+              engagement.baloFeeBps
+            ),
+            currency
+          )} client`;
+    pendingNote = `Waiting on ${parties.clientCompanyName}: ${signedHours(minutesOf(sent))}${capClause} (not in the totals yet).`;
+  }
   return {
     kind: 'tm',
     rows,
-    pendingNote:
-      sent === undefined
-        ? null
-        : `Waiting on ${parties.clientCompanyName}: ${signedHours(minutesOf(sent))} (not in the totals yet).`,
+    pendingNote,
     footnote:
-      'Billed each period from logged time. Change orders move the estimate, not the invoice.',
+      'Billed each period from logged time, up to the cap. A change order moves the estimate and, when it says so, the cap.',
   };
 }
 
@@ -175,6 +212,6 @@ export function mapChangeOrderAdminView(
   parties: EngagementParties
 ): ChangeOrderAdminMoneyView {
   return engagement.pricingMethod === 'tm'
-    ? tmView(orders, engagement, parties)
+    ? tmView(settlement, orders, engagement, parties)
     : fixedView(settlement, orders, engagement, parties);
 }

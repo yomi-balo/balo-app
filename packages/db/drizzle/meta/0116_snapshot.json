@@ -1,5 +1,5 @@
 {
-  "id": "bb2010ba-547e-484a-859c-9a0d5c5dbc0e",
+  "id": "9f1c466a-748d-4ff8-abc9-8ddbe8fbf62d",
   "prevId": "f9de61d4-2880-4fda-9394-54cef9a4272e",
   "version": "7",
   "dialect": "postgresql",
@@ -10509,6 +10509,26 @@
         "engagement_change_order_decided_xor_withdrawn": {
           "name": "engagement_change_order_decided_xor_withdrawn",
           "value": "NOT (\"engagement_change_orders\".\"decided_at\" IS NOT NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NOT NULL)"
+        },
+        "engagement_change_order_decided_stamped": {
+          "name": "engagement_change_order_decided_stamped",
+          "value": "(\"engagement_change_orders\".\"status\" <> 'approved' AND \"engagement_change_orders\".\"status\" <> 'declined') OR (\"engagement_change_orders\".\"decided_at\" IS NOT NULL AND \"engagement_change_orders\".\"decided_by_user_id\" IS NOT NULL)"
+        },
+        "engagement_change_order_withdrawn_stamped": {
+          "name": "engagement_change_order_withdrawn_stamped",
+          "value": "\"engagement_change_orders\".\"status\" <> 'withdrawn' OR \"engagement_change_orders\".\"withdrawn_at\" IS NOT NULL"
+        },
+        "engagement_change_order_sent_stamped": {
+          "name": "engagement_change_order_sent_stamped",
+          "value": "(\"engagement_change_orders\".\"status\" <> 'sent' AND \"engagement_change_orders\".\"status\" <> 'approved') OR \"engagement_change_orders\".\"sent_at\" IS NOT NULL"
+        },
+        "engagement_change_order_open_unstamped": {
+          "name": "engagement_change_order_open_unstamped",
+          "value": "(\"engagement_change_orders\".\"status\" <> 'requested' AND \"engagement_change_orders\".\"status\" <> 'draft' AND \"engagement_change_orders\".\"status\" <> 'sent') OR (\"engagement_change_orders\".\"decided_at\" IS NULL AND \"engagement_change_orders\".\"withdrawn_at\" IS NULL)"
+        },
+        "engagement_change_order_requested_stamped": {
+          "name": "engagement_change_order_requested_stamped",
+          "value": "\"engagement_change_orders\".\"status\" <> 'requested' OR \"engagement_change_orders\".\"requested_at\" IS NOT NULL"
         }
       },
       "isRLSEnabled": false

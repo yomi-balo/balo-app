@@ -83,7 +83,11 @@ export async function approveChangeOrderAction(input: {
         0
       );
       const minutesDelta = changeOrderMinutesDelta(order.lines);
-      const expertPriceChangeLabel = `${formatWholeCurrency(approval.previousEffectivePriceCents, currency)} → ${formatWholeCurrency(approval.effectivePriceCents, currency)} (${signedMoney(approval.effectivePriceCents - approval.previousEffectivePriceCents, currency)})`;
+      const capDeltaCents = approval.effectivePriceCents - approval.previousEffectivePriceCents;
+      const newPrice = formatWholeCurrency(approval.effectivePriceCents, currency);
+      const expertPriceChangeLabel = isFixed
+        ? `${formatWholeCurrency(approval.previousEffectivePriceCents, currency)} → ${newPrice} (${signedMoney(capDeltaCents, currency)})`
+        : `Cap ${formatWholeCurrency(approval.previousEffectivePriceCents, currency)} → ${newPrice} (${signedMoney(capDeltaCents, currency)})`;
       const estimateChangeLabel = `${formatHours(minutesBefore)} → ${formatHours(minutesBefore + minutesDelta)} (${signedHours(minutesDelta)})`;
 
       publishNotificationEvent('change_order.approved', {
@@ -94,6 +98,7 @@ export async function approveChangeOrderAction(input: {
         pricingMethod: isFixed ? 'fixed' : 'tm',
         approvedOn: formatShortUtc(approvedAt),
         ...(isFixed ? { expertPriceChangeLabel } : { estimateChangeLabel }),
+        ...(!isFixed && capDeltaCents !== 0 ? { expertPriceChangeLabel } : {}),
         expertPartyLabel: parties.expertParty,
       }).catch(() => {
         // publishNotificationEvent logs internally.

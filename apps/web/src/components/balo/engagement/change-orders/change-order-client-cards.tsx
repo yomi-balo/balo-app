@@ -26,6 +26,14 @@ interface ChangeReviewCardProps {
 
 const REASON_MAX_LENGTH = 2000;
 
+/** What approving updates, worded for the project's pricing method ("the plan and price are"). */
+function approvedUpdateText(order: ChangeOrderItemView): string {
+  if (order.pricingMethod === 'fixed') return 'the plan and price are';
+  return order.priceEffect?.capText === undefined
+    ? 'the plan and estimates are'
+    : 'the plan, estimates and cap are';
+}
+
 /**
  * The client's review card for a sent change: the expert's summary, the milestone
  * difference, the client's own price effect, then Approve or Decline. Declining takes a
@@ -45,7 +53,7 @@ export function ChangeReviewCard({
   const approve = useCallback((): void => {
     run(
       approveChangeOrderAction({ engagementId, orderId: order.id }),
-      `Change approved — the plan and ${order.pricingMethod === 'tm' ? 'estimate' : 'price'} are updated.`
+      `Change approved — ${approvedUpdateText(order)} updated.`
     );
   }, [engagementId, order, run]);
   const startDecline = useCallback((): void => setDeclining(true), []);

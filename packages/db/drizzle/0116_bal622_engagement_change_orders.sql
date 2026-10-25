@@ -47,7 +47,12 @@ CREATE TABLE "engagement_change_orders" (
 	CONSTRAINT "engagement_change_order_sent_pair" CHECK (("engagement_change_orders"."sent_at" IS NULL) = ("engagement_change_orders"."sent_by_user_id" IS NULL)),
 	CONSTRAINT "engagement_change_order_decided_pair" CHECK (("engagement_change_orders"."decided_at" IS NULL) = ("engagement_change_orders"."decided_by_user_id" IS NULL)),
 	CONSTRAINT "engagement_change_order_withdrawn_pair" CHECK (("engagement_change_orders"."withdrawn_at" IS NULL) = ("engagement_change_orders"."withdrawn_by_user_id" IS NULL)),
-	CONSTRAINT "engagement_change_order_decided_xor_withdrawn" CHECK (NOT ("engagement_change_orders"."decided_at" IS NOT NULL AND "engagement_change_orders"."withdrawn_at" IS NOT NULL))
+	CONSTRAINT "engagement_change_order_decided_xor_withdrawn" CHECK (NOT ("engagement_change_orders"."decided_at" IS NOT NULL AND "engagement_change_orders"."withdrawn_at" IS NOT NULL)),
+	CONSTRAINT "engagement_change_order_decided_stamped" CHECK (("engagement_change_orders"."status" <> 'approved' AND "engagement_change_orders"."status" <> 'declined') OR ("engagement_change_orders"."decided_at" IS NOT NULL AND "engagement_change_orders"."decided_by_user_id" IS NOT NULL)),
+	CONSTRAINT "engagement_change_order_withdrawn_stamped" CHECK ("engagement_change_orders"."status" <> 'withdrawn' OR "engagement_change_orders"."withdrawn_at" IS NOT NULL),
+	CONSTRAINT "engagement_change_order_sent_stamped" CHECK (("engagement_change_orders"."status" <> 'sent' AND "engagement_change_orders"."status" <> 'approved') OR "engagement_change_orders"."sent_at" IS NOT NULL),
+	CONSTRAINT "engagement_change_order_open_unstamped" CHECK (("engagement_change_orders"."status" <> 'requested' AND "engagement_change_orders"."status" <> 'draft' AND "engagement_change_orders"."status" <> 'sent') OR ("engagement_change_orders"."decided_at" IS NULL AND "engagement_change_orders"."withdrawn_at" IS NULL)),
+	CONSTRAINT "engagement_change_order_requested_stamped" CHECK ("engagement_change_orders"."status" <> 'requested' OR "engagement_change_orders"."requested_at" IS NOT NULL)
 );
 --> statement-breakpoint
 ALTER TABLE "engagement_change_order_lines" ADD CONSTRAINT "engagement_change_order_lines_change_order_id_engagement_change_orders_id_fk" FOREIGN KEY ("change_order_id") REFERENCES "public"."engagement_change_orders"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

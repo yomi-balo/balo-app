@@ -157,10 +157,23 @@ export interface ChangeOrderApprovedExpertEmailProps {
   readonly actorClientLabel: string;
   readonly projectTitle: string;
   readonly approvedOn: string;
-  /** Pre-formatted EXPERT price change (fixed) or estimate change (T&M); absent ⇒ no line. */
+  /** 'tm' switches the "what was updated" sentence to estimates (and the cap when it moved). */
+  readonly pricingMethod?: 'fixed' | 'tm';
+  /** T&M only: the cap moved with this change. */
+  readonly capMoved?: boolean;
+  /** Pre-formatted EXPERT price/cap change and estimate change; absent ⇒ no line. */
   readonly changeLabel?: string;
   readonly engagementUrl: string;
   readonly baseUrl: string;
+}
+
+function approvedUpdateSentence(pricingMethod: 'fixed' | 'tm', capMoved: boolean): string {
+  if (pricingMethod !== 'tm') {
+    return 'The plan and price are updated — the difference is settled at the end of the project.';
+  }
+  return capMoved
+    ? 'The plan, estimates and cap are updated.'
+    : 'The plan and estimates are updated.';
 }
 
 export function ChangeOrderApprovedExpertEmail({
@@ -168,6 +181,8 @@ export function ChangeOrderApprovedExpertEmail({
   actorClientLabel = 'The client',
   projectTitle = 'your project',
   approvedOn,
+  pricingMethod = 'fixed',
+  capMoved = false,
   changeLabel,
   engagementUrl,
   baseUrl,
@@ -185,7 +200,7 @@ export function ChangeOrderApprovedExpertEmail({
     >
       <Text style={shared.bodyText}>
         {actorClientLabel} approved your change to <strong>{projectTitle}</strong> on {approvedOn}.
-        The plan and price are updated — the difference is settled at the end of the project.
+        {approvedUpdateSentence(pricingMethod, capMoved)}
       </Text>
       {changeLabel ? <Text style={shared.bodyText}>{changeLabel}</Text> : null}
     </ChangeOrderShell>

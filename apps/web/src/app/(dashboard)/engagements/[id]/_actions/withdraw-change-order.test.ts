@@ -26,23 +26,32 @@ vi.mock('@/lib/authz/engagement', () => ({
   hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
 }));
 
-const { mockFindEngagement, mockWithdraw, mockFindOwner, InvalidChangeOrderTransitionError } =
-  vi.hoisted(() => {
-    class InvalidChangeOrderTransitionError extends Error {}
-    return {
-      mockFindEngagement: vi.fn(),
-      mockWithdraw: vi.fn(),
-      mockFindOwner: vi.fn(),
-      InvalidChangeOrderTransitionError,
-    };
-  });
+const {
+  mockFindEngagement,
+  mockWithdraw,
+  mockFindOwner,
+  mockFindMembers,
+  InvalidChangeOrderTransitionError,
+} = vi.hoisted(() => {
+  class InvalidChangeOrderTransitionError extends Error {}
+  return {
+    mockFindEngagement: vi.fn(),
+    mockWithdraw: vi.fn(),
+    mockFindOwner: vi.fn(),
+    mockFindMembers: vi.fn(),
+    InvalidChangeOrderTransitionError,
+  };
+});
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
     findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   engagementChangeOrdersRepository: { withdraw: (...a: unknown[]) => mockWithdraw(...a) },
-  companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
+  companiesRepository: {
+    findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a),
+    findWithMembers: (...a: unknown[]) => mockFindMembers(...a),
+  },
   InvalidChangeOrderTransitionError,
   ChangeOrderAlreadyOpenError: class extends Error {},
   ChangeOrderCoherenceError: class extends Error {},
@@ -99,6 +108,7 @@ beforeEach(() => {
   mockHasExpertCapability.mockResolvedValue(true);
   mockWithdraw.mockResolvedValue(withdrawn);
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+  mockFindMembers.mockResolvedValue({ members: [{ userId: 'requester-1' }] });
 });
 
 describe('withdrawChangeOrderAction', () => {
@@ -153,6 +163,25 @@ describe('withdrawChangeOrderAction', () => {
       recipientId: 'owner-1',
       actorExpertLabel: 'Charles',
     });
+  });
+
+  it('tells the requester too when the withdrawn order came from a request', async () => {
+    mockWithdraw.mockResolvedValue({ ...withdrawn, requestedByUserId: 'requester-1' });
+    await withdrawChangeOrderAction(INPUT);
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ requestedByUserId: 'requester-1' });
+  });
+
+  it('leaves the requester out when they have left the company or are the owner', async () => {
+    mockWithdraw.mockResolvedValue({ ...withdrawn, requestedByUserId: 'requester-1' });
+    mockFindMembers.mockResolvedValue({ members: [] });
+    await withdrawChangeOrderAction(INPUT);
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
+
+    mockPublish.mockClear();
+    mockFindMembers.mockResolvedValue({ members: [{ userId: 'requester-1' }] });
+    mockFindOwner.mockResolvedValue({ id: 'requester-1' });
+    await withdrawChangeOrderAction(INPUT);
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
   });
 
   it('maps an order that was decided meanwhile to STATUS_CHANGED', async () => {

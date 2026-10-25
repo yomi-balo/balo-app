@@ -50,6 +50,16 @@ export interface ChangeOrderLineView {
   } | null;
 }
 
+/**
+ * The money or estimate effect of an order. On T&M, `capText` carries the cap change when the
+ * order moves it ("Cap A$40,000 → A$45,000 (+A$5,000)"), beside the estimate in `text`.
+ */
+export interface ChangeOrderPriceEffectView {
+  text: string;
+  capText?: string;
+  hint: string | null;
+}
+
 export interface ChangeOrderItemView {
   id: string;
   status: ChangeOrderStatus;
@@ -69,7 +79,7 @@ export interface ChangeOrderItemView {
   /** The dates line, e.g. "Requested 15 Oct · Sent 18 Oct · Approved 20 Oct". */
   datesLabel: string;
   lines: ChangeOrderLineView[];
-  priceEffect: { text: string; hint: string | null } | null;
+  priceEffect: ChangeOrderPriceEffectView | null;
   /** The compact price or estimate change shown on a history row; null when there are no lines. */
   deltaChip: string | null;
   /** The expert's answer to a request, set when the order was answered without a change. */
@@ -215,21 +225,56 @@ function currentEstimateMinutes(engagement: ProjectEngagementWithMilestones): nu
   return engagement.milestones.reduce((sum, m) => sum + (m.estimatedMinutes ?? 0), 0);
 }
 
+/**
+ * The order's price (fixed) or cap (T&M) movement in the viewer's terms: the client sees the
+ * grossed-up figures and the change between them, everyone else the expert-side figures.
+ */
+function moneyMovement(
+  order: ChangeOrderWithLines,
+  index: number,
+  vc: ViewContext
+): { from: number; to: number; shown: number } {
+  const { engagement, lens } = vc;
+  const delta = order.priceDeltaCents ?? 0;
+  const earlier = approvedSum(vc.orders, (o) => o.priceDeltaCents ?? 0, { from: 0, to: index });
+  const fromExpert = engagement.priceCents + earlier;
+  const toExpert = fromExpert + delta;
+  if (lens !== 'client') return { from: fromExpert, to: toExpert, shown: delta };
+  return {
+    from: applyBaloFee(fromExpert, engagement.baloFeeBps),
+    to: applyBaloFee(toExpert, engagement.baloFeeBps),
+    shown: clientPriceChangeCents(fromExpert, toExpert, engagement.baloFeeBps),
+  };
+}
+
 function tmPriceEffect(
   order: ChangeOrderWithLines,
   index: number,
   settled: boolean,
   vc: ViewContext
-): { text: string; hint: string | null } {
+): ChangeOrderPriceEffectView {
   const delta = minutesDelta(order);
   const later = approvedSum(vc.orders, minutesDelta, { from: index + 1, to: vc.orders.length });
   const base = currentEstimateMinutes(vc.engagement) - later;
   const isApproved = order.status === 'approved';
   const from = isApproved ? base - delta : base;
   const to = isApproved ? base : base + delta;
+  const { currency } = vc.engagement;
+  const cap = moneyMovement(order, index, vc);
+  const capMoves = cap.shown !== 0;
+  const billedNote = "You're billed for the time logged, as now.";
+  let hint: string | null = null;
+  if (!settled && vc.lens === 'client') {
+    hint = capMoves ? `${billedNote} The cap is the most that can be billed.` : billedNote;
+  }
   return {
     text: `Estimate ${formatHours(from)} → ${formatHours(to)} (${signedHours(delta)})`,
-    hint: !settled && vc.lens === 'client' ? "You're billed for the time logged, as now." : null,
+    ...(capMoves
+      ? {
+          capText: `Cap ${formatWholeCurrency(cap.from, currency)} → ${formatWholeCurrency(cap.to, currency)} (${signedMoney(cap.shown, currency)})`,
+        }
+      : {}),
+    hint,
   };
 }
 
@@ -238,19 +283,11 @@ function fixedPriceEffect(
   index: number,
   settled: boolean,
   vc: ViewContext
-): { text: string; hint: string | null } {
+): ChangeOrderPriceEffectView {
   const { engagement, lens, parties } = vc;
   const { currency } = engagement;
-  const delta = order.priceDeltaCents ?? 0;
-  const earlier = approvedSum(vc.orders, (o) => o.priceDeltaCents ?? 0, { from: 0, to: index });
-  const fromExpert = engagement.priceCents + earlier;
-  const toExpert = fromExpert + delta;
   const isClient = lens === 'client';
-  const from = isClient ? applyBaloFee(fromExpert, engagement.baloFeeBps) : fromExpert;
-  const to = isClient ? applyBaloFee(toExpert, engagement.baloFeeBps) : toExpert;
-  const shown = isClient
-    ? clientPriceChangeCents(fromExpert, toExpert, engagement.baloFeeBps)
-    : delta;
+  const { from, to, shown } = moneyMovement(order, index, vc);
   if (shown === 0) return { text: "The price doesn't change.", hint: null };
 
   const text = `Project price ${formatWholeCurrency(from, currency)} → ${formatWholeCurrency(to, currency)} (${signedMoney(shown, currency)})`;
@@ -276,7 +313,7 @@ function priceEffectFor(
   index: number,
   settled: boolean,
   vc: ViewContext
-): { text: string; hint: string | null } | null {
+): ChangeOrderPriceEffectView | null {
   // A request carries no change yet, and an answered request never will.
   if (order.status === 'requested' || (order.status === 'declined' && order.sentAt === null)) {
     return null;
@@ -288,16 +325,13 @@ function priceEffectFor(
 
 function deltaChipFor(order: ChangeOrderWithLines, index: number, vc: ViewContext): string | null {
   if (order.sentAt === null) return null;
-  const { engagement, lens } = vc;
-  if (engagement.pricingMethod === 'tm') return signedHours(minutesDelta(order));
-  const delta = order.priceDeltaCents ?? 0;
-  if (lens !== 'client') return signedMoney(delta, engagement.currency);
-  const earlier = approvedSum(vc.orders, (o) => o.priceDeltaCents ?? 0, { from: 0, to: index });
-  const fromExpert = engagement.priceCents + earlier;
-  return signedMoney(
-    clientPriceChangeCents(fromExpert, fromExpert + delta, engagement.baloFeeBps),
-    engagement.currency
-  );
+  const { engagement } = vc;
+  const { shown } = moneyMovement(order, index, vc);
+  if (engagement.pricingMethod === 'tm') {
+    const hours = signedHours(minutesDelta(order));
+    return shown === 0 ? hours : `${hours} · cap ${signedMoney(shown, engagement.currency)}`;
+  }
+  return signedMoney(shown, engagement.currency);
 }
 
 function pillFor(
@@ -393,10 +427,11 @@ function mapItem(order: ChangeOrderWithLines, index: number, vc: ViewContext): C
 
 type PanelOutcome = ChangeOrderPanelView['outcome'];
 
-function planUpdatedText(vc: ViewContext): string {
-  return vc.engagement.pricingMethod === 'fixed'
-    ? 'The plan and price are updated.'
-    : 'The plan and estimate are updated.';
+function planUpdatedText(order: ChangeOrderWithLines, vc: ViewContext): string {
+  if (vc.engagement.pricingMethod === 'fixed') return 'The plan and price are updated.';
+  return (order.priceDeltaCents ?? 0) === 0
+    ? 'The plan and estimates are updated.'
+    : 'The plan, estimates and cap are updated.';
 }
 
 function expertOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelOutcome {
@@ -404,7 +439,7 @@ function expertOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelO
   if (latest.status === 'approved') {
     return {
       tone: 'emerald',
-      text: `${vc.parties.clientCompanyName} approved the change on ${decidedOn}. ${planUpdatedText(vc)}`,
+      text: `${vc.parties.clientCompanyName} approved the change on ${decidedOn}. ${planUpdatedText(latest, vc)}`,
     };
   }
   if (latest.status === 'declined' && latest.sentAt !== null) {
@@ -427,7 +462,7 @@ function clientOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelO
     const decidedOn = latest.decidedAt === null ? '' : formatShortUtc(latest.decidedAt);
     return {
       tone: 'emerald',
-      text: `You approved the change on ${decidedOn}. ${planUpdatedText(vc)}`,
+      text: `You approved the change on ${decidedOn}. ${planUpdatedText(latest, vc)}`,
     };
   }
   if (latest.status === 'declined' && latest.sentAt === null) {

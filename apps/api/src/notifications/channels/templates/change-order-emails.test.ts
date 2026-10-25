@@ -81,6 +81,23 @@ describe('change-order emails (BAL-622)', () => {
     expect(html).toContain('A$12,500');
   });
 
+  it('approved-expert: T&M says estimates, and the cap only when it moved', async () => {
+    const base = {
+      actorClientLabel: 'Dana @ Northwind',
+      clientCompanyName: 'Northwind',
+      approvedOn: '15 Oct',
+      pricingMethod: 'tm',
+    };
+    const plain = await renderTemplate('change-order-approved-expert', base);
+    expect(plain.html).toContain('The plan and estimates are updated.');
+    expect(plain.html).not.toContain('and price are updated');
+    const capped = await renderTemplate('change-order-approved-expert', {
+      ...base,
+      expertPriceChangeLabel: 'Cap A$10,000 → A$12,000',
+    });
+    expect(capped.html).toContain('The plan, estimates and cap are updated.');
+  });
+
   it('approved-admin: renders no amounts and links to the engagement', async () => {
     const { html, subject } = await renderTemplate('change-order-approved-admin', {
       actorClientLabel: 'Dana @ Northwind',

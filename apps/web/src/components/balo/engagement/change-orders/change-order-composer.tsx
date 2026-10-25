@@ -35,6 +35,7 @@ import {
   blankRow,
   composerIssues,
   countLines,
+  estimateCostCents,
   estimateTotals,
   hoursInputToMinutes,
   linesFrom,
@@ -65,10 +66,21 @@ interface ChangeOrderComposerProps {
   clientCompanyName: string;
   projectTitle: string;
   currency: string;
-  /** Fixed price: the expert-side effective price right now. Ignored on T&M. */
+  /** The expert-side effective price right now: the price, or the cap on T&M. */
   currentPriceCents: number;
+  /** T&M: the expert's hourly rate in cents, when the project has one. Ignored on fixed. */
+  hourlyRateCents?: number | null;
   milestones: ComposerMilestone[];
   order: ChangeOrderComposerOrder | null;
+}
+
+/** The hourly rate in whole currency units, or with cents when it is not a whole amount. */
+function formatRate(cents: number, currency: string): string {
+  if (cents % 100 === 0) return formatWholeCurrency(cents, currency);
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase(),
+  }).format(cents / 100);
 }
 
 const NOTE_MAX_LENGTH = 2000;
@@ -235,6 +247,7 @@ export function ChangeOrderComposer({
   projectTitle,
   currency,
   currentPriceCents,
+  hourlyRateCents = null,
   milestones,
   order,
 }: Readonly<ChangeOrderComposerProps>): React.JSX.Element {
@@ -251,16 +264,15 @@ export function ChangeOrderComposer({
   );
   const [note, setNote] = useState(order?.note ?? '');
   const [totalInput, setTotalInput] = useState(() =>
-    pricingMethod === 'fixed'
-      ? String((currentPriceCents + (order?.priceDeltaCents ?? 0)) / 100)
-      : ''
+    String((currentPriceCents + (order?.priceDeltaCents ?? 0)) / 100)
   );
+  const savedOrderId = useRef<string | undefined>(order?.id);
   const [attempted, setAttempted] = useState(false);
 
   const isFixed = pricingMethod === 'fixed';
   const lines = useMemo(() => linesFrom(rows, pricingMethod), [rows, pricingMethod]);
   const counts = useMemo(() => countLines(lines), [lines]);
-  const totalCents = isFixed ? parseDollarsToCents(totalInput) : null;
+  const totalCents = parseDollarsToCents(totalInput);
   const priceDeltaCents = totalCents === null ? 0 : totalCents - currentPriceCents;
   const issues = useMemo(
     () =>
@@ -268,12 +280,15 @@ export function ChangeOrderComposer({
         pricing: pricingMethod,
         note,
         lines,
-        priceDeltaCents: isFixed ? priceDeltaCents : 0,
+        priceDeltaCents,
         priceValid: totalCents !== null,
       }),
-    [pricingMethod, note, lines, isFixed, priceDeltaCents, totalCents]
+    [pricingMethod, note, lines, priceDeltaCents, totalCents]
   );
   const estimates = useMemo(() => estimateTotals(milestones, rows), [milestones, rows]);
+  const estimateCostCap = estimateCostCents(hourlyRateCents, estimates.nextMinutes);
+  const capShortfall =
+    !isFixed && estimateCostCap !== null && estimateCostCap > (totalCents ?? currentPriceCents);
 
   const patchRow = useCallback((key: string, patch: Partial<ComposerRow>): void => {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -292,6 +307,14 @@ export function ChangeOrderComposer({
     (event: React.ChangeEvent<HTMLInputElement>): void => setTotalInput(event.target.value),
     []
   );
+  const priceKind = isFixed ? 'price' : 'cap';
+  const priceNote =
+    totalCents !== null && priceDeltaCents !== 0
+      ? `That's ${signedMoney(priceDeltaCents, currency)}.`
+      : `Leave it to keep the ${priceKind}.`;
+  const raiseCap = useCallback((): void => {
+    if (estimateCostCap !== null) setTotalInput(String(estimateCostCap / 100));
+  }, [estimateCostCap]);
 
   const workspaceHref = `/engagements/${engagementId}`;
   const submit = useCallback(
@@ -306,14 +329,16 @@ export function ChangeOrderComposer({
       startTransition(async () => {
         const result = await saveChangeOrderAction({
           engagementId,
-          ...(order === null ? {} : { orderId: order.id }),
+          ...(savedOrderId.current === undefined ? {} : { orderId: savedOrderId.current }),
           note: note.trim(),
-          ...(isFixed && totalCents !== null ? { newTotalCents: totalCents } : {}),
+          ...(totalCents === null ? {} : { newTotalCents: totalCents }),
           lines,
           send,
         });
+        if (result.changeOrderId !== undefined) savedOrderId.current = result.changeOrderId;
         if (!result.success) {
           toast.error(result.error);
+          if (result.changeOrderId !== undefined) router.refresh();
           return;
         }
         toast.success(
@@ -324,18 +349,7 @@ export function ChangeOrderComposer({
         router.push(workspaceHref);
       });
     },
-    [
-      clientCompanyName,
-      engagementId,
-      isFixed,
-      issues.length,
-      lines,
-      note,
-      order,
-      router,
-      totalCents,
-      workspaceHref,
-    ]
+    [clientCompanyName, engagementId, issues.length, lines, note, router, totalCents, workspaceHref]
   );
   const send = useCallback((): void => submit(true), [submit]);
   const saveDraft = useCallback((): void => submit(false), [submit]);
@@ -370,7 +384,8 @@ export function ChangeOrderComposer({
               What&apos;s changing and why
             </Label>
             <p className="text-muted-foreground mt-0.5 text-xs">
-              {clientCompanyName} reads this first.
+              {clientCompanyName} reads this word for word. Describe the change, and leave amounts
+              to the {isFixed ? 'price' : 'cap'} box.
             </p>
             <Textarea
               id="change-order-note"
@@ -424,30 +439,7 @@ export function ChangeOrderComposer({
             <li>{counts.removed} removed</li>
           </ul>
 
-          {isFixed ? (
-            <div className="border-border mt-4 border-t pt-4">
-              <Label htmlFor="change-order-price" className="text-sm font-medium">
-                Project price
-              </Label>
-              <div className="mt-1.5 flex items-center gap-2">
-                <span className="text-muted-foreground text-sm">{currencySymbol(currency)}</span>
-                <Input
-                  id="change-order-price"
-                  type="number"
-                  min="0"
-                  step="50"
-                  value={totalInput}
-                  onChange={changeTotal}
-                />
-              </div>
-              <p className="text-muted-foreground mt-1.5 text-xs">
-                Currently {formatWholeCurrency(currentPriceCents, currency)}.{' '}
-                {totalCents !== null && priceDeltaCents !== 0
-                  ? `That's ${signedMoney(priceDeltaCents, currency)}.`
-                  : 'Leave it to keep the price.'}
-              </p>
-            </div>
-          ) : (
+          {!isFixed && (
             <div className="border-border mt-4 border-t pt-4 text-sm">
               <p className="text-foreground font-medium">Estimate</p>
               <p className="text-muted-foreground mt-1">
@@ -456,6 +448,42 @@ export function ChangeOrderComposer({
               </p>
             </div>
           )}
+
+          <div className="border-border mt-4 border-t pt-4">
+            <Label htmlFor="change-order-price" className="text-sm font-medium">
+              {isFixed ? 'Project price' : 'Cap'}
+            </Label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="text-muted-foreground text-sm">{currencySymbol(currency)}</span>
+              <Input
+                id="change-order-price"
+                type="number"
+                min="0"
+                step="50"
+                value={totalInput}
+                onChange={changeTotal}
+              />
+            </div>
+            <p className="text-muted-foreground mt-1.5 text-xs">
+              Currently {formatWholeCurrency(currentPriceCents, currency)}. {priceNote}
+            </p>
+            {capShortfall && estimateCostCap !== null && hourlyRateCents !== null && (
+              <div
+                role="status"
+                className="border-warning/25 bg-warning/10 text-foreground mt-2 space-y-2 rounded-xl border p-3 text-xs leading-relaxed"
+              >
+                <p>
+                  At {formatRate(hourlyRateCents, currency)}/hr the new estimate comes to{' '}
+                  {formatWholeCurrency(estimateCostCap, currency)}, above the{' '}
+                  {formatWholeCurrency(totalCents ?? currentPriceCents, currency)} cap. Raise the
+                  cap so the approved scope can be billed.
+                </p>
+                <Button type="button" variant="outline" size="sm" onClick={raiseCap}>
+                  Raise cap to {formatWholeCurrency(estimateCostCap, currency)}
+                </Button>
+              </div>
+            )}
+          </div>
 
           {showIssues && (
             <ul

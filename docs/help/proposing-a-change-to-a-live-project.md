@@ -26,14 +26,17 @@ You can also propose a change without a request, from the project page.
 
 The composer lists every milestone. For each one you can leave it unchanged, edit it, remove it,
 or add new ones. Each row shows its state: Unchanged, Edited, New or Removed. Add a note on what's
-changing and why, because the client reads it first.
+changing and why, because the client reads it word for word. Describe the change and leave amounts
+to the price box.
 
 - **Wording and scope.** Editing a milestone's title or description is a change to wording. Adding
   or removing a milestone changes the scope.
 - **Fixed price.** Enter the new project total. The composer shows the difference from the current
   price.
 - **Time and materials.** Set the estimate on each milestone. The composer shows how the total
-  estimate moves.
+  estimate moves. The cap box starts at the current cap. If your rate times the new estimate comes
+  to more than the cap, the composer says so and offers **Raise cap**, so the approved scope can
+  still be billed. Enter a higher cap and the client approves it along with the change.
 
 ## Draft or send
 
@@ -49,8 +52,9 @@ their reason.
 
 ## Approval
 
-When the client approves, the milestones and the price update right away and you're told. Any
-price difference is settled on the final invoice.
+When the client approves, the milestones and the price update right away and you're told. On a
+time and materials project the estimates update and, if you raised it, the cap. Any price
+difference on a fixed-price project is settled on the final invoice.
 
 ## Marking the project ready
 

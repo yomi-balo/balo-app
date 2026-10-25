@@ -26,24 +26,32 @@ vi.mock('@/lib/authz/engagement', () => ({
   hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
 }));
 
-const { mockFindEngagement, mockDecline, mockFindOwner, ChangeOrderNotFoundError } = vi.hoisted(
-  () => {
-    class ChangeOrderNotFoundError extends Error {}
-    return {
-      mockFindEngagement: vi.fn(),
-      mockDecline: vi.fn(),
-      mockFindOwner: vi.fn(),
-      ChangeOrderNotFoundError,
-    };
-  }
-);
+const {
+  mockFindEngagement,
+  mockDecline,
+  mockFindOwner,
+  mockFindMembers,
+  ChangeOrderNotFoundError,
+} = vi.hoisted(() => {
+  class ChangeOrderNotFoundError extends Error {}
+  return {
+    mockFindEngagement: vi.fn(),
+    mockDecline: vi.fn(),
+    mockFindOwner: vi.fn(),
+    mockFindMembers: vi.fn(),
+    ChangeOrderNotFoundError,
+  };
+});
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
     findWithMilestones: (...a: unknown[]) => mockFindEngagement(...a),
   },
   engagementChangeOrdersRepository: { decline: (...a: unknown[]) => mockDecline(...a) },
-  companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
+  companiesRepository: {
+    findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a),
+    findWithMembers: (...a: unknown[]) => mockFindMembers(...a),
+  },
   ChangeOrderNotFoundError,
   ChangeOrderAlreadyOpenError: class extends Error {},
   ChangeOrderCoherenceError: class extends Error {},
@@ -101,6 +109,7 @@ beforeEach(() => {
   mockHasExpertCapability.mockResolvedValue(true);
   mockDecline.mockResolvedValue(answered);
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+  mockFindMembers.mockResolvedValue({ members: [{ userId: DANA.id }] });
 });
 
 describe('answerChangeRequestAction', () => {
@@ -180,8 +189,21 @@ describe('answerChangeRequestAction', () => {
       recipientId: 'owner-1',
       actorExpertLabel: 'Charles',
       answer: ANSWER,
+      requestedByUserId: DANA.id,
     });
     expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain(ANSWER);
+  });
+
+  it('leaves the requester out when they have left the company or are the owner', async () => {
+    mockFindMembers.mockResolvedValue({ members: [{ userId: 'someone-else' }] });
+    await answerChangeRequestAction(INPUT);
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
+
+    mockPublish.mockClear();
+    mockFindMembers.mockResolvedValue({ members: [{ userId: DANA.id }] });
+    mockFindOwner.mockResolvedValue({ id: DANA.id });
+    await answerChangeRequestAction(INPUT);
+    expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('requestedByUserId');
   });
 
   it('still publishes (client rules skip) when the client owner cannot be found', async () => {

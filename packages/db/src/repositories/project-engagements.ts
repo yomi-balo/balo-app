@@ -569,6 +569,8 @@ function queryProjectEngagementWithMilestones(id: string) {
           sourceProposalId: true,
           pricingMethod: true,
           priceCents: true,
+          // The expert's hourly rate: the change-order composer prices a T&M estimate against it.
+          rateCents: true,
           cadence: true,
           completionRequestedAt: true,
           changeRequestNote: true,

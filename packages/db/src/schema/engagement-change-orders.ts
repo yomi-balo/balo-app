@@ -17,10 +17,11 @@ import { timestamps, softDelete } from './helpers';
 
 /**
  * engagement_change_orders — one row per change order on a live project: an amendment to
- * the delivery plan (added, edited and removed milestones) plus, on a fixed-price project,
- * a signed expert-side price delta. Nothing applies until the client approves; approval
- * writes the lines onto `engagement_milestones` and the delta becomes part of the
- * effective price (`price_cents` + Σ approved `price_delta_cents`) in one transaction.
+ * the delivery plan (added, edited and removed milestones) plus a signed expert-side
+ * price delta — the price on a fixed-price project, the cap on a T&M one. Nothing applies
+ * until the client approves; approval writes the lines onto `engagement_milestones` and the
+ * delta becomes part of the effective price (`price_cents` + Σ approved
+ * `price_delta_cents`) in one transaction.
  *
  * A client request opens the row as `requested` (`request_note`); the expert either turns
  * it into a draft or answers it without a change order (stored as `declined`, with the
@@ -33,6 +34,11 @@ import { timestamps, softDelete } from './helpers';
  * ONE OPEN ORDER PER ENGAGEMENT — `engagement_change_order_one_open_idx`. "Open" is
  * defined by timestamps only (`decided_at`, `withdrawn_at`, `deleted_at` all NULL), never
  * by a status literal, so the predicate is safe against a later `ADD VALUE`.
+ *
+ * STATUS ⇔ TIMESTAMPS — the `*_stamped` / `open_unstamped` CHECKs tie each status to the
+ * timestamps it implies, so the timestamp-only "open" predicate and the status always
+ * agree. CHECKs (unlike partial-index predicates) may name enum literals created in the
+ * same migration.
  *
  * ACTOR-FK INDEXING — the four actor columns are DELIBERATELY UNINDEXED, the same ruling
  * as the actor FKs on `project_engagements`: nothing filters or joins on them (they are
@@ -70,8 +76,9 @@ export const engagementChangeOrders = pgTable(
     note: text('note'),
 
     /**
-     * Signed expert-side change to the price, fixed-price projects only (NULL on T&M and
-     * on a scope-only change).
+     * Signed expert-side change to the price (fixed) or the cap (T&M); NULL on a
+     * scope-only change. The repository derives it under the engagement lock from the
+     * caller's intended new total, against the effective price at that moment.
      */
     priceDeltaCents: integer('price_delta_cents'),
 
@@ -138,6 +145,26 @@ export const engagementChangeOrders = pgTable(
     check(
       'engagement_change_order_decided_xor_withdrawn',
       sql`NOT (${t.decidedAt} IS NOT NULL AND ${t.withdrawnAt} IS NOT NULL)`
+    ),
+    check(
+      'engagement_change_order_decided_stamped',
+      sql`(${t.status} <> 'approved' AND ${t.status} <> 'declined') OR (${t.decidedAt} IS NOT NULL AND ${t.decidedByUserId} IS NOT NULL)`
+    ),
+    check(
+      'engagement_change_order_withdrawn_stamped',
+      sql`${t.status} <> 'withdrawn' OR ${t.withdrawnAt} IS NOT NULL`
+    ),
+    check(
+      'engagement_change_order_sent_stamped',
+      sql`(${t.status} <> 'sent' AND ${t.status} <> 'approved') OR ${t.sentAt} IS NOT NULL`
+    ),
+    check(
+      'engagement_change_order_open_unstamped',
+      sql`(${t.status} <> 'requested' AND ${t.status} <> 'draft' AND ${t.status} <> 'sent') OR (${t.decidedAt} IS NULL AND ${t.withdrawnAt} IS NULL)`
+    ),
+    check(
+      'engagement_change_order_requested_stamped',
+      sql`${t.status} <> 'requested' OR ${t.requestedAt} IS NOT NULL`
     ),
   ]
 );

@@ -127,7 +127,7 @@ describe('mapChangeOrderAdminView — time and materials', () => {
     milestones: [makeMilestone({ estimatedMinutes: 3600 })],
   });
   const settlement = deriveProjectSettlement({
-    acceptedPriceCents: 0,
+    acceptedPriceCents: 1_000_000,
     approvedDeltasInOrder: [],
     baloFeeBps: 2500,
     upfrontDueClientCents: 0,
@@ -152,11 +152,54 @@ describe('mapChangeOrderAdminView — time and materials', () => {
       { label: 'Accepted estimate', value: '50 hrs', strong: false },
       { label: 'Change approved 5 Oct', value: '+10 hrs', strong: false },
       { label: 'Current estimate', value: '60 hrs', strong: true },
+      { label: 'Accepted cap', value: 'A$10,000 expert · A$12,500 client', strong: false },
+      { label: 'Current cap', value: 'A$10,000 expert · A$12,500 client', strong: true },
     ]);
-    expect(view.footnote).toBe(
-      'Billed each period from logged time. Change orders move the estimate, not the invoice.'
+    expect(view.footnote).toContain('up to the cap');
+  });
+
+  it('labels an approved cap change on both sides, and a sent one in the pending note', () => {
+    const capSettlement = deriveProjectSettlement({
+      acceptedPriceCents: 1_000_000,
+      approvedDeltasInOrder: [100_000],
+      baloFeeBps: 2500,
+      upfrontDueClientCents: 0,
+    });
+    const approved = makeOrder({
+      id: 'a',
+      status: 'approved',
+      priceDeltaCents: 100_000,
+      decidedAt: new Date('2026-10-05T00:00:00Z'),
+      lines: [],
+    });
+    const sent = makeOrder({
+      id: 'b',
+      status: 'sent',
+      priceDeltaCents: 40_000,
+      sentAt: new Date(),
+      lines: [makeLine({ op: 'add', estimatedMinutes: 90 })],
+    });
+    const view = mapChangeOrderAdminView(
+      capSettlement,
+      [approved, sent],
+      engagement,
+      deriveEngagementParties(engagement)
     );
-    expect(JSON.stringify(view)).not.toContain('A$');
+    if (view.kind !== 'tm') throw new Error('expected the T&M view');
+
+    expect(view.rows).toContainEqual({
+      label: 'Cap change approved 5 Oct',
+      value: '+A$1,000 expert · +A$1,250 client',
+      strong: false,
+    });
+    expect(view.rows).toContainEqual({
+      label: 'Current cap',
+      value: 'A$11,000 expert · A$13,750 client',
+      strong: true,
+    });
+    expect(view.pendingNote).toBe(
+      'Waiting on Northwind: +1.5 hrs, cap +A$400 expert, +A$500 client (not in the totals yet).'
+    );
   });
 
   it('notes a sent change in hours', () => {

@@ -27,6 +27,7 @@ import {
 } from './engagement-change-orders';
 import { ChangeOrderCoherenceError } from './change-order-coherence';
 import { EngagementNotActiveError } from './_shared/engagement-lock';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 
 async function auditFor(entityId: string): Promise<AuditEvent[]> {
   return db
@@ -97,7 +98,7 @@ async function seedSentOrder(): Promise<{
     engagementId: seeded.engagementId,
     userId: seeded.userId,
     note: 'Adds a migration and folds the build in.',
-    priceDeltaCents: 150_000,
+    newTotalCents: 650_000,
     lines: [
       line({ op: 'add', title: 'Data migration', descriptionHtml: '<p>Move it</p>' }),
       line({ op: 'edit', engagementMilestoneId: seeded.first.id, title: 'Discovery v2' }),
@@ -144,7 +145,7 @@ describe('engagementChangeOrdersRepository.requestByClient', () => {
       repo.requestByClient({ engagementId, userId, note: 'Two' })
     ).rejects.toBeInstanceOf(ChangeOrderAlreadyOpenError);
     await expect(
-      repo.createDraft({ engagementId, userId, note: null, priceDeltaCents: null, lines: [] })
+      repo.createDraft({ engagementId, userId, note: null, newTotalCents: null, lines: [] })
     ).rejects.toBeInstanceOf(ChangeOrderAlreadyOpenError);
   });
 
@@ -167,7 +168,7 @@ describe('engagementChangeOrdersRepository on a project that is not active', () 
     const { id: userId } = await userFactory();
     const { order: draft } = await engagementChangeOrderFactory({ engagementId, status: 'draft' });
     const ids = { engagementId, orderId: draft.id, userId };
-    const empty = { note: null, priceDeltaCents: null, lines: [] };
+    const empty = { note: null, newTotalCents: null, lines: [] };
 
     // Sequential thunks: the test harness runs on one connection, so the writes must not interleave.
     const attempts: (() => Promise<unknown>)[] = [
@@ -215,7 +216,7 @@ describe('engagementChangeOrdersRepository.createDraft', () => {
       engagementId,
       userId,
       note: null,
-      priceDeltaCents: null,
+      newTotalCents: null,
       lines: [
         line({ op: 'add' }),
         line({ op: 'edit', engagementMilestoneId: first.id, title: 'D2' }),
@@ -242,7 +243,7 @@ describe('engagementChangeOrdersRepository.createDraft', () => {
       userId,
       fromOrderId: requested.id,
       note: 'Sure',
-      priceDeltaCents: 10_000,
+      newTotalCents: 510_000,
       lines: [line({ op: 'add' })],
     });
 
@@ -263,7 +264,7 @@ describe('engagementChangeOrdersRepository.createDraft', () => {
         userId,
         fromOrderId: order.id,
         note: null,
-        priceDeltaCents: null,
+        newTotalCents: null,
         lines: [],
       })
     ).rejects.toBeInstanceOf(InvalidChangeOrderTransitionError);
@@ -277,7 +278,7 @@ describe('engagementChangeOrdersRepository.replaceLines', () => {
       engagementId,
       userId,
       note: 'v1',
-      priceDeltaCents: null,
+      newTotalCents: null,
       lines: [line({ op: 'add', title: 'Old' })],
     });
 
@@ -286,11 +287,12 @@ describe('engagementChangeOrdersRepository.replaceLines', () => {
       orderId: draft.id,
       userId,
       note: 'v2',
-      priceDeltaCents: 5_000,
+      newTotalCents: 505_000,
       lines: [line({ op: 'add', title: 'New A' }), line({ op: 'add', title: 'New B' })],
     });
 
     expect(replaced.note).toBe('v2');
+    expect(replaced.priceDeltaCents).toBe(5_000);
     expect(replaced.lines.map((l) => l.title)).toEqual(['New A', 'New B']);
     const all = await db
       .select()
@@ -307,7 +309,7 @@ describe('engagementChangeOrdersRepository.replaceLines', () => {
         orderId,
         userId,
         note: 'x',
-        priceDeltaCents: null,
+        newTotalCents: null,
         lines: [],
       })
     ).rejects.toBeInstanceOf(InvalidChangeOrderTransitionError);
@@ -350,7 +352,7 @@ describe('engagementChangeOrdersRepository.send', () => {
       engagementId,
       userId,
       note: '   ',
-      priceDeltaCents: null,
+      newTotalCents: null,
       lines: [line({ op: 'edit', engagementMilestoneId: first.id, title: 'D2' })],
     });
 
@@ -453,7 +455,7 @@ describe('engagementChangeOrdersRepository.returnDraftToRequest', () => {
       userId,
       fromOrderId: requested.id,
       note: 'Draft note',
-      priceDeltaCents: 1_000,
+      newTotalCents: 501_000,
       lines: [line({ op: 'add' })],
     });
 
@@ -479,7 +481,7 @@ describe('engagementChangeOrdersRepository.returnDraftToRequest', () => {
       engagementId,
       userId,
       note: null,
-      priceDeltaCents: null,
+      newTotalCents: null,
       lines: [],
     });
     await expect(
@@ -535,7 +537,7 @@ describe('engagementChangeOrdersRepository.approve', () => {
       engagementId,
       userId,
       note: 'Re-price discovery',
-      priceDeltaCents: 50_000,
+      newTotalCents: 550_000,
       lines: [
         line({ op: 'edit', engagementMilestoneId: first.id, title: 'D', valueCents: 250_000 }),
       ],
@@ -563,7 +565,7 @@ describe('engagementChangeOrdersRepository.approve', () => {
       engagementId,
       userId,
       note: 'More discovery time',
-      priceDeltaCents: null,
+      newTotalCents: null,
       lines: [
         line({ op: 'edit', engagementMilestoneId: first.id, title: 'D', estimatedMinutes: 900 }),
       ],
@@ -659,12 +661,247 @@ describe('engagementChangeOrdersRepository.approve', () => {
       engagementId,
       userId,
       note: 'x',
-      priceDeltaCents: 1,
+      newTotalCents: 500_001,
       lines: [],
     });
     await expect(repo.approve({ engagementId, orderId: draft.id, userId })).rejects.toBeInstanceOf(
       InvalidChangeOrderTransitionError
     );
+  });
+});
+
+describe('engagementChangeOrdersRepository — the delta is derived from newTotalCents under the lock', () => {
+  it('measures the delta against an effective price that moved after the caller read it', async () => {
+    const { engagementId, orderId, userId } = await seedSentOrder();
+    // The caller reads the effective price, then an approval lands before its write locks.
+    const staleRead = await repo.effectivePriceCents(engagementId);
+    await repo.approve({ engagementId, orderId, userId });
+    expect(staleRead).toBe(500_000);
+
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Adds a hand-over session.',
+      newTotalCents: 700_000,
+      lines: [line({ op: 'add', title: 'Hand-over' })],
+    });
+
+    expect(draft.priceDeltaCents).toBe(50_000);
+    await repo.send({ engagementId, orderId: draft.id, userId });
+    const approved = await repo.approve({ engagementId, orderId: draft.id, userId });
+    expect(approved.previousEffectivePriceCents).toBe(650_000);
+    expect(approved.effectivePriceCents).toBe(700_000);
+  });
+
+  it('replaceLines re-derives the delta under its own lock', async () => {
+    const { engagementId, userId } = await seedProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'v1',
+      newTotalCents: 520_000,
+      lines: [],
+    });
+    expect(draft.priceDeltaCents).toBe(20_000);
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'approved',
+      values: { priceDeltaCents: 10_000 },
+    });
+
+    const replaced = await repo.replaceLines({
+      engagementId,
+      orderId: draft.id,
+      userId,
+      note: 'v2',
+      newTotalCents: 520_000,
+      lines: [],
+    });
+
+    expect(replaced.priceDeltaCents).toBe(10_000);
+  });
+
+  it('stores a new total equal to the effective price as no price change', async () => {
+    const { engagementId, userId } = await seedProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: null,
+      newTotalCents: 500_000,
+      lines: [],
+    });
+    expect(draft.priceDeltaCents).toBeNull();
+
+    const replaced = await repo.replaceLines({
+      engagementId,
+      orderId: draft.id,
+      userId,
+      note: null,
+      newTotalCents: 450_000,
+      lines: [],
+    });
+    expect(replaced.priceDeltaCents).toBe(-50_000);
+  });
+});
+
+describe('engagementChangeOrdersRepository — a T&M order moves the cap', () => {
+  async function seedTmProject(): Promise<{
+    engagementId: string;
+    userId: string;
+    first: EngagementMilestone;
+  }> {
+    const seeded = await seedProject({
+      projectValues: {
+        pricingMethod: 'tm',
+        priceCents: 900_000,
+        rateCents: 20_000,
+        cadence: 'monthly',
+      },
+    });
+    await db
+      .update(engagementMilestones)
+      .set({ valueCents: null, estimatedMinutes: 600 })
+      .where(eq(engagementMilestones.engagementId, seeded.engagementId));
+    return seeded;
+  }
+
+  it('applies an approved cap delta to the effective cap and leaves price_cents alone', async () => {
+    const { engagementId, userId } = await seedTmProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Adds a migration and raises the cap to fit it.',
+      newTotalCents: 1_200_000,
+      lines: [line({ op: 'add', title: 'Data migration', estimatedMinutes: 900 })],
+    });
+    expect(draft.priceDeltaCents).toBe(300_000);
+    await repo.send({ engagementId, orderId: draft.id, userId });
+
+    const result = await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    expect(result.previousEffectivePriceCents).toBe(900_000);
+    expect(result.effectivePriceCents).toBe(1_200_000);
+    expect(await repo.effectivePriceCents(engagementId)).toBe(1_200_000);
+    const [child] = await db
+      .select({ priceCents: projectEngagements.priceCents })
+      .from(projectEngagements)
+      .where(eq(projectEngagements.engagementId, engagementId));
+    expect(child?.priceCents).toBe(900_000);
+    const terms = await repo.settlementTermsFor(engagementId);
+    expect(terms.approvedDeltas.map((d) => d.priceDeltaCents)).toEqual([300_000]);
+  });
+
+  it('refuses at send a cap below zero', async () => {
+    const { engagementId, userId } = await seedTmProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Lowers the cap.',
+      newTotalCents: -1,
+      lines: [],
+    });
+
+    await expect(repo.send({ engagementId, orderId: draft.id, userId })).rejects.toMatchObject({
+      rule: 'effective_price_negative',
+    });
+  });
+
+  it('still refuses a value on a T&M line', async () => {
+    const { engagementId, userId } = await seedTmProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Adds a priced milestone.',
+      newTotalCents: 1_000_000,
+      lines: [line({ op: 'add', estimatedMinutes: 60, valueCents: 10_000 })],
+    });
+
+    await expect(repo.send({ engagementId, orderId: draft.id, userId })).rejects.toMatchObject({
+      rule: 'tm_line_has_value',
+    });
+  });
+});
+
+describe('engagement_change_orders status ⇔ timestamp CHECKs', () => {
+  /** Each probe runs in its own savepoint, so a refused insert leaves the test tx usable. */
+  async function probe(
+    constraint: string,
+    values: Omit<typeof engagementChangeOrders.$inferInsert, 'engagementId'>
+  ): Promise<void> {
+    const { engagement } = await engagementFactory();
+    await expectConstraintViolation(
+      '23514',
+      (tx) => tx.insert(engagementChangeOrders).values({ engagementId: engagement.id, ...values }),
+      constraint
+    );
+  }
+
+  it('accepts a row in every status when its stamps agree (positive control)', async () => {
+    for (const status of [
+      'requested',
+      'draft',
+      'sent',
+      'approved',
+      'declined',
+      'withdrawn',
+    ] as const) {
+      const { order } = await engagementChangeOrderFactory({ status });
+      expect(order.status).toBe(status);
+    }
+  });
+
+  it('refuses approved / declined without a decision stamp', async () => {
+    const { id: u } = await userFactory();
+    const at = new Date();
+    await probe('engagement_change_order_decided_stamped', {
+      status: 'approved',
+      sentAt: at,
+      sentByUserId: u,
+    });
+    await probe('engagement_change_order_decided_stamped', { status: 'declined' });
+  });
+
+  it('refuses withdrawn without withdrawn_at', async () => {
+    await probe('engagement_change_order_withdrawn_stamped', { status: 'withdrawn' });
+  });
+
+  it('refuses sent / approved without sent_at', async () => {
+    const { id: u } = await userFactory();
+    const at = new Date();
+    await probe('engagement_change_order_sent_stamped', { status: 'sent' });
+    await probe('engagement_change_order_sent_stamped', {
+      status: 'approved',
+      decidedAt: at,
+      decidedByUserId: u,
+    });
+  });
+
+  it('refuses requested / draft / sent carrying a decision or withdrawal stamp', async () => {
+    const { id: u } = await userFactory();
+    const at = new Date();
+    const requested = { requestedAt: at, requestedByUserId: u };
+    const sent = { sentAt: at, sentByUserId: u };
+    await probe('engagement_change_order_open_unstamped', {
+      status: 'requested',
+      ...requested,
+      decidedAt: at,
+      decidedByUserId: u,
+    });
+    await probe('engagement_change_order_open_unstamped', {
+      status: 'draft',
+      withdrawnAt: at,
+      withdrawnByUserId: u,
+    });
+    await probe('engagement_change_order_open_unstamped', {
+      status: 'sent',
+      ...sent,
+      decidedAt: at,
+      decidedByUserId: u,
+    });
+  });
+
+  it('refuses requested without requested_at', async () => {
+    await probe('engagement_change_order_requested_stamped', { status: 'requested' });
   });
 });
 

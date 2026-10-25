@@ -570,6 +570,7 @@ const changeOrderSentPayload = z.object({
   linesRemoved: changeOrderLineCount,
   clientPriceChangeLabel: z.string().min(1).max(200).optional(),
   estimateChangeLabel: z.string().min(1).max(200).optional(),
+  requestedByUserId: z.uuid().optional(),
 });
 
 const changeOrderApprovedPayload = z.object({
@@ -595,6 +596,7 @@ const changeOrderDeclinedPayload = z.object({
 const changeOrderAnsweredPayload = z.object({
   ...changeOrderBase,
   recipientId: z.uuid().optional(),
+  requestedByUserId: z.uuid().optional(),
   actorExpertLabel: z.string().min(1).max(200),
   answer: z.string().min(1).max(2000),
 });
@@ -602,6 +604,7 @@ const changeOrderAnsweredPayload = z.object({
 const changeOrderWithdrawnPayload = z.object({
   ...changeOrderBase,
   recipientId: z.uuid().optional(),
+  requestedByUserId: z.uuid().optional(),
   actorExpertLabel: z.string().min(1).max(200),
 });
 
