@@ -93,8 +93,8 @@ pnpm test:e2e               # Run Playwright E2E tests
 
 # Database (run from packages/db/)
 pnpm db:generate            # Generate migration from schema changes
-pnpm db:push                # Push schema to dev DB (dev only, never production)
-pnpm db:migrate             # Apply migrations (production)
+pnpm db:push                # Push schema to a local DB only (never balo-dev)
+pnpm db:migrate             # Railway runs this pre-deploy; run it yourself only against a local DB
 pnpm db:studio              # Open Drizzle Studio
 
 # Code quality
@@ -171,6 +171,8 @@ const response = await loggedFetch('https://api.stripe.com/v1/charges', {
 - Every table: `id` (UUID), `created_at`, `updated_at` (with timezone)
 - Soft deletes via `deleted_at` timestamp — every table gets it
 - Foreign keys explicit with ON DELETE behaviour specified
+- Migrations run on deploy (Railway pre-deploy `db:migrate`, one transaction) and are never undone. **Every migration must work with the build it replaces (expand/contract):** add nullable or defaulted columns first; drop, rename or tighten only in a later PR, once no live build (Railway or Vercel) declares the old shape. Vercel can also go live before the migrate commits. An unasked `DROP` from `db:generate` is a stop-and-check. Details: `drizzle-schema` skill.
+- drizzle-kit uses `MIGRATION_DATABASE_URL` (session pooler :5432, or direct), else `DATABASE_URL`, and refuses :6543. `push` runs only against a local database; `migrate` falls back to `DATABASE_URL` only for one, and refuses a remote `MIGRATION_DATABASE_URL` that `.env` assigns. Never put `MIGRATION_DATABASE_URL` in a `.env` file. Never `db:push` or `db:migrate` a branch against balo-dev (the deployed apps' DB): untracked schema fails the next deploy, and a stray `when` makes the migrator skip merged migrations.
 
 ### Integration Tests
 

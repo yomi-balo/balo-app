@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@balo/shared": "workspace:*",
+    "drizzle-kit": "^0.30.0",
     "drizzle-orm": "^0.38.0",
     "postgres": "^3.4.0"
   },
@@ -31,7 +32,6 @@
     "@repo/typescript-config": "workspace:*",
     "@testcontainers/postgresql": "^11.13.0",
     "dotenv-cli": "^11.0.0",
-    "drizzle-kit": "^0.30.0",
     "testcontainers": "^11.13.0",
     "tsx": "^4.7.0",
     "typescript": "^5.0.0",
