@@ -35,6 +35,11 @@ vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => false,
 }));
 
+const mockAttachCards = vi.fn();
+vi.mock('@/lib/request-files/thread-file-cards', () => ({
+  attachRequestFileCards: (...args: unknown[]) => mockAttachCards(...args),
+}));
+
 import { fetchThreadAction } from './fetch-thread';
 import { log } from '@/lib/logging';
 
@@ -82,6 +87,16 @@ describe('fetchThreadAction', () => {
     mockResolveAccess.mockResolvedValue(ACCESS_OK);
     mockListMessagesPage.mockResolvedValue({ messages: [messageRow()], hasEarlier: false });
     mockListFiles.mockResolvedValue([]);
+    mockAttachCards.mockImplementation(async (_user: unknown, _requestId: unknown, rows: unknown) =>
+      (rows as Array<Record<string, unknown>>).map((row) => ({
+        id: row.id,
+        conversationId: row.conversationId,
+        bodyHtml: row.body,
+        senderUserId: row.senderUserId,
+        senderName: 'Priya Nair',
+        createdAtIso: (row.createdAt as Date).toISOString(),
+      }))
+    );
   });
 
   it('rejects when not signed in', async () => {
@@ -154,6 +169,42 @@ describe('fetchThreadAction', () => {
       scope: { kind: 'full' },
       before: { createdAt: new Date('2026-06-09T10:00:00.000Z'), id: MSG_ID },
       limit: 30,
+      includeRequestFileShares: true,
+    });
+  });
+
+  it('opts in to share cards and resolves them per viewer through attachRequestFileCards', async () => {
+    const rows = [messageRow({ requestSharedFileId: 'f0000000-0000-4000-8000-000000000009' })];
+    mockListMessagesPage.mockResolvedValue({ messages: rows, hasEarlier: false });
+    const card = { kind: 'expert', file: { id: 'f' } };
+    mockAttachCards.mockResolvedValue([{ id: MSG_ID, requestSharedFile: card }]);
+
+    const result = await fetchThreadAction({
+      requestId: REQUEST_ID,
+      relationshipId: REL_ID,
+      includeFiles: false,
+    });
+
+    expect(mockListMessagesPage).toHaveBeenCalledWith(
+      expect.objectContaining({ includeRequestFileShares: true })
+    );
+    expect(mockAttachCards).toHaveBeenCalledWith(USER, REQUEST_ID, rows);
+    expect(result).toMatchObject({
+      success: true,
+      messages: [{ id: MSG_ID, requestSharedFile: card }],
+    });
+  });
+
+  it('answers with the generic error when card resolution throws', async () => {
+    mockAttachCards.mockRejectedValue(new Error('boom'));
+    const result = await fetchThreadAction({
+      requestId: REQUEST_ID,
+      relationshipId: REL_ID,
+      includeFiles: false,
+    });
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not load this conversation. Please try again.',
     });
   });
 

@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { MessageComposer } from './message-composer';
+import { CONVERSATION_FILE_ACCEPT } from '@/lib/storage/conversation-file-constraints';
 import { MESSAGE_MAX_TEXT } from '@/lib/project-request/conversation-view-types';
 
 type ComposerProps = React.ComponentProps<typeof MessageComposer>;
@@ -203,6 +204,23 @@ describe('MessageComposer', () => {
     expect(screen.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
   });
 
+  it('names the paperclip "Attach a file" unless the surface says otherwise', () => {
+    renderComposer();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeInTheDocument();
+  });
+
+  it('uses the surface’s own paperclip label when one is given', () => {
+    renderComposer({ attachLabel: 'Share a file' });
+    expect(screen.getByRole('button', { name: 'Share a file' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach a file' })).not.toBeInTheDocument();
+  });
+
+  it('renders no paperclip at all without an onAttach handler', () => {
+    renderComposer({ onAttach: undefined });
+    expect(screen.queryByRole('button', { name: /file/i })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+  });
+
   it('forwards a picked file to onAttach', async () => {
     const user = userEvent.setup();
     const { onAttach } = renderComposer();
@@ -211,6 +229,15 @@ describe('MessageComposer', () => {
     expect(input).not.toBeNull();
     await user.upload(input as HTMLInputElement, file);
     expect(onAttach).toHaveBeenCalledWith(file);
+  });
+
+  it('restricts the picker to the allowed file types and clears it after a pick', async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toHaveAttribute('accept', CONVERSATION_FILE_ACCEPT);
+    await user.upload(input, new File(['x'], 'scope.pdf', { type: 'application/pdf' }));
+    expect(input.value).toBe('');
   });
 
   /**

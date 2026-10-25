@@ -1,8 +1,18 @@
-import { pgTable, uuid, text, integer, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  timestamp,
+  index,
+  uniqueIndex,
+  check,
+} from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { conversationContextTypeEnum } from './enums';
 import { users } from './users';
 import { meetings } from './meetings';
+import { requestSharedFiles } from './request-files';
 import { timestamps, softDelete } from './helpers';
 
 /**
@@ -194,6 +204,11 @@ export const conversationContexts = pgTable(
  * a client member, the expert's user, or an admin — ROLE IS DERIVED AT READ TIME, NOT BAKED
  * INTO THE ROW). ⚠ THERE IS NO `party` COLUMN AND ONE MUST NOT BE ADDED: it would go stale
  * the moment membership changes.
+ *
+ * A message is EITHER a written message (`body` non-empty) OR a request-share card
+ * (`request_shared_file_id` set, `body` the optional note — possibly `''`). The
+ * `conversation_message_body_or_file` CHECK makes an empty, file-less message
+ * unrepresentable.
  */
 export const conversationMessages = pgTable(
   'conversation_messages',
@@ -220,7 +235,29 @@ export const conversationMessages = pgTable(
       onDelete: 'set null',
     }),
 
-    // Sanitised HTML message body.
+    /**
+     * The request-share card this message carries (BAL-617). NULL on every case-, engagement-
+     * and meeting-origin message, and on every written message in a request thread. Non-null
+     * ONLY on a message posted by `requestSharedFilesRepository.share()` into a receiving
+     * track's open thread; the row carries the id and nothing else — the card (name, size,
+     * audience) is resolved per viewer on read, never stored here.
+     *
+     * ⚠ READERS EXCLUDE THESE ROWS BY DEFAULT. `listMessages` / `listMessagesPage` drop them
+     * unless the caller opts in with `includeRequestFileShares`, and only the request surface
+     * does. A reader that cannot apply the file's audience rule therefore never shows a card
+     * to someone the file was not shared with (or a blank bubble for a note-less share).
+     *
+     * ON DELETE CASCADE, deliberately not SET NULL: nulling the column on a note-less share
+     * (`body = ''`) would violate `conversation_message_body_or_file`. User-facing deletes of a
+     * shared file are SOFT (`deleted_at`), so the message survives and the client's
+     * "Removed" tombstone renders from the soft-deleted file row. Only a HARD delete of the
+     * file (erasure, or the parent request's cascade) removes the message with it.
+     */
+    requestSharedFileId: uuid('request_shared_file_id').references(() => requestSharedFiles.id, {
+      onDelete: 'cascade',
+    }),
+
+    // Sanitised HTML message body. `''` only on a request-share card with no note.
     body: text('body').notNull(),
     ...timestamps,
     ...softDelete,
@@ -240,6 +277,26 @@ export const conversationMessages = pgTable(
     index('conversation_message_meeting_idx')
       .on(t.sentDuringMeetingId, t.createdAt)
       .where(sql`${t.sentDuringMeetingId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+    /**
+     * ⚠ THE FK'S INDEX, AND IT MUST BE NON-PARTIAL — the `conversation_context_conversation_fk_idx`
+     * ruling. `request_shared_file_id` REFERENCES `request_shared_files(id) ON DELETE CASCADE`,
+     * and Postgres runs that cascade as an unqualified
+     * `DELETE FROM conversation_messages WHERE request_shared_file_id = $1` — no `IS NOT NULL`,
+     * no `deleted_at IS NULL`. A partial index cannot serve a predicate it does not cover, so a
+     * partial one here would seq-scan every message on each hard file delete. The column is
+     * NULL on almost every row; those NULLs cost a little index space, which is the trade.
+     */
+    index('conversation_message_shared_file_idx').on(t.requestSharedFileId),
+    /**
+     * A written message has a body; a share card may have none. `''` is the only empty value
+     * the web caller writes (a blank composer is refused before it gets here), so `<> ''` is
+     * the whole rule. THREE-VALUED-LOGIC SAFE: `body` is NOT NULL, so the left arm is never
+     * unknown.
+     */
+    check(
+      'conversation_message_body_or_file',
+      sql`${t.body} <> '' OR ${t.requestSharedFileId} IS NOT NULL`
+    ),
   ]
 );
 
@@ -338,6 +395,10 @@ export const conversationMessagesRelations = relations(conversationMessages, ({ 
   sentDuringMeeting: one(meetings, {
     fields: [conversationMessages.sentDuringMeetingId],
     references: [meetings.id],
+  }),
+  requestSharedFile: one(requestSharedFiles, {
+    fields: [conversationMessages.requestSharedFileId],
+    references: [requestSharedFiles.id],
   }),
 }));
 

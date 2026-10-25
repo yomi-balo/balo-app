@@ -180,6 +180,18 @@ describe('fetchCaseThreadAction — the page query is fully STATED', () => {
     });
   });
 
+  /**
+   * ⚠ Request-share card messages are request-surface only. This reader
+   * must NOT opt in to them: the repository excludes them by default (fail-closed), so a share
+   * can never render as a blank bubble on the case panel. Passing the flag — in ANY form — fails
+   * this test.
+   */
+  it('does not opt in to request-share cards', async () => {
+    await fetchCaseThreadAction(INPUT);
+    const [call] = mockListMessagesPage.mock.calls;
+    expect(call?.[0]).not.toHaveProperty('includeRequestFileShares');
+  });
+
   it('never reads a conversation named by the caller', async () => {
     await fetchCaseThreadAction(INPUT);
     const [call] = mockListMessagesPage.mock.calls;

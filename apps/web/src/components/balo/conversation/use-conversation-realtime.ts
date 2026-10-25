@@ -5,6 +5,7 @@ import type * as Ably from 'ably';
 import {
   conversationChannelName,
   CONVERSATION_EVENT_FILE,
+  CONVERSATION_EVENT_FILE_SHARED,
   CONVERSATION_EVENT_MESSAGE,
   typingChannelName,
   type TypingSignal,
@@ -12,7 +13,9 @@ import {
 import { fetchRealtimeToken, type RealtimeTokenResult } from '@/lib/realtime/ably-auth';
 import {
   isConversationFilePayload,
+  isConversationFileSharedPayload,
   isConversationMessagePayload,
+  type ConversationFileSharedPayload,
   sanitizeRealtimeBodyHtml,
 } from '@/lib/realtime/message-payload';
 import { attachTypingChannel } from '@/lib/realtime/typing-channel';
@@ -57,6 +60,13 @@ export interface UseConversationRealtimeInput {
   conversationIds: string[];
   onMessage: (message: ConversationMessageView) => void;
   onFile: (file: ConversationFileView) => void;
+  /**
+   * A request-share card landed in a thread (BAL-617). The ping is content-free by contract — the
+   * card is resolved per viewer on read — so the handler refetches rather than trusting the wire.
+   * The hook subscribes to the `file_shared` event ONLY when this is provided, so the case panel
+   * and the in-call hook, which have no such card, never listen for it.
+   */
+  onFileShared?: (payload: ConversationFileSharedPayload) => void;
   /**
    * The ONE open thread whose `typing:{conversationId}` channel to attach; `null` or omitted
    * means no typing at all. Callers pass it only while that thread's composer is live.
@@ -157,6 +167,7 @@ export function useConversationRealtime(
     conversationIds,
     onMessage,
     onFile,
+    onFileShared,
     typingConversationId = null,
   } = input;
   const [status, setStatus] = useState<ConversationRealtimeStatus>(
@@ -175,10 +186,13 @@ export function useConversationRealtime(
   // Keep the latest handlers in refs so re-renders never resubscribe channels.
   const onMessageRef = useRef(onMessage);
   const onFileRef = useRef(onFile);
+  const onFileSharedRef = useRef(onFileShared);
   useEffect(() => {
     onMessageRef.current = onMessage;
     onFileRef.current = onFile;
-  }, [onMessage, onFile]);
+    onFileSharedRef.current = onFileShared;
+  }, [onMessage, onFile, onFileShared]);
+  const listensForFileShared = onFileShared !== undefined;
 
   // Stable identity for the channel set (order-insensitive).
   const channelsKey = useMemo(
@@ -279,6 +293,17 @@ export function useConversationRealtime(
           .catch(() => {
             // Attach failures surface via the connection-state listeners.
           });
+        if (listensForFileShared) {
+          channel
+            .subscribe(CONVERSATION_EVENT_FILE_SHARED, (msg: Ably.InboundMessage) => {
+              if (!disposed && isConversationFileSharedPayload(msg.data)) {
+                onFileSharedRef.current?.(msg.data);
+              }
+            })
+            .catch(() => {
+              // Attach failures surface via the connection-state listeners.
+            });
+        }
       }
 
       setClient(realtime);
@@ -296,7 +321,7 @@ export function useConversationRealtime(
     };
     // ⚠ `fetchToken` MUST BE MEMOIZED BY THE CALLER — see the prop's docblock.
     // `receive` is stable for the life of the mount (see `useTypingIndicator`).
-  }, [enabled, fetchToken, channelsKey, receive]);
+  }, [enabled, fetchToken, channelsKey, receive, listensForFileShared]);
 
   const typing = useMemo(
     () => (typingId === null ? null : { typingClientIds, onKeystroke, onStopped }),

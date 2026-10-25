@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ellipsis, MessageSquare, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
+import * as Sentry from '@sentry/nextjs';
 import { cn } from '@/lib/utils';
 import {
   track,
   CONVERSATION_EVENTS,
   DASHBOARD_EVENTS,
   PROJECT_EVENTS,
+  REQUEST_FILE_EVENTS,
   type ConversationCallRoute,
   type ConversationCallSurface,
   type ConversationProposalCta,
@@ -20,6 +22,7 @@ import {
   insertUpcomingCall,
   isConversationReadOnly,
   previewOfHtml,
+  SHARED_FILE_PREVIEW,
   upcomingCallCapCopy,
   UPCOMING_CALL_CAP,
   type ConversationFileView,
@@ -46,6 +49,7 @@ import {
 import { createConversationRealtimeTokenAction } from '@/app/(dashboard)/projects/[requestId]/_actions/create-conversation-realtime-token';
 import { sendConversationTypingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/send-conversation-typing';
 import type { TypingSignal } from '@/lib/realtime/channels';
+import type { ConversationFileSharedPayload } from '@/lib/realtime/message-payload';
 // BAL-421 — the five ANCHOR-AGNOSTIC leaves moved to `components/balo/conversation/`; the
 // case surface is their second consumer. Pure path move, no behaviour change.
 import { useConversationRealtime } from '@/components/balo/conversation/use-conversation-realtime';
@@ -65,6 +69,16 @@ import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet
 import { ProposalRequestDialog } from './proposal-request-dialog';
 import { DeclineTrackDialog } from '../close/decline-track-dialog';
 import { useRegisterClientBookCall, useRegisterExpertProposeTimes } from '../expert-call-bridge';
+import { ShareFileSheet } from '../files/share-file-sheet';
+import { ThreadFileCard } from '../files/thread-file-card';
+import {
+  deriveThreadShare,
+  useRegisterThreadMessageSink,
+  useRequestFiles,
+  type ThreadMessageSink,
+} from '../files/request-files-provider';
+import { useRequestFileShare, type ShareCompleted } from '../files/use-request-file-share';
+import type { ShareEntryPoint, ShareRecipients } from '../files/share-file-types';
 
 interface ConversationStageProps {
   requestId: string;
@@ -145,6 +159,44 @@ function withEarlierMessages(
     hasEarlier,
     loadingEarlier: false,
   };
+}
+
+/**
+ * Merges the newest page into an open thread: messages already shown stay as they are, unknown
+ * ones are added, and the result stays in time order. A `file_shared` ping triggers this refetch.
+ */
+function withNewestPage(
+  current: ConversationMessageView[],
+  page: ConversationMessageView[]
+): ConversationMessageView[] {
+  const known = new Set(current.map((m) => m.id));
+  const added = page.filter((m) => !known.has(m.id));
+  if (added.length === 0) return current;
+  return [...current, ...added].sort(
+    (a, b) => a.createdAtIso.localeCompare(b.createdAtIso) || a.id.localeCompare(b.id)
+  );
+}
+
+/** A share card carries no body when sent without a note; the tab preview then names the share. */
+function previewOfMessage(message: ConversationMessageView): string | null {
+  const preview = previewOfHtml(message.bodyHtml);
+  if (preview !== null) return preview;
+  return message.requestSharedFile === undefined ? null : SHARED_FILE_PREVIEW;
+}
+
+/** True when a drag carries files (rather than selected text or a link). */
+function dragCarriesFiles(event: React.DragEvent): boolean {
+  return Array.from(event.dataTransfer.types).includes('Files');
+}
+
+const EMPTY_RECIPIENTS: ShareRecipients = { side: 'client', liveTracks: [] };
+
+/** The share dialog's open state: which thread it started from, and how it was configured. */
+interface ShareDialogState {
+  relationshipId: string;
+  options: 'none' | 'thread';
+  recipients: ShareRecipients;
+  initialNote: string;
 }
 
 /** The post-guard derived render model for the active thread (pure). */
@@ -455,29 +507,23 @@ function EmptyConversationStage({
  * verbatim — selection, never order, reacts to activity.
  * BAL-212 guard: the ONLY message write path is the composer submit.
  *
- * ── ⚠⚠ NO FILE AFFORDANCE. RETIRED BY BAL-431 (OSD-2). ─────────────────────────────────────
+ * ── ⚠⚠ FILES ARE SHARED FROM HERE, STORED REQUEST-WIDE (BAL-617) ───────────────────────────
  *
- * This stage used to be a SECOND file home on the request surface: a composer attach button, a
- * Files pill in the header, a paperclip in the mobile tab strip, a `ThreadFilesPanel` drawer,
- * file bubbles in the timeline, and Ably file ingestion. ADR-1048 rejected two homes, and the
- * ruling retired THIS one — the request-level, audience-aware `RequestFilesPanel` (mounted by
- * `request-detail-shell.tsx`) is now the single file home for a project request.
+ * The composer paperclip and a file dropped on the conversation open the share dialog straight
+ * away (no composer staging); the audience is written on Share through the request-file
+ * pipeline, never as a `conversation_files` row. The share posts a card message into each
+ * receiving thread, and `MessageList` renders it through `ThreadFileCard`. The file list itself
+ * (Files card, All files sheet) lives in `RequestFilesProvider`; this stage registers a sink so
+ * the cards a share just posted appear in the open threads at once.
  *
- * What that means concretely, so none of it is rediscovered as a bug:
- *   · `onAttach` is NOT passed to `MessageComposer`, so the composer renders no attach button
- *     at all (the prop is optional precisely for this).
+ * What stays true from BAL-431 (OSD-2), so none of it is rediscovered as a bug:
  *   · `MessageList` receives an EMPTY `files` array — it is a SHARED leaf and the CASE surface
- *     still shares files in-thread, so its interface is untouched.
+ *     still shares conversation files in-thread, so its interface is untouched.
  *   · The realtime hook's `onFile` is a documented no-op: nothing writes a conversation file
- *     against a relationship-anchored conversation any more, so no such event can arrive.
- *   · `fetchThreadAction` is called with `includeFiles: false` on both legs.
+ *     against a relationship-anchored conversation any more.
+ *   · `fetchThreadAction` is called with `includeFiles: false`.
  *   · `view.initialFiles` and `thread.fileCount` are still BUILT server-side (they belong to
- *     the shared conversation view-model, whose other consumer is the case surface) and are
- *     deliberately not read here.
- *
- * Retiring the affordance, NOT the data: `conversation_files` rows written before this are
- * untouched and stay visible on the CASE surface wherever a thread carried over at kickoff.
- * No backfill was needed — the guard count of orphanable request-stage files was 0.
+ *     the shared conversation view-model) and are deliberately not read here.
  */
 export function ConversationStage({
   requestId,
@@ -523,6 +569,11 @@ export function ConversationStage({
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
+  // Read by the `file_shared` handler, which outlives any one render.
+  const threadDataRef = useRef(threadData);
+  useEffect(() => {
+    threadDataRef.current = threadData;
+  }, [threadData]);
   const lastMarkAtRef = useRef<Record<string, number>>({});
   const composerContainerRef = useRef<HTMLDivElement>(null);
 
@@ -733,6 +784,63 @@ export function ConversationStage({
     // Intentionally empty — see the docblock above.
   }, []);
 
+  /** Refetches a loaded thread's newest page (lens-correct) and merges what is new by id. */
+  const refetchNewestPage = useCallback(
+    (threadId: string): void => {
+      fetchThreadAction({ requestId, relationshipId: threadId, includeFiles: false })
+        .then((result) => {
+          if (!result.success) return;
+          setThreadData((prev) => {
+            const data = prev[threadId];
+            if (data?.state !== 'ready') return prev;
+            const messages = withNewestPage(data.messages, result.messages);
+            return messages === data.messages
+              ? prev
+              : { ...prev, [threadId]: { ...data, messages } };
+          });
+        })
+        .catch((error: unknown) => {
+          Sentry.captureException(error);
+        });
+    },
+    [requestId]
+  );
+
+  /**
+   * A card landed in a thread. The ping is content-free — the card is resolved per viewer on
+   * read — so the newest page is refetched through the lens-correct action and merged by id.
+   * The sender's own island already added the cards from the confirm result, so it skips this.
+   */
+  const handleRealtimeFileShared = useCallback(
+    (payload: ConversationFileSharedPayload): void => {
+      const threadId = threadIdByConversationId.get(payload.conversationId);
+      if (threadId === undefined || payload.senderUserId === viewerUserId) return;
+      const activeVisible =
+        threadId === activeThreadIdRef.current && document.visibilityState === 'visible';
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.relationshipId === threadId
+            ? {
+                ...t,
+                latestMessagePreview: SHARED_FILE_PREVIEW,
+                latestMessageAtIso: payload.createdAtIso,
+                latestMessageFromViewer: false,
+                latestMessageFromExpert: payload.senderUserId === t.expertUserId,
+                latestInboundActivityAtIso: payload.createdAtIso,
+                unread: !activeVisible,
+              }
+            : t
+        )
+      );
+      // A thread that was never opened has nothing to merge into; it loads in full when opened.
+      if (threadDataRef.current[threadId]?.state === 'ready') {
+        refetchNewestPage(threadId);
+      }
+      if (activeVisible) markReadSafe(threadId);
+    },
+    [viewerUserId, markReadSafe, threadIdByConversationId, refetchNewestPage]
+  );
+
   // BAL-424 — channels are keyed on the CONVERSATION, so a Case (which has no relationship)
   // and a thread that carries over at kickoff both keep one stable channel for life.
   const conversationIds = useMemo(() => view.threads.map((t) => t.conversationId), [view.threads]);
@@ -762,6 +870,7 @@ export function ConversationStage({
     conversationIds,
     onMessage: handleRealtimeMessage,
     onFile: handleRealtimeFile,
+    onFileShared: handleRealtimeFileShared,
     typingConversationId: typingConversationIdOf(hasLiveComposer ? activeThread : null, readOnly),
     sendTyping,
   });
@@ -792,6 +901,127 @@ export function ConversationStage({
       setDrafts((prev) => ({ ...prev, [activeThreadId]: text }));
     },
     [activeThreadId]
+  );
+
+  // ── Sharing a file into the open thread (BAL-617) ───────────────────────
+  const filesContext = useRequestFiles();
+  const filesView = filesContext?.view ?? null;
+  const completeShare = filesContext?.completeShare;
+  const activeRelationshipId = activeThread?.relationshipId ?? null;
+  const threadShare = useMemo(
+    () =>
+      filesView === null || activeRelationshipId === null
+        ? null
+        : deriveThreadShare(filesView, activeRelationshipId),
+    [filesView, activeRelationshipId]
+  );
+  const canShareFile = threadShare?.allowed === true && !readOnly;
+  const [shareDialog, setShareDialog] = useState<ShareDialogState | null>(null);
+  const shareDialogRef = useRef(shareDialog);
+  useEffect(() => {
+    shareDialogRef.current = shareDialog;
+  }, [shareDialog]);
+  const [dragging, setDragging] = useState(false);
+
+  const handleFileShared = useCallback(
+    (result: ShareCompleted): void => {
+      const dialog = shareDialogRef.current;
+      setShareDialog(null);
+      // The note was the draft, now sent with the file: clear it (Cancel keeps it).
+      if (dialog !== null) setDrafts((prev) => ({ ...prev, [dialog.relationshipId]: '' }));
+      completeShare?.(result);
+    },
+    [completeShare]
+  );
+  const fileShare = useRequestFileShare({
+    requestId,
+    recipients: shareDialog?.recipients ?? EMPTY_RECIPIENTS,
+    defaultEntryPoint: 'composer',
+    onShared: handleFileShared,
+  });
+  const { pickFile, cancel: cancelFileShare } = fileShare;
+
+  const startFileShare = useCallback(
+    (file: File, entryPoint: ShareEntryPoint): void => {
+      if (threadShare === null || !canShareFile || activeThreadId === null) return;
+      setShareDialog({
+        relationshipId: activeThreadId,
+        options: threadShare.options,
+        recipients: threadShare.recipients,
+        initialNote: activeDraft,
+      });
+      track(REQUEST_FILE_EVENTS.SHARE_DIALOG_OPENED, { entry_point: entryPoint });
+      pickFile(file, entryPoint);
+    },
+    [threadShare, canShareFile, activeThreadId, activeDraft, pickFile]
+  );
+  const handleAttachPick = useCallback(
+    (file: File): void => startFileShare(file, 'composer'),
+    [startFileShare]
+  );
+  const handleCancelFileShare = useCallback((): void => {
+    cancelFileShare();
+    setShareDialog(null);
+  }, [cancelFileShare]);
+
+  const handleDragOver = useCallback(
+    (event: React.DragEvent): void => {
+      if (!canShareFile || shareDialog !== null || !dragCarriesFiles(event)) return;
+      event.preventDefault();
+      setDragging(true);
+    },
+    [canShareFile, shareDialog]
+  );
+  const handleDragLeave = useCallback((event: React.DragEvent): void => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+  }, []);
+  const handleDrop = useCallback(
+    (event: React.DragEvent): void => {
+      if (!canShareFile) return;
+      event.preventDefault();
+      setDragging(false);
+      if (shareDialog !== null) return;
+      const [file] = Array.from(event.dataTransfer.files);
+      if (file !== undefined) startFileShare(file, 'drop');
+    },
+    [canShareFile, shareDialog, startFileShare]
+  );
+
+  /** Cards a share just posted, handed over by the provider so the open threads show them at once. */
+  const handleShareMessages = useCallback<ThreadMessageSink>(
+    (posted) => {
+      for (const { relationshipId, message } of posted) {
+        setThreadData((prev) => {
+          const data = prev[relationshipId];
+          if (data?.state !== 'ready') return prev;
+          if (data.messages.some((m) => m.id === message.id)) return prev;
+          return { ...prev, [relationshipId]: { ...data, messages: [...data.messages, message] } };
+        });
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.relationshipId === relationshipId
+              ? {
+                  ...t,
+                  latestMessagePreview: previewOfMessage(message),
+                  latestMessageAtIso: message.createdAtIso,
+                  latestMessageFromViewer: true,
+                  latestMessageFromExpert: viewerUserId === t.expertUserId,
+                  viewerHasSentMessage: true,
+                }
+              : t
+          )
+        );
+      }
+    },
+    [viewerUserId]
+  );
+  useRegisterThreadMessageSink(handleShareMessages);
+
+  const renderSharedFile = useCallback(
+    (message: ConversationMessageView, mine: boolean): React.ReactNode => (
+      <ThreadFileCard message={message} mine={mine} />
+    ),
+    []
   );
 
   const handleSend = useCallback(
@@ -1363,196 +1593,231 @@ export function ConversationStage({
   });
 
   return (
-    <RequestCard className={STAGE_CARD_CLASS}>
-      {/* Strip row: tabs (mobile always; desktop hidden when single) + pinned mobile controls */}
-      <div
-        className={cn(
-          'border-border bg-muted/40 flex items-stretch border-b',
-          single && 'lg:hidden'
-        )}
-      >
-        <ThreadTabs
-          threads={threads}
-          activeThreadId={activeThreadId}
-          showYouSuffix={showYouSuffix}
-          onSelect={handleTabSelect}
-        />
-        {/* Pinned mobile controls. The paperclip that used to sit here is RETIRED (BAL-431 /
+    <div
+      className="relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <RequestCard className={STAGE_CARD_CLASS}>
+        {/* Strip row: tabs (mobile always; desktop hidden when single) + pinned mobile controls */}
+        <div
+          className={cn(
+            'border-border bg-muted/40 flex items-stretch border-b',
+            single && 'lg:hidden'
+          )}
+        >
+          <ThreadTabs
+            threads={threads}
+            activeThreadId={activeThreadId}
+            showYouSuffix={showYouSuffix}
+            onSelect={handleTabSelect}
+          />
+          {/* Pinned mobile controls. The paperclip that used to sit here is RETIRED (BAL-431 /
             OSD-2) — files live in the request-level panel now — so the whole rail collapses
             when the overflow trigger has nothing to show, rather than leaving dead padding. */}
-        {showOverflow && (
-          <div className="flex shrink-0 items-center gap-1.5 px-2 py-1.5 lg:hidden">
-            <button
-              type="button"
-              onClick={handleOpenOverflow}
-              aria-label="More thread options"
-              className="border-border bg-card text-muted-foreground focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-[9px] border focus-visible:ring-2 focus-visible:outline-none"
-            >
-              <Ellipsis className="h-4 w-4" aria-hidden="true" />
-            </button>
+          {showOverflow && (
+            <div className="flex shrink-0 items-center gap-1.5 px-2 py-1.5 lg:hidden">
+              <button
+                type="button"
+                onClick={handleOpenOverflow}
+                aria-label="More thread options"
+                className="border-border bg-card text-muted-foreground focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-[9px] border focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <Ellipsis className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop header — identity, call CTA, proposal slot (no Files pill: BAL-431 / OSD-2) */}
+        <div className="hidden lg:block">
+          <ThreadHeader
+            thread={activeThread}
+            showYouSuffix={showYouSuffix}
+            actions={actions}
+            callPending={callPending}
+            profileBookingHref={profileBookingHref}
+            deliveryEngagementId={deliveryEngagementId}
+            joinPartyLabel={joinPartyLabel}
+            onCall={handleHeaderCall}
+            onBookAnother={handleHeaderCall}
+            onJoin={handleJoin}
+            onRequestProposal={onHeaderRequestProposal}
+            onBuildProposal={onHeaderBuildProposal}
+            onViewProposal={handleHeaderView}
+            onDecline={actions.declineSlot === null ? null : handleDecline}
+          />
+        </div>
+
+        {/* Realtime down (configured but the connection died) — quiet, non-blocking */}
+        {realtimeStatus === 'failed' && (
+          <div className="border-border bg-muted/40 text-muted-foreground flex items-center gap-2 border-b px-3.5 py-1.5 text-xs">
+            <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Live updates paused — refresh to catch up.
           </div>
         )}
-      </div>
 
-      {/* Desktop header — identity, call CTA, proposal slot (no Files pill: BAL-431 / OSD-2) */}
-      <div className="hidden lg:block">
-        <ThreadHeader
-          thread={activeThread}
-          showYouSuffix={showYouSuffix}
-          actions={actions}
+        {/* Per-thread nudge — the live edge at the top */}
+        {nudge && (
+          <div className="px-3.5 pt-3">
+            <ThreadNudge
+              nudge={nudge}
+              callPending={callPending}
+              onReply={focusComposer}
+              onCall={handleNudgeCall}
+              onBuild={onNudgeBuild}
+              onView={handleNudgeView}
+              onAccept={onNudgeAccept}
+            />
+          </div>
+        )}
+
+        <MessageList
+          threadKey={activeThread.relationshipId}
+          counterpartyFirstName={activeThread.expertFirstName}
+          introHtml={activeThread.eoiHtml}
+          lens={lens}
+          viewerUserId={viewerUserId}
+          state={activeData.state}
+          messages={activeData.messages}
+          files={NO_THREAD_FILES}
+          hasEarlier={activeData.hasEarlier}
+          loadingEarlier={activeData.loadingEarlier}
+          downloadingFileId={null}
+          onLoadEarlier={handleLoadEarlier}
+          onRetry={handleRetry}
+          onFileClick={noopFileClick}
+          renderSharedFile={renderSharedFile}
+        />
+
+        {typing !== null && <TypingIndicator names={typingNames} className="px-4 pb-1" />}
+
+        {/* The paperclip appears only while the viewer can share into this thread. */}
+        <div ref={composerContainerRef}>
+          <MessageComposer
+            expertFirstName={composerExpertName}
+            disabled={composer.disabled}
+            disabledPlaceholder={composer.disabledPlaceholder}
+            placeholder={nudge?.composerPlaceholder}
+            sending={composer.sending}
+            uploading={null}
+            onAttach={canShareFile ? handleAttachPick : undefined}
+            attachLabel="Share a file"
+            value={composer.value}
+            onChange={composer.onChange}
+            onSend={composer.onSend}
+            onFocusChange={composer.onFocusChange}
+            onTyping={typing?.onKeystroke}
+            onTypingStopped={typing?.onStopped}
+          />
+        </div>
+
+        <MobileActionRail
+          visible={!composerFocused}
+          callSlot={actions.callSlot}
           callPending={callPending}
+          expertName={activeThread.expertName}
+          expertFirstName={activeThread.expertFirstName}
+          upcomingCalls={activeThread.upcomingCalls}
           profileBookingHref={profileBookingHref}
           deliveryEngagementId={deliveryEngagementId}
           joinPartyLabel={joinPartyLabel}
-          onCall={handleHeaderCall}
-          onBookAnother={handleHeaderCall}
+          proposalCta={actions.railProposal}
+          onCall={handleRailCall}
+          onBookAnother={handleRailCall}
           onJoin={handleJoin}
-          onRequestProposal={onHeaderRequestProposal}
-          onBuildProposal={onHeaderBuildProposal}
-          onViewProposal={handleHeaderView}
+          onProposal={onRailProposal}
+          onBuildProposal={onRailBuildProposal}
+          onViewProposal={handleRailView}
+        />
+
+        <MobileOverflowSheet
+          open={overflowOpen}
+          onOpenChange={setOverflowOpen}
+          thread={activeThread}
+          showProposalPill={showProposalPill}
+          profileHref={profileHref}
+          declineSlot={actions.declineSlot}
           onDecline={actions.declineSlot === null ? null : handleDecline}
         />
-      </div>
 
-      {/* Realtime down (configured but the connection died) — quiet, non-blocking */}
-      {realtimeStatus === 'failed' && (
-        <div className="border-border bg-muted/40 text-muted-foreground flex items-center gap-2 border-b px-3.5 py-1.5 text-xs">
-          <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          Live updates paused — refresh to catch up.
-        </div>
-      )}
-
-      {/* Per-thread nudge — the live edge at the top */}
-      {nudge && (
-        <div className="px-3.5 pt-3">
-          <ThreadNudge
-            nudge={nudge}
-            callPending={callPending}
-            onReply={focusComposer}
-            onCall={handleNudgeCall}
-            onBuild={onNudgeBuild}
-            onView={handleNudgeView}
-            onAccept={onNudgeAccept}
-          />
-        </div>
-      )}
-
-      <MessageList
-        threadKey={activeThread.relationshipId}
-        counterpartyFirstName={activeThread.expertFirstName}
-        introHtml={activeThread.eoiHtml}
-        lens={lens}
-        viewerUserId={viewerUserId}
-        state={activeData.state}
-        messages={activeData.messages}
-        files={NO_THREAD_FILES}
-        hasEarlier={activeData.hasEarlier}
-        loadingEarlier={activeData.loadingEarlier}
-        downloadingFileId={null}
-        onLoadEarlier={handleLoadEarlier}
-        onRetry={handleRetry}
-        onFileClick={noopFileClick}
-      />
-
-      {typing !== null && <TypingIndicator names={typingNames} className="px-4 pb-1" />}
-
-      {/* No `onAttach` — the composer therefore renders NO attach button (BAL-431 / OSD-2). */}
-      <div ref={composerContainerRef}>
-        <MessageComposer
-          expertFirstName={composerExpertName}
-          disabled={composer.disabled}
-          disabledPlaceholder={composer.disabledPlaceholder}
-          placeholder={nudge?.composerPlaceholder}
-          sending={composer.sending}
-          uploading={null}
-          value={composer.value}
-          onChange={composer.onChange}
-          onSend={composer.onSend}
-          onFocusChange={composer.onFocusChange}
-          onTyping={typing?.onKeystroke}
-          onTypingStopped={typing?.onStopped}
-        />
-      </div>
-
-      <MobileActionRail
-        visible={!composerFocused}
-        callSlot={actions.callSlot}
-        callPending={callPending}
-        expertName={activeThread.expertName}
-        expertFirstName={activeThread.expertFirstName}
-        upcomingCalls={activeThread.upcomingCalls}
-        profileBookingHref={profileBookingHref}
-        deliveryEngagementId={deliveryEngagementId}
-        joinPartyLabel={joinPartyLabel}
-        proposalCta={actions.railProposal}
-        onCall={handleRailCall}
-        onBookAnother={handleRailCall}
-        onJoin={handleJoin}
-        onProposal={onRailProposal}
-        onBuildProposal={onRailBuildProposal}
-        onViewProposal={handleRailView}
-      />
-
-      <MobileOverflowSheet
-        open={overflowOpen}
-        onOpenChange={setOverflowOpen}
-        thread={activeThread}
-        showProposalPill={showProposalPill}
-        profileHref={profileHref}
-        declineSlot={actions.declineSlot}
-        onDecline={actions.declineSlot === null ? null : handleDecline}
-      />
-
-      {/* BAL-540 — the client's per-track decline confirm. `partyLabel` collapses to
+        {/* BAL-540 — the client's per-track decline confirm. `partyLabel` collapses to
           `expertName` (see `close-copy.ts`'s docblock: agency data is not yet plumbed onto the
           conversation view-model). */}
-      {actions.declineSlot !== null && (
-        <DeclineTrackDialog
-          open={declineDialogOpen}
-          onOpenChange={setDeclineDialogOpen}
-          requestId={requestId}
-          relationshipId={activeThread.relationshipId}
-          expertName={activeThread.expertName}
-          partyLabel={activeThread.expertName}
-          companyName={clientCompanyName}
-          stage={actions.declineSlot}
-          variant="client"
+        {actions.declineSlot !== null && (
+          <DeclineTrackDialog
+            open={declineDialogOpen}
+            onOpenChange={setDeclineDialogOpen}
+            requestId={requestId}
+            relationshipId={activeThread.relationshipId}
+            expertName={activeThread.expertName}
+            partyLabel={activeThread.expertName}
+            companyName={clientCompanyName}
+            stage={actions.declineSlot}
+            variant="client"
+          />
+        )}
+
+        {/* A5 confirm beat — committing action gets friction proportional to consequence. */}
+        <ProposalRequestDialog
+          open={proposalDialogOpen}
+          onOpenChange={setProposalDialogOpen}
+          expertFirstName={activeThread.expertFirstName}
+          onConfirm={handleProposalConfirm}
+          onConfirmed={handleProposalConfirmed}
         />
-      )}
 
-      {/* A5 confirm beat — committing action gets friction proportional to consequence. */}
-      <ProposalRequestDialog
-        open={proposalDialogOpen}
-        onOpenChange={setProposalDialogOpen}
-        expertFirstName={activeThread.expertFirstName}
-        onConfirm={handleProposalConfirm}
-        onConfirmed={handleProposalConfirmed}
-      />
-
-      {/* BAL-283 — the CLIENT lens's live-availability booking dialog. Mounted for the ACTIVE
+        {/* BAL-283 — the CLIENT lens's live-availability booking dialog. Mounted for the ACTIVE
           thread only; a tab switch while open would otherwise book against the wrong
           relationship. */}
-      {lens === 'client' && (
-        <IntroCallBookingDialog
-          open={introCallDialogOpen}
-          onOpenChange={setIntroCallDialogOpen}
-          requestId={requestId}
-          relationshipId={activeThread.relationshipId}
-          expertProfileId={activeThread.expertProfileId}
-          expertName={activeThread.expertName}
-          expertFirstName={activeThread.expertFirstName}
-          expertInitials={activeThread.expertInitials}
-          requestTitle={requestTitle}
-          clientCompanyName={clientCompanyName}
-          viewerEmailDomain={viewerEmailDomain}
-          viewerTimezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          surface={introCallSurface}
-          callKind={activeThread.stage === 'won' ? 'call' : 'intro'}
-          requestStatus={requestStatus}
-          onBooked={handleIntroCallBooked}
-          onMessage={handleIntroCallMessage}
-        />
+        {lens === 'client' && (
+          <IntroCallBookingDialog
+            open={introCallDialogOpen}
+            onOpenChange={setIntroCallDialogOpen}
+            requestId={requestId}
+            relationshipId={activeThread.relationshipId}
+            expertProfileId={activeThread.expertProfileId}
+            expertName={activeThread.expertName}
+            expertFirstName={activeThread.expertFirstName}
+            expertInitials={activeThread.expertInitials}
+            requestTitle={requestTitle}
+            clientCompanyName={clientCompanyName}
+            viewerEmailDomain={viewerEmailDomain}
+            viewerTimezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+            surface={introCallSurface}
+            callKind={activeThread.stage === 'won' ? 'call' : 'intro'}
+            requestStatus={requestStatus}
+            onBooked={handleIntroCallBooked}
+            onMessage={handleIntroCallMessage}
+          />
+        )}
+
+        {shareDialog !== null && (
+          <ShareFileSheet
+            open
+            mode={{
+              kind: 'thread',
+              threadRelationshipId: shareDialog.relationshipId,
+              options: shareDialog.options,
+            }}
+            recipients={shareDialog.recipients}
+            upload={fileShare.upload}
+            pending={fileShare.pending}
+            confirming={fileShare.confirming}
+            error={fileShare.error}
+            initialNote={shareDialog.initialNote}
+            onRetryUpload={fileShare.retryUpload}
+            onSubmit={fileShare.submit}
+            onCancel={handleCancelFileShare}
+          />
+        )}
+      </RequestCard>
+      {dragging && canShareFile && (
+        <output className="border-primary bg-primary/5 text-primary pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed text-sm font-semibold">
+          Drop to share a file
+        </output>
       )}
-    </RequestCard>
+    </div>
   );
 }

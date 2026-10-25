@@ -9,6 +9,7 @@ import {
   REQUEST_FILE_CONCEALED_KEYS,
   type RequestFileSerializerFile,
   type RequestFileSerializerTrack,
+  type RequestThreadFileCard,
 } from './request-file-audience-view';
 
 /**
@@ -196,6 +197,50 @@ describe('toClientRequestFileView', () => {
     });
   });
 
+  it('visibleToLiveTrackIds is the live subset of the audience for an all-tracks file', () => {
+    const view = toClientRequestFileView(
+      { ...overWideClientFile(), createdAt: new Date('2026-07-01T00:00:00Z') },
+      new Set<string>(),
+      [LIVE_TRACK, CLOSED_TRACK],
+      'Sarah Chen @ Acme Corp'
+    );
+    // The closed track kept access (shared before it closed) but is not LIVE, so no chip.
+    expect(view.visibleToLiveTrackIds).toEqual(['rel_priya']);
+  });
+
+  it('visibleToLiveTrackIds is the granted live tracks for a grants file', () => {
+    const second: RequestFileSerializerTrack = {
+      ...LIVE_TRACK,
+      relationshipId: 'rel_sam',
+      expertProfileId: 'ep_sam',
+      trackName: 'Sam Lee',
+    };
+    const file = { ...overWideClientFile(), audience: 'grants' as const };
+    const view = toClientRequestFileView(
+      file,
+      new Set(['rel_sam', 'rel_wei']),
+      [LIVE_TRACK, second, CLOSED_TRACK],
+      'Sarah Chen @ Acme Corp'
+    );
+    expect(view.visibleToLiveTrackIds).toEqual(['rel_sam']);
+  });
+
+  it('visibleToLiveTrackIds is the uploading track alone for an expert-side file', () => {
+    const expertFile: RequestFileSerializerFile = {
+      ...overWideClientFile(),
+      side: 'expert',
+      audience: 'own_track',
+      expertRelationshipId: 'rel_priya',
+    };
+    const view = toClientRequestFileView(
+      expertFile,
+      new Set<string>(),
+      [LIVE_TRACK, CLOSED_TRACK],
+      'Priya Sharma'
+    );
+    expect(view.visibleToLiveTrackIds).toEqual(['rel_priya']);
+  });
+
   it('canDelete is true for a client file and false for an expert-uploaded file', () => {
     const clientView = toClientRequestFileView(
       overWideClientFile(),
@@ -275,5 +320,19 @@ describe('three-lens table — one input row, three audience-shaped outputs', ()
     expect(adminView).toHaveProperty('visibleTo');
     expect(expertView).not.toHaveProperty('audience');
     expect(expertView).not.toHaveProperty('visibleTo');
+  });
+});
+
+describe('RequestThreadFileCard — the expert arm', () => {
+  it('is exactly { kind, file }, with file keys equal to the expert view keys', () => {
+    const file = toExpertRequestFileView(overWideClientFile(), 'Acme Corp', {
+      relationshipId: 'rel_priya',
+      joinedAt: new Date('2026-01-01T00:00:00Z'),
+      access: { kind: 'live' },
+    });
+    const card: RequestThreadFileCard = { kind: 'expert', file };
+    expect(Object.keys(card).sort()).toStrictEqual(['file', 'kind']);
+    expect(Object.keys(card.file).sort()).toStrictEqual([...REQUEST_FILE_EXPERT_VIEW_KEYS].sort());
+    expect(JSON.stringify(card)).not.toContain('visibleToLiveTrackIds');
   });
 });

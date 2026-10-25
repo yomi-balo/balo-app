@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   conversationSubjectForMeetingContext,
   engagementConversationIsWritable,
+  isThreadOpenStatus,
   resolveGuestConversationScope,
+  THREAD_OPEN_RELATIONSHIP_STATUSES,
   type ConversationSubject,
   type EngagementStatusLabel,
 } from './index';
@@ -170,5 +172,33 @@ describe('engagementConversationIsWritable', () => {
     ['cancelled', false],
   ])('%s → %s', (status, expected) => {
     expect(engagementConversationIsWritable(status)).toBe(expected);
+  });
+});
+
+describe('isThreadOpenStatus', () => {
+  // Every `request_expert_relationship_status` label. `invited` has no thread yet and
+  // `declined` is over — neither may receive a message or a share card.
+  it.each<[string, boolean]>([
+    ['invited', false],
+    ['eoi_submitted', true],
+    ['proposal_requested', true],
+    ['proposal_submitted', true],
+    ['accepted', true],
+    ['declined', false],
+  ])('%s → %s', (status, expected) => {
+    expect(isThreadOpenStatus(status)).toBe(expected);
+  });
+
+  it('an unknown label is not open', () => {
+    expect(isThreadOpenStatus('not_a_status')).toBe(false);
+  });
+
+  it('the open set is exactly the four post-interest, pre-close statuses', () => {
+    expect([...THREAD_OPEN_RELATIONSHIP_STATUSES]).toEqual([
+      'eoi_submitted',
+      'proposal_requested',
+      'proposal_submitted',
+      'accepted',
+    ]);
   });
 });

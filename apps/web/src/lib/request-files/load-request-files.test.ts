@@ -399,6 +399,8 @@ describe('loadRequestFiles', () => {
     expect(view.liveTracks).toEqual([{ relationshipId: REL_ID, trackName: 'Wei' }]);
     // ⚠ THE SAME LABEL THE CONFIRM ACTION EMITS — the file must not change format on reload.
     expect(view.files[0]?.uploadedByName).toBe('Sarah Chen @ Acme Corp');
+    // The closed track kept access (shared after it opened, before it closed) but is not LIVE.
+    expect(view.files[0]?.visibleToLiveTrackIds).toEqual([REL_ID]);
     // The closed track still appears as an ANNOTATION, with the right reason.
     const audience = view.files[0]?.audience;
     expect(audience?.type === 'all_live_tracks' && audience.annotations).toEqual([
@@ -803,5 +805,121 @@ describe('loadRequestFiles', () => {
     expect(audience?.type === 'grants' && audience.grants).toEqual([
       { relationshipId: REL_ID, trackName: 'Wei' },
     ]);
+  });
+});
+
+// ── BAL-617: visibleToLiveTrackIds + requestKind ─────────────────────────────────────
+
+const LIVE_STANDING = {
+  status: 'proposal_submitted',
+  declinedAt: null,
+  notSelectedAt: null,
+  openedAt: OPENED_AT,
+};
+
+function clientScope(sendTo: 'match' | 'direct'): unknown {
+  const closedAt = new Date('2026-08-20T00:00:00.000Z');
+  return {
+    ok: true,
+    side: 'client',
+    companyId: 'c1',
+    request: {
+      ...(requestRow([
+        narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei'),
+        narrowRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID, 'Priya'),
+      ]) as object),
+      sendTo,
+    },
+    tracks: [
+      {
+        relationshipId: REL_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        access: { kind: 'live' },
+        standing: LIVE_STANDING,
+      },
+      {
+        relationshipId: OTHER_REL_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        access: { kind: 'live' },
+        standing: { ...LIVE_STANDING, notSelectedAt: closedAt },
+      },
+    ],
+  };
+}
+
+describe('loadRequestFiles — visibleToLiveTrackIds (AC12)', () => {
+  beforeEach(() => {
+    mockListByRequest.mockResolvedValue([
+      fullRel(REL_ID, EXPERT_PROFILE_ID),
+      fullRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID),
+    ]);
+  });
+
+  it('an all-live-tracks file is visible to every live track', async () => {
+    mockAuthorizeScope.mockResolvedValue(clientScope('match'));
+    mockListForRequest.mockResolvedValue([{ file: fileRow(), grants: [] }]);
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.files[0]?.visibleToLiveTrackIds.sort()).toEqual([REL_ID, OTHER_REL_ID].sort());
+  });
+
+  it('a grants file is visible only to the granted live tracks', async () => {
+    mockAuthorizeScope.mockResolvedValue(clientScope('match'));
+    mockListForRequest.mockResolvedValue([
+      { file: fileRow({ audience: 'grants' }), grants: [{ relationshipId: OTHER_REL_ID }] },
+    ]);
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.files[0]?.visibleToLiveTrackIds).toEqual([OTHER_REL_ID]);
+  });
+
+  it('an expert-side file is visible only to its own track', async () => {
+    mockAuthorizeScope.mockResolvedValue(clientScope('match'));
+    mockListForRequest.mockResolvedValue([
+      {
+        file: fileRow({ side: 'expert', audience: 'own_track', expertRelationshipId: REL_ID }),
+        grants: [],
+      },
+    ]);
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.files[0]?.visibleToLiveTrackIds).toEqual([REL_ID]);
+  });
+});
+
+describe('loadRequestFiles — requestKind', () => {
+  beforeEach(() => {
+    mockListByRequest.mockResolvedValue([fullRel(REL_ID, EXPERT_PROFILE_ID)]);
+    mockListForRequest.mockResolvedValue([]);
+  });
+
+  it.each([
+    ['match', 'matched'],
+    ['direct', 'direct'],
+  ] as const)('client arm: send_to %s is %s', async (sendTo, expected) => {
+    mockAuthorizeScope.mockResolvedValue(clientScope(sendTo));
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.requestKind).toBe(expected);
+  });
+
+  it('expert arm: carries the request kind', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      request: {
+        ...(requestRow([narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei')]) as object),
+        sendTo: 'direct',
+      },
+      viewer: {
+        relationshipId: REL_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        access: { kind: 'live' },
+        standing: LIVE_STANDING,
+      },
+    });
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+    if (view?.lens !== 'expert') throw new Error('expected the expert lens');
+    expect(view.requestKind).toBe('direct');
   });
 });

@@ -347,12 +347,25 @@ export {
   WORKSPACE_EVENTS,
   type WorkspaceEventMap,
 } from './workspace';
-// BAL-431 / ADR-1048 — request-stage shared-file events. ALL THREE ARE SERVER-ONLY:
-// `uploader_side`/`viewer_side`/`via_all_audience` are gate-resolved facts (the
-// `meeting_files.party` discipline), so none may be emitted client-side.
+// BAL-431 / ADR-1048 — request-stage shared-file events. THE THREE `_SERVER_` EVENTS ARE
+// SERVER-ONLY: `uploader_side`/`viewer_side`/`via_all_audience` are gate-resolved facts (the
+// `meeting_files.party` discipline), so none may be emitted client-side. BAL-617 adds the
+// CLIENT namespace `REQUEST_FILE_EVENTS` (share dialog + in-app preview).
 export {
   REQUEST_FILE_SERVER_EVENTS,
   type RequestFileServerEventMap,
+  REQUEST_FILE_EVENTS,
+  type RequestFileEventMap,
+  REQUEST_FILE_SHARE_ENTRY_POINTS,
+  type RequestFileShareEntryPointProp,
+  REQUEST_FILE_SHARE_AUDIENCE_CHOICES,
+  type RequestFileShareAudienceChoiceProp,
+  REQUEST_FILE_PREVIEW_KINDS,
+  type RequestFilePreviewKindProp,
+  REQUEST_FILE_PREVIEW_SURFACES,
+  type RequestFilePreviewSurfaceProp,
+  REQUEST_FILE_DOWNLOAD_PURPOSES,
+  type RequestFileDownloadPurposeProp,
   REQUEST_FILE_AUDIENCE_TYPES,
   type RequestFileAudienceProp,
   REQUEST_FILE_SIDES,

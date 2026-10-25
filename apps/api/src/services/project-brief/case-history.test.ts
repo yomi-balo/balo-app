@@ -108,6 +108,25 @@ describe('buildCaseHistoryInput', () => {
     expect(getMemberRole).not.toHaveBeenCalledWith('company', COMPANY_ID, EXPERT_USER);
   });
 
+  /**
+   * ⚠ Request-share card messages carry no text and are request-surface only; the AI brief input must NOT opt in, so the repository's fail-closed default keeps
+   * them out as noise. Its read takes exactly (conversationId, scope) — no third argument.
+   */
+  it('reads the thread without opting in to request-share cards', async () => {
+    findByContext.mockResolvedValue({ id: 'conv-1' });
+    listMessages.mockResolvedValue([]);
+    listMeetingsForContext.mockResolvedValue([]);
+
+    await buildCaseHistoryInput({
+      engagementId: ENGAGEMENT_ID,
+      companyId: COMPANY_ID,
+      expertUserIds: [EXPERT_USER],
+    });
+
+    expect(listMessages).toHaveBeenCalledWith('conv-1', { kind: 'full' });
+    expect(listMessages.mock.calls[0]).toHaveLength(2);
+  });
+
   it('⚠ a sanitised-HTML message body is decoded to plain text', async () => {
     findByContext.mockResolvedValue({ id: 'conv-1' });
     listMessages.mockResolvedValue([

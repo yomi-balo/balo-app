@@ -23,6 +23,7 @@ const EXPECTED_FILES = [
   'redeeming-a-promo-code.md',
   'requesting-a-project.md',
   'reviewing-a-finished-project.md',
+  'sharing-files-with-invited-experts.md',
   'turning-a-case-into-a-project.md',
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',

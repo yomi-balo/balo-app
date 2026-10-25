@@ -13,6 +13,11 @@ import { personWithOrgLabel } from '@balo/shared/parties';
  * names cross, addresses never. ⚠ NO MONEY — a file share moves none.
  */
 
+/** The sender's note as a quoted line after the share sentence; empty when there is none. */
+function noteSuffix(noteExcerpt: string | undefined): string {
+  return noteExcerpt ? ` Their note: “${noteExcerpt}”` : '';
+}
+
 // ── request_file.shared_with_expert ────────────────────────────────────────────────────────
 
 export interface RequestFileSharedExpertEmailProps {
@@ -21,6 +26,8 @@ export interface RequestFileSharedExpertEmailProps {
   /** Retrospective — a PERSON name, "@ company" on first mention (CLAUDE.md). */
   readonly sharedByPersonLabel: string;
   readonly fileName: string;
+  /** Plain-text note preview; rendered as a quoted line when present. */
+  readonly noteExcerpt?: string;
   readonly requestTitle: string;
   readonly requestId: string;
   readonly baseUrl: string;
@@ -44,6 +51,7 @@ export function RequestFileSharedExpertEmail({
   clientCompanyName,
   sharedByPersonLabel,
   fileName,
+  noteExcerpt,
   requestTitle,
   requestId,
   baseUrl,
@@ -58,7 +66,7 @@ export function RequestFileSharedExpertEmail({
       pillLabel="📄 New file"
       heroHeading="A new file was shared with you"
       heroSubtext={`${attribution} shared a file on this request.`}
-      bodyText={`${attribution} shared "${fileName}" on "${requestTitle}".`}
+      bodyText={`${attribution} shared "${fileName}" on "${requestTitle}".${noteSuffix(noteExcerpt)}`}
       summaryLabel="Project request"
       projectTitle={requestTitle}
       calloutText="Open the request to review the file."
@@ -77,6 +85,8 @@ export interface RequestFileSharedClientEmailProps {
   /** Retrospective — the person, "@ agency" on first mention. */
   readonly expertPersonLabel: string;
   readonly fileName: string;
+  /** Plain-text note preview; rendered as a quoted line when present. */
+  readonly noteExcerpt?: string;
   readonly requestTitle: string;
   readonly requestId: string;
   readonly baseUrl: string;
@@ -92,6 +102,7 @@ export function RequestFileSharedClientEmail({
   expertPartyLabel,
   expertPersonLabel,
   fileName,
+  noteExcerpt,
   requestTitle,
   requestId,
   baseUrl,
@@ -106,7 +117,7 @@ export function RequestFileSharedClientEmail({
       pillLabel="📄 New file"
       heroHeading="A new file was shared"
       heroSubtext={`${attribution} shared a file on this request.`}
-      bodyText={`${attribution} shared "${fileName}" on "${requestTitle}".`}
+      bodyText={`${attribution} shared "${fileName}" on "${requestTitle}".${noteSuffix(noteExcerpt)}`}
       summaryLabel="Project request"
       projectTitle={requestTitle}
       calloutText="Open the request to review the file."

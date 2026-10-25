@@ -3,7 +3,7 @@ import 'server-only';
 import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
-import { attachmentDisposition } from '@/lib/storage/content-disposition';
+import { attachmentDisposition, inlineDisposition } from '@/lib/storage/content-disposition';
 import { deletePrefixedObjectFromR2 } from '@/lib/storage/delete-prefixed-object';
 import {
   CONVERSATION_ALLOWED_CONTENT_TYPES,
@@ -100,6 +100,36 @@ export async function createPresignedRequestFileDownload(
     Bucket: R2_BUCKET,
     Key: key,
     ResponseContentDisposition: attachmentDisposition(fileName),
+  });
+  return getSignedUrl(r2Client, command, { expiresIn: DOWNLOAD_TTL_SECONDS });
+}
+
+// ── Presigned GET, inline preview (server-only) ──
+/** The one stored type that may be previewed inline. */
+const PREVIEWABLE_PDF_CONTENT_TYPE = 'application/pdf';
+
+/**
+ * Short-lived URL that lets the browser RENDER a stored PDF in-app.
+ *
+ * ⚠ BOTH RESPONSE OVERRIDES ARE SIGNED, AND THE TYPE IS A LITERAL, NOT THE STORED VALUE. An
+ * inline disposition on a type the browser may sniff or render (`text/html`, `image/svg+xml`)
+ * would run attacker-supplied markup on the R2 origin, so the response type is forced to
+ * `application/pdf` and anything else throws. There is deliberately no inline fallback without
+ * the forced type: a caller that cannot preview a file gets the attachment URL instead.
+ */
+export async function createPresignedRequestFilePreview(
+  key: string,
+  fileName: string,
+  contentType: string
+): Promise<string> {
+  if (contentType !== PREVIEWABLE_PDF_CONTENT_TYPE) {
+    throw new Error(`Cannot preview content type: ${contentType}`);
+  }
+  const command = new GetObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    ResponseContentDisposition: inlineDisposition(fileName),
+    ResponseContentType: PREVIEWABLE_PDF_CONTENT_TYPE,
   });
   return getSignedUrl(r2Client, command, { expiresIn: DOWNLOAD_TTL_SECONDS });
 }
