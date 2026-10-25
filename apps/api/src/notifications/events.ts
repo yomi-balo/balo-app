@@ -14,6 +14,12 @@ import type {
   EngagementCancelledPayload,
   EngagementAcceptedPayload,
   EngagementChangesRequestedPayload,
+  ChangeOrderRequestedPayload,
+  ChangeOrderSentPayload,
+  ChangeOrderApprovedPayload,
+  ChangeOrderDeclinedPayload,
+  ChangeOrderAnsweredPayload,
+  ChangeOrderWithdrawnPayload,
   EngagementAutoAcceptedPayload,
   EngagementReviewReminderPayload,
   CompanyProvisionedPayload,
@@ -491,6 +497,12 @@ export type NotificationEvent =
   | 'engagement.cancelled'
   | 'engagement.accepted'
   | 'engagement.changes_requested'
+  | 'change_order.requested'
+  | 'change_order.sent'
+  | 'change_order.approved'
+  | 'change_order.declined'
+  | 'change_order.answered'
+  | 'change_order.withdrawn'
   | 'engagement.auto_accepted'
   | 'engagement.review_reminder'
   // BAL-390 — a case was closed (fused close + rating ask). LIVE as of BAL-388: the recap's
@@ -866,6 +878,12 @@ export interface EventPayloadMap {
   'engagement.cancelled': EngagementCancelledPayload;
   'engagement.accepted': EngagementAcceptedPayload;
   'engagement.changes_requested': EngagementChangesRequestedPayload;
+  'change_order.requested': ChangeOrderRequestedPayload;
+  'change_order.sent': ChangeOrderSentPayload;
+  'change_order.approved': ChangeOrderApprovedPayload;
+  'change_order.declined': ChangeOrderDeclinedPayload;
+  'change_order.answered': ChangeOrderAnsweredPayload;
+  'change_order.withdrawn': ChangeOrderWithdrawnPayload;
   'engagement.auto_accepted': EngagementAutoAcceptedPayload;
   'engagement.review_reminder': EngagementReviewReminderPayload;
   'engagement.case_closed': EngagementCaseClosedPayload;

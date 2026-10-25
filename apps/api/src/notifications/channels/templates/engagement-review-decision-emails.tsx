@@ -1,14 +1,6 @@
-import { Button, Heading, Section, Text } from '@react-email/components';
-import type { CSSProperties, ReactNode } from 'react';
-import {
-  colors,
-  shared,
-  EmailShell,
-  LogoRow,
-  StatusPill,
-  Callout,
-  SupportFooter,
-} from './shared.js';
+import { Text } from '@react-email/components';
+import { colors, shared, Callout, SupportFooter } from './shared.js';
+import { NoticeShell, ViewProjectCta, successPill, amberPill } from './notice-shell.js';
 import { milestonePhrases } from './review-email-shared.js';
 import { joinTitles } from '@balo/shared/engagements';
 
@@ -30,75 +22,6 @@ import { joinTitles } from '@balo/shared/engagements';
  * subject format is kept STABLE across the client-accept and auto-accept paths (it is
  * the money trigger).
  */
-
-const successPill: CSSProperties = {
-  ...shared.statusPillBase,
-  background: 'rgba(5, 150, 105, 0.16)',
-  border: '1px solid rgba(5, 150, 105, 0.32)',
-  color: '#6EE7B7',
-};
-
-const amberPill: CSSProperties = {
-  ...shared.statusPillBase,
-  background: 'rgba(217, 119, 6, 0.16)',
-  border: '1px solid rgba(217, 119, 6, 0.32)',
-  color: '#FCD34D',
-};
-
-interface NoticeShellProps {
-  readonly previewText: string;
-  readonly pillLabel: string;
-  readonly pillStyle: CSSProperties;
-  readonly heading: string;
-  readonly subtext?: string;
-  readonly firstName: string;
-  readonly baseUrl: string;
-  readonly children: ReactNode;
-}
-
-/** Shared shell for the D7 decision emails: hero (logo/pill/heading) + card (greeting + body). */
-function NoticeShell({
-  previewText,
-  pillLabel,
-  pillStyle,
-  heading,
-  subtext,
-  firstName,
-  baseUrl,
-  children,
-}: NoticeShellProps) {
-  return (
-    <EmailShell previewText={previewText} baseUrl={baseUrl}>
-      <Section style={shared.smallHero}>
-        <LogoRow size="small" />
-        <StatusPill label={pillLabel} style={pillStyle} />
-        <Heading style={shared.smallHeroHeading}>{heading}</Heading>
-        {subtext ? <Text style={shared.smallHeroSubtext}>{subtext}</Text> : null}
-      </Section>
-      <Section style={shared.card}>
-        <Text style={shared.greeting}>Hi {firstName},</Text>
-        {children}
-      </Section>
-    </EmailShell>
-  );
-}
-
-/** A "View the project →" CTA linking to the delivery workspace. */
-function ViewProjectCta({
-  engagementUrl,
-  label = 'View the project →',
-}: Readonly<{
-  engagementUrl: string;
-  label?: string;
-}>) {
-  return (
-    <Section style={{ ...shared.ctaWrapper, margin: '24px 0 4px' }}>
-      <Button style={shared.smallCtaButton} href={engagementUrl}>
-        {label}
-      </Button>
-    </Section>
-  );
-}
 
 // ── engagement.accepted → EXPERT (congratulations) ───────────────
 export interface EngagementAcceptedExpertEmailProps {

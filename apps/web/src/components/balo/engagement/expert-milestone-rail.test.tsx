@@ -33,7 +33,7 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/reorder-milestones', () => 
   reorderMilestonesAction: vi.fn(),
 }));
 
-import { ExpertMilestoneRail } from './expert-milestone-rail';
+import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-rail';
 import { toast } from 'sonner';
 import { startMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/start-milestone';
 import { completeMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/complete-milestone';
@@ -73,13 +73,16 @@ function node(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView {
     completedLabel: null,
     completionNote: null,
     feedback: null,
+    changePending: false,
+    changeProvenance: null,
     ...overrides,
   };
 }
 
 function renderRail(
   milestones: MilestoneNodeView[],
-  emptyState: EmptyStateView | null = EMPTY_STATE
+  emptyState: EmptyStateView | null = EMPTY_STATE,
+  proposeChange?: ProposeChangeLink
 ) {
   return render(
     <ExpertMilestoneRail
@@ -88,6 +91,7 @@ function renderRail(
       emptyState={emptyState}
       expertPersonShort="Priya"
       clientCompanyName="Northwind Industrial"
+      proposeChange={proposeChange}
     />
   );
 }
@@ -392,5 +396,62 @@ describe('ExpertMilestoneRail — D3 scope edits', () => {
       node({ id: 'b', title: 'Second' }),
     ]);
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('ExpertMilestoneRail — change orders', () => {
+  const LINK: ProposeChangeLink = {
+    href: '/engagements/eng-1/change-order',
+    label: 'Propose a change',
+    disabledReason: null,
+  };
+
+  it('offers no "Propose a change" entry unless the view allows it', () => {
+    renderRail([node({ id: 'a' })]);
+    expect(screen.queryByRole('link', { name: /propose a change/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/changes to price go through a new proposal/i)).toBeInTheDocument();
+  });
+
+  it('links the header entry to the composer and points the footnote at it', () => {
+    renderRail([node({ id: 'a' })], EMPTY_STATE, LINK);
+    expect(screen.getByRole('link', { name: /propose a change/i })).toHaveAttribute(
+      'href',
+      '/engagements/eng-1/change-order'
+    );
+    expect(
+      screen.getByText(/changes to scope or price go to Northwind Industrial as a proposed change/i)
+    ).toBeInTheDocument();
+  });
+
+  it('relabels the entry when a draft is open', () => {
+    renderRail([node({ id: 'a' })], EMPTY_STATE, { ...LINK, label: 'Continue draft change' });
+    expect(screen.getByRole('link', { name: /continue draft change/i })).toBeInTheDocument();
+  });
+
+  it('disables the entry with the reason while a change waits on the client', () => {
+    renderRail([node({ id: 'a' })], EMPTY_STATE, {
+      ...LINK,
+      disabledReason: 'A change is already waiting on Northwind Industrial',
+    });
+    expect(screen.queryByRole('link', { name: /propose a change/i })).not.toBeInTheDocument();
+    const button = screen.getByRole('button', { name: /propose a change\./i });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName(/waiting on Northwind Industrial/);
+  });
+
+  it('locks a milestone a sent change touches: no edit or remove, a lock note, delivery stays', () => {
+    renderRail([
+      node({ id: 'a', title: 'First', changePending: true }),
+      node({ id: 'b', title: 'Second' }),
+    ]);
+    expect(screen.getByText('Change pending')).toBeInTheDocument();
+    expect(
+      screen.getByText('Locked while Northwind Industrial reviews a change to it')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit First' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove First' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move First down' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Second' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /start milestone/i })).toHaveLength(2);
   });
 });

@@ -1,12 +1,14 @@
 'use client';
 
 import { useCallback, useMemo, useOptimistic, useState, useTransition } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Check,
   ChevronDown,
   ChevronUp,
   Flag,
+  Lock,
   Pencil,
   Play,
   Plus,
@@ -39,6 +41,15 @@ import { removeMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actio
 import { reorderMilestonesAction } from '@/app/(dashboard)/engagements/[id]/_actions/reorder-milestones';
 import type { MilestoneActionResult } from '@/app/(dashboard)/engagements/[id]/_actions/milestone-action-shared';
 
+/** The rail header's "Propose a change" entry into the change-order composer. */
+export interface ProposeChangeLink {
+  href: string;
+  /** "Propose a change", or "Continue draft change" while a draft is open. */
+  label: string;
+  /** Why the link is unavailable (a change is already with the client); null when it works. */
+  disabledReason: string | null;
+}
+
 interface ExpertMilestoneRailProps {
   engagementId: string;
   /** Descriptions are ALREADY server-sanitised by the view-mapper. */
@@ -49,6 +60,8 @@ interface ExpertMilestoneRailProps {
   expertPersonShort: string;
   /** Modal copy + the notify footnote. */
   clientCompanyName: string;
+  /** The change-order composer entry; omitted when the viewer cannot propose changes. */
+  proposeChange?: ProposeChangeLink;
 }
 
 /** Optimistic patch instructions applied by the reducer. */
@@ -100,6 +113,32 @@ function textOrNull(text: string): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+function ProposeChangeButton({ link }: Readonly<{ link: ProposeChangeLink }>): React.JSX.Element {
+  if (link.disabledReason !== null) {
+    return (
+      <span title={link.disabledReason}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled
+          aria-label={`${link.label}. ${link.disabledReason}`}
+        >
+          <Pencil className="size-3.5" aria-hidden />
+          {link.label}
+        </Button>
+      </span>
+    );
+  }
+  return (
+    <Button size="sm" variant="ghost" asChild>
+      <Link href={link.href}>
+        <Pencil className="size-3.5" aria-hidden />
+        {link.label}
+      </Link>
+    </Button>
+  );
+}
+
 /**
  * The interactive delivery rail for the delivering expert while the engagement is
  * `active` (BAL-332 / D2 + BAL-333 / D3). Owns `useOptimistic` + `useTransition`,
@@ -119,6 +158,7 @@ export function ExpertMilestoneRail({
   emptyState,
   expertPersonShort,
   clientCompanyName,
+  proposeChange,
 }: Readonly<ExpertMilestoneRailProps>): React.JSX.Element {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -270,6 +310,8 @@ export function ExpertMilestoneRail({
         completedLabel: null,
         completionNote: null,
         feedback: null,
+        changePending: false,
+        changeProvenance: null,
       };
       startTransition(async () => {
         applyOptimistic({ kind: 'add', node: optimisticNode });
@@ -398,6 +440,20 @@ export function ExpertMilestoneRail({
   }, [formModal]);
 
   function actionsFor(node: MilestoneNodeView): React.ReactNode {
+    const progress = progressActionFor(node);
+    if (!node.changePending) return progress;
+    return (
+      <>
+        <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+          <Lock className="size-3" aria-hidden />
+          Locked while {clientCompanyName} reviews a change to it
+        </span>
+        {progress}
+      </>
+    );
+  }
+
+  function progressActionFor(node: MilestoneNodeView): React.ReactNode {
     if (node.status === 'pending') {
       return (
         <Button
@@ -466,26 +522,30 @@ export function ExpertMilestoneRail({
         >
           <ChevronDown className="size-3.5" aria-hidden />
         </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="text-muted-foreground size-7"
-          disabled={isPending}
-          onClick={() => setFormModal({ mode: 'edit', target: node })}
-          aria-label={`Edit ${node.title}`}
-        >
-          <Pencil className="size-3.5" aria-hidden />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="text-muted-foreground hover:text-destructive size-7"
-          disabled={isPending}
-          onClick={() => setRemoveTarget(node)}
-          aria-label={`Remove ${node.title}`}
-        >
-          <Trash2 className="size-3.5" aria-hidden />
-        </Button>
+        {!node.changePending && (
+          <>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-muted-foreground size-7"
+              disabled={isPending}
+              onClick={() => setFormModal({ mode: 'edit', target: node })}
+              aria-label={`Edit ${node.title}`}
+            >
+              <Pencil className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive size-7"
+              disabled={isPending}
+              onClick={() => setRemoveTarget(node)}
+              aria-label={`Remove ${node.title}`}
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </Button>
+          </>
+        )}
       </>
     );
   }
@@ -573,10 +633,13 @@ export function ExpertMilestoneRail({
             <Flag className="size-3.5" aria-hidden />
             Delivery plan
           </div>
-          <Button size="sm" variant="ghost" disabled={isPending} onClick={openAdd}>
-            <Plus className="size-3.5" aria-hidden />
-            Add milestone
-          </Button>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button size="sm" variant="ghost" disabled={isPending} onClick={openAdd}>
+              <Plus className="size-3.5" aria-hidden />
+              Add milestone
+            </Button>
+            {proposeChange !== undefined && <ProposeChangeButton link={proposeChange} />}
+          </div>
         </div>
         <div className="mt-4">
           {optimistic.map((node, index) => (
@@ -592,8 +655,10 @@ export function ExpertMilestoneRail({
         <p className="text-muted-foreground mt-4 text-xs leading-relaxed">
           {clientCompanyName} and Balo are notified when you complete a milestone or change the
           plan. The project goes to {clientCompanyName} for review as a whole when you mark it
-          complete. Pricing is fixed from the accepted proposal — changes to price go through a new
-          proposal.
+          complete.{' '}
+          {proposeChange === undefined
+            ? 'Pricing is fixed from the accepted proposal — changes to price go through a new proposal.'
+            : `Changes to scope or price go to ${clientCompanyName} as a proposed change, and nothing changes until they approve.`}
         </p>
       </Card>
 

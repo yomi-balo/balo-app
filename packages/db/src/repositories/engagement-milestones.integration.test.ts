@@ -7,6 +7,7 @@ import type { ProjectDeliveryStatus } from './_shared/engagement-supertype';
 import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
 import {
   caseEngagementFactory,
+  engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
   proposalFactory,
@@ -19,6 +20,7 @@ import {
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
 } from './engagement-milestones';
+import { MilestoneChangePendingError } from './_shared/change-order-guards';
 
 /**
  * Read delivery audit rows for one polymorphic entity from main's generic
@@ -635,5 +637,88 @@ describe('engagementMilestonesRepository — the CASE widening is BLOCKED (BAL-4
     expect(rows.map((r) => r.status).sort()).toEqual(['in_progress', 'pending']);
     expect(rows.every((r) => r.completedAt === null)).toBe(true);
     expect(rows.every((r) => r.startedByUserId === null)).toBe(true);
+  });
+});
+
+describe('engagementMilestonesRepository — milestones locked by a sent change order', () => {
+  /** A sent order with an edit line on `locked` and a remove line on `removing`. */
+  async function seedLocked(status: 'sent' | 'draft' = 'sent'): Promise<{
+    lockedId: string;
+    removingId: string;
+    freeId: string;
+    userId: string;
+  }> {
+    const { engagement } = await engagementFactory();
+    const { milestone: locked } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { sortOrder: 0, title: 'Locked' },
+    });
+    const { milestone: removing } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { sortOrder: 1, title: 'Removing', status: 'in_progress' },
+    });
+    const { milestone: free } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { sortOrder: 2, title: 'Free' },
+    });
+    await engagementChangeOrderFactory({
+      engagementId: engagement.id,
+      status,
+      lines: [
+        { op: 'edit', engagementMilestoneId: locked.id, title: 'Locked v2' },
+        { op: 'remove', engagementMilestoneId: removing.id, title: 'Removing' },
+        { op: 'edit', engagementMilestoneId: free.id, title: 'gone', deletedAt: new Date() },
+      ],
+    });
+    const user = await userFactory();
+    return { lockedId: locked.id, removingId: removing.id, freeId: free.id, userId: user.id };
+  }
+
+  it('refuses a plain edit or removal of a targeted milestone, and writes nothing', async () => {
+    const { lockedId, removingId, userId } = await seedLocked();
+
+    await expect(
+      engagementMilestonesRepository.editDescriptive({ milestoneId: lockedId, userId, title: 'x' })
+    ).rejects.toBeInstanceOf(MilestoneChangePendingError);
+    await expect(
+      engagementMilestonesRepository.softDelete({ milestoneId: removingId, userId })
+    ).rejects.toBeInstanceOf(MilestoneChangePendingError);
+
+    const [locked] = await db
+      .select()
+      .from(engagementMilestones)
+      .where(eq(engagementMilestones.id, lockedId));
+    expect(locked?.title).toBe('Locked');
+    expect(await auditEventsForEntity(lockedId)).toHaveLength(0);
+  });
+
+  it('still lets delivery move: start and complete a targeted milestone', async () => {
+    const { lockedId, removingId, userId } = await seedLocked();
+
+    const started = await engagementMilestonesRepository.start({ milestoneId: lockedId, userId });
+    const completed = await engagementMilestonesRepository.complete({
+      milestoneId: removingId,
+      userId,
+    });
+
+    expect(started.status).toBe('in_progress');
+    expect(completed.status).toBe('completed');
+  });
+
+  it('does not lock a milestone targeted only by a soft-deleted line or by a draft', async () => {
+    const sent = await seedLocked();
+    const edited = await engagementMilestonesRepository.editDescriptive({
+      milestoneId: sent.freeId,
+      userId: sent.userId,
+      title: 'Free v2',
+    });
+    expect(edited.title).toBe('Free v2');
+
+    const draft = await seedLocked('draft');
+    const removed = await engagementMilestonesRepository.softDelete({
+      milestoneId: draft.removingId,
+      userId: draft.userId,
+    });
+    expect(removed.deletedAt).toBeInstanceOf(Date);
   });
 });

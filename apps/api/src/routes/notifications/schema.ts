@@ -537,6 +537,77 @@ const engagementChangesRequestedPayload = z.object({
   taggedMilestoneTitles: z.array(z.string().min(1).max(200)).max(100).optional(),
 });
 
+// BAL-622 change orders. Every payload shares the base below; `correlationId` is
+// `${changeOrderId}:<event>` (z.string, not z.uuid, so the suffix validates). FEE CONCEALMENT:
+// the `sent` arm (read by the client) has client figures only and the `approved` arm (read by
+// the expert) has expert figures only. Mirrors packages/shared/src/notifications/index.ts.
+const changeOrderBase = {
+  correlationId: z.string().min(1).max(120),
+  engagementId: z.uuid(),
+  changeOrderId: z.uuid(),
+  projectTitle: z.string().min(1).max(200),
+};
+const changeOrderPricingMethod = z.enum(['fixed', 'tm']);
+const changeOrderLineCount = z.number().int().nonnegative();
+
+const changeOrderRequestedPayload = z.object({
+  ...changeOrderBase,
+  expertProfileId: z.uuid(),
+  actorClientLabel: z.string().min(1).max(200),
+  note: z.string().min(1).max(2000),
+  expertPartyLabel: z.string().min(1).max(200).optional(),
+});
+
+const changeOrderSentPayload = z.object({
+  ...changeOrderBase,
+  recipientId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  summary: z.string().min(1).max(2000),
+  pricingMethod: changeOrderPricingMethod,
+  linesAdded: changeOrderLineCount,
+  linesEdited: changeOrderLineCount,
+  linesRemoved: changeOrderLineCount,
+  clientPriceChangeLabel: z.string().min(1).max(200).optional(),
+  estimateChangeLabel: z.string().min(1).max(200).optional(),
+  requestedByUserId: z.uuid().optional(),
+});
+
+const changeOrderApprovedPayload = z.object({
+  ...changeOrderBase,
+  expertProfileId: z.uuid(),
+  actorClientLabel: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  pricingMethod: changeOrderPricingMethod,
+  approvedOn: z.string().min(1).max(60),
+  expertPriceChangeLabel: z.string().min(1).max(200).optional(),
+  estimateChangeLabel: z.string().min(1).max(200).optional(),
+  expertPartyLabel: z.string().min(1).max(200).optional(),
+});
+
+const changeOrderDeclinedPayload = z.object({
+  ...changeOrderBase,
+  expertProfileId: z.uuid(),
+  actorClientLabel: z.string().min(1).max(200),
+  reason: z.string().min(1).max(2000),
+  clientCompanyName: z.string().min(1).max(200).optional(),
+});
+
+const changeOrderAnsweredPayload = z.object({
+  ...changeOrderBase,
+  recipientId: z.uuid().optional(),
+  requestedByUserId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+  answer: z.string().min(1).max(2000),
+});
+
+const changeOrderWithdrawnPayload = z.object({
+  ...changeOrderBase,
+  recipientId: z.uuid().optional(),
+  requestedByUserId: z.uuid().optional(),
+  actorExpertLabel: z.string().min(1).max(200),
+});
+
 // BAL-345 domain auto-join. All four events carry the SAME shape: `userId` is the
 // subject (joiner/requester), `correlationId` the stable membership/request id.
 // One schema, reused for all four arms (DRY — the completeness guard still checks
@@ -1042,6 +1113,30 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.changes_requested'),
     payload: engagementChangesRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.requested'),
+    payload: changeOrderRequestedPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.sent'),
+    payload: changeOrderSentPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.approved'),
+    payload: changeOrderApprovedPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.declined'),
+    payload: changeOrderDeclinedPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.answered'),
+    payload: changeOrderAnsweredPayload,
+  }),
+  z.object({
+    event: z.literal('change_order.withdrawn'),
+    payload: changeOrderWithdrawnPayload,
   }),
   z.object({
     event: z.literal('engagement.case_closed'),

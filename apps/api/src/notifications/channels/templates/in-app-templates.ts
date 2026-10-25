@@ -283,6 +283,47 @@ function milestoneProgress(data: Record<string, unknown>): string {
   return typeof done === 'number' && typeof total === 'number' ? `${done}/${total}` : '';
 }
 
+/** BAL-622 — "{n} added · {n} edited · {n} removed" from the payload line counts; zero counts are dropped. */
+function changeOrderLineCounts(data: Record<string, unknown>): string {
+  const parts = (
+    [
+      ['added', data.linesAdded],
+      ['edited', data.linesEdited],
+      ['removed', data.linesRemoved],
+    ] as const
+  )
+    .filter(([, count]) => typeof count === 'number' && count > 0)
+    .map(([label, count]) => `${count} ${label}`);
+  return parts.length > 0 ? parts.join(' · ') : 'No milestone changes';
+}
+
+/** BAL-622 — verbatim user text as a curly-quoted lead-in for a following sentence; "" when blank. */
+function quotedLeadIn(text: unknown): string {
+  return typeof text === 'string' && text.trim().length > 0 ? `“${text.trim()}” ` : '';
+}
+
+/**
+ * BAL-622 — what a T&M change order moved on the plan. The cap is a price figure, so a T&M
+ * payload carrying a price label means the cap moved; the estimate label always rides alongside.
+ */
+function changeOrderChangeClause(data: Record<string, unknown>, priceKey: string): string {
+  const price = data[priceKey];
+  const estimate = data.estimateChangeLabel;
+  return [price, estimate]
+    .filter((label): label is string => typeof label === 'string' && label.length > 0)
+    .map((label) => ` ${label}.`)
+    .join('');
+}
+
+/** BAL-622 — the pricing-aware "what was updated" phrase on an approved change. */
+function approvedUpdateClause(data: Record<string, unknown>): string {
+  if (data.pricingMethod !== 'tm') return 'The plan and price are updated.';
+  const capMoved = typeof data.expertPriceChangeLabel === 'string';
+  return capMoved
+    ? 'The plan, estimates and cap are updated.'
+    : 'The plan and estimates are updated.';
+}
+
 /** Admin changes-requested suffix: the round ordinal when present, else the legacy review cycle. */
 function changeRoundLabel(round: number | undefined, cycle: number | undefined): string {
   if (round) return ` (round ${round} of changes)`;
@@ -985,6 +1026,102 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return engagementNotice(
       'Changes requested',
       `${actor} requested changes on '${title}'${cycleLabel}.`,
+      data
+    );
+  },
+
+  // BAL-622 change order requested — EXPERT (act). The client's note verbatim.
+  'change-order-requested-expert': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    return engagementNotice(
+      `${actor} asked for a change to ${title}`,
+      `${quotedLeadIn(data.note)}Propose a change if it affects scope or price, or answer it from the project page.`,
+      data
+    );
+  },
+
+  // BAL-622 change order requested — ADMIN ops signal (prospective party, no amounts).
+  'change-order-requested-admin': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'A project';
+    const expertParty = (data.expertPartyLabel as string) ?? 'the expert';
+    return engagementNotice(
+      'Change requested',
+      `${title}: ${actor} asked ${expertParty} for a change.`,
+      data
+    );
+  },
+
+  // BAL-622 change order sent — CLIENT (review it). Client figures only; nothing is
+  // applied until the client approves.
+  'change-order-sent-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const title = (data.projectTitle as string) ?? 'your project';
+    const client = (data.clientCompanyName as string) ?? 'the client';
+    const changeClause = changeOrderChangeClause(data, 'clientPriceChangeLabel');
+    return engagementNotice(
+      `${actor} proposed a change to ${title}`,
+      `${changeOrderLineCounts(data)}.${changeClause} Nothing changes unless ${client} approves it.`,
+      data
+    );
+  },
+
+  // BAL-622 change order sent — ADMIN ops signal. Names the waiting party; no amounts.
+  'change-order-sent-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const client = (data.clientCompanyName as string) ?? 'the client';
+    return engagementNotice('Change sent', `${title}: waiting on ${client}.`, data);
+  },
+
+  // BAL-622 change order approved — EXPERT (warm milestone). Expert figures only.
+  'change-order-approved-expert': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    const on = (data.approvedOn as string) ?? 'today';
+    const changeClause = changeOrderChangeClause(data, 'expertPriceChangeLabel');
+    return engagementNotice(
+      `${actor} approved your change to ${title}`,
+      `Approved on ${on}. ${approvedUpdateClause(data)}${changeClause}`,
+      data
+    );
+  },
+
+  // BAL-622 change order declined — EXPERT. The reason verbatim.
+  'change-order-declined-expert': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    return engagementNotice(
+      `${actor} declined the change to ${title}`,
+      `${quotedLeadIn(data.reason)}You can propose a different change from the project page.`,
+      data
+    );
+  },
+
+  // BAL-622 change order declined — ADMIN ops signal.
+  'change-order-declined-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const client = (data.clientCompanyName as string) ?? 'The client';
+    return engagementNotice('Change declined', `${title}: ${client} declined the change.`, data);
+  },
+
+  // BAL-622 change order answered — CLIENT. The expert's answer verbatim.
+  'change-order-answered-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    return engagementNotice(
+      `${actor} answered your change request`,
+      `${quotedLeadIn(data.answer)}Nothing on the project changed.`,
+      data
+    );
+  },
+
+  // BAL-622 change order withdrawn — CLIENT.
+  'change-order-withdrawn-client': (data) => {
+    const actor = (data.actorExpertLabel as string) ?? 'Your expert';
+    const title = (data.projectTitle as string) ?? 'your project';
+    return engagementNotice(
+      'Change withdrawn',
+      `${actor} withdrew the proposed change to ${title}. Nothing changed.`,
       data
     );
   },

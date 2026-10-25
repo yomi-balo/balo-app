@@ -12,10 +12,18 @@ import { CancelledBanner } from './cancelled-banner';
 import { AdminOversightStrip } from './admin-oversight-strip';
 import { EngagementProgress } from './engagement-progress';
 import { MilestoneRail } from './milestone-rail';
-import { ExpertMilestoneRail } from './expert-milestone-rail';
+import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-rail';
 import { MilestoneEmptyState } from './milestone-empty-state';
 import { ExpertCompletionCard } from './expert-completion-card';
 import { ActionItemsPanel } from './action-items-panel';
+import type { ChangeOrderPanelView } from '@/lib/engagement/change-order-view';
+import {
+  ChangeOrderAdminPanel,
+  type ChangeOrderAdminMoneyView,
+} from './change-orders/change-order-admin-panel';
+import { ChangeOrderHistory } from './change-orders/change-order-history';
+import { ChangeOrderPanel } from './change-orders/change-order-panel';
+import { RequestChangeCard } from './change-orders/request-change-card';
 
 interface EngagementWorkspaceProps {
   view: EngagementWorkspaceView;
@@ -30,6 +38,16 @@ interface EngagementWorkspaceProps {
    * ever non-null; this component does no lens or status check of its own.
    */
   rating?: EndOfCallRatingView | null;
+  /**
+   * BAL-622 — the change-order panel view for this viewer; omitted → no change-order surface
+   * (no panel, no "Request a change", no history, no "Propose a change" on the rail).
+   */
+  changeOrders?: ChangeOrderPanelView;
+  /**
+   * BAL-622 — the Balo-staff money panel; non-null only for a viewer holding the platform
+   * capability (the page resolves it). Null / omitted → not rendered.
+   */
+  adminMoney?: ChangeOrderAdminMoneyView | null;
 }
 
 /**
@@ -50,6 +68,8 @@ export function EngagementWorkspace({
   initialAction = null,
   actionItems,
   rating = null,
+  changeOrders,
+  adminMoney = null,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // Render the action-items panel only when it has something to show — live items OR a
   // writable (active) engagement inviting the first add. A read-only, empty panel is
@@ -75,6 +95,7 @@ export function EngagementWorkspace({
           emptyState={view.emptyState}
           expertPersonShort={view.parties.expertPersonShort}
           clientCompanyName={view.parties.clientCompanyName}
+          proposeChange={proposeChangeFor(changeOrders)}
         />
       </Reveal>
     );
@@ -97,6 +118,12 @@ export function EngagementWorkspace({
       <Reveal>
         <EngagementHeader header={view.header} />
       </Reveal>
+
+      {adminMoney !== null && (
+        <Reveal delay={0.03}>
+          <ChangeOrderAdminPanel money={adminMoney} />
+        </Reveal>
+      )}
 
       {view.reviewBanner !== null && (
         <Reveal delay={0.05}>
@@ -150,6 +177,18 @@ export function EngagementWorkspace({
         </Reveal>
       )}
 
+      {changeOrders !== undefined && (
+        <ChangeOrderPanel
+          engagementId={view.engagementId}
+          lens={view.lens}
+          view={changeOrders}
+          clientParty={view.parties.clientCompanyName}
+          expertParty={view.parties.expertPartyShort}
+          expertActor={view.parties.expertRetroFirstMention}
+          delay={0.12}
+        />
+      )}
+
       {view.hasMilestones && (
         <Reveal delay={0.15}>
           <EngagementProgress progress={view.progress} />
@@ -157,6 +196,22 @@ export function EngagementWorkspace({
       )}
 
       {milestoneSection}
+
+      {changeOrders !== undefined && view.lens === 'client' && view.status === 'active' && (
+        <Reveal delay={0.21}>
+          <RequestChangeCard
+            engagementId={view.engagementId}
+            canRequest={changeOrders.affordances.requestChange}
+            expertParty={view.parties.expertPartyShort}
+          />
+        </Reveal>
+      )}
+
+      {changeOrders !== undefined && changeOrders.history.length > 0 && (
+        <Reveal delay={0.21}>
+          <ChangeOrderHistory history={changeOrders.history} />
+        </Reveal>
+      )}
 
       {showActionItems && actionItems !== undefined && (
         <Reveal delay={0.22}>
@@ -173,6 +228,36 @@ export function EngagementWorkspace({
           />
         </Reveal>
       )}
+
+      {changeOrders !== undefined && showChangeOrderFootnote(view, adminMoney) && (
+        <Reveal delay={0.28}>
+          <p className="text-muted-foreground text-sm leading-relaxed">{changeOrders.footnote}</p>
+        </Reveal>
+      )}
     </div>
   );
+}
+
+/** The rail's "Propose a change" entry, or undefined when the viewer has no such affordance. */
+function proposeChangeFor(
+  changeOrders: ChangeOrderPanelView | undefined
+): ProposeChangeLink | undefined {
+  if (changeOrders === undefined) return undefined;
+  const { affordances, composerHref } = changeOrders;
+  const available = affordances.propose || affordances.continueDraft;
+  if (!available && affordances.proposeDisabledReason === null) return undefined;
+  return {
+    href: composerHref,
+    label: affordances.continueDraft ? 'Continue draft change' : 'Propose a change',
+    disabledReason: available ? null : affordances.proposeDisabledReason,
+  };
+}
+
+/** The change-order footnote reads for a live project; an admin sees it only beside the money panel. */
+function showChangeOrderFootnote(
+  view: EngagementWorkspaceView,
+  adminMoney: ChangeOrderAdminMoneyView | null
+): boolean {
+  if (view.lens === 'admin') return adminMoney !== null;
+  return view.status === 'active';
 }

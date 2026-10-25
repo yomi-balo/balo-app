@@ -25,6 +25,7 @@ import {
 } from '../schema';
 import {
   caseEngagementFactory,
+  engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
   expertDraftFactory,
@@ -46,6 +47,7 @@ import {
   MilestonesIncompleteError,
   ChangeRequestMilestoneMismatchError,
 } from './project-engagements';
+import { ChangeOrderPendingError } from './_shared/change-order-guards';
 import { engagementMilestonesRepository } from './engagement-milestones';
 import {
   projectDeliveryToEngagementStatus,
@@ -2563,6 +2565,43 @@ describe('projectEngagementsRepository.listAllWithProgress', () => {
     expect(cancelledRow?.cancelledBy).not.toHaveProperty('workosId');
     expect(cancelledRow?.cancelledBy).not.toHaveProperty('phone');
   });
+
+  it('effectivePriceCents adds each project’s own approved, live change-order deltas', async () => {
+    const { engagement: changed } = await engagementFactory({
+      projectValues: { priceCents: 500_000 },
+    });
+    const { engagement: other } = await engagementFactory({
+      projectValues: { priceCents: 300_000 },
+    });
+    const { engagement: tm } = await engagementFactory({
+      projectValues: { pricingMethod: 'tm', priceCents: 900_000, rateCents: 20_000 },
+    });
+    for (const [status, priceDeltaCents, deletedAt] of [
+      ['approved', 150_000, null],
+      ['approved', -20_000, null],
+      ['approved', 999_000, new Date()],
+      ['declined', 777_000, null],
+    ] as const) {
+      await engagementChangeOrderFactory({
+        engagementId: changed.id,
+        status,
+        values: { priceDeltaCents, deletedAt },
+      });
+    }
+    await engagementChangeOrderFactory({
+      engagementId: other.id,
+      status: 'withdrawn',
+      values: { priceDeltaCents: 50_000 },
+    });
+
+    const rows = await projectEngagementsRepository.listAllWithProgress();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    expect(byId.get(changed.id)?.effectivePriceCents).toBe(630_000);
+    expect(byId.get(changed.id)?.priceCents).toBe(500_000);
+    expect(byId.get(other.id)?.effectivePriceCents).toBe(300_000);
+    expect(byId.get(tm.id)?.effectivePriceCents).toBe(900_000);
+  });
 });
 
 // ── BAL-417: the supertype split's NEW acceptance criteria ───────────────────
@@ -2836,6 +2875,7 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
         'completionRequestedAt',
         'createdAt',
         'currency',
+        'effectivePriceCents',
         'expertProfile',
         'expertProfileId',
         'id',
@@ -3461,5 +3501,34 @@ describe('projectEngagementsRepository.materializeFromKickoff — call carry-ove
     expect(children).toHaveLength(0);
     expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
     expect(await projectCallRowsFor(meetingId)).toHaveLength(0);
+  });
+});
+
+describe('projectEngagementsRepository.requestCompletion — an open change order', () => {
+  it.each<[string, Parameters<typeof engagementChangeOrderFactory>[0]]>([
+    ['a client request', { status: 'requested' }],
+    ['a draft made from a client request', { status: 'draft', fromRequest: true }],
+    ['a sent order', { status: 'sent' }],
+  ])('blocks marking the project ready: %s', async (_label, order) => {
+    const { engagementId, userId } = await seedActiveEngagement();
+    await engagementMilestoneFactory({ engagementId, values: { status: 'completed' } });
+    await engagementChangeOrderFactory({ engagementId, ...order });
+
+    await expect(
+      projectEngagementsRepository.requestCompletion({ engagementId, userId })
+    ).rejects.toBeInstanceOf(ChangeOrderPendingError);
+
+    const reloaded = await projectEngagementsRepository.findWithMilestones(engagementId);
+    expect(reloaded?.status).toBe('active');
+    expect(await auditEventsForEntity(engagementId)).toHaveLength(0);
+  });
+
+  it('does not block on a fresh expert draft or a decided order', async () => {
+    const { engagementId, userId } = await seedActiveEngagement();
+    await engagementChangeOrderFactory({ engagementId, status: 'approved' });
+    await engagementChangeOrderFactory({ engagementId, status: 'draft' });
+
+    const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
+    expect(advanced.status).toBe('pending_acceptance');
   });
 });

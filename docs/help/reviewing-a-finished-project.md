@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 4
 published: false
-updated: 2026-10-25
+updated: 2026-10-26
 related: [requesting-a-project]
 ---
 
@@ -28,7 +28,8 @@ shared. Take the time you need. There's no rush within the review window.
 ## Accepting the project
 
 If everything is as agreed, choose **Accept project**. Accepting confirms the delivery, and it
-can't be undone. Your final invoice is raised once you accept.
+can't be undone. Your final invoice is raised once you accept. On a fixed-price project, it's the accepted
+price adjusted for any changes you approved, less what was already invoiced upfront.
 
 ## Requesting changes
 

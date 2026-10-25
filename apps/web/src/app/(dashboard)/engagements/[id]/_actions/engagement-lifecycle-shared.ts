@@ -6,6 +6,13 @@ import {
   auditEventsRepository,
   MilestonesIncompleteError,
   InvalidEngagementTransitionError,
+  EngagementNotActiveError,
+  ChangeOrderAlreadyOpenError,
+  ChangeOrderCoherenceError,
+  ChangeOrderNotFoundError,
+  ChangeOrderPendingError,
+  InvalidChangeOrderTransitionError,
+  type ChangeOrderCoherenceRule,
   type ProjectDeliveryStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
@@ -15,7 +22,7 @@ import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platfo
 import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { DAY_MS, GENERIC_FAILURE, NOT_FOUND } from './milestone-action-shared';
+import { DAY_MS, GENERIC_FAILURE, NOT_FOUND, PLAN_CHANGED } from './milestone-action-shared';
 
 // Re-export the reused signed-in wrapper, notify helpers, generic copy, and the
 // millisecond denominators so the three lifecycle actions import everything they
@@ -47,6 +54,30 @@ export const MILESTONES_INCOMPLETE =
   'Not every milestone is complete yet — finish them before sending the project for review.';
 export const STATUS_CHANGED = "This project's status changed. Refresh and try again.";
 export const REASON_REQUIRED = 'A reason is required.';
+
+// ── Change-order copy (BAL-622) — mapped here so this stays the one error boundary ──
+export const CHANGE_ALREADY_OPEN =
+  "There's already a change open on this project. You can start another once it's decided.";
+export const CHANGE_ORDER_PENDING =
+  "A change to this project is still open. You can mark it ready once it's decided.";
+
+const COHERENCE_MESSAGES: Record<ChangeOrderCoherenceRule, string> = {
+  note_missing: "Add a short summary of what's changing and why.",
+  empty_change: 'Change at least one milestone or the price.',
+  effective_price_negative: 'Enter a price or cap of zero or more.',
+  tm_add_missing_estimate: 'Add an estimate in hours for each new milestone.',
+  tm_edit_missing_estimate: 'Add an estimate in hours for each milestone you change.',
+  tm_line_has_value: 'Milestone values are not used on a time and materials project.',
+  fixed_line_has_estimate: 'Estimates are not used on a fixed-price project.',
+  add_has_target: PLAN_CHANGED,
+  duplicate_target: 'Each milestone can appear in the change once.',
+  line_target_not_live: PLAN_CHANGED,
+};
+
+/** The friendly sentence for a failed change-order coherence rule. */
+export function coherenceMessage(rule: ChangeOrderCoherenceRule): string {
+  return COHERENCE_MESSAGES[rule];
+}
 
 /** The shared gate result — the loaded engagement or a friendly error. */
 export type GateResult =
@@ -101,7 +132,7 @@ export async function readReviewCycle(engagementId: string): Promise<number> {
  * any body copy. Extracted so BOTH gates below share it (SonarCloud new-code
  * duplication gate).
  */
-async function loadEngagementLens(
+export async function loadEngagementLens(
   user: SessionUser,
   engagementId: string
 ): Promise<
@@ -275,6 +306,24 @@ export async function gateClientEngagement(
 }
 
 /**
+ * The typed change-order failures (concurrent-tab races and coherence rules) as friendly copy,
+ * or null for anything else. Expected outcomes: they are returned, never logged.
+ */
+function mapChangeOrderError(error: unknown): string | null {
+  if (error instanceof ChangeOrderAlreadyOpenError) return CHANGE_ALREADY_OPEN;
+  if (
+    error instanceof InvalidChangeOrderTransitionError ||
+    error instanceof ChangeOrderNotFoundError
+  ) {
+    return STATUS_CHANGED;
+  }
+  if (error instanceof ChangeOrderCoherenceError) return coherenceMessage(error.rule);
+  if (error instanceof EngagementNotActiveError) return NOT_ACTIVE;
+  if (error instanceof ChangeOrderPendingError) return CHANGE_ORDER_PENDING;
+  return null;
+}
+
+/**
  * The single audited orchestration boundary shared by all three lifecycle actions:
  * resolve the caller's `authorize` gate → run `perform` (repo write + analytics +
  * notify + `log.info`) → `revalidatePath` on success. The two typed D0 race errors
@@ -299,6 +348,7 @@ export async function runEngagementLifecycleAction(
     // A typed-race failure surfaced by `perform` → no revalidate (nothing changed).
     if (result.success) {
       revalidatePath(`/engagements/${engagementId}`);
+      revalidatePath(`/engagements/${engagementId}/change-order`);
     }
     return result;
   } catch (error) {
@@ -309,6 +359,10 @@ export async function runEngagementLifecycleAction(
     }
     if (error instanceof InvalidEngagementTransitionError) {
       return { success: false, error: STATUS_CHANGED };
+    }
+    const changeOrderError = mapChangeOrderError(error);
+    if (changeOrderError !== null) {
+      return { success: false, error: changeOrderError };
     }
     log.error(failLabel, {
       engagementId,

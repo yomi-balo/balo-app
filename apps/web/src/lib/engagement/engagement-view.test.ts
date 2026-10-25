@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
+import { makeLine, makeOrder } from '@/test/change-order-fixtures';
 import {
   mapEngagementToWorkspaceView,
   offersRatingCard,
@@ -1044,4 +1045,173 @@ describe('offersRatingCard', () => {
       expect(offersRatingCard(status, lens)).toBe(status === 'completed' && lens === 'client');
     }
   );
+});
+
+describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
+  const approvedWithLines = makeOrder({
+    id: 'co-ok',
+    status: 'approved',
+    priceDeltaCents: 200_000,
+    sentAt: new Date('2026-06-20T00:00:00Z'),
+    decidedAt: new Date('2026-06-21T00:00:00Z'),
+    lines: [
+      makeLine({ op: 'add', engagementMilestoneId: 'ms-new', title: 'Added' }),
+      makeLine({ id: 'l2', op: 'edit', engagementMilestoneId: 'ms-edit', title: 'Edited' }),
+      makeLine({ id: 'l3', op: 'remove', engagementMilestoneId: 'ms-gone', title: 'Gone' }),
+    ],
+  });
+  const sentOrder = makeOrder({
+    id: 'co-sent',
+    status: 'sent',
+    sentAt: new Date('2026-07-01T00:00:00Z'),
+    lines: [
+      makeLine({ op: 'edit', engagementMilestoneId: 'ms-1', title: 'Edited' }),
+      makeLine({ id: 'l2', op: 'remove', engagementMilestoneId: 'ms-2', title: 'Removed' }),
+      makeLine({ id: 'l3', op: 'add', title: 'Brand new' }),
+    ],
+  });
+
+  it('terms strip shows the effective price: the accepted price plus every approved delta', () => {
+    const expert = mapEngagementToWorkspaceView(
+      makeEngagement({ baloFeeBps: 2500 }),
+      ctxFor('expert'),
+      NOW,
+      [approvedWithLines]
+    );
+    expect(expert.header.terms[0]?.value).toBe('Fixed price · A$60,000');
+
+    const client = mapEngagementToWorkspaceView(
+      makeEngagement({ baloFeeBps: 2500 }),
+      ctxFor('client'),
+      NOW,
+      [approvedWithLines]
+    );
+    expect(client.header.terms[0]?.value).toBe('Fixed price · A$75,000');
+  });
+
+  it('ignores a change order that is not approved when pricing the strip', () => {
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), NOW, [
+      makeOrder({ ...sentOrder, priceDeltaCents: 900_000 }),
+    ]);
+    expect(view.header.terms[0]?.value).toBe('Fixed price · A$58,000');
+  });
+
+  it('locks only the milestones a SENT order edits or removes', () => {
+    const milestones = [
+      makeMilestone({ id: 'ms-1', sortOrder: 0 }),
+      makeMilestone({ id: 'ms-2', sortOrder: 1 }),
+      makeMilestone({ id: 'ms-3', sortOrder: 2 }),
+    ];
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones }),
+      ctxFor('expert'),
+      NOW,
+      [sentOrder]
+    );
+    expect(view.milestones.map((m) => m.changePending)).toEqual([true, true, false]);
+  });
+
+  it('locks nothing while the open order is only a draft or a request', () => {
+    const milestones = [makeMilestone({ id: 'ms-1' })];
+    const draft = makeOrder({ ...sentOrder, status: 'draft', sentAt: null });
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones }),
+      ctxFor('expert'),
+      NOW,
+      [draft]
+    );
+    expect(view.milestones[0]?.changePending).toBe(false);
+  });
+
+  it('badges milestones an approved change added or updated, and nothing else', () => {
+    const milestones = [
+      makeMilestone({ id: 'ms-new', sortOrder: 0 }),
+      makeMilestone({ id: 'ms-edit', sortOrder: 1 }),
+      makeMilestone({ id: 'ms-plain', sortOrder: 2 }),
+    ];
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones }),
+      ctxFor('client'),
+      NOW,
+      [approvedWithLines]
+    );
+    expect(view.milestones.map((m) => m.changeProvenance)).toEqual(['added', 'updated', null]);
+  });
+
+  it('with no change orders every milestone is unbadged and unlocked', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [makeMilestone()] }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.milestones[0]).toMatchObject({ changePending: false, changeProvenance: null });
+  });
+
+  describe('completion card', () => {
+    const done = [makeMilestone({ status: 'completed' })];
+
+    it('blocks marking ready while a client request is open', () => {
+      const requested = makeOrder({
+        status: 'requested',
+        requestedAt: new Date('2026-07-01T00:00:00Z'),
+      });
+      const card = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: done }),
+        ctxFor('expert'),
+        NOW,
+        [requested]
+      ).completionCard;
+      expect(card?.canRequest).toBe(false);
+      expect(card?.bodyCopy).toBe(
+        "Answer Northwind Industrial's change request first. The project can't be marked ready while it's open."
+      );
+    });
+
+    it('blocks marking ready while a sent change waits on the client', () => {
+      const card = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: done }),
+        ctxFor('expert'),
+        NOW,
+        [sentOrder]
+      ).completionCard;
+      expect(card?.canRequest).toBe(false);
+      expect(card?.bodyCopy).toBe(
+        "A change is waiting on Northwind Industrial. You can mark the project ready once it's decided."
+      );
+    });
+
+    it('a draft made from a client request also blocks', () => {
+      const draft = makeOrder({
+        status: 'draft',
+        requestedAt: new Date('2026-07-01T00:00:00Z'),
+      });
+      const card = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: done }),
+        ctxFor('expert'),
+        NOW,
+        [draft]
+      ).completionCard;
+      expect(card?.canRequest).toBe(false);
+    });
+
+    it('a fresh expert draft does not block', () => {
+      const card = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: done }),
+        ctxFor('expert'),
+        NOW,
+        [makeOrder({ status: 'draft' })]
+      ).completionCard;
+      expect(card?.canRequest).toBe(true);
+    });
+
+    it('a decided order does not block', () => {
+      const card = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: done }),
+        ctxFor('expert'),
+        NOW,
+        [approvedWithLines]
+      ).completionCard;
+      expect(card?.canRequest).toBe(true);
+    });
+  });
 });

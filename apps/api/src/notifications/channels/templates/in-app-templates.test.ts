@@ -1642,4 +1642,135 @@ describe('getInAppTemplate', () => {
       expect(result.actionUrl).toBeUndefined();
     });
   });
+
+  describe('change order templates (BAL-622)', () => {
+    const data = {
+      engagementId: 'eng-1',
+      projectTitle: 'CPQ implementation',
+      actorClientLabel: 'Dana @ Northwind',
+      actorExpertLabel: 'Charles @ CloudPeak',
+      clientCompanyName: 'Northwind',
+      expertPartyLabel: 'CloudPeak',
+    };
+    const url = '/engagements/eng-1';
+
+    it('requested-expert carries the note and the next step', () => {
+      expect(
+        getInAppTemplate('change-order-requested-expert', { ...data, note: 'Add a report' })
+      ).toEqual({
+        title: 'Dana @ Northwind asked for a change to CPQ implementation',
+        body: '“Add a report” Propose a change if it affects scope or price, or answer it from the project page.',
+        actionUrl: url,
+      });
+    });
+
+    it('requested-admin names the addressed party and no amounts', () => {
+      expect(getInAppTemplate('change-order-requested-admin', data)).toEqual({
+        title: 'Change requested',
+        body: 'CPQ implementation: Dana @ Northwind asked CloudPeak for a change.',
+        actionUrl: url,
+      });
+    });
+
+    it('sent-client shows the counts and the client price label', () => {
+      const result = getInAppTemplate('change-order-sent-client', {
+        ...data,
+        linesAdded: 1,
+        linesEdited: 2,
+        linesRemoved: 0,
+        clientPriceChangeLabel: 'A$15,625 → A$18,125 (+A$2,500)',
+      });
+      expect(result.title).toBe('Charles @ CloudPeak proposed a change to CPQ implementation');
+      expect(result.body).toBe(
+        '1 added · 2 edited. A$15,625 → A$18,125 (+A$2,500). Nothing changes unless Northwind approves it.'
+      );
+      expect(result.actionUrl).toBe(url);
+    });
+
+    it('sent-client reads sensibly with no counts and no label', () => {
+      const result = getInAppTemplate('change-order-sent-client', data);
+      expect(result.body).toBe(
+        'No milestone changes. Nothing changes unless Northwind approves it.'
+      );
+    });
+
+    it('sent-admin names the waiting party and no amounts', () => {
+      expect(getInAppTemplate('change-order-sent-admin', data).body).toBe(
+        'CPQ implementation: waiting on Northwind.'
+      );
+    });
+
+    it('approved-expert is warm and carries the expert label', () => {
+      const result = getInAppTemplate('change-order-approved-expert', {
+        ...data,
+        approvedOn: '15 Oct',
+        expertPriceChangeLabel: 'A$12,500 → A$14,000',
+      });
+      expect(result.title).toBe('Dana @ Northwind approved your change to CPQ implementation');
+      expect(result.body).toBe(
+        'Approved on 15 Oct. The plan and price are updated. A$12,500 → A$14,000.'
+      );
+    });
+
+    it('approved-expert on T&M says estimates, and the cap only when it moved', () => {
+      const base = { ...data, approvedOn: '15 Oct', pricingMethod: 'tm' };
+      expect(
+        getInAppTemplate('change-order-approved-expert', {
+          ...base,
+          estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+        }).body
+      ).toBe('Approved on 15 Oct. The plan and estimates are updated. 56 hrs → 66 hrs (+10 hrs).');
+      expect(
+        getInAppTemplate('change-order-approved-expert', {
+          ...base,
+          expertPriceChangeLabel: 'Cap A$10,000 → A$12,000',
+          estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+        }).body
+      ).toBe(
+        'Approved on 15 Oct. The plan, estimates and cap are updated. Cap A$10,000 → A$12,000. 56 hrs → 66 hrs (+10 hrs).'
+      );
+    });
+
+    it('sent-client on T&M shows the cap figure beside the estimate change', () => {
+      const result = getInAppTemplate('change-order-sent-client', {
+        ...data,
+        pricingMethod: 'tm',
+        clientPriceChangeLabel: 'New cap A$12,500 (+A$2,500)',
+        estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
+      });
+      expect(result.body).toBe(
+        'No milestone changes. New cap A$12,500 (+A$2,500). 56 hrs → 66 hrs (+10 hrs). Nothing changes unless Northwind approves it.'
+      );
+    });
+
+    it('declined-expert carries the reason; declined-admin names the party', () => {
+      const expert = getInAppTemplate('change-order-declined-expert', {
+        ...data,
+        reason: 'Too costly.',
+      });
+      expect(expert.title).toBe('Dana @ Northwind declined the change to CPQ implementation');
+      expect(expert.body).toBe(
+        '“Too costly.” You can propose a different change from the project page.'
+      );
+      expect(getInAppTemplate('change-order-declined-admin', data)).toEqual({
+        title: 'Change declined',
+        body: 'CPQ implementation: Northwind declined the change.',
+        actionUrl: url,
+      });
+    });
+
+    it('answered-client carries the answer; withdrawn-client says nothing changed', () => {
+      const answered = getInAppTemplate('change-order-answered-client', {
+        ...data,
+        answer: 'Covered already.',
+      });
+      expect(answered.title).toBe('Charles @ CloudPeak answered your change request');
+      expect(answered.body).toBe('“Covered already.” Nothing on the project changed.');
+      expect(getInAppTemplate('change-order-withdrawn-client', data)).toEqual({
+        title: 'Change withdrawn',
+        body: 'Charles @ CloudPeak withdrew the proposed change to CPQ implementation. Nothing changed.',
+        actionUrl: url,
+      });
+    });
+  });
 });
