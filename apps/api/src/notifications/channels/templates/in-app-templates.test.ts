@@ -1682,14 +1682,16 @@ describe('getInAppTemplate', () => {
       });
       expect(result.title).toBe('Charles @ CloudPeak proposed a change to CPQ implementation');
       expect(result.body).toBe(
-        '1 added · 2 edited. A$15,625 → A$18,125 (+A$2,500). Nothing changes unless you approve it.'
+        '1 added · 2 edited. A$15,625 → A$18,125 (+A$2,500). Nothing changes unless Northwind approves it.'
       );
       expect(result.actionUrl).toBe(url);
     });
 
     it('sent-client reads sensibly with no counts and no label', () => {
       const result = getInAppTemplate('change-order-sent-client', data);
-      expect(result.body).toBe('No milestone changes. Nothing changes unless you approve it.');
+      expect(result.body).toBe(
+        'No milestone changes. Nothing changes unless Northwind approves it.'
+      );
     });
 
     it('sent-admin names the waiting party and no amounts', () => {
@@ -1737,7 +1739,7 @@ describe('getInAppTemplate', () => {
         estimateChangeLabel: '56 hrs → 66 hrs (+10 hrs)',
       });
       expect(result.body).toBe(
-        'No milestone changes. New cap A$12,500 (+A$2,500). 56 hrs → 66 hrs (+10 hrs). Nothing changes unless you approve it.'
+        'No milestone changes. New cap A$12,500 (+A$2,500). 56 hrs → 66 hrs (+10 hrs). Nothing changes unless Northwind approves it.'
       );
     });
 

@@ -605,6 +605,7 @@ describe('EngagementWorkspace — change orders', () => {
     discardDraft: false,
     withdraw: false,
     decide: false,
+    decideNotice: null,
     proposeDisabledReason: null,
   };
 

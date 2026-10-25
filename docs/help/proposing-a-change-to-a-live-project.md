@@ -29,8 +29,9 @@ or add new ones. Each row shows its state: Unchanged, Edited, New or Removed. Ad
 changing and why, because the client reads it word for word. Describe the change and leave amounts
 to the price box.
 
-- **Wording and scope.** Editing a milestone's title or description is a change to wording. Adding
-  or removing a milestone changes the scope.
+- **Wording and scope.** Fixing the wording of a milestone is a plain edit. It applies straight
+  away and the client is told. Anything that moves the price or cap, or adds or removes scope, goes
+  through a change order.
 - **Fixed price.** Enter the new project total. The composer shows the difference from the current
   price.
 - **Time and materials.** Set the estimate on each milestone. The composer shows how the total
@@ -58,5 +59,6 @@ difference on a fixed-price project is settled on the final invoice.
 
 ## Marking the project ready
 
-You can't mark the project ready for review while a client request is open or a change is waiting
-for the client. Answer, withdraw or wait for a decision first.
+You can't mark the project ready for review while a change is open: a client request, a draft made
+from one, or a change waiting for the client. Choose **Answer without a change order**, discard the
+draft, choose **Withdraw**, or wait for a decision first.

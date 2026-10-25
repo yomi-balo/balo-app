@@ -1122,6 +1122,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         firstName: (data.recipientName as string) ?? 'there',
         actorExpertLabel,
         projectTitle,
+        clientCompanyName: (data.clientCompanyName as string) ?? 'the client',
         summary: (data.summary as string) ?? '',
         linesAdded: numberCount(data.linesAdded),
         linesEdited: numberCount(data.linesEdited),

@@ -1058,10 +1058,11 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'change-order-sent-client': (data) => {
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
     const title = (data.projectTitle as string) ?? 'your project';
+    const client = (data.clientCompanyName as string) ?? 'the client';
     const changeClause = changeOrderChangeClause(data, 'clientPriceChangeLabel');
     return engagementNotice(
       `${actor} proposed a change to ${title}`,
-      `${changeOrderLineCounts(data)}.${changeClause} Nothing changes unless you approve it.`,
+      `${changeOrderLineCounts(data)}.${changeClause} Nothing changes unless ${client} approves it.`,
       data
     );
   },

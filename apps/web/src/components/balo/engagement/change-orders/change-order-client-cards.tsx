@@ -19,6 +19,10 @@ interface ChangeReviewCardProps {
   order: ChangeOrderItemView;
   /** Whether the client may approve or decline now (the view's `decide` affordance). */
   canDecide: boolean;
+  /** Names the approving party in place of the buttons when the viewer cannot decide. */
+  decideNotice: string | null;
+  /** The client company: who approves when the viewer cannot. */
+  clientParty: string;
   /** Fallback proposer when the order carries no sender label. */
   proposedBy: string;
   expertParty: string;
@@ -43,6 +47,8 @@ export function ChangeReviewCard({
   engagementId,
   order,
   canDecide,
+  decideNotice,
+  clientParty,
   proposedBy,
   expertParty,
 }: Readonly<ChangeReviewCardProps>): React.JSX.Element {
@@ -89,8 +95,8 @@ export function ChangeReviewCard({
             {order.sentByLabel ?? proposedBy} proposed a change
           </h3>
           <p className="text-muted-foreground mt-1 text-sm">
-            {order.sentOnLabel === null ? '' : `Sent ${order.sentOnLabel}. `}Nothing changes unless
-            you approve it.
+            {order.sentOnLabel === null ? '' : `Sent ${order.sentOnLabel}. `}Nothing changes unless{' '}
+            {canDecide ? 'you approve it.' : `${clientParty} approves it.`}
           </p>
           {order.requestNote !== null && (
             <p className="text-muted-foreground mt-3 text-sm">You asked: “{order.requestNote}”</p>
@@ -101,6 +107,9 @@ export function ChangeReviewCard({
           <ChangeOrderLines lines={order.lines} />
           {order.priceEffect !== null && <ChangeOrderPriceEffect effect={order.priceEffect} />}
 
+          {!canDecide && decideNotice !== null && (
+            <p className="text-muted-foreground mt-4 text-sm">{decideNotice}</p>
+          )}
           {canDecide && !declining && (
             <div className="mt-4 flex flex-wrap gap-2">
               <Button type="button" disabled={isPending} onClick={approve}>

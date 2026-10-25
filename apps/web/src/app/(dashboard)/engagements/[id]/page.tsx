@@ -8,6 +8,7 @@ import {
 } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
+import { CAPABILITIES, hasCapability } from '@/lib/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
@@ -169,7 +170,12 @@ export default async function EngagementWorkspacePage({
   ]);
   const view = mapEngagementToWorkspaceView(engagement, ctx, new Date(), changeOrderRows);
   const parties = deriveEngagementParties(engagement);
-  const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties);
+  const canDecide =
+    ctx.lens === 'client' &&
+    (await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
+      companyId: engagement.companyId,
+    }));
+  const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties, canDecide);
   // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
   // settlement is not even loaded for anyone else.
   const adminMoney = hasPlatformCapability(user, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)

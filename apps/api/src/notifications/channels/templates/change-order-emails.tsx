@@ -103,6 +103,8 @@ export interface ChangeOrderSentClientEmailProps {
   readonly firstName: string;
   readonly actorExpertLabel: string;
   readonly projectTitle: string;
+  /** The approving party; the copy names it so a requester who cannot approve is not misled. */
+  readonly clientCompanyName: string;
   readonly summary: string;
   readonly linesAdded: number;
   readonly linesEdited: number;
@@ -117,6 +119,7 @@ export function ChangeOrderSentClientEmail({
   firstName = 'there',
   actorExpertLabel = 'Your expert',
   projectTitle = 'your project',
+  clientCompanyName = 'the client',
   summary = '',
   linesAdded = 0,
   linesEdited = 0,
@@ -127,10 +130,10 @@ export function ChangeOrderSentClientEmail({
 }: Readonly<ChangeOrderSentClientEmailProps>) {
   return (
     <ChangeOrderShell
-      previewText={`${actorExpertLabel} proposed a change to ${projectTitle}. Nothing changes unless you approve it.`}
+      previewText={`${actorExpertLabel} proposed a change to ${projectTitle}. Nothing changes unless ${clientCompanyName} approves it.`}
       pillLabel="Change proposed"
       pillStyle={amberPill}
-      heading="A change is waiting for your review"
+      heading="A change is waiting for review"
       firstName={firstName}
       engagementUrl={engagementUrl}
       ctaLabel="Review the change →"
@@ -145,7 +148,8 @@ export function ChangeOrderSentClientEmail({
       </Text>
       {changeLabel ? <Text style={shared.bodyText}>{changeLabel}</Text> : null}
       <Text style={{ ...shared.bodyText, margin: 0 }}>
-        Nothing changes unless you approve it. Approved changes are settled on your final invoice.
+        Nothing changes unless {clientCompanyName} approves it. Approved changes are settled on the
+        final invoice.
       </Text>
     </ChangeOrderShell>
   );

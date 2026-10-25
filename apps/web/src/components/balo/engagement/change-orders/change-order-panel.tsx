@@ -100,6 +100,7 @@ function clientBody({
   view,
   expertParty,
   expertActor,
+  clientParty,
 }: PanelBodyProps): React.JSX.Element | null {
   const { open, affordances } = view;
   if (open === null) return null;
@@ -109,6 +110,8 @@ function clientBody({
         engagementId={engagementId}
         order={open}
         canDecide={affordances.decide}
+        decideNotice={affordances.decideNotice}
+        clientParty={clientParty}
         proposedBy={expertActor}
         expertParty={expertParty}
       />

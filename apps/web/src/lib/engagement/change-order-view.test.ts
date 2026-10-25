@@ -34,13 +34,15 @@ function ctxFor(lens: EngagementLens): EngagementViewerContext {
 function view(
   orders: Parameters<typeof mapChangeOrdersToView>[0],
   lens: EngagementLens,
-  engagement = makeProject()
+  engagement = makeProject(),
+  canDecide = true
 ): ReturnType<typeof mapChangeOrdersToView> {
   return mapChangeOrdersToView(
     orders,
     engagement,
     ctxFor(lens),
     deriveEngagementParties(engagement),
+    canDecide,
     NOW
   );
 }
@@ -153,7 +155,14 @@ describe('mapChangeOrdersToView — open order and affordances', () => {
     const client = view([sentFixed], 'client');
     expect(client.open?.pill).toEqual({ tone: 'violet', label: 'Waiting on you' });
     expect(client.affordances.decide).toBe(true);
+    expect(client.affordances.decideNotice).toBeNull();
     expect(client.affordances.withdraw).toBe(false);
+
+    const participant = view([sentFixed], 'client', makeProject(), false);
+    expect(participant.affordances.decide).toBe(false);
+    expect(participant.affordances.decideNotice).toBe(
+      'Northwind approves changes — anyone who can approve proposals for Northwind can approve or decline this.'
+    );
 
     const expert = view([sentFixed], 'expert');
     expect(expert.open?.pill).toEqual({ tone: 'violet', label: 'Waiting on Northwind' });
@@ -161,6 +170,7 @@ describe('mapChangeOrdersToView — open order and affordances', () => {
       withdraw: true,
       propose: false,
       decide: false,
+      decideNotice: null,
       proposeDisabledReason: 'A change is already waiting on Northwind',
     });
   });

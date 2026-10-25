@@ -100,8 +100,10 @@ export interface ChangeOrderAffordances {
   discardDraft: boolean;
   /** The expert may withdraw the sent change. */
   withdraw: boolean;
-  /** The client may approve or decline the sent change. */
+  /** The client may approve or decline the sent change (they hold the approval capability). */
   decide: boolean;
+  /** Shown instead of the decide buttons to a client-side viewer who cannot decide; names the party. */
+  decideNotice: string | null;
   proposeDisabledReason: string | null;
 }
 
@@ -207,6 +209,8 @@ interface ViewContext {
   lens: LensName;
   parties: EngagementParties;
   orders: readonly ChangeOrderWithLines[];
+  /** The viewer holds `approve_own_proposals` for the client company. */
+  canDecide: boolean;
   now: Date;
 }
 
@@ -492,6 +496,7 @@ function affordancesFor(
   const isExpert = vc.lens === 'expert' && active;
   const isClient = vc.lens === 'client' && active;
   const status = open?.status ?? null;
+  const awaitingDecision = isClient && status === 'sent';
   return {
     requestChange: isClient && open === null,
     propose: isExpert && (open === null || status === 'requested'),
@@ -499,7 +504,11 @@ function affordancesFor(
     continueDraft: isExpert && status === 'draft',
     discardDraft: isExpert && status === 'draft',
     withdraw: isExpert && status === 'sent',
-    decide: isClient && status === 'sent',
+    decide: awaitingDecision && vc.canDecide,
+    decideNotice:
+      awaitingDecision && !vc.canDecide
+        ? `${vc.parties.clientCompanyName} approves changes — anyone who can approve proposals for ${vc.parties.clientCompanyName} can approve or decline this.`
+        : null,
     proposeDisabledReason:
       isExpert && status === 'sent'
         ? `A change is already waiting on ${vc.parties.clientCompanyName}`
@@ -540,16 +549,18 @@ function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): 
 
 /**
  * Map the engagement's change orders (oldest first, as the repository lists them) into the
- * panel view for one viewer. `now` is injectable for deterministic tests.
+ * panel view for one viewer. `canDecide` is the viewer's `approve_own_proposals` capability
+ * for the client company, resolved by the caller. `now` is injectable for deterministic tests.
  */
 export function mapChangeOrdersToView(
   orders: readonly ChangeOrderWithLines[],
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
   parties: EngagementParties,
+  canDecide: boolean,
   now: Date = new Date()
 ): ChangeOrderPanelView {
-  const vc: ViewContext = { engagement, lens: ctx.lens, parties, orders, now };
+  const vc: ViewContext = { engagement, lens: ctx.lens, parties, orders, canDecide, now };
   const open = findOpenOrder(orders);
   const indexed = orders.map((order, index) => ({ order, index }));
   const openItem = indexed.find(

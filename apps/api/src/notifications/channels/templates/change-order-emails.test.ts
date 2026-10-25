@@ -39,6 +39,7 @@ describe('change-order emails (BAL-622)', () => {
   it('sent-client: counts, client price label, approval promise, CTA', async () => {
     const { html, subject } = await renderTemplate('change-order-sent-client', {
       actorExpertLabel: 'Charles @ CloudPeak',
+      clientCompanyName: 'Northwind',
       summary: 'Adds the Q4 report and trims the data load.',
       linesAdded: 1,
       linesEdited: 2,
@@ -49,8 +50,8 @@ describe('change-order emails (BAL-622)', () => {
     expect(html).toContain('Adds the Q4 report and trims the data load.');
     expect(html).toMatch(/1 added[\s\S]*2 edited[\s\S]*0 removed/);
     expect(html).toContain('A$15,625');
-    expect(html).toContain('Nothing changes unless you approve it.');
-    expect(html).toContain('Approved changes are settled on your final invoice.');
+    expect(html).toContain('Nothing changes unless Northwind approves it.');
+    expect(html).toContain('Approved changes are settled on the final invoice.');
     expect(html).toContain('Review the change');
     expect(html).toContain(CTA);
   });

@@ -34,6 +34,7 @@ const {
   mockReadRatingCard,
   mockListChangeOrders,
   mockLoadProjectSettlement,
+  mockHasCapability,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -52,6 +53,7 @@ const {
   mockReadRatingCard: vi.fn(),
   mockListChangeOrders: vi.fn(),
   mockLoadProjectSettlement: vi.fn(),
+  mockHasCapability: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
@@ -71,6 +73,10 @@ vi.mock('@balo/db', () => ({
   },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+vi.mock('@/lib/authz', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/authz')>()),
+  hasCapability: mockHasCapability,
+}));
 vi.mock('next/navigation', () => ({
   notFound: mockNotFound,
   redirect: mockRedirect,
@@ -91,6 +97,7 @@ vi.mock('@/lib/engagement/change-order-settlement', () => ({
 }));
 
 import { deriveProjectSettlement } from '@balo/shared/engagements';
+import { makeOrder } from '@/test/change-order-fixtures';
 import EngagementWorkspacePage, { generateMetadata } from './page';
 
 const ENGAGEMENT_ID = 'eng-1';
@@ -185,6 +192,7 @@ beforeEach(() => {
   mockListActionItems.mockResolvedValue([]);
   mockReadRatingCard.mockResolvedValue(null);
   mockListChangeOrders.mockResolvedValue([]);
+  mockHasCapability.mockResolvedValue(true);
   mockLoadProjectSettlement.mockResolvedValue(
     deriveProjectSettlement({
       acceptedPriceCents: 5_800_000,
@@ -444,6 +452,47 @@ describe('EngagementWorkspacePage (RSC) — change orders and the staff money vi
     await renderPage();
 
     expect(mockListChangeOrders).toHaveBeenCalledWith(ENGAGEMENT_ID);
+  });
+
+  describe('deciding on a sent change', () => {
+    const NOTICE =
+      'anyone who can approve proposals for Northwind Industrial can approve or decline this.';
+
+    beforeEach(() => {
+      mockFindWithMilestones.mockResolvedValue(engagement());
+      mockListChangeOrders.mockResolvedValue([
+        makeOrder({
+          status: 'sent',
+          sentAt: new Date('2026-10-18T00:00:00Z'),
+          note: 'Adds a report',
+        }),
+      ]);
+    });
+
+    it('shows the decide buttons to a client who holds approve_own_proposals', async () => {
+      mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+
+      await renderPage();
+
+      expect(mockHasCapability).toHaveBeenCalledWith(
+        expect.objectContaining({ companyId: COMPANY_ID }),
+        'approve_own_proposals',
+        { companyId: COMPANY_ID }
+      );
+      expect(screen.getByRole('button', { name: 'Approve change' })).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(NOTICE))).not.toBeInTheDocument();
+    });
+
+    it('shows no buttons and names the party to a participant who cannot approve', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID, companyRole: 'member' }));
+
+      await renderPage();
+
+      expect(screen.queryByRole('button', { name: 'Approve change' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Decline' })).not.toBeInTheDocument();
+      expect(screen.getByText(new RegExp(NOTICE))).toBeInTheDocument();
+    });
   });
 
   it.each([

@@ -54,6 +54,7 @@ const NO_AFFORDANCES: ChangeOrderAffordances = {
   discardDraft: false,
   withdraw: false,
   decide: false,
+  decideNotice: null,
   proposeDisabledReason: null,
 };
 
@@ -292,6 +293,19 @@ describe('ChangeOrderPanel · client', () => {
     expect(screen.getByText('Project price A$15,625 → A$17,500 (+A$1,875)')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve change' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Decline' })).toBeEnabled();
+  });
+
+  it('names the approving party and hides the buttons for a participant who cannot decide', () => {
+    const notice =
+      'Northwind approves changes — anyone who can approve proposals for Northwind can approve or decline this.';
+    renderPanel(
+      'client',
+      view({ open: item(), affordances: { ...NO_AFFORDANCES, decideNotice: notice } })
+    );
+    expect(screen.getByText(notice)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing changes unless Northwind approves it\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve change' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Decline' })).not.toBeInTheDocument();
   });
 
   it('quotes the original request when there was one', () => {
