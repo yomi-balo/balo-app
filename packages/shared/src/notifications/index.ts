@@ -193,6 +193,25 @@ export interface EngagementMilestoneCompletedPayload {
   totalCount: number; // {m} — total live milestones
 }
 
+// BAL-624 first crossing of a milestone's estimate by logged time. Fans out to the CLIENT
+// company owner (email + in-app) and the Balo ADMINS (in-app); the expert gets nothing.
+// `correlationId = `${milestoneId}:estimate_exceeded:${estimatedMinutes}`` — one notice per
+// milestone per estimate, yet a raised estimate that is crossed again notifies again. Labels carry
+// hours, never money. `recipientId` is absent for a retainer / owner-miss (client rules skip;
+// admins still fire).
+export interface EngagementMilestoneEstimateExceededPayload {
+  correlationId: string; // `${milestoneId}:estimate_exceeded:${estimatedMinutes}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  milestoneId: string;
+  recipientId?: string; // client company owner user id → recipient:'client'
+  expertPartyLabel: string; // prospective party label
+  actorExpertLabel: string; // retrospective person label
+  projectTitle: string;
+  milestoneTitle: string;
+  loggedHoursLabel: string; // e.g. "8.5 hrs"
+  estimatedHoursLabel: string; // e.g. "8 hrs"
+}
+
 // BAL-332 (D2) expert milestone reverted. The delivering EXPERT moved a completed
 // milestone back to in progress — fans out to the CLIENT company owner and the Balo
 // ADMINS (in-app both; reverts are never silent). `correlationId =

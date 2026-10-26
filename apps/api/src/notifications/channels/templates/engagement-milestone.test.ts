@@ -237,3 +237,37 @@ describe('getInAppTemplate — BAL-333 scope-changed factories', () => {
     expect(admin.actionUrl).toBeUndefined();
   });
 });
+
+describe('milestone estimate exceeded templates (BAL-624)', () => {
+  const data = {
+    recipientName: 'Dana',
+    actorExpertLabel: 'Priya @ CloudPeak',
+    projectTitle: 'CPQ implementation',
+    milestoneTitle: 'Discovery',
+    loggedHoursLabel: '8.5 hrs',
+    estimatedHoursLabel: '8 hrs',
+    engagementId: 'eng-1',
+  };
+
+  it('email: subject, hours-only body and workspace CTA', async () => {
+    const result = getEmailTemplate('engagement-milestone-estimate-exceeded-client', data);
+    expect(result.subject).toBe('Discovery has gone over its estimate on CPQ implementation');
+    const html = await render(result.component);
+    expect(html).toContain('Priya @ CloudPeak has logged 8.5 hrs against &#x27;Discovery&#x27;');
+    expect(html).toContain('over its 8 hrs estimate');
+    expect(html).toContain('/engagements/eng-1');
+    expect(html).not.toMatch(/A\$|AUD/);
+  });
+
+  it('in-app client and admin bodies state hours and deep-link to the workspace', () => {
+    const client = getInAppTemplate('engagement-milestone-estimate-exceeded-client', data);
+    expect(client.title).toBe('Milestone over estimate');
+    expect(client.body).toBe("'Discovery' is at 8.5 hrs; the estimate is 8 hrs.");
+    expect(client.actionUrl).toBe('/engagements/eng-1');
+    const admin = getInAppTemplate('engagement-milestone-estimate-exceeded-admin', data);
+    expect(admin.body).toBe(
+      "CPQ implementation: 'Discovery' is over its estimate (8.5 hrs of 8 hrs)."
+    );
+    expect(`${client.body}${admin.body}`).not.toMatch(/\$|AUD/);
+  });
+});

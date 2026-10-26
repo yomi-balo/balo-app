@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useOptimistic, useState, useTransition } from 'react';
+import { useCallback, useMemo, useOptimistic, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -13,6 +13,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Timer,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -23,12 +24,20 @@ import { cn } from '@/lib/utils';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { track, ENGAGEMENT_EVENTS } from '@/lib/analytics';
 import type { EmptyStateView, MilestoneNodeView } from '@/lib/engagement/engagement-view';
+import type {
+  MilestoneTimeView,
+  TimeEntryView,
+  WorkspaceTimeView,
+} from '@/lib/engagement/time-view';
 import {
   changeOrderPrefillHref,
   scopeChangeMessage,
   type ChangeOrderPrefill,
 } from '@/lib/engagement/scope-change-redirect';
 import { MilestoneRow } from './milestone-row';
+import { LogTimeForm } from './time/log-time-form';
+import { DeleteTimeEntryDialog } from './time/delete-time-entry-dialog';
+import { TimeTotals } from './time/time-totals';
 import { MilestoneEmptyState } from './milestone-empty-state';
 import { CompleteMilestoneModal } from './complete-milestone-modal';
 import { RevertMilestoneModal } from './revert-milestone-modal';
@@ -71,6 +80,14 @@ interface ExpertMilestoneRailProps {
   proposeChange?: ProposeChangeLink;
   /** Time-and-materials: new milestones need the client's approval, so "Add milestone" is hidden. */
   addNeedsChangeOrder: boolean;
+  /** Time-and-materials only: per-milestone hours, the time log and the project totals. */
+  time?: WorkspaceTimeView | null;
+}
+
+/** The inline log-time form's target: a milestone, and the entry being edited when there is one. */
+interface TimeFormTarget {
+  milestoneId: string;
+  entry?: TimeEntryView;
 }
 
 /** A refused write, explained: the message plus the way into the composer. */
@@ -193,6 +210,7 @@ export function ExpertMilestoneRail({
   clientCompanyName,
   proposeChange,
   addNeedsChangeOrder,
+  time = null,
 }: Readonly<ExpertMilestoneRailProps>): React.JSX.Element {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -201,6 +219,8 @@ export function ExpertMilestoneRail({
   const [formModal, setFormModal] = useState<FormModalState | null>(null);
   const [removeTarget, setRemoveTarget] = useState<MilestoneNodeView | null>(null);
   const [redirect, setRedirect] = useState<ScopeRedirectState | null>(null);
+  const [timeForm, setTimeForm] = useState<TimeFormTarget | null>(null);
+  const [deleteEntry, setDeleteEntry] = useState<TimeEntryView | null>(null);
 
   const ctaFor = useCallback(
     (prefill: ChangeOrderPrefill | null): ScopeChangeCta => {
@@ -498,6 +518,19 @@ export function ExpertMilestoneRail({
   const closeForm = useCallback((): void => setFormModal(null), []);
   const closeRemove = useCallback((): void => setRemoveTarget(null), []);
   const dismissRedirect = useCallback((): void => setRedirect(null), []);
+  // After the log-time form closes, focus returns to that milestone's Log time button.
+  const refocusLogFor = useRef<string | null>(null);
+  const closeTimeForm = useCallback((): void => {
+    refocusLogFor.current = timeForm?.milestoneId ?? null;
+    setTimeForm(null);
+  }, [timeForm]);
+  const focusLogButton = useCallback((milestoneId: string, element: HTMLButtonElement | null) => {
+    if (element !== null && refocusLogFor.current === milestoneId) {
+      refocusLogFor.current = null;
+      element.focus();
+    }
+  }, []);
+  const closeDeleteEntry = useCallback((): void => setDeleteEntry(null), []);
 
   // Removing agreed scope needs the client's approval: explain that up front instead of
   // offering a confirm the server would refuse.
@@ -535,7 +568,15 @@ export function ExpertMilestoneRail({
 
   function actionsFor(node: MilestoneNodeView): React.ReactNode {
     const progress = progressActionFor(node);
-    if (!node.changePending) return progress;
+    const logging = timeActionsFor(node);
+    if (!node.changePending) {
+      return (
+        <>
+          {progress}
+          {logging}
+        </>
+      );
+    }
     return (
       <>
         <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
@@ -543,6 +584,75 @@ export function ExpertMilestoneRail({
           Locked while {clientCompanyName} reviews a change to it
         </span>
         {progress}
+        {logging}
+      </>
+    );
+  }
+
+  /** "Log time" on an in-progress milestone, and the inline form once it (or an edit) opens. */
+  function timeActionsFor(node: MilestoneNodeView): React.ReactNode {
+    const milestoneTime: MilestoneTimeView | undefined = time?.byMilestoneId[node.id];
+    if (milestoneTime === undefined) return null;
+    const formOpen = timeForm?.milestoneId === node.id;
+    return (
+      <>
+        {milestoneTime.canLog && !formOpen && (
+          <Button
+            ref={(element) => focusLogButton(node.id, element)}
+            size="sm"
+            variant="ghost"
+            onClick={() => setTimeForm({ milestoneId: node.id })}
+            aria-label={`Log time on ${node.title}`}
+          >
+            <Timer className="size-3.5" aria-hidden />
+            Log time
+          </Button>
+        )}
+        {formOpen && (
+          <div className="basis-full">
+            <LogTimeForm
+              key={timeForm.entry?.id ?? 'new'}
+              engagementId={engagementId}
+              milestoneId={node.id}
+              milestoneTitle={milestoneTime.milestoneTitle}
+              estimatedMinutes={milestoneTime.estimatedMinutes}
+              loggedMinutes={milestoneTime.loggedMinutes}
+              clientCompanyName={clientCompanyName}
+              entry={timeForm.entry}
+              onClose={closeTimeForm}
+            />
+          </div>
+        )}
+      </>
+    );
+  }
+
+  /** Edit and delete icons on the viewer's own entries, where the view allows them. */
+  function entryControlsFor(milestoneId: string, entry: TimeEntryView): React.ReactNode {
+    return (
+      <>
+        {entry.canEdit && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-muted-foreground size-11 sm:size-7"
+            onClick={() => setTimeForm({ milestoneId, entry })}
+            aria-label={`Edit time entry: ${entry.note}`}
+          >
+            <Pencil className="size-3.5" aria-hidden />
+          </Button>
+        )}
+        {entry.canDelete && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="text-muted-foreground hover:text-destructive-strong size-11 sm:size-7"
+            onClick={() => setDeleteEntry(entry)}
+            aria-label={`Delete time entry: ${entry.note}`}
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+          </Button>
+        )}
       </>
     );
   }
@@ -594,6 +704,8 @@ export function ExpertMilestoneRail({
   function controlsFor(node: MilestoneNodeView, index: number): React.ReactNode {
     const isFirst = index === 0;
     const isLast = index === optimistic.length - 1;
+    // A milestone with logged time can't be removed; completing it is the way to close it out.
+    const hasLoggedTime = (time?.byMilestoneId[node.id]?.loggedMinutes ?? 0) > 0;
     return (
       <>
         <Button
@@ -628,16 +740,18 @@ export function ExpertMilestoneRail({
             >
               <Pencil className="size-3.5" aria-hidden />
             </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="text-muted-foreground hover:text-destructive size-7"
-              disabled={isPending}
-              onClick={() => openRemove(node)}
-              aria-label={`Remove ${node.title}`}
-            >
-              <Trash2 className="size-3.5" aria-hidden />
-            </Button>
+            {!hasLoggedTime && (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="text-muted-foreground hover:text-destructive-strong size-7"
+                disabled={isPending}
+                onClick={() => openRemove(node)}
+                aria-label={`Remove ${node.title}`}
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+              </Button>
+            )}
           </>
         )}
       </>
@@ -766,9 +880,12 @@ export function ExpertMilestoneRail({
               isLast={index === optimistic.length - 1}
               actions={actionsFor(node)}
               controls={controlsFor(node, index)}
+              time={time?.byMilestoneId[node.id]}
+              timeControls={(entry) => entryControlsFor(node.id, entry)}
             />
           ))}
         </div>
+        {time !== null && <TimeTotals totals={time.totals} />}
         <p className="text-muted-foreground mt-4 text-xs leading-relaxed">
           {clientCompanyName} and Balo are notified when you complete a milestone or change the
           plan. The project goes to {clientCompanyName} for review as a whole when you mark it
@@ -780,6 +897,12 @@ export function ExpertMilestoneRail({
       </Card>
 
       {modals}
+      <DeleteTimeEntryDialog
+        engagementId={engagementId}
+        entry={deleteEntry}
+        clientCompanyName={clientCompanyName}
+        onClose={closeDeleteEntry}
+      />
     </>
   );
 }

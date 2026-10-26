@@ -792,6 +792,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-624: a time entry took a milestone past its estimate for the first time at that
+  // estimate. CLIENT owner (recipient:'client' via payload.recipientId; email + in-app) and
+  // Balo ADMINS (recipient:'admin_users' fan-out; in-app). No expert rule: the expert logged
+  // the time and sees the over-state on the page.
+  'engagement.milestone_estimate_exceeded': [
+    ...emailAndInApp('client', 'engagement-milestone-estimate-exceeded-client'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-milestone-estimate-exceeded-admin',
+      timing: 'immediate',
+    },
+  ],
   // BAL-332 (D2): the expert reopened a completed milestone. IN-APP ONLY to BOTH the
   // client owner and the admins — reverts are never silent, but they aren't
   // email-worthy. One template shared by both rules.

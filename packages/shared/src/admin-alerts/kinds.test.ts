@@ -53,3 +53,18 @@ describe('ADMIN_ALERT_KINDS — change-order kinds (BAL-622)', () => {
     expect(meta).toMatchObject({ group: 'money', finder: null, cadence: null });
   });
 });
+
+describe('ADMIN_ALERT_KINDS — over-estimate kind (BAL-624)', () => {
+  it('is a 15m marketplace finder kind that targets the project page', () => {
+    const meta = ADMIN_ALERT_KINDS['project.over_estimate'];
+    expect(meta).toMatchObject({
+      group: 'marketplace',
+      finder: 'projectOverEstimate',
+      cadence: '15m',
+    });
+    expect(meta.target({ entityId: 'eng_1', detail: DETAIL })).toEqual({
+      label: 'the project',
+      href: '/engagements/eng_1',
+    });
+  });
+});

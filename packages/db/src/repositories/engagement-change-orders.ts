@@ -21,6 +21,7 @@ import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
+import { loggedMinutesTx, milestoneIdsWithLoggedTimeTx } from './engagement-time-entries';
 import { isUniqueViolation } from './experts';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
 import type { PricingMethod } from './proposal-types';
@@ -372,14 +373,17 @@ async function liveMilestonesTx(tx: DbTx, engagementId: string): Promise<Engagem
     .for('update');
 }
 
-/** Assemble the coherence snapshot under the engagement lock and assert it. */
+/**
+ * Assemble the coherence snapshot under the engagement lock and assert it. The logged time is
+ * read under the same lock, so time logged between send and approve is counted at approve.
+ */
 async function assertCoherentTx(
   tx: DbTx,
   order: EngagementChangeOrder,
   lines: readonly EngagementChangeOrderLine[],
   live: readonly EngagementMilestone[]
 ): Promise<{ pricingMethod: PricingMethod; currentEffectivePriceCents: number }> {
-  const { pricingMethod } = await readProjectTermsTx(tx, order.engagementId);
+  const { pricingMethod, rateCents } = await readProjectTermsTx(tx, order.engagementId);
   const currentEffectivePriceCents = await effectivePriceCentsTx(tx, order.engagementId);
   assertChangeOrderCoherent({
     pricingMethod,
@@ -388,6 +392,9 @@ async function assertCoherentTx(
     note: order.note,
     lines,
     liveMilestoneIds: new Set(live.map((m) => m.id)),
+    milestoneIdsWithTime: await milestoneIdsWithLoggedTimeTx(tx, order.engagementId),
+    loggedMinutes: await loggedMinutesTx(tx, order.engagementId),
+    rateCents,
   });
   return { pricingMethod, currentEffectivePriceCents };
 }

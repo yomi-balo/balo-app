@@ -7,6 +7,7 @@ import type {
   ProjectProposalResubmittedPayload,
   BillingDetailsConfirmedPayload,
   EngagementMilestoneCompletedPayload,
+  EngagementMilestoneEstimateExceededPayload,
   EngagementMilestoneRevertedPayload,
   EngagementScopeChangedPayload,
   EngagementCompletionRequestedPayload,
@@ -490,6 +491,7 @@ export type NotificationEvent =
   | 'proposal.shared'
   | 'billing.details_confirmed'
   | 'engagement.milestone_completed'
+  | 'engagement.milestone_estimate_exceeded'
   | 'engagement.milestone_reverted'
   | 'engagement.scope_changed'
   | 'engagement.completion_requested'
@@ -871,6 +873,7 @@ export interface EventPayloadMap {
   'proposal.shared': ProposalSharedPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
   'engagement.milestone_completed': EngagementMilestoneCompletedPayload;
+  'engagement.milestone_estimate_exceeded': EngagementMilestoneEstimateExceededPayload;
   'engagement.milestone_reverted': EngagementMilestoneRevertedPayload;
   'engagement.scope_changed': EngagementScopeChangedPayload;
   'engagement.completion_requested': EngagementCompletionRequestedPayload;

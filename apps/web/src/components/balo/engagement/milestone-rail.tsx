@@ -2,10 +2,14 @@ import { Flag } from 'lucide-react';
 
 import { Card } from '@/components/ui/card';
 import type { MilestoneNodeView } from '@/lib/engagement/engagement-view';
+import type { WorkspaceTimeView } from '@/lib/engagement/time-view';
 import { MilestoneRow } from './milestone-row';
+import { TimeTotals } from './time/time-totals';
 
 interface MilestoneRailProps {
   milestones: MilestoneNodeView[];
+  /** Time-and-materials only: per-milestone hours and the project totals. */
+  time?: WorkspaceTimeView | null;
 }
 
 /**
@@ -17,9 +21,13 @@ interface MilestoneRailProps {
  * labels, and the success-tinted "Delivered:" completion note. NO action buttons —
  * this component stays a SERVER, read-only component for the client/admin lenses and
  * every non-active expert state; the interactive expert rail is a separate client
- * component (`ExpertMilestoneRail`). Caller guards on `hasMilestones`.
+ * component (`ExpertMilestoneRail`). On a time-and-materials project each row carries its hours
+ * and a time log, with the project totals below. Caller guards on `hasMilestones`.
  */
-export function MilestoneRail({ milestones }: Readonly<MilestoneRailProps>): React.JSX.Element {
+export function MilestoneRail({
+  milestones,
+  time = null,
+}: Readonly<MilestoneRailProps>): React.JSX.Element {
   return (
     <Card className="border-border bg-card p-6">
       <div className="text-muted-foreground flex items-center gap-2 text-xs font-semibold tracking-wide uppercase">
@@ -28,9 +36,15 @@ export function MilestoneRail({ milestones }: Readonly<MilestoneRailProps>): Rea
       </div>
       <div className="mt-4">
         {milestones.map((node, index) => (
-          <MilestoneRow key={node.id} node={node} isLast={index === milestones.length - 1} />
+          <MilestoneRow
+            key={node.id}
+            node={node}
+            isLast={index === milestones.length - 1}
+            time={time?.byMilestoneId[node.id]}
+          />
         ))}
       </div>
+      {time !== null && <TimeTotals totals={time.totals} />}
     </Card>
   );
 }

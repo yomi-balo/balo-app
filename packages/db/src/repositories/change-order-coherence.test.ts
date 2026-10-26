@@ -41,6 +41,9 @@ function fixed(
     note: 'Adds a migration.',
     lines: [addLine()],
     liveMilestoneIds: new Set([LIVE_A, LIVE_B]),
+    milestoneIdsWithTime: new Set<string>(),
+    loggedMinutes: 0,
+    rateCents: null,
     ...overrides,
   };
 }
@@ -109,5 +112,62 @@ describe('assertChangeOrderCoherent', () => {
 
   it('allows a remove line with no estimate on T&M', () => {
     expect(ruleOf(tm({ lines: [{ ...editLine(), op: 'remove' }] }))).toBeNull();
+  });
+
+  describe('remove_has_logged_time', () => {
+    const withTime = { milestoneIdsWithTime: new Set([LIVE_A]) };
+
+    it('refuses a remove line on a milestone with time logged', () => {
+      expect(ruleOf(tm({ ...withTime, lines: [{ ...editLine(), op: 'remove' }] }))).toBe(
+        'remove_has_logged_time'
+      );
+    });
+
+    it('accepts removing a milestone with no time, and editing one with time', () => {
+      const removeB = { ...editLine({ engagementMilestoneId: LIVE_B }), op: 'remove' as const };
+      expect(ruleOf(tm({ ...withTime, lines: [removeB] }))).toBeNull();
+      expect(ruleOf(tm({ ...withTime, lines: [editLine({ estimatedMinutes: 60 })] }))).toBeNull();
+    });
+  });
+
+  describe('cap_below_logged', () => {
+    // 10 hours at $150/hr: logged value 150_000 cents.
+    const logged = { loggedMinutes: 600, rateCents: 15_000, currentEffectivePriceCents: 400_000 };
+
+    it('refuses a cap decrease below the value of the time logged', () => {
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -250_001 }))).toBe('cap_below_logged');
+    });
+
+    it('accepts a cap decrease to exactly the logged value, or above it', () => {
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -250_000 }))).toBeNull();
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -100_000 }))).toBeNull();
+    });
+
+    it('rounds the logged value up to the cent', () => {
+      // 1 minute at 100 cents/hr is 1.67 cents, valued at 2.
+      const oneMinute = { loggedMinutes: 1, rateCents: 100, currentEffectivePriceCents: 3 };
+      expect(ruleOf(tm({ ...oneMinute, priceDeltaCents: -2 }))).toBe('cap_below_logged');
+      expect(ruleOf(tm({ ...oneMinute, priceDeltaCents: -1 }))).toBeNull();
+    });
+
+    it('always accepts a raise, even one that leaves the cap below the logged value', () => {
+      const over = { ...logged, currentEffectivePriceCents: 50_000 };
+      expect(ruleOf(tm({ ...over, priceDeltaCents: 10_000 }))).toBeNull();
+    });
+
+    it('skips a scope-only order on a project already over its cap', () => {
+      const over = { ...logged, currentEffectivePriceCents: 50_000 };
+      expect(ruleOf(tm({ ...over, priceDeltaCents: null }))).toBeNull();
+    });
+
+    it('values logged time at zero without a rate', () => {
+      expect(ruleOf(tm({ ...logged, rateCents: null, priceDeltaCents: -400_000 }))).toBeNull();
+    });
+
+    it('never applies on a fixed-price project', () => {
+      expect(
+        ruleOf(fixed({ ...logged, currentEffectivePriceCents: 500_000, priceDeltaCents: -499_000 }))
+      ).toBeNull();
+    });
   });
 });

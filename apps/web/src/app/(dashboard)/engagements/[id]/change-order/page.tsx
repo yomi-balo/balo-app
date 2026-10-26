@@ -1,7 +1,12 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { engagementChangeOrdersRepository, projectEngagementsRepository } from '@balo/db';
+import {
+  engagementChangeOrdersRepository,
+  engagementTimeEntriesRepository,
+  projectEngagementsRepository,
+} from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import { loggedValueCents } from '@balo/shared/engagements';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { log } from '@/lib/logging';
@@ -118,7 +123,11 @@ export default async function ChangeOrderComposerPage({
     redirect(workspaceHref);
   }
 
-  const orders = await engagementChangeOrdersRepository.listForEngagement(id);
+  const isTm = engagement.pricingMethod === 'tm';
+  const [orders, loggedSums] = await Promise.all([
+    engagementChangeOrdersRepository.listForEngagement(id),
+    isTm ? engagementTimeEntriesRepository.sumsForEngagement(id, null) : Promise.resolve(null),
+  ]);
   const open = findOpenOrder(orders);
   if (open?.status === 'sent') {
     redirect(workspaceHref);
@@ -172,6 +181,18 @@ export default async function ChangeOrderComposerPage({
         currency={engagement.currency}
         currentPriceCents={effectiveExpertPriceCents(engagement.priceCents, orders)}
         hourlyRateCents={engagement.rateCents}
+        milestoneIdsWithTime={
+          loggedSums === null
+            ? []
+            : Object.entries(loggedSums.byMilestone)
+                .filter(([, minutes]) => minutes > 0)
+                .map(([milestoneId]) => milestoneId)
+        }
+        loggedValueCents={
+          loggedSums === null
+            ? null
+            : loggedValueCents(loggedSums.totalMinutes, engagement.rateCents)
+        }
         milestones={milestones}
         order={order}
         prefillLine={prefillLineFor(prefill, milestones)}

@@ -26,6 +26,8 @@ export { engagementMilestoneFactory } from './engagement-milestone.factory';
 export type { EngagementMilestoneFactoryResult } from './engagement-milestone.factory';
 export { engagementChangeOrderFactory } from './engagement-change-order.factory';
 export type { EngagementChangeOrderFactoryResult } from './engagement-change-order.factory';
+export { engagementTimeEntryFactory } from './engagement-time-entry.factory';
+export type { EngagementTimeEntryFactoryResult } from './engagement-time-entry.factory';
 export { actionItemFactory } from './action-item.factory';
 export type { ActionItemFactoryResult } from './action-item.factory';
 export { meetingFactory } from './meeting.factory';

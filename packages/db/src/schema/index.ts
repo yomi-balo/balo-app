@@ -38,6 +38,8 @@ export * from './engagement-milestones';
 export * from './project-change-requests';
 // BAL-622 — change orders on a live project, and the milestone lines each one proposes.
 export * from './engagement-change-orders';
+// BAL-624 — time logged against a time-and-materials project's milestones.
+export * from './engagement-time-entries';
 export * from './action-items';
 export * from './transcripts';
 export * from './meetings';

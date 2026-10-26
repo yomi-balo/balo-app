@@ -29,6 +29,7 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
   'project.proposal_accepted',
   'billing.details_confirmed',
   'engagement.milestone_completed',
+  'engagement.milestone_estimate_exceeded',
   'engagement.milestone_reverted',
   'engagement.scope_changed',
   'engagement.completion_requested',

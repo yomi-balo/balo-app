@@ -330,6 +330,7 @@ export {
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
+  MilestoneHasLoggedTimeError,
   type EngagementMilestoneStatus,
   type MilestoneEditBefore,
   type MilestoneContentEditRow,
@@ -360,6 +361,19 @@ export {
   ScopeChangeRequiresChangeOrderError,
 } from './_shared/change-order-guards';
 export type { EngagementChangeOrder, EngagementChangeOrderLine } from '../schema';
+// ── Time logged on a time-and-materials project ────────────────────────────
+export {
+  engagementTimeEntriesRepository,
+  loggedMinutesTx,
+  milestoneIdsWithLoggedTimeTx,
+  TimeEntryWriteRefusedError,
+  type TimeEntryRefusal,
+  type TimeEntryWriteResult,
+  type TimeEntryListRow,
+  type TimeEntrySums,
+  type OverEstimateAlertRow,
+} from './engagement-time-entries';
+export type { EngagementTimeEntry, NewEngagementTimeEntry } from '../schema';
 export {
   actionItemsRepository,
   ACTION_ITEM_STATUS_TRANSITIONS,

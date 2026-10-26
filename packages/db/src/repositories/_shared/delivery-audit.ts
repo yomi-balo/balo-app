@@ -17,6 +17,11 @@ export type DeliveryAuditAction =
   | 'engagement_milestone.edited'
   | 'engagement_milestone.removed'
   | 'engagement_milestone.reordered'
+  // the milestone's logged time first went past its estimate (once per estimate value)
+  | 'engagement_milestone.estimate_exceeded'
+  // time entries on a time-and-materials project (an insert is not audited: the row is the record)
+  | 'engagement_time_entry.edited'
+  | 'engagement_time_entry.removed'
   // engagement lifecycle
   //
   // `engagement.created` is TYPE-AGNOSTIC by design (BAL-417 post-review). Before it,
@@ -52,7 +57,8 @@ export type DeliveryAuditAction =
 export type DeliveryAuditEntityType =
   | 'engagement'
   | 'engagement_milestone'
-  | 'engagement_change_order';
+  | 'engagement_change_order'
+  | 'engagement_time_entry';
 
 /**
  * Record ONE delivery audit event inside the caller's transaction (pass the `tx`

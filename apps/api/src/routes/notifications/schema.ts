@@ -358,6 +358,19 @@ const billingDetailsConfirmedPayload = z.object({
   projectRequestId: z.uuid(),
 });
 
+const engagementMilestoneEstimateExceededPayload = z.object({
+  correlationId: z.string().min(1).max(160),
+  engagementId: z.uuid(),
+  milestoneId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertPartyLabel: z.string().min(1).max(200),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  milestoneTitle: z.string().min(1).max(200),
+  loggedHoursLabel: z.string().min(1).max(40),
+  estimatedHoursLabel: z.string().min(1).max(40),
+});
+
 // BAL-332 (D2) expert milestone completed (expert → client owner + admins).
 // `correlationId` = `${milestoneId}:${completedAtEpochMs}` (idempotent per
 // completion; z.string not z.uuid so the epoch suffix validates). `recipientId` is
@@ -1086,6 +1099,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.milestone_completed'),
     payload: engagementMilestoneCompletedPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.milestone_estimate_exceeded'),
+    payload: engagementMilestoneEstimateExceededPayload,
   }),
   z.object({
     event: z.literal('engagement.milestone_reverted'),

@@ -32,6 +32,15 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/remove-milestone', () => ({
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/reorder-milestones', () => ({
   reorderMilestonesAction: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/log-time', () => ({
+  logTimeAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/update-time-entry', () => ({
+  updateTimeEntryAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/remove-time-entry', () => ({
+  removeTimeEntryAction: vi.fn(),
+}));
 
 import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-rail';
 import { toast } from 'sonner';
@@ -43,6 +52,10 @@ import { addMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/
 import { updateMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/update-milestone';
 import { removeMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/remove-milestone';
 import { reorderMilestonesAction } from '@/app/(dashboard)/engagements/[id]/_actions/reorder-milestones';
+import { logTimeAction } from '@/app/(dashboard)/engagements/[id]/_actions/log-time';
+import { removeTimeEntryAction } from '@/app/(dashboard)/engagements/[id]/_actions/remove-time-entry';
+import type { WorkspaceTimeView } from '@/lib/engagement/time-view';
+import { entryView, milestoneTimeView } from './time/fixtures';
 
 const startMock = vi.mocked(startMilestoneAction);
 const completeMock = vi.mocked(completeMilestoneAction);
@@ -659,5 +672,130 @@ describe('ExpertMilestoneRail — scope changes that need approval (BAL-623)', (
       expect(within(dialog).getByRole('button', { name: /remove milestone/i })).toBeInTheDocument();
       expect(track).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('ExpertMilestoneRail — time and materials', () => {
+  const inProgress = node({
+    id: 'm-1',
+    title: 'Discovery',
+    status: 'in_progress',
+    nodeVariant: 'in_progress',
+    statusLabel: 'In progress',
+  });
+
+  function timeView(canLog: boolean): WorkspaceTimeView {
+    return {
+      byMilestoneId: {
+        'm-1': milestoneTimeView({
+          milestoneId: 'm-1',
+          milestoneTitle: 'Discovery',
+          canLog,
+          entries: [entryView({ canEdit: true, canDelete: true })],
+        }),
+      },
+      totals: { loggedLabel: '4 of 8 hrs logged', fillPercent: 50, over: false, period: null },
+      overEstimateBanner: null,
+      clientCompanyName: 'Northwind Industrial',
+    };
+  }
+
+  function renderWithTime(time: WorkspaceTimeView) {
+    return render(
+      <ExpertMilestoneRail
+        engagementId="eng-1"
+        milestones={[inProgress]}
+        emptyState={null}
+        expertPersonShort="Priya"
+        clientCompanyName="Northwind Industrial"
+        addNeedsChangeOrder
+        time={time}
+      />
+    );
+  }
+
+  it('offers Log time on an in-progress milestone and logs through the inline form', async () => {
+    const user = userEvent.setup();
+    vi.mocked(logTimeAction).mockResolvedValue({ success: true });
+    renderWithTime(timeView(true));
+    await user.click(screen.getByRole('button', { name: 'Log time on Discovery' }));
+    await user.type(screen.getByLabelText('Note'), 'Mapped the flows');
+    await user.click(screen.getByRole('button', { name: 'Log time' }));
+    expect(logTimeAction).toHaveBeenCalledWith({
+      engagementId: 'eng-1',
+      milestoneId: 'm-1',
+      minutes: 60,
+      note: 'Mapped the flows',
+    });
+  });
+
+  it('offers no Log time when the viewer cannot log', () => {
+    renderWithTime(timeView(false));
+    expect(screen.queryByRole('button', { name: /Log time/ })).not.toBeInTheDocument();
+  });
+
+  it("renders the totals under the plan and edit / delete on the author's entries", () => {
+    renderWithTime(timeView(true));
+    expect(screen.getByText('4 of 8 hrs logged', { selector: 'p' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Edit time entry: Mapped the discovery flows' })
+    ).toBeInTheDocument();
+  });
+
+  it('opens the form prefilled from an entry to edit it', async () => {
+    const user = userEvent.setup();
+    renderWithTime(timeView(true));
+    await user.click(screen.getByText('Time log (1)'));
+    await user.click(
+      screen.getByRole('button', { name: 'Edit time entry: Mapped the discovery flows' })
+    );
+    expect(screen.getByLabelText('Note')).toHaveValue('Mapped the discovery flows');
+    expect(screen.getByLabelText('Hours')).toHaveValue(1.5);
+    expect(screen.getByRole('button', { name: 'Save entry' })).toBeInTheDocument();
+  });
+
+  it('confirms before deleting an entry, then removes it', async () => {
+    const user = userEvent.setup();
+    vi.mocked(removeTimeEntryAction).mockResolvedValue({ success: true });
+    renderWithTime(timeView(true));
+    await user.click(
+      screen.getByRole('button', { name: 'Delete time entry: Mapped the discovery flows' })
+    );
+    expect(screen.getByRole('heading', { name: 'Delete this time entry?' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete entry' }));
+    expect(removeTimeEntryAction).toHaveBeenCalledWith({ engagementId: 'eng-1', entryId: 'te-1' });
+  });
+
+  it('returns focus to the Log time button when the form is cancelled', async () => {
+    const user = userEvent.setup();
+    renderWithTime(timeView(true));
+    await user.click(screen.getByRole('button', { name: 'Log time on Discovery' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Log time on Discovery' })).toHaveFocus();
+  });
+
+  it('gives the entry controls a 44px touch target on mobile', () => {
+    renderWithTime(timeView(true));
+    const edit = screen.getByRole('button', {
+      name: 'Edit time entry: Mapped the discovery flows',
+    });
+    expect(edit).toHaveClass('size-11', 'sm:size-7');
+    expect(
+      screen.getByRole('button', { name: 'Delete time entry: Mapped the discovery flows' })
+    ).toHaveClass('size-11', 'hover:text-destructive-strong');
+  });
+
+  it('hides Remove for a milestone with logged time, and keeps it for one without', () => {
+    const { unmount } = renderWithTime(timeView(true));
+    expect(screen.queryByRole('button', { name: 'Remove Discovery' })).not.toBeInTheDocument();
+    unmount();
+    const empty = timeView(true);
+    empty.byMilestoneId['m-1'] = {
+      ...milestoneTimeView({ milestoneId: 'm-1' }),
+      loggedMinutes: 0,
+      entries: [],
+    };
+    renderWithTime(empty);
+    expect(screen.getByRole('button', { name: 'Remove Discovery' })).toBeInTheDocument();
   });
 });

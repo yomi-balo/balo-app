@@ -1,0 +1,634 @@
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, ne, sql, sum } from 'drizzle-orm';
+import { estimateCrossed, TIME_ENTRY_MAX_MINUTES, type IsoDate } from '@balo/shared/engagements';
+import { db } from '../client';
+import {
+  agencies,
+  auditEvents,
+  companies,
+  engagementMilestones,
+  engagements,
+  engagementTimeEntries,
+  expertProfiles,
+  projectEngagements,
+  projectRequests,
+  users,
+  type EngagementMilestone,
+  type EngagementTimeEntry,
+} from '../schema';
+import { recordDeliveryAudit } from './_shared/delivery-audit';
+import { lockEngagementAndMilestone, type DbTx } from './_shared/engagement-lock';
+import { readProjectTermsTx } from './_shared/change-order-guards';
+import type { DbExecutor } from './_shared/db-executor';
+
+/**
+ * The time-entry repository: time an expert logs against the milestones of a live
+ * time-and-materials project, and the sums the workspace and the admin finder read.
+ *
+ * LOCK DANCE (fenced by `time-entry-writers-take-the-engagement-lock-first.test.ts`): every
+ * write transaction opens with `lockEngagementAndMilestone`, so time writes serialise with
+ * every other delivery write on the engagement — including a change order's `send` and
+ * `approve`, which read the logged total under the same lock for `cap_below_logged`. Lock
+ * order: engagement → project child → milestone → entry. The entry's milestone is discovered
+ * by an unlocked read before the transaction; the guards run against the locked re-reads.
+ *
+ * WRITE PRECONDITIONS. The project is `active` (so `pending_acceptance` is refused by the lock)
+ * and priced `tm`. `log` and `update` need the milestone `in_progress` and keep the author's
+ * live minutes on the work date, across the engagement, within a day (`TIME_ENTRY_MAX_MINUTES`);
+ * `remove` works on a milestone in any status. `update` and `remove` act only on the caller's
+ * own live entry.
+ *
+ * ESTIMATE CROSSING. A write that moves a milestone's live logged total from within its
+ * estimate to beyond it records `engagement_milestone.estimate_exceeded` in the same
+ * transaction — once per milestone per estimate value (the value is kept in the audit
+ * metadata), so removing and relogging at the same estimate does not record it again, while a
+ * change order that raises the estimate re-arms it. The returned `estimateExceeded` flag tells
+ * the caller to notify.
+ *
+ * ROLE-FREE. The web layer decides who may log (the engagement axis); `userId` is the actor.
+ *
+ * NEVER NOTIFIES — the caller publishes after commit (`repositories-never-notify.test.ts`).
+ */
+
+export type TimeEntryRefusal =
+  | 'not_time_and_materials'
+  | 'milestone_not_in_progress'
+  | 'milestone_not_found'
+  | 'entry_not_found'
+  | 'daily_limit_exceeded';
+
+/** A time write refused by a precondition. Nothing is written. */
+export class TimeEntryWriteRefusedError extends Error {
+  constructor(public readonly reason: TimeEntryRefusal) {
+    super(`Time entry write refused: ${reason}`);
+    this.name = 'TimeEntryWriteRefusedError';
+  }
+}
+
+export interface TimeEntryWriteResult {
+  entry: EngagementTimeEntry;
+  milestone: { id: string; title: string; estimatedMinutes: number | null };
+  /** The milestone's live logged total after the write. */
+  loggedAfterMinutes: number;
+  /** The write crossed the milestone's estimate for the first time at this estimate; audited in the transaction. */
+  estimateExceeded: boolean;
+  /** Live milestones of the engagement whose logged total is now over their estimate. */
+  milestonesOverCount: number;
+}
+
+export interface TimeEntryListRow {
+  id: string;
+  engagementMilestoneId: string;
+  userId: string;
+  authorFirstName: string | null;
+  workedOn: IsoDate;
+  minutes: number;
+  note: string;
+  createdAt: Date;
+}
+
+export interface TimeEntrySums {
+  totalMinutes: number;
+  /** Minutes worked inside the billing period; null when no period was given. */
+  periodMinutes: number | null;
+  /** Live minutes per milestone id, including milestones since removed. */
+  byMilestone: Record<string, number>;
+}
+
+export interface OverEstimateAlertRow {
+  engagementId: string;
+  projectTitle: string | null;
+  clientCompanyName: string;
+  expertFirstName: string | null;
+  expertLastName: string | null;
+  agencyName: string | null;
+  loggedMinutes: number;
+  estimatedMinutes: number;
+}
+
+const liveEntry = isNull(engagementTimeEntries.deletedAt);
+
+/** Minutes of live time logged on the engagement, including entries on removed milestones. */
+export async function loggedMinutesTx(exec: DbExecutor, engagementId: string): Promise<number> {
+  const [row] = await exec
+    .select({ total: sum(engagementTimeEntries.minutes) })
+    .from(engagementTimeEntries)
+    .where(and(eq(engagementTimeEntries.engagementId, engagementId), liveEntry));
+  return Number(row?.total ?? 0);
+}
+
+async function milestoneLoggedMinutesTx(tx: DbTx, milestoneId: string): Promise<number> {
+  const [row] = await tx
+    .select({ total: sum(engagementTimeEntries.minutes) })
+    .from(engagementTimeEntries)
+    .where(and(eq(engagementTimeEntries.engagementMilestoneId, milestoneId), liveEntry));
+  return Number(row?.total ?? 0);
+}
+
+async function sumsByMilestoneTx(
+  exec: DbExecutor,
+  engagementId: string
+): Promise<Record<string, number>> {
+  const rows = await exec
+    .select({
+      milestoneId: engagementTimeEntries.engagementMilestoneId,
+      total: sum(engagementTimeEntries.minutes),
+    })
+    .from(engagementTimeEntries)
+    .where(and(eq(engagementTimeEntries.engagementId, engagementId), liveEntry))
+    .groupBy(engagementTimeEntries.engagementMilestoneId);
+  return Object.fromEntries(rows.map((r) => [r.milestoneId, Number(r.total ?? 0)]));
+}
+
+/** The ids of the engagement's milestones that have live time logged against them. */
+export async function milestoneIdsWithLoggedTimeTx(
+  exec: DbExecutor,
+  engagementId: string
+): Promise<Set<string>> {
+  return new Set(Object.keys(await sumsByMilestoneTx(exec, engagementId)));
+}
+
+/**
+ * Refuse `daily_limit_exceeded` when the author's live minutes on `workedOn`, across the
+ * engagement and excluding `excludeEntryId`, plus `minutes` would pass a day.
+ */
+async function assertWithinDailyLimitTx(
+  tx: DbTx,
+  input: {
+    engagementId: string;
+    userId: string;
+    workedOn: IsoDate;
+    minutes: number;
+    excludeEntryId?: string;
+  }
+): Promise<void> {
+  const [row] = await tx
+    .select({ total: sum(engagementTimeEntries.minutes) })
+    .from(engagementTimeEntries)
+    .where(
+      and(
+        eq(engagementTimeEntries.engagementId, input.engagementId),
+        eq(engagementTimeEntries.userId, input.userId),
+        eq(engagementTimeEntries.workedOn, input.workedOn),
+        liveEntry,
+        input.excludeEntryId === undefined
+          ? undefined
+          : ne(engagementTimeEntries.id, input.excludeEntryId)
+      )
+    );
+  if (Number(row?.total ?? 0) + input.minutes > TIME_ENTRY_MAX_MINUTES) {
+    throw new TimeEntryWriteRefusedError('daily_limit_exceeded');
+  }
+}
+
+/** Live milestones with an estimate whose logged total is over it. */
+async function milestonesOverCountTx(tx: DbTx, engagementId: string): Promise<number> {
+  const byMilestone = await sumsByMilestoneTx(tx, engagementId);
+  const milestones = await tx
+    .select({
+      id: engagementMilestones.id,
+      estimatedMinutes: engagementMilestones.estimatedMinutes,
+    })
+    .from(engagementMilestones)
+    .where(
+      and(
+        eq(engagementMilestones.engagementId, engagementId),
+        isNull(engagementMilestones.deletedAt),
+        isNotNull(engagementMilestones.estimatedMinutes)
+      )
+    );
+  return milestones.filter(
+    (m) => m.estimatedMinutes !== null && (byMilestone[m.id] ?? 0) > m.estimatedMinutes
+  ).length;
+}
+
+async function assertTimeAndMaterialsTx(tx: DbTx, engagementId: string): Promise<void> {
+  const { pricingMethod } = await readProjectTermsTx(tx, engagementId);
+  if (pricingMethod !== 'tm') throw new TimeEntryWriteRefusedError('not_time_and_materials');
+}
+
+function assertInProgress(milestone: EngagementMilestone): void {
+  if (milestone.status !== 'in_progress') {
+    throw new TimeEntryWriteRefusedError('milestone_not_in_progress');
+  }
+}
+
+/**
+ * Unlocked lock-order discovery: the live milestone's engagement must be `engagementId`.
+ * Refuses `milestone_not_found` otherwise, before any lock is taken on another engagement.
+ */
+async function discoverMilestone(milestoneId: string, engagementId: string): Promise<void> {
+  const [row] = await db
+    .select({ engagementId: engagementMilestones.engagementId })
+    .from(engagementMilestones)
+    .where(and(eq(engagementMilestones.id, milestoneId), isNull(engagementMilestones.deletedAt)));
+  if (row?.engagementId !== engagementId) {
+    throw new TimeEntryWriteRefusedError('milestone_not_found');
+  }
+}
+
+/**
+ * Unlocked lock-order discovery of the milestone a live entry sits on. A missing or removed
+ * entry, one on another engagement or by another author, or one whose milestone was removed
+ * all refuse with the same `entry_not_found`, so authorship does not leak.
+ */
+async function discoverOwnEntryMilestoneId(input: {
+  engagementId: string;
+  entryId: string;
+  userId: string;
+}): Promise<string> {
+  const [row] = await db
+    .select({ milestoneId: engagementTimeEntries.engagementMilestoneId })
+    .from(engagementTimeEntries)
+    .innerJoin(
+      engagementMilestones,
+      and(
+        eq(engagementMilestones.id, engagementTimeEntries.engagementMilestoneId),
+        isNull(engagementMilestones.deletedAt)
+      )
+    )
+    .where(
+      and(
+        eq(engagementTimeEntries.id, input.entryId),
+        eq(engagementTimeEntries.engagementId, input.engagementId),
+        eq(engagementTimeEntries.userId, input.userId),
+        liveEntry
+      )
+    );
+  if (row === undefined) throw new TimeEntryWriteRefusedError('entry_not_found');
+  return row.milestoneId;
+}
+
+/** Re-read the caller's entry FOR UPDATE under the engagement and milestone locks. */
+async function lockOwnEntryTx(
+  tx: DbTx,
+  input: { engagementId: string; entryId: string; userId: string; milestoneId: string }
+): Promise<EngagementTimeEntry> {
+  const [entry] = await tx
+    .select()
+    .from(engagementTimeEntries)
+    .where(
+      and(
+        eq(engagementTimeEntries.id, input.entryId),
+        eq(engagementTimeEntries.engagementId, input.engagementId),
+        eq(engagementTimeEntries.engagementMilestoneId, input.milestoneId),
+        eq(engagementTimeEntries.userId, input.userId),
+        liveEntry
+      )
+    )
+    .for('update');
+  if (entry === undefined) throw new TimeEntryWriteRefusedError('entry_not_found');
+  return entry;
+}
+
+/**
+ * Record `engagement_milestone.estimate_exceeded` when the write crosses the estimate and no
+ * crossing has been recorded for this milestone at this estimate. Runs under the engagement
+ * lock, so the check-then-insert cannot race. Returns whether it recorded one.
+ */
+async function recordFirstCrossingTx(
+  tx: DbTx,
+  input: {
+    engagementId: string;
+    milestone: EngagementMilestone;
+    beforeMinutes: number;
+    afterMinutes: number;
+    timeEntryId: string;
+    actorUserId: string;
+  }
+): Promise<boolean> {
+  const est = input.milestone.estimatedMinutes;
+  if (est === null || !estimateCrossed(input.beforeMinutes, input.afterMinutes, est)) {
+    return false;
+  }
+  const [prior] = await tx
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'engagement_milestone'),
+        eq(auditEvents.entityId, input.milestone.id),
+        eq(auditEvents.action, 'engagement_milestone.estimate_exceeded'),
+        sql`${auditEvents.metadata}->>'estimatedMinutes' = ${String(est)}`
+      )
+    )
+    .limit(1);
+  if (prior !== undefined) return false;
+
+  await recordDeliveryAudit(tx, {
+    actorUserId: input.actorUserId,
+    action: 'engagement_milestone.estimate_exceeded',
+    entityType: 'engagement_milestone',
+    entityId: input.milestone.id,
+    engagementId: input.engagementId,
+    metadata: {
+      estimatedMinutes: est,
+      loggedMinutes: input.afterMinutes,
+      timeEntryId: input.timeEntryId,
+    },
+  });
+  return true;
+}
+
+async function writeResultTx(
+  tx: DbTx,
+  input: {
+    engagementId: string;
+    entry: EngagementTimeEntry;
+    milestone: EngagementMilestone;
+    beforeMinutes: number;
+    afterMinutes: number;
+    actorUserId: string;
+  }
+): Promise<TimeEntryWriteResult> {
+  const estimateExceeded = await recordFirstCrossingTx(tx, {
+    engagementId: input.engagementId,
+    milestone: input.milestone,
+    beforeMinutes: input.beforeMinutes,
+    afterMinutes: input.afterMinutes,
+    timeEntryId: input.entry.id,
+    actorUserId: input.actorUserId,
+  });
+  return {
+    entry: input.entry,
+    milestone: {
+      id: input.milestone.id,
+      title: input.milestone.title,
+      estimatedMinutes: input.milestone.estimatedMinutes,
+    },
+    loggedAfterMinutes: input.afterMinutes,
+    estimateExceeded,
+    milestonesOverCount: await milestonesOverCountTx(tx, input.engagementId),
+  };
+}
+
+export const engagementTimeEntriesRepository = {
+  /**
+   * Log time against an in-progress milestone of an active T&M project. Throws
+   * `EngagementNotActiveError` (project not active) or `TimeEntryWriteRefusedError`.
+   */
+  async log(input: {
+    engagementId: string;
+    milestoneId: string;
+    userId: string;
+    minutes: number;
+    note: string;
+    workedOn: IsoDate;
+  }): Promise<TimeEntryWriteResult> {
+    await discoverMilestone(input.milestoneId, input.engagementId);
+    return db.transaction(async (tx) => {
+      const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
+      if (milestone.engagementId !== input.engagementId) {
+        throw new TimeEntryWriteRefusedError('milestone_not_found');
+      }
+      await assertTimeAndMaterialsTx(tx, input.engagementId);
+      assertInProgress(milestone);
+      await assertWithinDailyLimitTx(tx, input);
+
+      const beforeMinutes = await milestoneLoggedMinutesTx(tx, milestone.id);
+      const [entry] = await tx
+        .insert(engagementTimeEntries)
+        .values({
+          engagementId: input.engagementId,
+          engagementMilestoneId: milestone.id,
+          userId: input.userId,
+          workedOn: input.workedOn,
+          minutes: input.minutes,
+          note: input.note,
+        })
+        .returning();
+      if (entry === undefined) throw new Error('Time entry insert returned no row');
+
+      return writeResultTx(tx, {
+        engagementId: input.engagementId,
+        entry,
+        milestone,
+        beforeMinutes,
+        afterMinutes: beforeMinutes + input.minutes,
+        actorUserId: input.userId,
+      });
+    });
+  },
+
+  /**
+   * Change the minutes and note of the caller's own entry on an in-progress milestone, and
+   * re-check the estimate crossing. Throws `EngagementNotActiveError` or
+   * `TimeEntryWriteRefusedError`.
+   */
+  async update(input: {
+    engagementId: string;
+    entryId: string;
+    userId: string;
+    minutes: number;
+    note: string;
+  }): Promise<TimeEntryWriteResult> {
+    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    return db.transaction(async (tx) => {
+      const { milestone } = await lockEngagementAndMilestone(tx, milestoneId);
+      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      await assertTimeAndMaterialsTx(tx, input.engagementId);
+      assertInProgress(milestone);
+      await assertWithinDailyLimitTx(tx, {
+        engagementId: input.engagementId,
+        userId: input.userId,
+        workedOn: current.workedOn,
+        minutes: input.minutes,
+        excludeEntryId: current.id,
+      });
+
+      const beforeMinutes = await milestoneLoggedMinutesTx(tx, milestone.id);
+      const [entry] = await tx
+        .update(engagementTimeEntries)
+        .set({ minutes: input.minutes, note: input.note, updatedAt: new Date() })
+        .where(eq(engagementTimeEntries.id, current.id))
+        .returning();
+      if (entry === undefined) throw new Error('Time entry update returned no row');
+
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_time_entry.edited',
+        entityType: 'engagement_time_entry',
+        entityId: entry.id,
+        engagementId: input.engagementId,
+        metadata: {
+          fromMinutes: current.minutes,
+          toMinutes: entry.minutes,
+          noteChanged: current.note !== entry.note,
+        },
+      });
+
+      return writeResultTx(tx, {
+        engagementId: input.engagementId,
+        entry,
+        milestone,
+        beforeMinutes,
+        afterMinutes: beforeMinutes - current.minutes + entry.minutes,
+        actorUserId: input.userId,
+      });
+    });
+  },
+
+  /**
+   * Soft-delete the caller's own entry, on a milestone in any status. No crossing check.
+   * Throws `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
+   */
+  async remove(input: {
+    engagementId: string;
+    entryId: string;
+    userId: string;
+  }): Promise<EngagementTimeEntry> {
+    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    return db.transaction(async (tx) => {
+      await lockEngagementAndMilestone(tx, milestoneId);
+      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      await assertTimeAndMaterialsTx(tx, input.engagementId);
+
+      const now = new Date();
+      const [entry] = await tx
+        .update(engagementTimeEntries)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(eq(engagementTimeEntries.id, current.id))
+        .returning();
+      if (entry === undefined) throw new Error('Time entry delete returned no row');
+
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_time_entry.removed',
+        entityType: 'engagement_time_entry',
+        entityId: entry.id,
+        engagementId: input.engagementId,
+        metadata: { minutes: entry.minutes },
+      });
+      return entry;
+    });
+  },
+
+  /** The engagement's live entries, newest work date first (ties: newest logged first). */
+  async listByEngagement(engagementId: string): Promise<TimeEntryListRow[]> {
+    return db
+      .select({
+        id: engagementTimeEntries.id,
+        engagementMilestoneId: engagementTimeEntries.engagementMilestoneId,
+        userId: engagementTimeEntries.userId,
+        authorFirstName: users.firstName,
+        workedOn: engagementTimeEntries.workedOn,
+        minutes: engagementTimeEntries.minutes,
+        note: engagementTimeEntries.note,
+        createdAt: engagementTimeEntries.createdAt,
+      })
+      .from(engagementTimeEntries)
+      .leftJoin(users, eq(users.id, engagementTimeEntries.userId))
+      .where(and(eq(engagementTimeEntries.engagementId, engagementId), liveEntry))
+      .orderBy(
+        desc(engagementTimeEntries.workedOn),
+        desc(engagementTimeEntries.createdAt),
+        asc(engagementTimeEntries.id)
+      );
+  },
+
+  /**
+   * Live logged minutes: the total, per milestone, and inside the billing period
+   * (`startOn` inclusive, `endOn` exclusive). Entries on removed milestones count.
+   */
+  async sumsForEngagement(
+    engagementId: string,
+    period: { startOn: IsoDate; endOn: IsoDate } | null
+  ): Promise<TimeEntrySums> {
+    const byMilestone = await sumsByMilestoneTx(db, engagementId);
+    const totalMinutes = Object.values(byMilestone).reduce((acc, m) => acc + m, 0);
+    if (period === null) return { totalMinutes, periodMinutes: null, byMilestone };
+
+    const [row] = await db
+      .select({ total: sum(engagementTimeEntries.minutes) })
+      .from(engagementTimeEntries)
+      .where(
+        and(
+          eq(engagementTimeEntries.engagementId, engagementId),
+          liveEntry,
+          gte(engagementTimeEntries.workedOn, period.startOn),
+          lt(engagementTimeEntries.workedOn, period.endOn)
+        )
+      );
+    return { totalMinutes, periodMinutes: Number(row?.total ?? 0), byMilestone };
+  },
+
+  /**
+   * Active T&M projects whose total live logged time exceeds the sum of their live milestones'
+   * non-null estimates (at least one required), furthest over first. The admin
+   * `project.over_estimate` finder; a project drops out once an approved change raises the
+   * estimate or it leaves `active`.
+   */
+  async listOverEstimateForAlerts(limit: number): Promise<OverEstimateAlertRow[]> {
+    const logged = db
+      .select({
+        engagementId: engagementTimeEntries.engagementId,
+        loggedMinutes: sql<number>`sum(${engagementTimeEntries.minutes})`
+          .mapWith(Number)
+          .as('logged_total'),
+      })
+      .from(engagementTimeEntries)
+      .where(liveEntry)
+      .groupBy(engagementTimeEntries.engagementId)
+      .as('logged');
+
+    const estimated = db
+      .select({
+        engagementId: engagementMilestones.engagementId,
+        estimatedMinutes: sql<number>`sum(${engagementMilestones.estimatedMinutes})`
+          .mapWith(Number)
+          .as('estimate_total'),
+      })
+      .from(engagementMilestones)
+      .where(
+        and(
+          isNull(engagementMilestones.deletedAt),
+          isNotNull(engagementMilestones.estimatedMinutes)
+        )
+      )
+      .groupBy(engagementMilestones.engagementId)
+      .as('estimated');
+
+    return db
+      .select({
+        engagementId: logged.engagementId,
+        projectTitle: projectRequests.title,
+        clientCompanyName: companies.name,
+        expertFirstName: users.firstName,
+        expertLastName: users.lastName,
+        agencyName: agencies.name,
+        loggedMinutes: logged.loggedMinutes,
+        estimatedMinutes: estimated.estimatedMinutes,
+      })
+      .from(logged)
+      .innerJoin(estimated, eq(estimated.engagementId, logged.engagementId))
+      .innerJoin(
+        engagements,
+        and(eq(engagements.id, logged.engagementId), isNull(engagements.deletedAt))
+      )
+      .innerJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          eq(projectEngagements.pricingMethod, 'tm'),
+          eq(projectEngagements.deliveryStatus, 'active'),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .innerJoin(companies, eq(companies.id, engagements.companyId))
+      .leftJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, projectEngagements.projectRequestId),
+          isNull(projectRequests.deletedAt)
+        )
+      )
+      .where(gt(logged.loggedMinutes, estimated.estimatedMinutes))
+      .orderBy(
+        desc(sql`${logged.loggedMinutes} - ${estimated.estimatedMinutes}`),
+        asc(logged.engagementId)
+      )
+      .limit(limit);
+  },
+};

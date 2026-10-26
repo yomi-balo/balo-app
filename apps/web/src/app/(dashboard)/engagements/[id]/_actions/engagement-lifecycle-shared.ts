@@ -12,6 +12,8 @@ import {
   ChangeOrderNotFoundError,
   ChangeOrderPendingError,
   InvalidChangeOrderTransitionError,
+  TimeEntryWriteRefusedError,
+  type TimeEntryRefusal,
   type ChangeOrderCoherenceRule,
   type ProjectDeliveryStatus,
   type ProjectEngagementWithMilestones,
@@ -22,7 +24,13 @@ import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platfo
 import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { DAY_MS, GENERIC_FAILURE, NOT_FOUND, PLAN_CHANGED } from './milestone-action-shared';
+import {
+  DAY_MS,
+  GENERIC_FAILURE,
+  MILESTONE_GONE,
+  NOT_FOUND,
+  PLAN_CHANGED,
+} from './milestone-action-shared';
 
 // Re-export the reused signed-in wrapper, notify helpers, generic copy, and the
 // millisecond denominators so the three lifecycle actions import everything they
@@ -72,6 +80,9 @@ const COHERENCE_MESSAGES: Record<ChangeOrderCoherenceRule, string> = {
   add_has_target: PLAN_CHANGED,
   duplicate_target: 'Each milestone can appear in the change once.',
   line_target_not_live: PLAN_CHANGED,
+  cap_below_logged: "The cap can't go below the value of the time already logged.",
+  remove_has_logged_time:
+    "A milestone with time logged on it can't be removed. Complete it instead.",
 };
 
 /** The friendly sentence for a failed change-order coherence rule. */
@@ -305,6 +316,16 @@ export async function gateClientEngagement(
   return { ok: true, engagement: loaded.engagement };
 }
 
+export const NOT_TIME_AND_MATERIALS = 'Time is only logged on time and materials projects.';
+
+const TIME_ENTRY_REFUSALS: Record<TimeEntryRefusal, string> = {
+  not_time_and_materials: NOT_TIME_AND_MATERIALS,
+  milestone_not_in_progress: "Time can only be logged on a milestone that's in progress.",
+  milestone_not_found: MILESTONE_GONE,
+  daily_limit_exceeded: "That's more than 24 hours logged for one day.",
+  entry_not_found: 'This time entry has changed or been removed. Refresh and try again.',
+};
+
 /**
  * The typed change-order failures (concurrent-tab races and coherence rules) as friendly copy,
  * or null for anything else. Expected outcomes: they are returned, never logged.
@@ -320,6 +341,7 @@ function mapChangeOrderError(error: unknown): string | null {
   if (error instanceof ChangeOrderCoherenceError) return coherenceMessage(error.rule);
   if (error instanceof EngagementNotActiveError) return NOT_ACTIVE;
   if (error instanceof ChangeOrderPendingError) return CHANGE_ORDER_PENDING;
+  if (error instanceof TimeEntryWriteRefusedError) return TIME_ENTRY_REFUSALS[error.reason];
   return null;
 }
 

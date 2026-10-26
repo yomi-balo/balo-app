@@ -38,6 +38,9 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   CHANGE_ORDER_APPROVED: 'engagement_change_order_approved',
   CHANGE_ORDER_DECLINED: 'engagement_change_order_declined',
   CHANGE_ORDER_WITHDRAWN: 'engagement_change_order_withdrawn',
+  // BAL-624 time logged on a time-and-materials project (minutes and hours only, never money).
+  TIME_LOGGED: 'engagement_time_logged',
+  MILESTONE_ESTIMATE_EXCEEDED: 'engagement_milestone_estimate_exceeded',
 } as const;
 
 /**
@@ -60,6 +63,10 @@ export const ENGAGEMENT_EVENTS = {
   COMPLETION_BLOCKED_VIEW: 'engagement_completion_blocked_view',
   /** A plain milestone write needed the client's approval, so the expert was pointed at a change order. */
   SCOPE_CHANGE_REDIRECTED: 'engagement_scope_change_redirected',
+  /** The "More actions" menu opened the cancel-project dialog. */
+  CANCEL_DIALOG_OPENED: 'engagement_cancel_dialog_opened',
+  /** The cancel-project dialog was closed without cancelling. */
+  CANCEL_DIALOG_KEPT: 'engagement_cancel_dialog_kept',
 } as const;
 
 export interface EngagementEventMap {
@@ -74,6 +81,16 @@ export interface EngagementEventMap {
     pricing_method: 'fixed' | 'tm';
     /** `refused` = the write was attempted and declined; `pre_empted` = the UI explained it up front. */
     trigger: 'refused' | 'pre_empted';
+  };
+  [ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED]: {
+    engagement_id: string;
+    delivery_status: 'active' | 'pending_acceptance';
+  };
+  [ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT]: {
+    engagement_id: string;
+    delivery_status: 'active' | 'pending_acceptance';
+    /** `button` = the Keep button; `dismiss` = Escape or an overlay click. */
+    via: 'button' | 'dismiss';
   };
 }
 
@@ -243,4 +260,21 @@ export interface EngagementServerEventMap {
     answered_without_change_order: boolean;
   };
   [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.TIME_LOGGED]: {
+    engagement_id: string;
+    milestone_id: string;
+    minutes: number;
+    /** True when this entry took the milestone past its estimate for the first time. */
+    crossed_estimate: boolean;
+    /** Logged time as a whole percentage of the estimate; null when the estimate is null or 0. */
+    milestone_pct_of_estimate: number | null;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED]: {
+    engagement_id: string;
+    milestone_id: string;
+    /** Live milestones now over their estimate, this one included. */
+    milestones_over_count: number;
+    distinct_id: string;
+  };
 }

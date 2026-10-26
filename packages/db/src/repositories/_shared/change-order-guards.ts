@@ -118,6 +118,8 @@ export async function readProjectTermsTx(
   priceCents: number;
   depositCents: number | null;
   sourceProposalId: string | null;
+  /** The expert-side hourly rate on T&M; null on fixed price. */
+  rateCents: number | null;
 }> {
   const [child] = await exec
     .select({
@@ -125,6 +127,7 @@ export async function readProjectTermsTx(
       priceCents: projectEngagements.priceCents,
       depositCents: projectEngagements.depositCents,
       sourceProposalId: projectEngagements.sourceProposalId,
+      rateCents: projectEngagements.rateCents,
     })
     .from(projectEngagements)
     .where(

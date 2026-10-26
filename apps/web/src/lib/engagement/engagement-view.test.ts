@@ -5,7 +5,6 @@ import { makeLine, makeOrder } from '@/test/change-order-fixtures';
 import {
   mapEngagementToWorkspaceView,
   offersRatingCard,
-  DELIVERY_QUIET_THRESHOLD_DAYS,
   type EngagementWorkspaceStatus,
 } from './engagement-view';
 
@@ -172,12 +171,56 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     );
     const [pricing] = view.header.terms;
     expect(pricing?.label).toBe('Pricing');
-    expect(pricing?.value).toBe('Time & materials · A$58,000');
+    expect(pricing?.value).toBe('Time & materials');
   });
 
-  it('timeframe: retainer cadence humanises to "Monthly retainer"', () => {
+  it.each(['client', 'expert', 'admin'] as const)(
+    'time and materials terms are the method, the billing cadence and the kickoff — no amount (%s)',
+    (lens) => {
+      const view = mapEngagementToWorkspaceView(
+        makeEngagement({ pricingMethod: 'tm', cadence: 'monthly', rateCents: 15_000 }),
+        ctxFor(lens),
+        NOW
+      );
+      const terms = view.header.terms.filter((t) => t.label !== 'Last delivery activity');
+      expect(terms.map((t) => t.value)).toEqual([
+        'Time & materials',
+        'Billed monthly',
+        'Kicked off 12 Jun',
+      ]);
+      expect(terms[1]).toMatchObject({ icon: 'Receipt', label: 'Billing' });
+      expect(JSON.stringify(view.header.terms)).not.toMatch(/A\$|\$|AUD/);
+    }
+  );
+
+  it('time and materials with a fortnightly cadence reads "Billed fortnightly"', () => {
     const view = mapEngagementToWorkspaceView(
-      makeEngagement({ cadence: 'monthly', pricingMethod: 'tm' }),
+      makeEngagement({ pricingMethod: 'tm', cadence: 'fortnightly' }),
+      ctxFor('client'),
+      NOW
+    );
+    expect(view.header.terms.map((t) => t.value)).toContain('Billed fortnightly');
+  });
+
+  it('time and materials without a cadence omits the billing chip and the timeframe', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        pricingMethod: 'tm',
+        cadence: null,
+        milestones: [makeMilestone({ estimatedMinutes: 600 })],
+      }),
+      ctxFor('client'),
+      NOW
+    );
+    expect(view.header.terms.map((t) => t.value)).toEqual([
+      'Time & materials',
+      'Kicked off 12 Jun',
+    ]);
+  });
+
+  it('timeframe: a fixed-price retainer cadence humanises to "Monthly retainer"', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ cadence: 'monthly', pricingMethod: 'fixed' }),
       ctxFor('client'),
       NOW
     );
@@ -449,8 +492,8 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
   });
 });
 
-describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
-  it('client review banner names the expert (retro) and counts down (clamped)', () => {
+describe('mapEngagementToWorkspaceView — review banner', () => {
+  it('client review banner names the expert (retro) and states the auto-accept date', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
         status: 'pending_acceptance',
@@ -461,42 +504,46 @@ describe('mapEngagementToWorkspaceView — review banner & countdown', () => {
       NOW
     );
     expect(view.reviewBanner?.title).toBe('Priya says the project is ready');
-    // requested 4 Jul + 7 days = 11 Jul; now = 7 Jul → 4 days remaining.
-    expect(view.reviewBanner?.countdown).toEqual({
-      autoOnDate: '11 Jul 2026',
-      daysRemaining: 4,
-      autoInLabel: 'Auto-accepts in 4 days',
-    });
+    // requested 4 Jul + 7 days = 11 Jul.
+    expect(view.reviewBanner?.autoAcceptOn).toBe('11 Jul 2026');
+    expect(view.reviewBanner?.body).toBe(
+      "Have a look through the milestones below, then accept the project or request changes. If you don't respond, it's accepted on 11 Jul 2026."
+    );
   });
 
-  it('rounds a partial day UP (Math.ceil): 4.4 days remaining → "5 days"', () => {
-    // Requested 2.6 days before NOW; auto-accepts 7 days after the request, so
-    // 4.4 days remain — Math.ceil pins this to 5 (floor/round would give 4).
+  it('carries no countdown wording in any lens', () => {
+    const pending = makeEngagement({
+      status: 'pending_acceptance',
+      completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+    });
+    for (const lens of ['client', 'expert', 'admin'] as const) {
+      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), NOW).reviewBanner;
+      expect(banner).not.toHaveProperty('countdown');
+      expect(`${banner?.title} ${banner?.body}`).not.toMatch(/Auto-accepts/i);
+    }
+  });
+
+  it('expert and admin bodies state the date and the final invoice', () => {
+    const pending = makeEngagement({
+      status: 'pending_acceptance',
+      completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+    });
+    expect(mapEngagementToWorkspaceView(pending, ctxFor('expert'), NOW).reviewBanner?.body).toBe(
+      "Requested 4 Jul. The delivery plan is locked while the project is in review. If Northwind Industrial doesn't respond, it's accepted on 11 Jul 2026 and the final invoice is raised then."
+    );
+    expect(mapEngagementToWorkspaceView(pending, ctxFor('admin'), NOW).reviewBanner?.body).toBe(
+      "Requested 4 Jul by Priya. If Northwind Industrial doesn't respond, it's accepted on 11 Jul 2026 and the final invoice is raised then."
+    );
+  });
+
+  it('falls back to the end of the review window when the request date is missing', () => {
     const view = mapEngagementToWorkspaceView(
-      makeEngagement({
-        status: 'pending_acceptance',
-        completionRequestedAt: new Date(NOW.getTime() - 2.6 * 24 * 60 * 60 * 1000),
-        milestones: [makeMilestone({ status: 'completed' })],
-      }),
+      makeEngagement({ status: 'pending_acceptance', completionRequestedAt: null }),
       ctxFor('client'),
       NOW
     );
-    expect(view.reviewBanner?.countdown?.daysRemaining).toBe(5);
-    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('Auto-accepts in 5 days');
-  });
-
-  it('countdown clamps to 0 (final day) and labels it "Auto-accepts today"', () => {
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({
-        status: 'pending_acceptance',
-        completionRequestedAt: new Date('2026-06-01T00:00:00.000Z'),
-      }),
-      ctxFor('expert'),
-      NOW
-    );
-    expect(view.reviewBanner?.countdown?.daysRemaining).toBe(0);
-    // Final day reads "Auto-accepts today", never "Auto-accepts in 0 days".
-    expect(view.reviewBanner?.countdown?.autoInLabel).toBe('Auto-accepts today');
+    expect(view.reviewBanner?.autoAcceptOn).toBeNull();
+    expect(view.reviewBanner?.body).toContain("it's accepted at the end of the review window.");
   });
 
   it('expert review banner names the client company, not the person', () => {
@@ -790,6 +837,7 @@ describe('mapEngagementToWorkspaceView — cancelled banner', () => {
       ctxFor('client'),
       NOW
     );
+    expect(view.cancelledBanner?.title).toBe('Project cancelled');
     expect(view.cancelledBanner?.body).toBe('Cancelled by Balo on 24 Jul 2026.');
     expect(view.cancelledBanner?.reason).toBe('Programme paused after the acquisition.');
   });
@@ -860,70 +908,69 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
   });
 });
 
-describe('mapEngagementToWorkspaceView — admin oversight', () => {
-  it('flags stalled when the last activity exceeds the quiet threshold', () => {
-    const stale = new Date(
-      NOW.getTime() - (DELIVERY_QUIET_THRESHOLD_DAYS + 2) * 24 * 60 * 60 * 1000
+describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
+  function chipOf(
+    over: Partial<ProjectEngagementWithMilestones>,
+    lens: EngagementLens
+  ): { icon: string; label: string; value: string } | undefined {
+    return mapEngagementToWorkspaceView(makeEngagement(over), ctxFor(lens), NOW).header.terms.find(
+      (t) => t.label === 'Last delivery activity'
     );
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ status: 'active', activatedAt: stale, createdAt: stale, milestones: [] }),
-      ctxFor('admin'),
-      NOW
-    );
-    expect(view.adminOversight?.stalled).toBe(true);
-    expect(view.adminOversight?.stalledNote).toContain('Priya');
-  });
+  }
 
-  it('is not stalled with recent activity, and null for non-admin lenses', () => {
+  it('shows how long since the last delivery signal on the admin lens', () => {
     const recent = new Date(NOW.getTime() - 2 * 24 * 60 * 60 * 1000);
-    const adminView = mapEngagementToWorkspaceView(
-      makeEngagement({ status: 'active', activatedAt: recent, createdAt: recent }),
-      ctxFor('admin'),
-      NOW
-    );
-    expect(adminView.adminOversight?.stalled).toBe(false);
-    expect(adminView.adminOversight?.lastActivityLabel).toBe('Last delivery activity: 2d ago');
-
-    const clientView = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
-    expect(clientView.adminOversight).toBeNull();
+    expect(chipOf({ status: 'active', activatedAt: recent, createdAt: recent }, 'admin')).toEqual({
+      icon: 'Clock',
+      label: 'Last delivery activity',
+      value: 'Last delivery activity: 2d ago',
+    });
   });
 
-  it('admin oversight is hidden on terminal (completed / cancelled) states', () => {
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ status: 'completed', acceptedAt: NOW, acceptanceMethod: 'auto' }),
-      ctxFor('admin'),
-      NOW
-    );
-    expect(view.adminOversight).toBeNull();
+  it('is also shown while the project awaits review', () => {
+    expect(
+      chipOf({ status: 'pending_acceptance', completionRequestedAt: NOW }, 'admin')?.value
+    ).toBe('Last delivery activity: today');
   });
 
-  it('a recent milestone completion counts as delivery activity (not stalled) even when activation is stale', () => {
+  it('is absent for the client and expert lenses and on terminal states', () => {
+    expect(chipOf({}, 'client')).toBeUndefined();
+    expect(chipOf({}, 'expert')).toBeUndefined();
+    expect(
+      chipOf({ status: 'completed', acceptedAt: NOW, acceptanceMethod: 'auto' }, 'admin')
+    ).toBeUndefined();
+    expect(chipOf({ status: 'cancelled', cancelledAt: NOW }, 'admin')).toBeUndefined();
+  });
+
+  it('a recent milestone completion counts as delivery activity even when activation is stale', () => {
     const stale = new Date(NOW.getTime() - 20 * 24 * 60 * 60 * 1000);
     const recent = new Date(NOW.getTime() - 2 * 24 * 60 * 60 * 1000);
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({
+    const chip = chipOf(
+      {
         status: 'active',
         activatedAt: stale,
         createdAt: stale,
         milestones: [makeMilestone({ status: 'completed', completedAt: recent })],
-      }),
-      ctxFor('admin'),
-      NOW
+      },
+      'admin'
     );
-    expect(view.adminOversight?.stalled).toBe(false);
-    expect(view.adminOversight?.lastActivityLabel).toBe('Last delivery activity: 2d ago');
+    expect(chip?.value).toBe('Last delivery activity: 2d ago');
+  });
+});
+
+describe('mapEngagementToWorkspaceView — cancel dialog', () => {
+  it('states the consequence and who sees the reason, naming the parties', () => {
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), NOW);
+    expect(view.cancelDialog).toEqual({
+      body: "Delivery stops straight away for Northwind Industrial and Priya Sharma, and it can't be undone. Both are told, with your reason.",
+      reasonHint: 'Northwind Industrial and Priya Sharma both see this.',
+      reviewNote: null,
+    });
   });
 
-  it('stalled note names the agency PARTY for an agency expert (not the bare first name)', () => {
-    const stale = new Date(
-      NOW.getTime() - (DELIVERY_QUIET_THRESHOLD_DAYS + 2) * 24 * 60 * 60 * 1000
-    );
+  it('names the agency party for an agency expert', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
-        status: 'active',
-        activatedAt: stale,
-        createdAt: stale,
-        milestones: [],
         expertProfile: {
           id: 'expert-priya',
           agencyId: 'agency-cloudpeak',
@@ -936,9 +983,40 @@ describe('mapEngagementToWorkspaceView — admin oversight', () => {
       ctxFor('admin'),
       NOW
     );
-    expect(view.adminOversight?.stalled).toBe(true);
-    expect(view.adminOversight?.stalledNote).toContain('CloudPeak Consulting');
-    expect(view.adminOversight?.stalledNote).not.toContain('Priya');
+    expect(view.cancelDialog?.reasonHint).toBe(
+      'Northwind Industrial and CloudPeak Consulting both see this.'
+    );
+  });
+
+  it('adds the review note while the client is reviewing', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        status: 'pending_acceptance',
+        completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+      }),
+      ctxFor('admin'),
+      NOW
+    );
+    expect(view.cancelDialog?.reviewNote).toBe(
+      "Priya has marked the project ready and Northwind Industrial is reviewing it. If they don't respond, it's accepted on 11 Jul 2026."
+    );
+  });
+
+  it('is null once the project is completed or cancelled', () => {
+    expect(
+      mapEngagementToWorkspaceView(
+        makeEngagement({ status: 'completed', acceptedAt: NOW, acceptanceMethod: 'auto' }),
+        ctxFor('admin'),
+        NOW
+      ).cancelDialog
+    ).toBeNull();
+    expect(
+      mapEngagementToWorkspaceView(
+        makeEngagement({ status: 'cancelled', cancelledAt: NOW }),
+        ctxFor('admin'),
+        NOW
+      ).cancelDialog
+    ).toBeNull();
   });
 });
 

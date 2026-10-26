@@ -24,12 +24,14 @@ const {
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class MilestoneHasLoggedTimeError extends Error {}
   class ScopeChangeRequiresChangeOrderError extends Error {
     constructor(
       public readonly reason: string,
@@ -46,6 +48,7 @@ const {
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
     MilestoneChangePendingError,
+    MilestoneHasLoggedTimeError,
     ScopeChangeRequiresChangeOrderError,
   };
 });
@@ -60,6 +63,7 @@ vi.mock('@balo/db', () => ({
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 }));
 

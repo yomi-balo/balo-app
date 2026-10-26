@@ -1,0 +1,94 @@
+import 'server-only';
+
+import { z } from 'zod';
+import type { ProjectEngagementWithMilestones, TimeEntryWriteResult } from '@balo/db';
+import {
+  TIME_ENTRY_MAX_MINUTES,
+  TIME_ENTRY_MINUTES_STEP,
+  TIME_ENTRY_NOTE_MAX,
+  hoursLabel,
+  percentOfEstimate,
+} from '@balo/shared/engagements';
+import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
+import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { log } from '@/lib/logging';
+import { deriveEngagementTitle, resolveClientRecipientId } from './engagement-lifecycle-shared';
+
+/** Whole minutes in quarter-hour steps, at least one step and at most a day. */
+export const minutesSchema = z
+  .number()
+  .int()
+  .min(TIME_ENTRY_MINUTES_STEP)
+  .max(TIME_ENTRY_MAX_MINUTES)
+  .refine((minutes) => minutes % TIME_ENTRY_MINUTES_STEP === 0);
+
+/** A trimmed, non-blank note. */
+export const noteSchema = z.string().trim().min(1).max(TIME_ENTRY_NOTE_MAX);
+
+export type TimeWriteKind = 'logged' | 'updated' | 'removed';
+
+/**
+ * What follows a committed time write: the `TIME_LOGGED` event (log only), the first-crossing
+ * notice to the client owner and admins plus its event, and one structured log line. The log
+ * carries ids and minutes only, never the note. Notifying is fire-and-forget.
+ */
+export async function afterTimeWrite(input: {
+  kind: TimeWriteKind;
+  userId: string;
+  engagement: ProjectEngagementWithMilestones;
+  result: Pick<TimeEntryWriteResult, 'entry'> & Partial<Omit<TimeEntryWriteResult, 'entry'>>;
+}): Promise<void> {
+  const { kind, userId, engagement, result } = input;
+  const { entry, milestone, loggedAfterMinutes, estimateExceeded, milestonesOverCount } = result;
+
+  if (kind === 'logged' && milestone !== undefined && loggedAfterMinutes !== undefined) {
+    trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.TIME_LOGGED, {
+      engagement_id: engagement.id,
+      milestone_id: milestone.id,
+      minutes: entry.minutes,
+      crossed_estimate: estimateExceeded === true,
+      milestone_pct_of_estimate: percentOfEstimate(loggedAfterMinutes, milestone.estimatedMinutes),
+      distinct_id: userId,
+    });
+  }
+
+  if (
+    estimateExceeded === true &&
+    milestone !== undefined &&
+    milestone.estimatedMinutes !== null &&
+    loggedAfterMinutes !== undefined
+  ) {
+    const parties = deriveEngagementParties(engagement);
+    const recipientId = await resolveClientRecipientId(engagement.company.id);
+    publishNotificationEvent('engagement.milestone_estimate_exceeded', {
+      correlationId: `${milestone.id}:estimate_exceeded:${milestone.estimatedMinutes}`,
+      engagementId: engagement.id,
+      milestoneId: milestone.id,
+      recipientId,
+      expertPartyLabel: parties.expertParty,
+      actorExpertLabel: parties.expertRetroFirstMention,
+      projectTitle: deriveEngagementTitle(engagement, parties),
+      milestoneTitle: milestone.title,
+      loggedHoursLabel: hoursLabel(loggedAfterMinutes),
+      estimatedHoursLabel: hoursLabel(milestone.estimatedMinutes),
+    }).catch(() => {
+      // publishNotificationEvent logs internally.
+    });
+    trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED, {
+      engagement_id: engagement.id,
+      milestone_id: milestone.id,
+      milestones_over_count: milestonesOverCount ?? 0,
+      distinct_id: userId,
+    });
+  }
+
+  log.info(`Time entry ${kind}`, {
+    engagementId: engagement.id,
+    timeEntryId: entry.id,
+    milestoneId: entry.engagementMilestoneId,
+    userId,
+    minutes: entry.minutes,
+    estimateExceeded: estimateExceeded === true,
+  });
+}
