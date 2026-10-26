@@ -1080,8 +1080,30 @@ describe('engagementMilestonesRepository.listProposalContentEdits', () => {
 
     expect(rows).toEqual([
       { milestoneId, kind: 'direct', before: { title: 'Discovery' } },
-      { milestoneId, kind: 'change_order', before: {} },
+      {
+        milestoneId,
+        kind: 'change_order',
+        resetFields: ['title', 'descriptionHtml', 'acceptanceCriteria'],
+      },
       { milestoneId, kind: 'direct', before: { title: 'D2' } },
+    ]);
+  });
+
+  it("narrows a change-order row's recorded fields to the wording fields", async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('fixed');
+    await db.transaction((tx) =>
+      recordDeliveryAudit(tx, {
+        actorUserId: userId,
+        action: 'engagement_milestone.edited',
+        entityType: 'engagement_milestone',
+        entityId: milestoneId,
+        engagementId,
+        metadata: { changeOrderId: randomUUID(), fields: ['acceptanceCriteria', 'title', 42] },
+      })
+    );
+
+    expect(await engagementMilestonesRepository.listProposalContentEdits([milestoneId])).toEqual([
+      { milestoneId, kind: 'change_order', resetFields: ['title', 'acceptanceCriteria'] },
     ]);
   });
 

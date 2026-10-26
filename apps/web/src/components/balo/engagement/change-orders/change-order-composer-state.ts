@@ -139,7 +139,8 @@ export function rowsFor(
 
 /**
  * The saved lines with an attempted change appended. The draft is never overwritten: a
- * remove already targeting that milestone, or an add with the same title, is left as it is.
+ * remove already targeting that milestone, or an add with the same title (a blank add when
+ * the draft already holds a blank one), is left as it is.
  */
 export function withPrefillLine(
   saved: readonly ComposerSavedLine[],
@@ -154,8 +155,7 @@ export function withPrefillLine(
 }
 
 function sameTitle(a: string, b: string): boolean {
-  const left = a.trim().toLowerCase();
-  return left !== '' && left === b.trim().toLowerCase();
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 function rowChanged(row: ComposerRow, orig: ComposerOriginal, pricing: ComposerPricing): boolean {

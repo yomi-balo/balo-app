@@ -25,6 +25,12 @@ changes.
 Go through the milestones on the project page, along with any files and messages your expert
 shared. Take the time you need. There's no rush within the review window.
 
+If your expert reworded any milestone after you accepted the proposal, the review card lists
+those milestones under **Changed since proposal**. Each one also carries a **Changed since
+proposal** label on the project page. Open **What changed** on the milestone to see what it said
+before and what it says now. Wording you approved as part of a change isn't flagged, because you've
+already agreed to it.
+
 ## Accepting the project
 
 If everything is as agreed, choose **Accept project**. Accepting confirms the delivery, and it

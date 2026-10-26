@@ -15,22 +15,22 @@ others need the client to agree first. This guide covers which is which.
 
 ## Wording edits
 
-Fixing the title, description or "Done when" of a milestone is a plain edit. It applies immediately and the
-client is told. The milestone is marked **Changed since proposal**, and the client sees what it
-said before and after when they review the finished project.
+Fixing the title, description or "Done when" of a milestone is a plain edit. It applies
+immediately and the client is told. A milestone from the accepted proposal is then marked
+**Changed since proposal**. The client sees that label on the milestone throughout delivery, and
+can open **What changed** to compare what it said before with what it says now. When you mark the
+project ready, the review card also lists every milestone whose wording changed.
 
 ## What needs a change
 
-- **Time and materials.** Changing the estimate on a milestone, or adding a milestone, needs a
-  change the client approves. On these projects the **Add milestone** button is replaced by
-  **Propose a change** (or **Propose the first milestone** while the plan is empty).
+- **Time and materials.** New milestones need a change the client approves. On these projects
+  the **Add milestone** button is replaced by **Propose a change**, or by **Propose the first
+  milestone** while the plan is empty. Either one opens the change composer.
 - **Fixed price.** Removing a milestone from the agreed scope needs a change. That covers
-  milestones from the accepted proposal and ones added by an approved change.
+  milestones from the accepted proposal and ones added by an approved change. Choosing **Remove**
+  on one of these opens a **Needs approval first** dialog instead of removing it. Its **Propose a
+  change** button opens the composer with that milestone's removal already added. Review it, add
+  a note on why, and send it like any other change.
 
-## Propose a change
-
-When an edit needs a change, you're offered **Propose a change**. If you tried to remove a
-milestone, the composer opens with that milestone's removal already added. If you tried to add a
-milestone, it opens with a new milestone line, carrying the title you entered. For an estimate
-change it opens without a line filled in. Review it, add a note on why, and send it like any
-other change.
+Milestones you added yourself on a fixed-price project, and that the client hasn't approved
+through a change, can still be removed directly.

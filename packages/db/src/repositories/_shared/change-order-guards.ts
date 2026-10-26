@@ -24,6 +24,20 @@ import type { DbTx } from './engagement-supertype';
  * already holds, so the rows it reads cannot change before the caller's write.
  */
 
+/**
+ * A milestone's wording columns: the fields "changed since the proposal" tracks. A direct edit
+ * to one on a proposal-origin milestone stamps `content_edited_at`; an approved change order
+ * that writes one resets that field's baseline.
+ */
+export const MILESTONE_CONTENT_FIELDS = ['title', 'descriptionHtml', 'acceptanceCriteria'] as const;
+
+export type MilestoneContentField = (typeof MILESTONE_CONTENT_FIELDS)[number];
+
+/** True when `value` names one of {@link MILESTONE_CONTENT_FIELDS}. */
+export function isMilestoneContentField(value: unknown): value is MilestoneContentField {
+  return MILESTONE_CONTENT_FIELDS.some((field) => field === value);
+}
+
 /** The SQL predicate for an OPEN change order: undecided, unwithdrawn, live. Timestamps only. */
 export function openChangeOrderPredicate(): SQL {
   const predicate = and(

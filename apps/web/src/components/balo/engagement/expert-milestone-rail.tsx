@@ -390,7 +390,7 @@ export function ExpertMilestoneRail({
             acceptanceCriteria: textOrNull(values.acceptanceCriteria) ?? undefined,
           }),
           'Milestone added',
-          { op: 'add', title: values.title.trim() }
+          { op: 'add' }
         );
       });
     },
@@ -695,7 +695,9 @@ export function ExpertMilestoneRail({
             </div>
             <h2 className="text-foreground text-lg font-semibold">Shape the delivery plan</h2>
             <p className="text-muted-foreground mx-auto mt-2 max-w-[420px] text-sm leading-relaxed">
-              Add your first milestone so {clientCompanyName} can follow progress.
+              {addNeedsChangeOrder
+                ? `Propose the first milestone — ${clientCompanyName} approves it before work is tracked against it.`
+                : `Add your first milestone so ${clientCompanyName} can follow progress.`}
             </p>
           </Card>
         ) : (
@@ -772,7 +774,7 @@ export function ExpertMilestoneRail({
           plan. The project goes to {clientCompanyName} for review as a whole when you mark it
           complete.{' '}
           {proposeChange === undefined
-            ? 'Pricing is fixed from the accepted proposal — changes to price go through a new proposal.'
+            ? `Pricing is fixed from the accepted proposal — changes to price go through a change ${clientCompanyName} approves.`
             : `Changes to scope or price go to ${clientCompanyName} as a proposed change, and nothing changes until they approve.`}
         </p>
       </Card>

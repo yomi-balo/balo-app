@@ -317,9 +317,12 @@ describe('withPrefillLine', () => {
     ]);
   });
 
-  it('does not treat blank add titles as duplicates', () => {
+  it('keeps the draft when it already holds a blank add, so repeat visits do not stack', () => {
     const blank = { ...addReporting, title: '' };
-    expect(withPrefillLine([blank], blank)).toEqual([blank, blank]);
+    const firstVisit = withPrefillLine([addReporting], blank);
+    expect(firstVisit).toEqual([addReporting, blank]);
+    const savedBlank = { ...blank, title: '  ' };
+    expect(withPrefillLine([addReporting, savedBlank], blank)).toEqual([addReporting, savedBlank]);
   });
 
   it('does not match a saved edit line against a remove prefill', () => {

@@ -1163,7 +1163,56 @@ describe('engagementChangeOrdersRepository.approve — not bound by the plain-wr
 
     expect(await engagementMilestonesRepository.listProposalContentEdits([first.id])).toEqual([
       { milestoneId: first.id, kind: 'direct', before: { title: 'Discovery' } },
-      { milestoneId: first.id, kind: 'change_order', before: {} },
+      {
+        milestoneId: first.id,
+        kind: 'change_order',
+        resetFields: ['title', 'descriptionHtml'],
+      },
     ]);
+  });
+
+  it('records on the approved edit audit row the wording fields the line wrote', async () => {
+    const { engagementId, userId, first } = await seedProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Tighten the wording.',
+      newTotalCents: 500_000,
+      lines: [
+        line({
+          op: 'edit',
+          engagementMilestoneId: first.id,
+          title: 'Discovery, agreed',
+          acceptanceCriteria: 'Signed off',
+        }),
+      ],
+    });
+    await repo.send({ engagementId, orderId: draft.id, userId });
+    await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    const edited = (await auditFor(first.id)).find(
+      (e) => e.action === 'engagement_milestone.edited'
+    );
+    expect(edited?.metadata).toMatchObject({ changeOrderId: draft.id });
+    expect(edited?.metadata?.fields).toEqual(['title', 'descriptionHtml', 'acceptanceCriteria']);
+  });
+
+  it('leaves acceptance criteria out of the recorded fields when the edit line carries none', async () => {
+    const { engagementId, userId, first } = await seedProject();
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Rename it.',
+      newTotalCents: 500_000,
+      lines: [line({ op: 'edit', engagementMilestoneId: first.id, title: 'Discovery, renamed' })],
+    });
+    await repo.send({ engagementId, orderId: draft.id, userId });
+    await repo.approve({ engagementId, orderId: draft.id, userId });
+
+    const edited = (await auditFor(first.id)).find(
+      (e) => e.action === 'engagement_milestone.edited'
+    );
+    expect(edited?.metadata).toMatchObject({ changeOrderId: draft.id });
+    expect(edited?.metadata?.fields).toEqual(['title', 'descriptionHtml']);
   });
 });

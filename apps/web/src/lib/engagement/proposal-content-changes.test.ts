@@ -4,6 +4,7 @@ import {
   diffProposalContent,
   summarizeProposalChanges,
   type MilestoneContent,
+  type MilestoneContentEdit,
   type ProposalEditRow,
 } from './proposal-content-changes';
 
@@ -13,8 +14,12 @@ const CURRENT: MilestoneContent = {
   acceptanceCriteria: 'Signed off',
 };
 
-const direct = (before: ProposalEditRow['before']): ProposalEditRow => ({ kind: 'direct', before });
-const approved: ProposalEditRow = { kind: 'change_order', before: {} };
+const direct = (before: MilestoneContentEdit): ProposalEditRow => ({ kind: 'direct', before });
+const approvedWriting = (...resetFields: (keyof MilestoneContent)[]): ProposalEditRow => ({
+  kind: 'change_order',
+  resetFields,
+});
+const approved = approvedWriting('title', 'descriptionHtml', 'acceptanceCriteria');
 
 describe('diffProposalContent', () => {
   it('reports only the fields that differ in plain text', () => {
@@ -57,6 +62,26 @@ describe('deriveProposalChanges', () => {
       direct({ acceptanceCriteria: 'Reviewed' }),
     ]);
     expect(changes.map((c) => c.field)).toEqual(['acceptance_criteria']);
+  });
+
+  it('keeps a field the approved change order did not write', () => {
+    const changes = deriveProposalChanges(CURRENT, [
+      direct({ acceptanceCriteria: 'Reviewed' }),
+      approvedWriting('title', 'descriptionHtml'),
+    ]);
+    expect(changes).toEqual([
+      { field: 'acceptance_criteria', label: 'Done when', before: 'Reviewed', after: 'Signed off' },
+    ]);
+  });
+
+  it('takes a reset field’s before value from the first direct edit after the reset', () => {
+    const changes = deriveProposalChanges(CURRENT, [
+      direct({ title: 'Original' }),
+      approvedWriting('title'),
+      direct({ title: 'Agreed' }),
+      direct({ title: 'Later' }),
+    ]);
+    expect(changes).toEqual([{ field: 'title', label: 'Title', before: 'Agreed', after: 'Build' }]);
   });
 
   it('drops a field edited back to its original value', () => {

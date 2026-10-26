@@ -18,7 +18,12 @@ import {
 } from '../schema';
 import { recordDeliveryAudit } from './_shared/delivery-audit';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
-import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
+import {
+  isMilestoneContentField,
+  openChangeOrderPredicate,
+  readProjectTermsTx,
+  type MilestoneContentField,
+} from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
 import { isUniqueViolation } from './experts';
@@ -446,6 +451,16 @@ function editedColumns(
 }
 
 /**
+ * The wording columns an edit line's update writes, in column order. Recorded on the edit's
+ * audit row so "changed since the proposal" resets only the fields the client approved.
+ */
+function writtenContentFields(
+  columns: Partial<typeof engagementMilestones.$inferInsert>
+): MilestoneContentField[] {
+  return Object.keys(columns).filter(isMilestoneContentField);
+}
+
+/**
  * Apply an approved order's lines to `engagement_milestones`, in `sort_order`. The ONLY
  * post-snapshot writer of `engagement_milestones.value_cents`
  * (`milestone-value-cents-has-one-post-snapshot-writer.test.ts`):
@@ -517,12 +532,17 @@ async function applyChangeOrderLinesTx(
     );
 
     if (line.op === 'edit') {
+      const columns = editedColumns(line, pricingMethod, ctx.now);
       const [edited] = await tx
         .update(engagementMilestones)
-        .set(editedColumns(line, pricingMethod, ctx.now))
+        .set(columns)
         .where(liveTarget)
         .returning({ id: engagementMilestones.id });
-      applied.push(await recordLiveMilestoneUpdate(tx, ctx, edited, 'engagement_milestone.edited'));
+      applied.push(
+        await recordLiveMilestoneUpdate(tx, ctx, edited, 'engagement_milestone.edited', {
+          fields: writtenContentFields(columns),
+        })
+      );
       continue;
     }
 
@@ -571,14 +591,16 @@ async function recordAddedMilestone(
 }
 
 /**
- * After an edit or remove of a milestone that must still be live: audit the action. A missing
- * row means the target is gone and throws `ChangeOrderCoherenceError('line_target_not_live')`.
+ * After an edit or remove of a milestone that must still be live: audit the action (an edit
+ * also records the wording `fields` it wrote). A missing row means the target is gone and
+ * throws `ChangeOrderCoherenceError('line_target_not_live')`.
  */
 async function recordLiveMilestoneUpdate(
   tx: DbTx,
   ctx: ApplyContext,
   updated: { id: string } | undefined,
-  action: 'engagement_milestone.edited' | 'engagement_milestone.removed'
+  action: 'engagement_milestone.edited' | 'engagement_milestone.removed',
+  extraMetadata: Record<string, unknown> = {}
 ): Promise<string> {
   if (updated === undefined) {
     throw new ChangeOrderCoherenceError('line_target_not_live');
@@ -589,7 +611,7 @@ async function recordLiveMilestoneUpdate(
     entityType: 'engagement_milestone',
     entityId: updated.id,
     engagementId: ctx.engagementId,
-    metadata: { changeOrderId: ctx.order.id },
+    metadata: { changeOrderId: ctx.order.id, ...extraMetadata },
   });
   return updated.id;
 }

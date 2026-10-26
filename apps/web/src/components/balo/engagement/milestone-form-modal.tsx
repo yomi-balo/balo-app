@@ -168,7 +168,7 @@ export function MilestoneFormModal({
             <AlertCircle className="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden />
             <p className="text-muted-foreground text-xs leading-relaxed">
               {clientCompanyName} is notified of plan changes. The project price can&rsquo;t change
-              here — pricing changes go through a new proposal.
+              here — pricing changes go through a change {clientCompanyName} approves.
             </p>
           </div>
         </div>

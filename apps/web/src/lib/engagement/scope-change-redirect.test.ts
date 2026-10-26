@@ -36,19 +36,12 @@ describe('changeOrderPrefillHref', () => {
     });
   });
 
-  it('round-trips an add with a title', () => {
-    const add: ChangeOrderPrefill = { op: 'add', title: 'Reporting & KPIs' };
-    expect(roundTrip(add)).toEqual(add);
-  });
-
-  it('round-trips a bare add', () => {
+  it('round-trips an add', () => {
     expect(roundTrip({ op: 'add' })).toEqual({ op: 'add' });
   });
 
-  it('never carries a description in the link', () => {
-    const href = changeOrderPrefillHref(HREF, { op: 'add', title: 'Big' });
-    expect(href).toContain('title=Big');
-    expect(href).not.toContain('description');
+  it('carries only the op for an add', () => {
+    expect(changeOrderPrefillHref(HREF, { op: 'add' })).toBe(`${HREF}?prefill=add`);
   });
 });
 
@@ -58,9 +51,12 @@ describe('parseChangeOrderPrefill', () => {
     { prefill: 'edit' },
     { prefill: 'remove' },
     { prefill: 'remove', milestone: 'nope' },
-    { prefill: 'add', title: 'x'.repeat(201) },
   ])('returns null for invalid input %j', (params) => {
     expect(parseChangeOrderPrefill(params)).toBeNull();
+  });
+
+  it('ignores a title param on an add', () => {
+    expect(parseChangeOrderPrefill({ prefill: 'add', title: 'Reporting' })).toEqual({ op: 'add' });
   });
 
   it('takes the first value of a repeated param', () => {

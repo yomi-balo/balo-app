@@ -56,7 +56,7 @@ function prefillLineFor(
     return {
       op: 'add',
       milestoneId: null,
-      title: prefill.title ?? '',
+      title: '',
       descriptionText: null,
       estimatedMinutes: null,
     };

@@ -813,6 +813,18 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
       NOW
     );
     expect(view.emptyState?.title).toBe('Shape the delivery plan');
+    expect(view.emptyState?.body).toMatch(/^Add your first milestone so Northwind/);
+  });
+
+  it('expert empty state on T&M invites proposing the first milestone', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [], pricingMethod: 'tm' }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.emptyState?.body).toMatch(
+      /^Propose the first milestone — Northwind Industrial approves it before work is tracked against it\./
+    );
   });
 
   it('emptyState is null when milestones exist', () => {

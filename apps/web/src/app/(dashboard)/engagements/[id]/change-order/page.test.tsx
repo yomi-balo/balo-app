@@ -234,13 +234,13 @@ describe('change-order composer page · prefill', () => {
     expect(composerProps().prefillLine).toBeNull();
   });
 
-  it('turns an add prefill into a new-milestone line', async () => {
+  it('turns an add prefill into a blank new-milestone line', async () => {
     await renderPage({ prefill: 'add', title: 'Reporting', description: 'Weekly pack.' });
-    // A description in the link is ignored: it never travels in the URL.
+    // A title or description in the link is ignored: an add opens blank.
     expect(composerProps().prefillLine).toEqual({
       op: 'add',
       milestoneId: null,
-      title: 'Reporting',
+      title: '',
       descriptionText: null,
       estimatedMinutes: null,
     });

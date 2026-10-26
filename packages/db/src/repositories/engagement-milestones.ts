@@ -13,8 +13,10 @@ import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 import {
   assertMilestoneNotPendingChangeTx,
   isAddedByApprovedChangeOrderTx,
+  MILESTONE_CONTENT_FIELDS,
   readProjectTermsTx,
   ScopeChangeRequiresChangeOrderError,
+  type MilestoneContentField,
 } from './_shared/change-order-guards';
 
 // Re-export so the established public path `import { EngagementNotActiveError } from '@balo/db'`
@@ -90,16 +92,25 @@ export type MilestoneEditBefore = Partial<{
  * One `engagement_milestone.edited` audit row that bears on "changed since the proposal", from
  * {@link engagementMilestonesRepository.listProposalContentEdits}. `direct` is an expert's
  * plain edit and carries the prior values; `change_order` is an approved change order's edit
- * (the client approved that wording) and carries none (`before` is `{}`).
+ * and names the wording fields it wrote (`resetFields`): the client approved that wording, so
+ * those fields' baselines reset. A change-order row recorded before the field list existed
+ * resets all three.
  */
-export interface MilestoneContentEditRow {
-  milestoneId: string;
-  kind: 'direct' | 'change_order';
-  before: MilestoneEditBefore;
-}
+export type MilestoneContentEditRow =
+  | { milestoneId: string; kind: 'direct'; before: MilestoneEditBefore }
+  | {
+      milestoneId: string;
+      kind: 'change_order';
+      resetFields: readonly MilestoneContentField[];
+    };
 
-/** The descriptive fields whose change on a proposal-origin milestone stamps `content_edited_at`. */
-const CONTENT_FIELDS = ['title', 'descriptionHtml', 'acceptanceCriteria'] as const;
+export type { MilestoneContentField };
+
+/** A change-order edit row's `metadata.fields`, narrowed; absent (a legacy row) → all three. */
+function parseResetFields(raw: unknown): MilestoneContentField[] {
+  if (!Array.isArray(raw)) return [...MILESTONE_CONTENT_FIELDS];
+  return MILESTONE_CONTENT_FIELDS.filter((field) => raw.some((value) => value === field));
+}
 
 /** Narrows an audit row's `metadata.before` key by key, dropping any key of the wrong type. */
 function parseEditBefore(raw: unknown): MilestoneEditBefore {
@@ -412,7 +423,7 @@ export const engagementMilestonesRepository = {
       const set: Partial<typeof engagementMilestones.$inferInsert> = { updatedAt: now };
       if (
         milestone.sourceProposalMilestoneId !== null &&
-        CONTENT_FIELDS.some((field) => field in before)
+        MILESTONE_CONTENT_FIELDS.some((field) => field in before)
       ) {
         set.contentEditedAt = now;
       }
@@ -585,9 +596,9 @@ export const engagementMilestonesRepository = {
   /**
    * The `engagement_milestone.edited` audit rows for `milestoneIds` that bear on "changed since
    * the proposal": direct edits that recorded `before`, and approved change-order edits (which
-   * carry `changeOrderId` and reset the baseline). Edits that recorded neither are left out.
-   * Ordered by the audit trail contract (`created_at`, then `seq`). Empty input returns `[]`
-   * without a query.
+   * carry `changeOrderId` and reset the baseline of the wording fields they wrote). Edits that
+   * recorded neither are left out. Ordered by the audit trail contract (`created_at`, then
+   * `seq`). Empty input returns `[]` without a query.
    */
   async listProposalContentEdits(
     milestoneIds: readonly string[]
@@ -612,7 +623,11 @@ export const engagementMilestonesRepository = {
     return rows.map((row): MilestoneContentEditRow => {
       const metadata = row.metadata ?? {};
       if (metadata.changeOrderId !== undefined && metadata.changeOrderId !== null) {
-        return { milestoneId: row.entityId, kind: 'change_order', before: {} };
+        return {
+          milestoneId: row.entityId,
+          kind: 'change_order',
+          resetFields: parseResetFields(metadata.fields),
+        };
       }
       return {
         milestoneId: row.entityId,

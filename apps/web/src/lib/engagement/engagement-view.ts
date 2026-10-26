@@ -800,10 +800,17 @@ function deriveEmptyState(
   // forward-looking "shaping the delivery plan" invitation would be stale.
   if (engagement.status === 'completed' || engagement.status === 'cancelled') return null;
   if (lens === 'expert') {
+    const client = parties.clientCompanyName;
+    // On T&M a milestone is added through a change the client approves, so the invitation
+    // matches the "Propose the first milestone" CTA.
+    const opener =
+      engagement.pricingMethod === 'tm'
+        ? `Propose the first milestone — ${client} approves it before work is tracked against it.`
+        : `Add your first milestone so ${client} can follow progress.`;
     return {
       icon: 'Flag',
       title: 'Shape the delivery plan',
-      body: `Add your first milestone so ${parties.clientCompanyName} can follow progress. When everything is delivered, you mark the project ready and ${parties.clientCompanyName} reviews it as a whole.`,
+      body: `${opener} When everything is delivered, you mark the project ready and ${client} reviews it as a whole.`,
     };
   }
   if (lens === 'client') {

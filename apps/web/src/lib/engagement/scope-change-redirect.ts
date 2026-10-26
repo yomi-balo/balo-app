@@ -1,8 +1,6 @@
 import { z } from 'zod';
 import type { ScopeChangeRedirectReason } from '@balo/shared/engagements';
 
-const MAX_PREFILL_TITLE = 200;
-
 /**
  * Why the expert is being sent to propose a change, in one sentence naming the client
  * company. Shown in place of a generic failure when a plain milestone edit needs approval.
@@ -23,10 +21,11 @@ export function scopeChangeMessage(
   return MESSAGE_BY_REASON[reason](clientCompanyName);
 }
 
-/** The attempted change the change-order composer opens with a line already added. */
-export type ChangeOrderPrefill =
-  | { op: 'add'; title?: string }
-  | { op: 'remove'; milestoneId: string };
+/**
+ * The attempted change the change-order composer opens with a line already added: a blank
+ * new milestone, or the removal of a named one.
+ */
+export type ChangeOrderPrefill = { op: 'add' } | { op: 'remove'; milestoneId: string };
 
 /** The composer link for an attempted change; `null` links to the bare composer. */
 export function changeOrderPrefillHref(
@@ -35,21 +34,12 @@ export function changeOrderPrefillHref(
 ): string {
   if (prefill === null) return composerHref;
   const params = new URLSearchParams({ prefill: prefill.op });
-  if (prefill.op === 'remove') {
-    params.set('milestone', prefill.milestoneId);
-  } else {
-    if (prefill.title !== undefined && prefill.title !== '') {
-      params.set('title', prefill.title);
-    }
-  }
+  if (prefill.op === 'remove') params.set('milestone', prefill.milestoneId);
   return `${composerHref}?${params.toString()}`;
 }
 
 const prefillSchema = z.discriminatedUnion('prefill', [
-  z.object({
-    prefill: z.literal('add'),
-    title: z.string().trim().max(MAX_PREFILL_TITLE).optional(),
-  }),
+  z.object({ prefill: z.literal('add') }),
   z.object({ prefill: z.literal('remove'), milestone: z.uuid() }),
 ]);
 
@@ -64,14 +54,8 @@ export function parseChangeOrderPrefill(
   const parsed = prefillSchema.safeParse({
     prefill: firstValue(params.prefill),
     milestone: firstValue(params.milestone),
-    title: firstValue(params.title),
   });
   if (!parsed.success) return null;
   const data = parsed.data;
-  if (data.prefill === 'remove') {
-    return { op: 'remove', milestoneId: data.milestone };
-  }
-  const prefill: ChangeOrderPrefill = { op: 'add' };
-  if (data.title !== undefined && data.title !== '') prefill.title = data.title;
-  return prefill;
+  return data.prefill === 'remove' ? { op: 'remove', milestoneId: data.milestone } : { op: 'add' };
 }

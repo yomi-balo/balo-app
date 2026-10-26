@@ -1,4 +1,4 @@
-import { htmlToPlainText } from '@balo/shared/notifications';
+import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 
 export type ProposalContentField = 'title' | 'description' | 'acceptance_criteria';
 
@@ -20,11 +20,13 @@ export interface MilestoneContent {
 /** The fields an edit may set; an absent key is untouched. */
 export type MilestoneContentEdit = Partial<MilestoneContent>;
 
-/** One audit row bearing on a milestone's wording, oldest first. */
-export interface ProposalEditRow {
-  kind: 'direct' | 'change_order';
-  before: MilestoneContentEdit;
-}
+/**
+ * One audit row bearing on a milestone's wording, oldest first: a direct edit with the values it
+ * replaced, or an approved change order's edit naming the wording fields it wrote.
+ */
+export type ProposalEditRow =
+  | { kind: 'direct'; before: MilestoneContentEdit }
+  | { kind: 'change_order'; resetFields: readonly (keyof MilestoneContent)[] };
 
 interface FieldSpec {
   field: ProposalContentField;
@@ -65,24 +67,44 @@ export function diffProposalContent(
 }
 
 /**
+ * Per field, the value the client last agreed to, if a direct edit has replaced it since. Walks
+ * the rows oldest first: the first direct edit of a field after its last reset records its
+ * baseline, and an approved change order resets only the fields it wrote.
+ */
+function agreedBaselines(
+  rows: readonly ProposalEditRow[]
+): Map<keyof MilestoneContent, string | null> {
+  const baselines = new Map<keyof MilestoneContent, string | null>();
+  for (const row of rows) {
+    if (row.kind === 'change_order') {
+      for (const key of row.resetFields) baselines.delete(key);
+      continue;
+    }
+    for (const spec of FIELDS) {
+      if (spec.key in row.before && !baselines.has(spec.key)) {
+        baselines.set(spec.key, row.before[spec.key] ?? null);
+      }
+    }
+  }
+  return baselines;
+}
+
+/**
  * What changed in one milestone's wording since the client last agreed to it. Rows are the
- * milestone's edit history, oldest first. An approved change order resets the baseline (the
- * client approved that wording), so only direct edits after the last one count. Each field's
- * "before" is the value the first such edit replaced; a field edited back to that value drops.
+ * milestone's edit history, oldest first. An approved change order resets the baseline of each
+ * field it wrote (the client approved that wording); a field it did not write keeps its earlier
+ * baseline. Each field's "before" is the value the first direct edit after its last reset
+ * replaced; a field edited back to that value drops.
  */
 export function deriveProposalChanges(
   current: MilestoneContent,
   rows: readonly ProposalEditRow[]
 ): ProposalContentChange[] {
-  const direct = rows.reduce(
-    (kept, row) => (row.kind === 'change_order' ? [] : [...kept, row]),
-    [] as ProposalEditRow[]
-  );
+  const baselines = agreedBaselines(rows);
   const changes: ProposalContentChange[] = [];
   for (const spec of FIELDS) {
-    const first = direct.find((row) => spec.key in row.before);
-    if (first === undefined) continue;
-    const beforeText = spec.plain(first.before[spec.key] ?? null);
+    if (!baselines.has(spec.key)) continue;
+    const beforeText = spec.plain(baselines.get(spec.key) ?? null);
     const afterText = spec.plain(current[spec.key]);
     if (beforeText !== afterText) {
       changes.push({ field: spec.field, label: spec.label, before: beforeText, after: afterText });

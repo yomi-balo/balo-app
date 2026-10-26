@@ -144,7 +144,9 @@ describe('ExpertMilestoneRail — emphasis', () => {
     expect(
       screen.getByText(/are notified when you complete a milestone or change the plan/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/changes to price go through a new proposal/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/changes to price go through a change Northwind Industrial approves/i)
+    ).toBeInTheDocument();
   });
 });
 
@@ -414,7 +416,9 @@ describe('ExpertMilestoneRail — change orders', () => {
   it('offers no "Propose a change" entry unless the view allows it', () => {
     renderRail([node({ id: 'a' })]);
     expect(screen.queryByRole('link', { name: /propose a change/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/changes to price go through a new proposal/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/changes to price go through a change Northwind Industrial approves/i)
+    ).toBeInTheDocument();
   });
 
   it('links the header entry to the composer and points the footnote at it', () => {
@@ -492,6 +496,22 @@ describe('ExpertMilestoneRail — scope changes that need approval (BAL-623)', (
     );
   });
 
+  it('matches the fallback invitation to the CTA on an empty time-and-materials plan', () => {
+    renderRail([], null, link, true);
+    expect(
+      screen.getByText(
+        'Propose the first milestone — Northwind Industrial approves it before work is tracked against it.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the fallback invitation on an empty fixed-price plan', () => {
+    renderRail([], null, link, false);
+    expect(
+      screen.getByText('Add your first milestone so Northwind Industrial can follow progress.')
+    ).toBeInTheDocument();
+  });
+
   it('shows the reason on an empty time-and-materials plan while a change is with the client', () => {
     renderRail(
       [],
@@ -505,7 +525,7 @@ describe('ExpertMilestoneRail — scope changes that need approval (BAL-623)', (
     ).not.toBeInTheDocument();
   });
 
-  it('explains a refused add with a pre-filled link, tracks it, and shows no error toast', async () => {
+  it('explains a refused add with a blank-add link, tracks it, and shows no error toast', async () => {
     addMock.mockResolvedValue({
       success: false,
       error: REFUSAL,
@@ -521,7 +541,7 @@ describe('ExpertMilestoneRail — scope changes that need approval (BAL-623)', (
     expect(notice).toHaveTextContent(REFUSAL);
     expect(within(notice).getByRole('link', { name: 'Propose a change' })).toHaveAttribute(
       'href',
-      '/engagements/eng-1/change-order?prefill=add&title=Data+migration'
+      '/engagements/eng-1/change-order?prefill=add'
     );
     expect(toast.error).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalled();
