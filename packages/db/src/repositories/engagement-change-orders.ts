@@ -18,12 +18,7 @@ import {
 } from '../schema';
 import { recordDeliveryAudit } from './_shared/delivery-audit';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
-import {
-  isMilestoneContentField,
-  openChangeOrderPredicate,
-  readProjectTermsTx,
-  type MilestoneContentField,
-} from './_shared/change-order-guards';
+import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
 import { isUniqueViolation } from './experts';
@@ -451,13 +446,12 @@ function editedColumns(
 }
 
 /**
- * The wording columns an edit line's update writes, in column order. Recorded on the edit's
- * audit row so "changed since the proposal" resets only the fields the client approved.
+ * The columns an edit line's update writes, in column order, less `updatedAt`. Recorded as
+ * the edit audit row's `fields`, which means the same on a direct edit; "changed since the
+ * proposal" narrows it to the wording fields, so only those the client approved reset.
  */
-function writtenContentFields(
-  columns: Partial<typeof engagementMilestones.$inferInsert>
-): MilestoneContentField[] {
-  return Object.keys(columns).filter(isMilestoneContentField);
+function writtenFields(columns: Partial<typeof engagementMilestones.$inferInsert>): string[] {
+  return Object.keys(columns).filter((column) => column !== 'updatedAt');
 }
 
 /**
@@ -540,7 +534,7 @@ async function applyChangeOrderLinesTx(
         .returning({ id: engagementMilestones.id });
       applied.push(
         await recordLiveMilestoneUpdate(tx, ctx, edited, 'engagement_milestone.edited', {
-          fields: writtenContentFields(columns),
+          fields: writtenFields(columns),
         })
       );
       continue;
@@ -592,7 +586,7 @@ async function recordAddedMilestone(
 
 /**
  * After an edit or remove of a milestone that must still be live: audit the action (an edit
- * also records the wording `fields` it wrote). A missing row means the target is gone and
+ * also records the `fields` it wrote). A missing row means the target is gone and
  * throws `ChangeOrderCoherenceError('line_target_not_live')`.
  */
 async function recordLiveMilestoneUpdate(

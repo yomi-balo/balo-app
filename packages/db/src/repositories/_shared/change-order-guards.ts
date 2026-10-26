@@ -33,11 +33,6 @@ export const MILESTONE_CONTENT_FIELDS = ['title', 'descriptionHtml', 'acceptance
 
 export type MilestoneContentField = (typeof MILESTONE_CONTENT_FIELDS)[number];
 
-/** True when `value` names one of {@link MILESTONE_CONTENT_FIELDS}. */
-export function isMilestoneContentField(value: unknown): value is MilestoneContentField {
-  return MILESTONE_CONTENT_FIELDS.some((field) => field === value);
-}
-
 /** The SQL predicate for an OPEN change order: undecided, unwithdrawn, live. Timestamps only. */
 export function openChangeOrderPredicate(): SQL {
   const predicate = and(

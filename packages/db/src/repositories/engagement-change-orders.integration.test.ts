@@ -1171,19 +1171,20 @@ describe('engagementChangeOrdersRepository.approve — not bound by the plain-wr
     ]);
   });
 
-  it('records on the approved edit audit row the wording fields the line wrote', async () => {
+  it('records on the approved edit audit row every field the line wrote', async () => {
     const { engagementId, userId, first } = await seedProject();
     const draft = await repo.createDraft({
       engagementId,
       userId,
       note: 'Tighten the wording.',
-      newTotalCents: 500_000,
+      newTotalCents: 550_000,
       lines: [
         line({
           op: 'edit',
           engagementMilestoneId: first.id,
           title: 'Discovery, agreed',
           acceptanceCriteria: 'Signed off',
+          valueCents: 250_000,
         }),
       ],
     });
@@ -1194,7 +1195,19 @@ describe('engagementChangeOrdersRepository.approve — not bound by the plain-wr
       (e) => e.action === 'engagement_milestone.edited'
     );
     expect(edited?.metadata).toMatchObject({ changeOrderId: draft.id });
-    expect(edited?.metadata?.fields).toEqual(['title', 'descriptionHtml', 'acceptanceCriteria']);
+    expect(edited?.metadata?.fields).toEqual([
+      'title',
+      'descriptionHtml',
+      'acceptanceCriteria',
+      'valueCents',
+    ]);
+    expect(await engagementMilestonesRepository.listProposalContentEdits([first.id])).toEqual([
+      {
+        milestoneId: first.id,
+        kind: 'change_order',
+        resetFields: ['title', 'descriptionHtml', 'acceptanceCriteria'],
+      },
+    ]);
   });
 
   it('leaves acceptance criteria out of the recorded fields when the edit line carries none', async () => {

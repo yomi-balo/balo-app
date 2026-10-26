@@ -106,7 +106,7 @@ export type MilestoneContentEditRow =
 
 export type { MilestoneContentField };
 
-/** A change-order edit row's `metadata.fields`, narrowed; absent (a legacy row) → all three. */
+/** A change-order edit row's `metadata.fields`, narrowed to the wording fields; absent (a legacy row) → all three. */
 function parseResetFields(raw: unknown): MilestoneContentField[] {
   if (!Array.isArray(raw)) return [...MILESTONE_CONTENT_FIELDS];
   return MILESTONE_CONTENT_FIELDS.filter((field) => raw.some((value) => value === field));
