@@ -8,6 +8,7 @@ import type {
 import {
   changeOrderMinutesDelta,
   clientPriceChangeCents,
+  hoursLabel,
   isChangeOrderStale,
 } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
@@ -42,6 +43,12 @@ export interface ChangeOrderLineView {
   title: string;
   descriptionText: string | null;
   estimateLabel: string | null;
+  /**
+   * The hours already logged on the milestone ("12 hrs logged so far"), with " · already past
+   * the new estimate" once they reach it. Set only on a sent T&M order's edit that changes the
+   * estimate of a milestone with time logged; never on history, where the figure has moved on.
+   */
+  loggedLabel: string | null;
   /** The milestone as it was when the change was sent (edit lines); null when not stamped. */
   before: {
     title: string;
@@ -171,11 +178,30 @@ function plainOrNull(html: string | null): string | null {
   return htmlToPlainText(html) || null;
 }
 
-function mapLines(
+type OrderLine = ChangeOrderWithLines['lines'][number];
+
+/** The hours already logged on an edit's milestone, for a sent T&M order that moves its estimate. */
+function loggedLabelFor(
+  line: OrderLine,
   order: ChangeOrderWithLines,
-  pricingMethod: ProjectEngagementWithMilestones['pricingMethod']
-): ChangeOrderLineView[] {
-  const isTm = pricingMethod === 'tm';
+  vc: ViewContext
+): string | null {
+  const next = line.estimatedMinutes;
+  const milestoneId = line.engagementMilestoneId;
+  if (vc.engagement.pricingMethod !== 'tm' || order.status !== 'sent') return null;
+  if (line.op !== 'edit' || next === null || milestoneId === null) return null;
+  const previous =
+    line.beforeTitle === null
+      ? (vc.engagement.milestones.find((m) => m.id === milestoneId)?.estimatedMinutes ?? null)
+      : line.beforeEstimatedMinutes;
+  const logged = vc.loggedMinutesByMilestone[milestoneId] ?? 0;
+  if (next === previous || logged <= 0) return null;
+  const label = `${hoursLabel(logged)} logged so far`;
+  return logged >= next ? `${label} · already past the new estimate` : label;
+}
+
+function mapLines(order: ChangeOrderWithLines, vc: ViewContext): ChangeOrderLineView[] {
+  const isTm = vc.engagement.pricingMethod === 'tm';
   const estimate = (minutes: number | null): string | null =>
     isTm && minutes !== null ? formatHours(minutes) : null;
   return order.lines.map((line) => ({
@@ -183,6 +209,7 @@ function mapLines(
     title: line.title,
     descriptionText: plainOrNull(line.descriptionHtml),
     estimateLabel: estimate(line.estimatedMinutes),
+    loggedLabel: loggedLabelFor(line, order, vc),
     before:
       line.beforeTitle === null
         ? null
@@ -212,6 +239,8 @@ interface ViewContext {
   /** The viewer holds `approve_own_proposals` for the client company. */
   canDecide: boolean;
   now: Date;
+  /** T&M: minutes of live time logged per milestone. */
+  loggedMinutesByMilestone: Readonly<Record<string, number>>;
 }
 
 /** Σ approved deltas of the orders strictly before / after `index`, by the chosen measure. */
@@ -421,7 +450,7 @@ function mapItem(order: ChangeOrderWithLines, index: number, vc: ViewContext): C
     requestNote: order.requestNote,
     requestedHeading: requestedHeadingFor(order, vc),
     datesLabel: datesLabelFor(order),
-    lines: showsDetail ? mapLines(order, vc.engagement.pricingMethod) : [],
+    lines: showsDetail ? mapLines(order, vc) : [],
     priceEffect: showsDetail ? priceEffectFor(order, index, settled, vc) : null,
     deltaChip: showsDetail ? deltaChipFor(order, index, vc) : null,
     answerText: answerTextFor(order, vc),
@@ -551,6 +580,8 @@ function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): 
  * Map the engagement's change orders (oldest first, as the repository lists them) into the
  * panel view for one viewer. `canDecide` is the viewer's `approve_own_proposals` capability
  * for the client company, resolved by the caller. `now` is injectable for deterministic tests.
+ * `loggedMinutesByMilestone` is the T&M time logged per milestone, shown on a sent order's
+ * estimate edits.
  */
 export function mapChangeOrdersToView(
   orders: readonly ChangeOrderWithLines[],
@@ -558,9 +589,18 @@ export function mapChangeOrdersToView(
   ctx: EngagementViewerContext,
   parties: EngagementParties,
   canDecide: boolean,
-  now: Date = new Date()
+  now: Date = new Date(),
+  loggedMinutesByMilestone: Readonly<Record<string, number>> = {}
 ): ChangeOrderPanelView {
-  const vc: ViewContext = { engagement, lens: ctx.lens, parties, orders, canDecide, now };
+  const vc: ViewContext = {
+    engagement,
+    lens: ctx.lens,
+    parties,
+    orders,
+    canDecide,
+    now,
+    loggedMinutesByMilestone,
+  };
   const open = findOpenOrder(orders);
   const indexed = orders.map((order, index) => ({ order, index }));
   const openItem = indexed.find(

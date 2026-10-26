@@ -265,7 +265,15 @@ export default async function EngagementWorkspacePage({
   const canDecide = await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
     companyId: engagement.companyId,
   });
-  const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties, canDecide);
+  const changeOrders = mapChangeOrdersToView(
+    changeOrderRows,
+    engagement,
+    ctx,
+    parties,
+    canDecide,
+    now,
+    timeSums.byMilestone
+  );
   // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
   // settlement is not even loaded for anyone else.
   const adminMoney = hasPlatformCapability(user, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)

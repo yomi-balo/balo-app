@@ -27,6 +27,7 @@ function item(overrides: Partial<ChangeOrderItemView> = {}): ChangeOrderItemView
         title: 'Marketing dashboard',
         descriptionText: 'KPI board.',
         estimateLabel: null,
+        loggedLabel: null,
         before: null,
       },
     ],
@@ -150,6 +151,7 @@ describe('ChangeOrderLines', () => {
             title: 'Dashboard',
             descriptionText: 'KPI board.',
             estimateLabel: '5 hrs',
+            loggedLabel: null,
             before: null,
           },
           {
@@ -157,6 +159,7 @@ describe('ChangeOrderLines', () => {
             title: 'Build v2',
             descriptionText: 'Same text.',
             estimateLabel: '30 hrs',
+            loggedLabel: null,
             before: { title: 'Build', descriptionText: 'Same text.', estimateLabel: '20 hrs' },
           },
           {
@@ -164,6 +167,7 @@ describe('ChangeOrderLines', () => {
             title: 'Old step',
             descriptionText: null,
             estimateLabel: null,
+            loggedLabel: null,
             before: null,
           },
         ]}
@@ -179,6 +183,27 @@ describe('ChangeOrderLines', () => {
     expect(screen.queryByText('Description before')).not.toBeInTheDocument();
     expect(screen.getByText('20 hrs')).toBeInTheDocument();
     expect(screen.getByText('Old step')).toHaveClass('line-through');
+  });
+
+  it('shows the hours already logged, muted, under an estimate change', () => {
+    render(
+      <ChangeOrderLines
+        lines={[
+          {
+            op: 'edit',
+            title: 'Discovery',
+            descriptionText: null,
+            estimateLabel: '10 hrs',
+            loggedLabel: '10.5 hrs logged so far · already past the new estimate',
+            before: { title: 'Discovery', descriptionText: null, estimateLabel: '8 hrs' },
+          },
+        ]}
+      />
+    );
+    expect(screen.getByText('8 hrs')).toBeInTheDocument();
+    expect(screen.getByText('10.5 hrs logged so far · already past the new estimate')).toHaveClass(
+      'text-muted-foreground'
+    );
   });
 });
 

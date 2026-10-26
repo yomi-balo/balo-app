@@ -12,6 +12,7 @@ const {
   mockSums,
   mockHasDeliveryCapability,
   mockHasPlatformCapability,
+  mockListChangeOrders,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -19,12 +20,13 @@ const {
   mockSums: vi.fn(),
   mockHasDeliveryCapability: vi.fn(),
   mockHasPlatformCapability: vi.fn(),
+  mockListChangeOrders: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
   blocksMarkReady: () => false,
-  engagementChangeOrdersRepository: { listForEngagement: vi.fn().mockResolvedValue([]) },
+  engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
   engagementMilestonesRepository: { listProposalContentEdits: vi.fn().mockResolvedValue([]) },
   projectEngagementsRepository: { findWithMilestones: mockFindWithMilestones },
   actionItemsRepository: { listByEngagement: vi.fn().mockResolvedValue([]) },
@@ -59,7 +61,7 @@ vi.mock('@/components/balo/engagement/engagement-workspace', () => ({
   EngagementWorkspace: () => null,
 }));
 
-import { makeMilestone } from '@/test/change-order-fixtures';
+import { makeLine, makeMilestone, makeOrder } from '@/test/change-order-fixtures';
 import EngagementWorkspacePage from './page';
 
 const BUILD = makeMilestone({
@@ -137,6 +139,7 @@ beforeEach(() => {
   mockSums.mockResolvedValue({ totalMinutes: 0, periodMinutes: 0, byMilestone: {} });
   mockHasDeliveryCapability.mockResolvedValue(true);
   mockHasPlatformCapability.mockReturnValue(false);
+  mockListChangeOrders.mockResolvedValue([]);
 });
 
 describe('EngagementWorkspacePage — time and materials wiring', () => {
@@ -212,6 +215,37 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows a sent change's estimate edit the hours already logged, from the loaded sums", async () => {
+    mockFindWithMilestones.mockResolvedValue(engagement({ milestones: [BUILD] }));
+    mockSums.mockResolvedValue({
+      totalMinutes: 540,
+      periodMinutes: 0,
+      byMilestone: { 'ms-1': 540 },
+    });
+    mockListChangeOrders.mockResolvedValue([
+      makeOrder({
+        status: 'sent',
+        note: 'Raises the build estimate.',
+        sentAt: new Date('2026-10-20T00:00:00Z'),
+        lines: [
+          makeLine({
+            op: 'edit',
+            engagementMilestoneId: 'ms-1',
+            title: 'Build',
+            estimatedMinutes: 600,
+            beforeTitle: 'Build',
+            beforeEstimatedMinutes: 480,
+          }),
+        ],
+      }),
+    ]);
+    const props = await renderPage();
+    const changeOrders = props.changeOrders as {
+      open: { lines: { loggedLabel: string | null }[] } | null;
+    };
+    expect(changeOrders.open?.lines[0]?.loggedLabel).toBe('9 hrs logged so far');
   });
 
   it('passes no time view and reads no entries for a fixed-price project', async () => {

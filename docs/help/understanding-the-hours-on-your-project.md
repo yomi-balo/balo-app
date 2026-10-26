@@ -44,5 +44,6 @@ including when the hours pass it before you approve the raise.
 
 If you want the plan to change, for example because you'd like to adjust scope or you expect the
 hours to keep growing, choose **Request a change** on the project page and describe what you'd like.
-Your expert replies with a proposal that sets new estimates, and you approve or decline it. See
+Your expert replies with a proposal that sets new estimates, and you approve or decline it. The
+change card shows the hours already logged on each milestone whose estimate changes. See
 **Approving or declining a change to your project** for the steps.
