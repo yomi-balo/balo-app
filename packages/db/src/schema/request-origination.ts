@@ -49,7 +49,8 @@ import { timestamps, softDelete } from './helpers';
  * Rich text authored by users (`message`, `overview`, `body`) is server-sanitised
  * HTML — same contract as `project_requests.description`; sanitisation happens in
  * the web caller, never in @balo/db. Money is integer minor units (`price_cents`)
- * + `currency`, never floats (mirrors `expert_profiles.rate_cents`).
+ * + `currency`, never floats. `proposals.rate_cents` is the T&M rate PER HOUR — unlike
+ * `expert_profiles.rate_cents`, which is per minute; nothing derives one from the other.
  */
 
 /**
@@ -332,6 +333,7 @@ export const proposals = pgTable(
     baloFeeBps: integer('balo_fee_bps').notNull().default(2500),
     // ── T&M-only commercial terms (NULLABLE; only populated for `tm`) ──
     depositCents: integer('deposit_cents'),
+    // T&M rate in integer cents PER HOUR (`deriveTmTotalCents`).
     rateCents: integer('rate_cents'),
     cadence: proposalCadenceEnum('cadence'),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),

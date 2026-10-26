@@ -53,6 +53,9 @@ export const expertProfiles = pgTable(
     headline: text('headline'),
     bio: text('bio'),
     username: text('username'),
+    // The expert's raw (un-marked-up) rate in integer cents PER MINUTE — e.g. A$2.30/min = 230.
+    // Billing (`deriveSessionEstimate`) and every display read it per minute; NOT per hour, unlike
+    // `proposals.rate_cents`. `null` ⇒ no rate set.
     rateCents: integer('rate_cents'),
 
     trailheadUrl: text('trailhead_url'),

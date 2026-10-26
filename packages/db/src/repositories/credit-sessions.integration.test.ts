@@ -60,6 +60,7 @@ import { creditReceivablesRepository } from './credit-receivables';
 import { creditHoldsRepository } from './credit-holds';
 import { meetingContextsRepository } from './meeting-contexts';
 import { creditWalletsRepository } from './credit-wallets';
+import { expertsRepository } from './experts';
 
 /**
  * Integration tests for `creditSessionsRepository` (BAL-378). Covers the money-invariant
@@ -220,6 +221,36 @@ describe('creditSessionsRepository.open — gate', () => {
     expect(hold?.amountMinor).toBe(10 * CLIENT_RATE_PER_MIN); // 2500
     expect(hold?.status).toBe('active');
     expect(hold?.sessionId).toBe(s.id);
+  });
+
+  /**
+   * ⚠ THE WRITER ↔ READER SEAM. The expert settings Rate tab saves `ratePerMinuteCents` through
+   * `expertsRepository.updateProfile({ rateCents })`; `open()` reads the same column. Both sides
+   * are a plain `integer`, so a unit disagreement type-checks — this pins it end to end: a
+   * A$2.30/min rate saved the way the settings page saves it opens at 230 expert / 288 client.
+   */
+  it('prices a rate saved through the settings writer as cents per minute', async () => {
+    const ctx = await setup({ balanceMinor: 50_000, expertRateCents: null });
+    await expertsRepository.updateProfile(ctx.expertProfileId, { rateCents: 230 });
+
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 15,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.session.expertRateMinorPerMinute).toBe(230);
+    expect(res.session.clientRateMinorPerMinute).toBe(288);
+    expect(res.session.expertRateMinorPerHour).toBe(13_800);
+    const [hold] = await db
+      .select()
+      .from(creditHolds)
+      .where(eq(creditHolds.id, res.session.holdId!));
+    expect(hold?.amountMinor).toBe(15 * 288);
   });
 
   it('rejects insufficient_no_mandate when the estimate is unfunded and no mandate exists', async () => {
