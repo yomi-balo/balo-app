@@ -39,6 +39,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startTranscriptCaptureWorker },
     { startAdminAlertSweepWorker, registerAdminAlertSweepCron },
     { startProjectBriefParseWorker },
+    { startProposalDraftGenerateWorker },
     {
       startMeetingVenueRepairSweepWorker,
       registerMeetingVenueRepairSweepCron,
@@ -74,6 +75,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./transcript-capture.js'),
     import('./admin-alert-sweep.js'),
     import('./project-brief-parse.js'),
+    import('./proposal-draft-generate.js'),
     import('./meeting-venue-repair.js'),
   ]);
 
@@ -169,5 +171,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // (no cron), enqueued from `POST /project-briefs/parse` right after the web action writes the
   // row.
   startProjectBriefParseWorker();
+  // BAL-611: the AI proposal-draft generation worker — event-triggered (no cron), enqueued from
+  // `POST /proposal-drafts/generate` right after the web action writes the row.
+  startProposalDraftGenerateWorker();
   logger?.info('BullMQ workers started');
 }

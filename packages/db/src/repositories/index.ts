@@ -1084,3 +1084,17 @@ export {
   type CountProjectBriefParsesInput,
 } from './project-brief-parses';
 export type { ProjectBriefParse, NewProjectBriefParse } from '../schema';
+// ── AI proposal draft (BAL-611) — the ONLY access path to `proposal_draft_generations` ───
+// `findForRequester` (web poll) and `findForRelationshipExpert` (api re-check) are scoped;
+// `findById` carries no scope and is the worker's read alone.
+export {
+  proposalDraftGenerationsRepository,
+  type CreateOrGetProposalDraftGenerationInput,
+  type CreateOrGetProposalDraftGenerationResult,
+  type FindProposalDraftGenerationForRequesterInput,
+  type FindProposalDraftGenerationForRelationshipExpertInput,
+  type MarkProposalDraftGenerationSucceededInput,
+  type MarkProposalDraftGenerationFailedInput,
+  type CountProposalDraftGenerationsInput,
+} from './proposal-draft-generations';
+export type { ProposalDraftGeneration, NewProposalDraftGeneration } from '../schema';

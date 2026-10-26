@@ -1,5 +1,5 @@
 {
-  "id": "afca0da7-54cf-411d-a89d-bf063ce5feaa",
+  "id": "d4e0cd66-7e09-4c33-b82f-04e99cbeb928",
   "prevId": "6875b2ca-d527-4512-8731-dd87a321c30f",
   "version": "7",
   "dialect": "postgresql",
@@ -9655,12 +9655,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "content_edited_at": {
-          "name": "content_edited_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "status": {
           "name": "status",
           "type": "engagement_milestone_status",
@@ -17187,6 +17181,193 @@
       },
       "isRLSEnabled": false
     },
+    "public.proposal_draft_generations": {
+      "name": "proposal_draft_generations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "relationship_id": {
+          "name": "relationship_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by_user_id": {
+          "name": "requested_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "proposal_draft_generation_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "output": {
+          "name": "output",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model_id": {
+          "name": "model_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prompt_version": {
+          "name": "prompt_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "proposal_draft_generations_relationship_live_idx": {
+          "name": "proposal_draft_generations_relationship_live_idx",
+          "columns": [
+            {
+              "expression": "relationship_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"proposal_draft_generations\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposal_draft_generations_relationship_idx": {
+          "name": "proposal_draft_generations_relationship_idx",
+          "columns": [
+            {
+              "expression": "relationship_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposal_draft_generations_requester_idx": {
+          "name": "proposal_draft_generations_requester_idx",
+          "columns": [
+            {
+              "expression": "requested_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "proposal_draft_generations_requested_by_user_id_users_id_fk": {
+          "name": "proposal_draft_generations_requested_by_user_id_users_id_fk",
+          "tableFrom": "proposal_draft_generations",
+          "tableTo": "users",
+          "columnsFrom": ["requested_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "proposal_draft_generations_relationship_fk": {
+          "name": "proposal_draft_generations_relationship_fk",
+          "tableFrom": "proposal_draft_generations",
+          "tableTo": "request_expert_relationships",
+          "columnsFrom": ["relationship_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "proposal_draft_generations_output_iff_succeeded": {
+          "name": "proposal_draft_generations_output_iff_succeeded",
+          "value": "(\"proposal_draft_generations\".\"status\" = 'succeeded') = (\"proposal_draft_generations\".\"output\" IS NOT NULL)"
+        },
+        "proposal_draft_generations_reason_iff_failed": {
+          "name": "proposal_draft_generations_reason_iff_failed",
+          "value": "(\"proposal_draft_generations\".\"status\" = 'failed') = (\"proposal_draft_generations\".\"failure_reason\" IS NOT NULL)"
+        },
+        "proposal_draft_generations_completed_iff_terminal": {
+          "name": "proposal_draft_generations_completed_iff_terminal",
+          "value": "(\"proposal_draft_generations\".\"status\" = 'pending') = (\"proposal_draft_generations\".\"completed_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.expert_application_decisions": {
       "name": "expert_application_decisions",
       "schema": "",
@@ -17760,6 +17941,11 @@
       "name": "proposal_document_kind",
       "schema": "public",
       "values": ["terms", "ref"]
+    },
+    "public.proposal_draft_generation_status": {
+      "name": "proposal_draft_generation_status",
+      "schema": "public",
+      "values": ["pending", "succeeded", "failed"]
     },
     "public.proposal_status": {
       "name": "proposal_status",

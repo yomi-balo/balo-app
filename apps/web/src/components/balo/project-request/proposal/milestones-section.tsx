@@ -21,6 +21,7 @@ import {
   milestoneFieldId,
 } from './proposal-composer-state';
 import type { ProposalMilestoneDraft, ProposalPricingMethod } from './proposal-composer-state';
+import { DraftSuggestion, DraftingSkeleton } from './proposal-draft-indicators';
 
 interface MilestonesSectionProps {
   milestones: ProposalMilestoneDraft[];
@@ -32,6 +33,11 @@ interface MilestonesSectionProps {
   onChange: (next: ProposalMilestoneDraft[]) => void;
   onToggleMilestonePricing: (enabled: boolean) => void;
   onSetPrice: (cents: number) => void;
+  /** An AI draft is being written: a skeleton replaces the rows and Add milestone is disabled. */
+  drafting?: boolean;
+  /** The milestones are an untouched AI suggestion: show the marker and Clear. */
+  suggested?: boolean;
+  onClear?: () => void;
 }
 
 export { parseDollarsToCents };
@@ -319,6 +325,9 @@ export function MilestonesSection({
   onChange,
   onToggleMilestonePricing,
   onSetPrice,
+  drafting = false,
+  suggested = false,
+  onClear,
 }: Readonly<MilestonesSectionProps>): React.JSX.Element {
   const isFixed = pricingMethod === 'fixed';
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -412,6 +421,7 @@ export function MilestonesSection({
   );
 
   const handleAdd = useCallback((): void => insertAt(milestones.length), [insertAt, milestones]);
+  const handleClear = useCallback((): void => onClear?.(), [onClear]);
 
   const totalHours = minutesToHoursLabel(sumEstimatedMinutes(milestones));
   const help = isFixed
@@ -419,43 +429,57 @@ export function MilestonesSection({
     : "Estimated hours per deliverable. They guide the estimate but don't cap it.";
 
   return (
-    <ComposerSection id="proposal-section-milestones" title="Milestones" help={help}>
+    <ComposerSection
+      id="proposal-section-milestones"
+      title="Milestones"
+      help={help}
+      busy={drafting}
+      aside={suggested && !drafting ? <DraftSuggestion onClear={handleClear} /> : undefined}
+    >
       <div aria-live="polite" className="sr-only">
         {announcement}
       </div>
-      <MotionConfig reducedMotion="user">
-        <Reorder.Group
-          as="ol"
-          axis="y"
-          values={milestones}
-          onReorder={onChange}
-          className="border-border overflow-hidden rounded-[14px] border"
-        >
-          {milestones.map((milestone, index) => (
-            <MilestoneRow
-              key={milestone.key}
-              milestone={milestone}
-              index={index}
-              count={milestones.length}
-              isFixed={isFixed}
-              showAmount={milestonePricingEnabled}
-              expanded={expanded.has(milestone.key)}
-              onPatch={patch}
-              onToggle={toggle}
-              onRemove={remove}
-              onMove={move}
-              onTitleKeyDown={handleTitleKeyDown}
-            />
-          ))}
-        </Reorder.Group>
-      </MotionConfig>
+      {drafting ? (
+        <DraftingSkeleton variant="milestones" />
+      ) : (
+        <MotionConfig reducedMotion="user">
+          <Reorder.Group
+            as="ol"
+            axis="y"
+            values={milestones}
+            onReorder={onChange}
+            className={cn(
+              'border-border overflow-hidden rounded-[14px] border',
+              suggested && 'animate-in fade-in duration-500 motion-reduce:animate-none'
+            )}
+          >
+            {milestones.map((milestone, index) => (
+              <MilestoneRow
+                key={milestone.key}
+                milestone={milestone}
+                index={index}
+                count={milestones.length}
+                isFixed={isFixed}
+                showAmount={milestonePricingEnabled}
+                expanded={expanded.has(milestone.key)}
+                onPatch={patch}
+                onToggle={toggle}
+                onRemove={remove}
+                onMove={move}
+                onTitleKeyDown={handleTitleKeyDown}
+              />
+            ))}
+          </Reorder.Group>
+        </MotionConfig>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3 px-1 pt-2.5">
         <button
           type="button"
           id={COMPOSER_TARGET.addMilestone}
           onClick={handleAdd}
-          className="text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          disabled={drafting}
+          className="text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
         >
           <Plus className="size-4" aria-hidden="true" />
           Add milestone
@@ -482,7 +506,7 @@ export function MilestonesSection({
         )}
       </div>
 
-      {isFixed && milestonePricingEnabled && milestones.length > 0 && (
+      {isFixed && milestonePricingEnabled && milestones.length > 0 && !drafting && (
         <AllocationLine
           milestones={milestones}
           fixedPriceCents={fixedPriceCents}

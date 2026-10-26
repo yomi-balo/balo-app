@@ -81,6 +81,12 @@ export const PROJECT_EVENTS = {
   PROPOSAL_MILESTONE_PRICING_TOGGLED: 'project_proposal_milestone_pricing_toggled',
   PROPOSAL_CHECKLIST_JUMPED: 'project_proposal_checklist_jumped',
   PROPOSAL_PREVIEW_OPENED: 'project_proposal_preview_opened',
+  // BAL-611: the expert cleared an AI-drafted section (Overview, or the suggested Milestones)
+  // with its Clear control. Fired CLIENT-side by the composer.
+  PROPOSAL_DRAFT_CLEARED: 'project_proposal_draft_cleared',
+  // BAL-611: the expert started typing while a draft was still being generated, so the draft
+  // was discarded before it arrived. Fired CLIENT-side by the composer, once per discard.
+  PROPOSAL_DRAFT_DISCARDED: 'project_proposal_draft_discarded',
   // BAL-324: an admin sent a "complete your billing details" reminder from the
   // kickoff board while the client-billing gate was still outstanding. Feature
   // prefix `project_` matches every constant here (the ticket's bare
@@ -361,6 +367,15 @@ export interface ProjectEventMap {
     milestone_count: number;
     milestones_priced: boolean;
   };
+  // BAL-611: `relationship_id` (not a proposal id, which may not exist yet) joins these two to
+  // PROJECT_PROPOSAL_SUBMITTED's `ai_draft_generated`.
+  [PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED]: {
+    section: 'overview' | 'milestones';
+    relationship_id: string;
+  };
+  [PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED]: {
+    relationship_id: string;
+  };
   // BAL-324: admin-initiated client-billing reminder from the kickoff board.
   [PROJECT_EVENTS.BILLING_REMINDER_SENT]: {
     request_id: string;
@@ -496,6 +511,10 @@ export const PROJECT_SERVER_EVENTS = {
   PROPOSAL_SHARE_REVOKED: 'project_proposal_share_revoked',
   // BAL-604: the delivering expert passed on a project. SERVER-SIDE, from the Server Action.
   PROJECT_TRACK_PASSED: 'project_track_passed',
+  // BAL-611: an AI proposal draft reached a terminal status. SERVER-SIDE, from the api worker
+  // (or the web start action when the enqueue fails), fired only by the write that won the
+  // row's compare-and-set, so a redelivered job never counts twice.
+  PROPOSAL_DRAFT_GENERATED: 'project_proposal_draft_generated',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -542,6 +561,13 @@ export interface ProjectServerEventMap {
     /** Client-charged price = applyBaloFee(price_cents, balo_fee_bps), derived
      *  SERVER-SIDE (BAL-357). `price_cents` above stays the expert's payout quote. */
     client_price_cents: number;
+    /**
+     * BAL-611: true iff a draft generation succeeded for this relationship, looked up at
+     * submit. It records that a draft was generated, NOT that the expert adopted it: adoption
+     * is the generated submits minus those whose `relationship_id` also carries
+     * PROPOSAL_DRAFT_CLEARED or PROPOSAL_DRAFT_DISCARDED.
+     */
+    ai_draft_generated: boolean;
     distinct_id: string;
   };
   // BAL-357: emitted server-side from the client's accept action — the fee +
@@ -598,6 +624,15 @@ export interface ProjectServerEventMap {
   // Server Action. `distinct_id` is the revoking user.
   [PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_REVOKED]: {
     share_link_id: string;
+    distinct_id: string;
+  };
+  // BAL-611: `latency_ms` is the row's `completed_at − created_at`; `milestone_count` is 0 on
+  // a failure. `distinct_id` is the expert who opened the composer.
+  [PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED]: {
+    relationship_id: string;
+    status: 'succeeded' | 'failed';
+    latency_ms: number;
+    milestone_count: number;
     distinct_id: string;
   };
 }

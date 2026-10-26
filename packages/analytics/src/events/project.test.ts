@@ -129,6 +129,48 @@ describe('PROJECT_EVENTS proposal composer v2 (BAL-610)', () => {
   });
 });
 
+describe('AI-drafted proposal events (BAL-611)', () => {
+  it('maps to the feature-prefixed snake_case event names', () => {
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED).toBe('project_proposal_draft_cleared');
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED).toBe('project_proposal_draft_discarded');
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED).toBe('project_proposal_draft_generated');
+  });
+
+  it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+
+  it('types the cleared section, the discard, and the generation outcome', () => {
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED]>().toEqualTypeOf<{
+      section: 'overview' | 'milestones';
+      relationship_id: string;
+    }>();
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED]>().toEqualTypeOf<{
+      relationship_id: string;
+    }>();
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED]
+    >().toEqualTypeOf<{
+      relationship_id: string;
+      status: 'succeeded' | 'failed';
+      latency_ms: number;
+      milestone_count: number;
+      distinct_id: string;
+    }>();
+  });
+
+  it('records whether a draft was generated for a submitted proposal', () => {
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]['ai_draft_generated']
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]
+    >().not.toHaveProperty('used_ai_draft');
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386 / BAL-604)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
@@ -141,6 +183,7 @@ describe('PROJECT_SERVER_EVENTS', () => {
       'PROPOSAL_SHARE_OPENED',
       'PROPOSAL_SHARE_REVOKED',
       'PROJECT_TRACK_PASSED',
+      'PROPOSAL_DRAFT_GENERATED',
     ]);
   });
 

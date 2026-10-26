@@ -86,3 +86,32 @@ describe('ComposerMobileBar', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 });
+
+describe('ComposerMobileBar — AI draft', () => {
+  function renderDrafting(readiness: ReadinessResult): void {
+    render(
+      <ComposerMobileBar
+        state={{ ...emptyDraftState(), fixedPriceCents: 500_000 }}
+        totalCents={500_000}
+        readiness={readiness}
+        reviseMode={false}
+        drafting
+        onJumpFirst={vi.fn()}
+        onPreview={vi.fn()}
+      />
+    );
+  }
+
+  it('reads Drafting… in place of the issue line', () => {
+    renderDrafting(NOT_READY);
+    expect(screen.getByText('Drafting…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /left$/ })).not.toBeInTheDocument();
+  });
+
+  it('reads Drafting… in place of Ready to send, and keeps the CTA enabled', () => {
+    renderDrafting(READY);
+    expect(screen.getByText('Drafting…')).toBeInTheDocument();
+    expect(screen.queryByText('Ready to send')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview and send' })).toBeEnabled();
+  });
+});

@@ -11,6 +11,7 @@ import {
   type ProposalMilestoneDraft,
 } from './proposal-composer-state';
 import type { ProposalExpertIdentity } from './proposal-review-types';
+import type { ProposalDraftGenerationView } from '@/lib/project-request/proposal/proposal-draft-types';
 
 // The `full` overview editor's bubble menu breaks in JSDOM — replace the
 // dynamic RichTextEditor with a plain textarea (the critical test caveat). This
@@ -53,6 +54,14 @@ vi.mock('sonner', () => ({
     info: vi.fn(),
     dismiss: vi.fn(),
   }),
+}));
+const startProposalDraftAction = vi.fn();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/start-proposal-draft', () => ({
+  startProposalDraftAction: (...args: unknown[]) => startProposalDraftAction(...args),
+}));
+const getProposalDraftAction = vi.fn();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-draft', () => ({
+  getProposalDraftAction: (...args: unknown[]) => getProposalDraftAction(...args),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-document-upload', () => ({
   requestProposalDocumentUploadAction: vi.fn(),
@@ -228,6 +237,8 @@ beforeEach(() => {
     analytics: { milestoneCount: 1, totalEstimatedMinutes: 0, pricingMethod: 'fixed' },
   });
   resubmitProposalAction.mockReset();
+  startProposalDraftAction.mockReset();
+  getProposalDraftAction.mockReset();
   uploads.args = {};
   vi.spyOn(globalThis, 'scrollTo').mockImplementation(() => {});
 });
@@ -1446,5 +1457,256 @@ describe('ProposalComposer — timeline note attribution', () => {
 
     expect(screen.getByText('Priya Shah @ Northwind')).toBeInTheDocument();
     expect(screen.getByText('Priya Shah asked for one change.')).toBeInTheDocument();
+  });
+});
+
+describe('ProposalComposer — AI draft (BAL-611)', () => {
+  const PATCH: Extract<ProposalDraftGenerationView, { status: 'succeeded' }>['patch'] = {
+    overviewHtml: '<p>Drafted overview</p>',
+    milestones: [
+      { title: 'Discovery', descriptionHtml: '<p>Map it</p>', acceptanceCriteria: 'Signed off' },
+      { title: 'Build', descriptionHtml: '<p>Configure</p>', acceptanceCriteria: 'Demo passes' },
+    ],
+  };
+  const SUCCEEDED: ProposalDraftGenerationView = {
+    status: 'succeeded',
+    generationId: 'gen-1',
+    patch: PATCH,
+  };
+
+  function blankDraft(): ProposalDraftState {
+    return { ...emptyDraftState(), proposalId: null };
+  }
+
+  function milestoneTitles(): string[] {
+    return screen
+      .queryAllByPlaceholderText('Milestone title')
+      .map((el) => (el as HTMLInputElement).value);
+  }
+
+  function deferredStart(): { resolve: (view: ProposalDraftGenerationView) => void } {
+    let resolve: (view: ProposalDraftGenerationView) => void = () => undefined;
+    startProposalDraftAction.mockReturnValue(
+      new Promise<ProposalDraftGenerationView>((r) => {
+        resolve = r;
+      })
+    );
+    return { resolve: (view) => resolve(view) };
+  }
+
+  it('applies a draft the server already has, with both badges and no round trip', async () => {
+    renderComposer(blankDraft(), { draftGeneration: SUCCEEDED });
+
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('<p>Drafted overview</p>');
+    expect(milestoneTitles()).toEqual(['Discovery', 'Build']);
+    expect(screen.getByText("Drafted from Priya's request")).toBeInTheDocument();
+    expect(screen.getByText('Suggested from the brief')).toBeInTheDocument();
+    expect(startProposalDraftAction).not.toHaveBeenCalled();
+    expect(getProposalDraftAction).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(saveProposalDraftAction).not.toHaveBeenCalled();
+  });
+
+  it('shows the skeletons while drafting, then applies the draft without saving it', async () => {
+    const start = deferredStart();
+    renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
+
+    expect(startProposalDraftAction).toHaveBeenCalledWith({
+      requestId: REQUEST_ID,
+      relationshipId: RELATIONSHIP_ID,
+    });
+    expect(screen.getByTestId('draft-skeleton-overview')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-skeleton-milestones')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add milestone/ })).toBeDisabled();
+    expect(screen.getAllByText("Drafting from Priya's request…").length).toBeGreaterThan(0);
+    expect(screen.getByText('Drafting…')).toBeInTheDocument();
+    expect(within(rail()).getByText('Milestones').nextElementSibling).toHaveTextContent('—');
+
+    await act(async () => {
+      start.resolve(SUCCEEDED);
+    });
+
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('<p>Drafted overview</p>');
+    expect(milestoneTitles()).toEqual(['Discovery', 'Build']);
+    expect(screen.getByText("Drafted from Priya's request")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add milestone/ })).toBeEnabled();
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(saveProposalDraftAction).not.toHaveBeenCalled();
+  });
+
+  it("saves the draft with the expert's first edit", async () => {
+    const user = userEvent.setup();
+    renderComposer(blankDraft(), { draftGeneration: SUCCEEDED });
+
+    await user.type(screen.getByLabelText('Proposal overview'), '!');
+
+    await waitFor(() => expect(saveProposalDraftAction).toHaveBeenCalled(), { timeout: 2000 });
+    const payload = saveProposalDraftAction.mock.calls[0]?.[0] as {
+      overview: string;
+      milestones: { title: string }[];
+    };
+    expect(payload.overview).toBe('<p>Drafted overview</p>!');
+    expect(payload.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
+  });
+
+  it('keeps what the expert types during drafting and discards the whole draft', async () => {
+    const user = userEvent.setup();
+    const start = deferredStart();
+    renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
+
+    await user.type(screen.getByLabelText('Proposal overview'), 'Mine');
+    expect(screen.queryByTestId('draft-skeleton-milestones')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add milestone/ })).toBeEnabled();
+
+    await act(async () => {
+      start.resolve(SUCCEEDED);
+    });
+
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('Mine');
+    expect(milestoneTitles()).toEqual(['']);
+    expect(screen.queryByText("Drafted from Priya's request")).not.toBeInTheDocument();
+    expect(screen.queryByText('Suggested from the brief')).not.toBeInTheDocument();
+  });
+
+  it('the first overview edit hides only the Overview badge', async () => {
+    const user = userEvent.setup();
+    renderComposer(blankDraft(), { draftGeneration: SUCCEEDED });
+
+    await user.type(screen.getByLabelText('Proposal overview'), '!');
+
+    expect(screen.queryByText("Drafted from Priya's request")).not.toBeInTheDocument();
+    expect(screen.getByText('Suggested from the brief')).toBeInTheDocument();
+  });
+
+  it('Clear on Overview empties it, tracks the event, toasts and can be undone', async () => {
+    const user = userEvent.setup();
+    renderComposer(blankDraft(), { draftGeneration: SUCCEEDED });
+
+    const overviewHeading = screen.getByRole('heading', { level: 2, name: 'Overview' });
+    const section = overviewHeading.closest('section') as HTMLElement;
+    await user.click(within(section).getByRole('button', { name: 'Clear drafted overview' }));
+
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('');
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED, {
+      section: 'overview',
+      relationship_id: RELATIONSHIP_ID,
+    });
+    expect(screen.queryByText("Drafted from Priya's request")).not.toBeInTheDocument();
+    expect(screen.getByText('Suggested from the brief')).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledWith('Overview cleared.', expect.anything());
+
+    act(() => lastToastUndo()());
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('<p>Drafted overview</p>');
+    expect(screen.getByText("Drafted from Priya's request")).toBeInTheDocument();
+  });
+
+  it('Clear on Milestones leaves exactly one blank milestone with no removal toast', async () => {
+    const user = userEvent.setup();
+    renderComposer(blankDraft(), { draftGeneration: SUCCEEDED });
+
+    const section = screen
+      .getByRole('heading', { level: 2, name: 'Milestones' })
+      .closest('section') as HTMLElement;
+    await user.click(within(section).getByRole('button', { name: 'Clear suggested milestones' }));
+
+    expect(milestoneTitles()).toEqual(['']);
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_DRAFT_CLEARED, {
+      section: 'milestones',
+      relationship_id: RELATIONSHIP_ID,
+    });
+    expect(screen.queryByText('Suggested from the brief')).not.toBeInTheDocument();
+    expect(screen.getByText("Drafted from Priya's request")).toBeInTheDocument();
+    expect(toast).toHaveBeenCalledWith('Suggested milestones cleared.', expect.anything());
+    expect(toast).not.toHaveBeenCalledWith('Milestone removed.', expect.anything());
+
+    act(() => lastToastUndo()());
+    expect(milestoneTitles()).toEqual(['Discovery', 'Build']);
+    expect(screen.getByText('Suggested from the brief')).toBeInTheDocument();
+  });
+
+  it('saves an applied draft when a pricing edit already created the proposal row', async () => {
+    const user = userEvent.setup();
+    const start = deferredStart();
+    renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
+
+    await user.type(screen.getByLabelText("What's not included"), 'X');
+    await waitFor(() => expect(saveProposalDraftAction).toHaveBeenCalledTimes(1), {
+      timeout: 2000,
+    });
+    await screen.findByText('Saved as draft');
+
+    await act(async () => {
+      start.resolve(SUCCEEDED);
+    });
+
+    await waitFor(() => expect(saveProposalDraftAction).toHaveBeenCalledTimes(2), {
+      timeout: 2000,
+    });
+    const payload = saveProposalDraftAction.mock.calls[1]?.[0] as {
+      overview: string;
+      exclusions: string;
+      milestones: { title: string }[];
+    };
+    expect(payload.overview).toBe('<p>Drafted overview</p>');
+    expect(payload.exclusions).toBe('X');
+    expect(payload.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
+  });
+
+  it('saves once, carrying both, when a debounced edit and the draft land together', async () => {
+    const user = userEvent.setup();
+    const start = deferredStart();
+    renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
+
+    await user.type(screen.getByLabelText("What's not included"), 'X');
+    expect(saveProposalDraftAction).not.toHaveBeenCalled();
+    await act(async () => {
+      start.resolve(SUCCEEDED);
+    });
+
+    await waitFor(() => expect(saveProposalDraftAction).toHaveBeenCalled(), { timeout: 2000 });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(saveProposalDraftAction).toHaveBeenCalledTimes(1);
+    const payload = saveProposalDraftAction.mock.calls[0]?.[0] as {
+      overview: string;
+      exclusions: string;
+      milestones: { title: string }[];
+    };
+    expect(payload.overview).toBe('<p>Drafted overview</p>');
+    expect(payload.exclusions).toBe('X');
+    expect(payload.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
+  });
+
+  it('shows the quiet line and a blank composer for a failed generation', () => {
+    renderComposer(blankDraft(), { draftGeneration: { status: 'failed' } });
+
+    expect(screen.getByText("Couldn't draft this one. Start from scratch.")).toBeInTheDocument();
+    expect(screen.getByLabelText('Proposal overview')).toHaveValue('');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stays blank with no line when generation was skipped', () => {
+    renderComposer(blankDraft(), { draftGeneration: { status: 'skipped' } });
+
+    expect(screen.queryByText(/Couldn't draft/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+    expect(startProposalDraftAction).not.toHaveBeenCalled();
+  });
+
+  it('never drafts in revise mode', () => {
+    renderReviseComposer(readyDraft());
+
+    expect(startProposalDraftAction).not.toHaveBeenCalled();
+    expect(getProposalDraftAction).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+  });
+
+  it('never drafts once a proposal exists, whatever the page passed', () => {
+    renderComposer(readyDraft(), { draftGeneration: { status: 'none' } });
+
+    expect(startProposalDraftAction).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
   });
 });

@@ -17,6 +17,7 @@ import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId
 import type { SaveProposalDraftInput } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
 import { formatWholeCurrency } from '@/lib/utils/currency';
+import type { ProposalDraftPatch } from '@/lib/project-request/proposal/proposal-draft-types';
 import { formatProposalAmount } from './proposal-format';
 
 export type ProposalPricingMethod = 'fixed' | 'tm';
@@ -257,6 +258,29 @@ export function syncPerMilestoneInstallments(
     key: prev.installments[i]?.key ?? row.key,
   }));
   return { ...next, installments };
+}
+
+/**
+ * Apply an AI-drafted patch (BAL-611): the Overview and one milestone row per drafted
+ * milestone, each built from a blank row for the current pricing method. Pricing, installment
+ * percentages, timeframe and exclusions are never touched; only a "One per milestone" payment
+ * schedule follows the new rows.
+ */
+export function applyDraftPatch(
+  state: ProposalDraftState,
+  patch: ProposalDraftPatch
+): ProposalDraftState {
+  const milestones = patch.milestones.map((drafted) => ({
+    ...blankMilestone(state.pricingMethod),
+    title: drafted.title,
+    descriptionHtml: drafted.descriptionHtml,
+    acceptanceCriteria: drafted.acceptanceCriteria,
+  }));
+  return syncPerMilestoneInstallments(state, {
+    ...state,
+    overview: patch.overviewHtml,
+    milestones,
+  });
 }
 
 type MilestoneAllocation =

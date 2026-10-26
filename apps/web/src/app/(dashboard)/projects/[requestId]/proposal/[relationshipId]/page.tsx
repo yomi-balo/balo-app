@@ -44,6 +44,7 @@ import {
 } from '@/lib/project-request/proposal-audience-view';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-types';
+import { loadProposalDraftGenerationView } from '@/lib/project-request/proposal/proposal-draft-view';
 
 interface ProposalComposerPageProps {
   params: Promise<{ requestId: string; relationshipId: string }>;
@@ -318,7 +319,10 @@ async function renderComposer(
   relationship: Relationship
 ): Promise<React.JSX.Element> {
   const draft = await proposalsRepository.findCurrentByRelationship(relationshipId);
-  const initialState = await hydrateComposerState(draft);
+  const [initialState, draftGeneration] = await Promise.all([
+    hydrateComposerState(draft),
+    draft === undefined ? loadProposalDraftGenerationView(relationshipId) : null,
+  ]);
   const brief = composerBriefProps(request, relationship);
 
   return (
@@ -327,6 +331,7 @@ async function renderComposer(
         requestId={requestId}
         relationshipId={relationshipId}
         initialState={initialState}
+        draftGeneration={draftGeneration}
         header={
           <ComposerHeader
             requestId={requestId}
