@@ -97,4 +97,29 @@ describe('EngagementHeader', () => {
     );
     expect(screen.getByLabelText('Billing: Billed monthly')).toBeInTheDocument();
   });
+
+  it('renders a warning-toned chip in the warning colours, and a plain chip neutral', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          terms: [
+            { icon: 'Clock', label: 'Pricing', value: 'Time & materials' },
+            {
+              icon: 'Clock',
+              label: 'Last delivery activity',
+              value: 'Quiet for 16 days · worth a check-in with Priya',
+              tone: 'warning',
+            },
+          ],
+        })}
+      />
+    );
+    const quiet = screen.getByLabelText(
+      'Last delivery activity: Quiet for 16 days · worth a check-in with Priya'
+    );
+    expect(quiet).toHaveClass('text-warning-strong', 'bg-warning/10');
+    const plain = screen.getByLabelText('Pricing: Time & materials');
+    expect(plain).toHaveClass('text-muted-foreground');
+    expect(plain).not.toHaveClass('text-warning-strong');
+  });
 });

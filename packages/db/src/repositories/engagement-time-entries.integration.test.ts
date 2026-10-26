@@ -156,6 +156,45 @@ describe('engagementTimeEntriesRepository.log', () => {
     expect(await crossingAudits(seeded.milestone.id)).toEqual([]);
   });
 
+  it('audits the insert in the same transaction', async () => {
+    const seeded = await seedTm();
+
+    const { entry } = await repo.log(logInput(seeded, 90));
+
+    const events = await auditFor(entry.id);
+    expect(events.map((e) => e.action)).toEqual(['engagement_time_entry.logged']);
+    expect(events[0]?.entityType).toBe('engagement_time_entry');
+    expect(events[0]?.actorUserId).toBe(seeded.userId);
+    expect(events[0]?.metadata).toEqual({
+      milestoneId: seeded.milestone.id,
+      minutes: 90,
+      workedOn: TODAY,
+      engagementId: seeded.engagementId,
+    });
+  });
+
+  it('rolls back the entry when its audit fails', async () => {
+    const seeded = await seedTm();
+    await db.execute(sql`
+      CREATE FUNCTION bal624_fail_logged() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'forced failure on the logged audit';
+      END;
+      $$
+    `);
+    await db.execute(sql`
+      CREATE TRIGGER bal624_fail_logged BEFORE INSERT ON audit_events
+      FOR EACH ROW WHEN (NEW.action = 'engagement_time_entry.logged')
+      EXECUTE FUNCTION bal624_fail_logged()
+    `);
+
+    await expect(repo.log(logInput(seeded, 60))).rejects.toThrow(
+      'forced failure on the logged audit'
+    );
+
+    expect(await entriesOn(seeded.milestone.id)).toBe(0);
+  });
+
   it('refuses a fixed-price project and writes nothing', async () => {
     const seeded = await seedTm({ project: { projectValues: { pricingMethod: 'fixed' } } });
 
@@ -336,9 +375,12 @@ describe('engagementTimeEntriesRepository.update', () => {
     expect(result.loggedAfterMinutes).toBe(75);
     expect(result.estimateExceeded).toBe(false);
     const events = await auditFor(entry.id);
-    expect(events.map((e) => e.action)).toEqual(['engagement_time_entry.edited']);
-    expect(events[0]?.entityType).toBe('engagement_time_entry');
-    expect(events[0]?.metadata).toEqual({
+    expect(events.map((e) => e.action)).toEqual([
+      'engagement_time_entry.logged',
+      'engagement_time_entry.edited',
+    ]);
+    expect(events[1]?.entityType).toBe('engagement_time_entry');
+    expect(events[1]?.metadata).toEqual({
       fromMinutes: 60,
       toMinutes: 75,
       noteChanged: true,
@@ -363,7 +405,8 @@ describe('engagementTimeEntriesRepository.update', () => {
     expect(result.estimateExceeded).toBe(true);
     const [audit] = await crossingAudits(seeded.milestone.id);
     expect(audit?.metadata).toMatchObject({ estimatedMinutes: 480, loggedMinutes: 510 });
-    const [edited] = await auditFor(entry.id);
+    const [, edited] = await auditFor(entry.id);
+    expect(edited?.action).toBe('engagement_time_entry.edited');
     expect(edited?.metadata).toMatchObject({ noteChanged: false });
   });
 
@@ -433,8 +476,11 @@ describe('engagementTimeEntriesRepository.remove', () => {
     expect(removed.deletedAt).toBeInstanceOf(Date);
     expect(await loggedMinutesTx(db, seeded.engagementId)).toBe(0);
     const events = await auditFor(entry.id);
-    expect(events.map((e) => e.action)).toEqual(['engagement_time_entry.removed']);
-    expect(events[0]?.metadata).toEqual({ minutes: 45, engagementId: seeded.engagementId });
+    expect(events.map((e) => e.action)).toEqual([
+      'engagement_time_entry.logged',
+      'engagement_time_entry.removed',
+    ]);
+    expect(events[1]?.metadata).toEqual({ minutes: 45, engagementId: seeded.engagementId });
   });
 
   it("refuses another author's entry and an already removed one", async () => {

@@ -398,6 +398,19 @@ export const engagementTimeEntriesRepository = {
         .returning();
       if (entry === undefined) throw new Error('Time entry insert returned no row');
 
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.userId,
+        action: 'engagement_time_entry.logged',
+        entityType: 'engagement_time_entry',
+        entityId: entry.id,
+        engagementId: input.engagementId,
+        metadata: {
+          milestoneId: milestone.id,
+          minutes: entry.minutes,
+          workedOn: entry.workedOn,
+        },
+      });
+
       return writeResultTx(tx, {
         engagementId: input.engagementId,
         entry,

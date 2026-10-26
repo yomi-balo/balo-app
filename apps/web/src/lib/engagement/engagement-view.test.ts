@@ -3,6 +3,7 @@ import type { ProjectEngagementWithMilestones } from '@balo/db';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
 import { makeLine, makeOrder } from '@/test/change-order-fixtures';
 import {
+  DELIVERY_QUIET_THRESHOLD_DAYS,
   mapEngagementToWorkspaceView,
   offersRatingCard,
   type EngagementWorkspaceStatus,
@@ -912,7 +913,7 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
   function chipOf(
     over: Partial<ProjectEngagementWithMilestones>,
     lens: EngagementLens
-  ): { icon: string; label: string; value: string } | undefined {
+  ): { icon: string; label: string; value: string; tone?: string } | undefined {
     return mapEngagementToWorkspaceView(makeEngagement(over), ctxFor(lens), NOW).header.terms.find(
       (t) => t.label === 'Last delivery activity'
     );
@@ -955,6 +956,25 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
       'admin'
     );
     expect(chip?.value).toBe('Last delivery activity: 2d ago');
+  });
+
+  it('turns to a check-in warning once delivery has been quiet for the threshold', () => {
+    const quiet = new Date(NOW.getTime() - DELIVERY_QUIET_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
+    expect(chipOf({ status: 'active', activatedAt: quiet, createdAt: quiet }, 'admin')).toEqual({
+      icon: 'Clock',
+      label: 'Last delivery activity',
+      value: `Quiet for ${DELIVERY_QUIET_THRESHOLD_DAYS} days · worth a check-in with Priya`,
+      tone: 'warning',
+    });
+  });
+
+  it('stays neutral one day short of the threshold', () => {
+    const almost = new Date(
+      NOW.getTime() - (DELIVERY_QUIET_THRESHOLD_DAYS - 1) * 24 * 60 * 60 * 1000
+    );
+    const chip = chipOf({ status: 'active', activatedAt: almost, createdAt: almost }, 'admin');
+    expect(chip?.value).toBe(`Last delivery activity: ${DELIVERY_QUIET_THRESHOLD_DAYS - 1}d ago`);
+    expect(chip).not.toHaveProperty('tone');
   });
 });
 

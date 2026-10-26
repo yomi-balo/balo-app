@@ -19,7 +19,8 @@ export type DeliveryAuditAction =
   | 'engagement_milestone.reordered'
   // the milestone's logged time first went past its estimate (once per estimate value)
   | 'engagement_milestone.estimate_exceeded'
-  // time entries on a time-and-materials project (an insert is not audited: the row is the record)
+  // time entries on a time-and-materials project
+  | 'engagement_time_entry.logged'
   | 'engagement_time_entry.edited'
   | 'engagement_time_entry.removed'
   // engagement lifecycle

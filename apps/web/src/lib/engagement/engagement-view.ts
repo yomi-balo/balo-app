@@ -58,6 +58,9 @@ export type { EngagementParties } from './engagement-parties';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Whole days without delivery activity after which the admin chip flags the project. */
+export const DELIVERY_QUIET_THRESHOLD_DAYS = 14;
+
 /**
  * The workspace's status union. Re-pointed at the schema-derived
  * `ProjectDeliveryStatus` by BAL-417 rather than re-declared as four literals, so it
@@ -104,6 +107,8 @@ export interface TermsStripItem {
   label: string;
   /** Display text, e.g. "Fixed price · A$58,000". */
   value: string;
+  /** Present only when the pill needs attention; absent renders it neutral. */
+  tone?: 'warning';
 }
 
 export interface ProvenanceLinkView {
@@ -841,18 +846,33 @@ function deriveLastActivityAt(engagement: ProjectEngagementWithMilestones): Date
   );
 }
 
-/** The admin header chip for an in-flight project: how long since anything moved. */
+/**
+ * The admin header chip for an in-flight project: how long since anything moved. Once
+ * delivery has been quiet for `DELIVERY_QUIET_THRESHOLD_DAYS`, the chip turns to a warning
+ * that suggests a check-in.
+ */
 function deriveLastActivityChip(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
+  parties: EngagementParties,
   now: Date
 ): TermsStripItem | null {
   if (lens !== 'admin') return null;
   if (engagement.status !== 'active' && engagement.status !== 'pending_acceptance') return null;
+  const lastActivityAt = deriveLastActivityAt(engagement);
+  const quietDays = wholeDaysSince(lastActivityAt, now);
+  if (quietDays >= DELIVERY_QUIET_THRESHOLD_DAYS) {
+    return {
+      icon: 'Clock',
+      label: 'Last delivery activity',
+      value: `Quiet for ${quietDays} days · worth a check-in with ${parties.expertPartyShort}`,
+      tone: 'warning',
+    };
+  }
   return {
     icon: 'Clock',
     label: 'Last delivery activity',
-    value: `Last delivery activity: ${formatRelativeDays(deriveLastActivityAt(engagement), now)}`,
+    value: `Last delivery activity: ${formatRelativeDays(lastActivityAt, now)}`,
   };
 }
 
@@ -981,7 +1001,9 @@ export function mapEngagementToWorkspaceView(
     provenance,
     terms: [
       ...deriveTermsStrip(engagement, ctx.lens, changeOrders),
-      ...[deriveLastActivityChip(engagement, ctx.lens, now)].filter((item) => item !== null),
+      ...[deriveLastActivityChip(engagement, ctx.lens, parties, now)].filter(
+        (item) => item !== null
+      ),
     ],
     backHref: '/projects',
   };

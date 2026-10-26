@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import type { EngagementHeaderView, ViewIcon } from '@/lib/engagement/engagement-view';
 import { StatusChip } from './status-chip';
 
@@ -83,7 +84,12 @@ export function EngagementHeader({
               key={item.label}
               variant="secondary"
               aria-label={`${item.label}: ${item.value}`}
-              className="bg-card text-muted-foreground border-border gap-1 font-medium"
+              className={cn(
+                'gap-1 font-medium',
+                item.tone === 'warning'
+                  ? 'border-warning/20 bg-warning/10 text-warning-strong'
+                  : 'bg-card text-muted-foreground border-border'
+              )}
             >
               <Icon aria-hidden="true" />
               {item.value}
