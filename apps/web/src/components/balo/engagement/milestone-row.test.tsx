@@ -23,6 +23,8 @@ function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView
     feedback: null,
     changePending: false,
     changeProvenance: null,
+    proposalChanges: [],
+    removalNeedsChangeOrder: false,
     ...overrides,
   };
 }
@@ -181,5 +183,30 @@ describe('MilestoneRow', () => {
       expect(screen.queryByText('Change pending')).not.toBeInTheDocument();
       expect(screen.queryByText(/approved change/)).not.toBeInTheDocument();
     });
+  });
+
+  it('marks a reworded milestone and lists what changed under a disclosure', () => {
+    render(
+      <MilestoneRow
+        node={makeNode({
+          proposalChanges: [
+            { field: 'title', label: 'Title', before: 'Discovery', after: 'Discovery & design' },
+            { field: 'acceptance_criteria', label: 'Done when', before: '', after: 'Signed off' },
+          ],
+        })}
+        isLast
+      />
+    );
+    expect(screen.getByText('Changed since proposal')).toBeInTheDocument();
+    expect(screen.getByText('What changed')).toBeInTheDocument();
+    const items = screen.getAllByRole('listitem', { hidden: true });
+    expect(items[0]).toHaveTextContent('Title: was “Discovery”, now “Discovery & design”');
+    expect(items[1]).toHaveTextContent('Done when: was empty, now “Signed off”');
+  });
+
+  it('shows no chip or disclosure for a milestone with no wording changes', () => {
+    render(<MilestoneRow node={makeNode()} isLast />);
+    expect(screen.queryByText('Changed since proposal')).not.toBeInTheDocument();
+    expect(screen.queryByText('What changed')).not.toBeInTheDocument();
   });
 });

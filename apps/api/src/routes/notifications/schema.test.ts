@@ -983,6 +983,18 @@ describe('publishBodySchema', () => {
       expect(result.success).toBe(true);
     });
 
+    it('accepts changeDetail up to 320 chars and rejects longer or empty', () => {
+      const parse = (changeDetail: string) =>
+        publishBodySchema.safeParse({
+          event: 'engagement.scope_changed',
+          payload: { ...valid, changeDetail },
+        }).success;
+      expect(parse('Title: “A” → “B”')).toBe(true);
+      expect(parse('x'.repeat(320))).toBe(true);
+      expect(parse('x'.repeat(321))).toBe(false);
+      expect(parse('')).toBe(false);
+    });
+
     it('accepts the payload without the optional recipientId + milestoneId', () => {
       const { recipientId: _r, milestoneId: _m, ...rest } = valid;
       const result = publishBodySchema.safeParse({

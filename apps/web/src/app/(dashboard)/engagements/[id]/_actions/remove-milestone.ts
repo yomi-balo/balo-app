@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
+import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { log } from '@/lib/logging';
 import {
   INVALID_REQUEST,
@@ -60,11 +61,16 @@ export async function removeMilestoneAction(
       const wasCompleted = milestone.status === 'completed';
       const hadSourceProvenance = milestone.sourceProposalMilestoneId !== null;
 
-      const outcome = await runMilestoneTransition(() =>
-        engagementMilestonesRepository.softDelete({ milestoneId: milestone.id, userId: user.id })
+      const outcome = await runMilestoneTransition(
+        () =>
+          engagementMilestonesRepository.softDelete({
+            milestoneId: milestone.id,
+            userId: user.id,
+          }),
+        deriveEngagementParties(engagement).clientCompanyName
       );
       if (!outcome.ok) {
-        return { success: false, error: outcome.error };
+        return { success: false, error: outcome.error, scopeChange: outcome.scopeChange };
       }
       const removed = outcome.value;
 

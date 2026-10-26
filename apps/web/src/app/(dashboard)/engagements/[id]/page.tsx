@@ -5,6 +5,7 @@ import {
   projectEngagementsRepository,
   actionItemsRepository,
   engagementChangeOrdersRepository,
+  engagementMilestonesRepository,
 } from '@balo/db';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
@@ -152,7 +153,10 @@ export default async function EngagementWorkspacePage({
   // otherwise-successful workspace render. No consultation is required for a project
   // (unlike the case surface / recap): a project can complete with zero consultation calls.
   // Runs alongside the action-items read below — two independent reads, one round trip.
-  const [rating, actionItems, changeOrderRows] = await Promise.all([
+  const editedMilestoneIds = engagement.milestones
+    .filter((m) => m.contentEditedAt !== null)
+    .map((m) => m.id);
+  const [rating, actionItems, changeOrderRows, contentEdits] = await Promise.all([
     offersRatingCard(engagement.status, ctx.lens)
       ? readRatingCard({
           engagementId: engagement.id,
@@ -167,8 +171,17 @@ export default async function EngagementWorkspacePage({
     // The engagement's change orders (BAL-622), oldest first — they move the effective price,
     // lock milestones and feed the change-order panel.
     engagementChangeOrdersRepository.listForEngagement(engagement.id),
+    // What the expert reworded after the proposal, for the "Changed since proposal" chip.
+    // Empty when no milestone carries the stamp (the repo returns without querying).
+    engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
   ]);
-  const view = mapEngagementToWorkspaceView(engagement, ctx, new Date(), changeOrderRows);
+  const view = mapEngagementToWorkspaceView(
+    engagement,
+    ctx,
+    new Date(),
+    changeOrderRows,
+    contentEdits
+  );
   const parties = deriveEngagementParties(engagement);
   const canDecide = await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
     companyId: engagement.companyId,

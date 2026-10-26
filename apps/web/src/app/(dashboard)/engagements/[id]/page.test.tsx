@@ -33,6 +33,7 @@ const {
   mockTrackServerAndFlush,
   mockReadRatingCard,
   mockListChangeOrders,
+  mockListContentEdits,
   mockLoadProjectSettlement,
   mockHasCapability,
 } = vi.hoisted(() => ({
@@ -52,6 +53,7 @@ const {
   mockTrackServerAndFlush: vi.fn(),
   mockReadRatingCard: vi.fn(),
   mockListChangeOrders: vi.fn(),
+  mockListContentEdits: vi.fn(),
   mockLoadProjectSettlement: vi.fn(),
   mockHasCapability: vi.fn(),
 }));
@@ -62,6 +64,7 @@ vi.mock('@balo/db', () => ({
   AUTO_ACCEPT_DAYS: 7,
   blocksMarkReady: () => false,
   engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
+  engagementMilestonesRepository: { listProposalContentEdits: mockListContentEdits },
   projectEngagementsRepository: {
     findWithMilestones: mockFindWithMilestones,
     findByProjectRequestId: mockFindIdByProjectRequestId,
@@ -192,6 +195,7 @@ beforeEach(() => {
   mockListActionItems.mockResolvedValue([]);
   mockReadRatingCard.mockResolvedValue(null);
   mockListChangeOrders.mockResolvedValue([]);
+  mockListContentEdits.mockResolvedValue([]);
   mockHasCapability.mockResolvedValue(true);
   mockLoadProjectSettlement.mockResolvedValue(
     deriveProjectSettlement({
@@ -452,6 +456,34 @@ describe('EngagementWorkspacePage (RSC) — change orders and the staff money vi
     await renderPage();
 
     expect(mockListChangeOrders).toHaveBeenCalledWith(ENGAGEMENT_ID);
+  });
+
+  it('reads the wording edits only for milestones carrying the content-edited stamp', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    const milestone = (id: string, contentEditedAt: Date | null): unknown => ({
+      id,
+      engagementId: ENGAGEMENT_ID,
+      sourceProposalMilestoneId: null,
+      sortOrder: 0,
+      title: id,
+      descriptionHtml: null,
+      acceptanceCriteria: null,
+      valueCents: null,
+      status: 'pending',
+      contentEditedAt,
+    });
+    mockFindWithMilestones.mockResolvedValue(
+      engagement({
+        milestones: [
+          milestone('ms-edited', new Date('2026-06-30T00:00:00Z')),
+          milestone('ms-plain', null),
+        ] as ProjectEngagementWithMilestones['milestones'],
+      })
+    );
+
+    await renderPage();
+
+    expect(mockListContentEdits).toHaveBeenCalledWith(['ms-edited']);
   });
 
   describe('deciding on a sent change', () => {

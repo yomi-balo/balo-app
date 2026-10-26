@@ -16,8 +16,8 @@ import {
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
 import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
-import { CHANGE_ORDER_STALE_BUSINESS_DAYS } from '@balo/shared/engagements';
-import { addBusinessDays, businessDaysBetween } from '@balo/shared/timezone';
+import { changeOrderStaleCutoff } from '@balo/shared/engagements';
+import { businessDaysBetween } from '@balo/shared/timezone';
 import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
 import {
@@ -167,15 +167,6 @@ async function expertApplicationPending(
   return { findings, batchFilled };
 }
 
-const MS_PER_DAY = 86_400_000;
-
-function lastWeekdayOnOrBefore(date: Date): Date {
-  const day = date.getUTCDay();
-  if (day === 6) return new Date(date.getTime() - MS_PER_DAY);
-  if (day === 0) return new Date(date.getTime() - 2 * MS_PER_DAY);
-  return date;
-}
-
 // ── project.change_order_stale ───────────────────────────────────────────
 
 async function projectChangeOrderStale(
@@ -183,7 +174,7 @@ async function projectChangeOrderStale(
 ): Promise<AdminAlertFinderOutcome> {
   // A weekend `now` is anchored to the Friday before it (same UTC time of day), so the cutoff
   // is five full business days back and the alert never fires on the fourth.
-  const cutoff = addBusinessDays(lastWeekdayOnOrBefore(ctx.now), -CHANGE_ORDER_STALE_BUSINESS_DAYS);
+  const cutoff = changeOrderStaleCutoff(ctx.now);
   const rows = await engagementChangeOrdersRepository.listStaleSentForAlerts(cutoff, ctx.limit);
   const batchFilled = rows.length === ctx.limit;
 

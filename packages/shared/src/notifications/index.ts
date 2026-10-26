@@ -239,6 +239,11 @@ export interface EngagementScopeChangedPayload {
   projectTitle: string; // {title} — subject + admin in-app body
   changeKind: MilestoneChangeKind;
   changeSummary: string; // "added 'Data migration dry-run'" | "removed 'X'" | "updated 'Y'"
+  /**
+   * A short before/after of the wording (at most 320 characters), set only when the edit
+   * changes a milestone that came from the accepted proposal.
+   */
+  changeDetail?: string;
 }
 
 // BAL-334 (D4) expert requested project completion (active → pending_acceptance).

@@ -52,7 +52,9 @@ describe('MilestoneFormModal', () => {
   it('shows the price-lock notice', () => {
     renderModal();
     expect(screen.getByText(/is notified of plan changes/i)).toBeInTheDocument();
-    expect(screen.getByText(/pricing changes go through a new proposal/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/pricing changes go through a change Northwind Industrial approves/i)
+    ).toBeInTheDocument();
   });
 
   it('disables the CTA until the title is non-empty', async () => {

@@ -10,6 +10,7 @@ import {
   minutesToHoursInput,
   rowState,
   rowsFor,
+  withPrefillLine,
   type ComposerMilestone,
   type ComposerRow,
   type ComposerSavedLine,
@@ -279,5 +280,53 @@ describe('composerIssues', () => {
     expect(composerIssues({ ...base, pricing: 'tm', lines: [], priceDeltaCents: 50_000 })).toEqual(
       []
     );
+  });
+});
+
+describe('withPrefillLine', () => {
+  const removeM1: ComposerSavedLine = {
+    op: 'remove',
+    milestoneId: 'm1',
+    title: 'Discovery',
+    descriptionText: null,
+    estimatedMinutes: null,
+  };
+  const addReporting: ComposerSavedLine = {
+    op: 'add',
+    milestoneId: null,
+    title: 'Reporting',
+    descriptionText: null,
+    estimatedMinutes: null,
+  };
+
+  it('appends the prefill after the saved lines', () => {
+    expect(withPrefillLine([addReporting], removeM1)).toEqual([addReporting, removeM1]);
+  });
+
+  it('returns the saved lines for no prefill', () => {
+    expect(withPrefillLine([addReporting], null)).toEqual([addReporting]);
+  });
+
+  it('keeps the draft when a saved line already removes that milestone', () => {
+    expect(withPrefillLine([removeM1], { ...removeM1, title: 'Other' })).toEqual([removeM1]);
+  });
+
+  it('keeps the draft when a saved add has the same title, ignoring case and spacing', () => {
+    expect(withPrefillLine([addReporting], { ...addReporting, title: '  reporting ' })).toEqual([
+      addReporting,
+    ]);
+  });
+
+  it('keeps the draft when it already holds a blank add, so repeat visits do not stack', () => {
+    const blank = { ...addReporting, title: '' };
+    const firstVisit = withPrefillLine([addReporting], blank);
+    expect(firstVisit).toEqual([addReporting, blank]);
+    const savedBlank = { ...blank, title: '  ' };
+    expect(withPrefillLine([addReporting, savedBlank], blank)).toEqual([addReporting, savedBlank]);
+  });
+
+  it('does not match a saved edit line against a remove prefill', () => {
+    const edit: ComposerSavedLine = { ...removeM1, op: 'edit' };
+    expect(withPrefillLine([edit], removeM1)).toEqual([edit, removeM1]);
   });
 });

@@ -37,10 +37,12 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', 
 vi.mock('./expert-milestone-rail', () => ({
   ExpertMilestoneRail: ({
     proposeChange,
+    addNeedsChangeOrder,
   }: {
     proposeChange?: { label: string; disabledReason: string | null; href: string };
+    addNeedsChangeOrder: boolean;
   }) => (
-    <div data-testid="expert-milestone-rail">
+    <div data-testid="expert-milestone-rail" data-add-needs-change-order={addNeedsChangeOrder}>
       Interactive rail
       {proposeChange !== undefined && (
         <span data-testid="propose-change">
@@ -128,6 +130,8 @@ function milestone(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeVie
     feedback: null,
     changePending: false,
     changeProvenance: null,
+    proposalChanges: [],
+    removalNeedsChangeOrder: false,
     ...overrides,
   };
 }
@@ -268,6 +272,7 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
     emptyState: null,
     adminOversight: null,
     completionCard: null,
+    addMilestoneNeedsChangeOrder: false,
     ...overrides,
   };
 }
@@ -360,6 +365,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
             },
             clientDecision: null,
             lastRequest: null,
+            changedSinceProposal: null,
           },
         })}
       />
@@ -722,6 +728,22 @@ describe('EngagementWorkspace — change orders', () => {
       'Propose a change|/engagements/eng-1/change-order|enabled'
     );
   });
+
+  it.each([true, false])(
+    'expert · active: passes addMilestoneNeedsChangeOrder=%s to the rail',
+    (needsChangeOrder) => {
+      render(
+        <EngagementWorkspace
+          view={view({ ...EXPERT, addMilestoneNeedsChangeOrder: needsChangeOrder })}
+          changeOrders={changeOrders()}
+        />
+      );
+      expect(screen.getByTestId('expert-milestone-rail')).toHaveAttribute(
+        'data-add-needs-change-order',
+        String(needsChangeOrder)
+      );
+    }
+  );
 
   it('expert · draft open: relabels the entry', () => {
     render(

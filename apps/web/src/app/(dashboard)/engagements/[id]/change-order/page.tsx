@@ -15,6 +15,10 @@ import {
   findOpenOrder,
   mapChangeOrdersToView,
 } from '@/lib/engagement/change-order-view';
+import {
+  parseChangeOrderPrefill,
+  type ChangeOrderPrefill,
+} from '@/lib/engagement/scope-change-redirect';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import { ChangeOrderComposer } from '@/components/balo/engagement/change-orders/change-order-composer';
 import type {
@@ -25,6 +29,7 @@ import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 
 interface ChangeOrderComposerPageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 // Generic and leak-free: the composer is a private, expert-only surface.
@@ -39,6 +44,35 @@ function plainOrNull(html: string | null): string | null {
 }
 
 /**
+ * The line an attempted change opens the composer with. A remove names a live milestone of
+ * this engagement and takes its live title; an unknown id is ignored.
+ */
+function prefillLineFor(
+  prefill: ChangeOrderPrefill | null,
+  milestones: readonly ComposerMilestone[]
+): ComposerSavedLine | null {
+  if (prefill === null) return null;
+  if (prefill.op === 'add') {
+    return {
+      op: 'add',
+      milestoneId: null,
+      title: '',
+      descriptionText: null,
+      estimatedMinutes: null,
+    };
+  }
+  const target = milestones.find((m) => m.id === prefill.milestoneId);
+  if (target === undefined) return null;
+  return {
+    op: 'remove',
+    milestoneId: target.id,
+    title: target.title,
+    descriptionText: null,
+    estimatedMinutes: null,
+  };
+}
+
+/**
  * The expert's change-order composer (`/engagements/[id]/change-order`). Reached only by the
  * delivering expert or an agency owner / admin (the `manage_engagement` capability): everyone
  * else, including the client and Balo staff, gets the same 404 a missing engagement gets, so
@@ -48,8 +82,10 @@ function plainOrNull(html: string | null): string | null {
  */
 export default async function ChangeOrderComposerPage({
   params,
+  searchParams,
 }: Readonly<ChangeOrderComposerPageProps>): Promise<React.JSX.Element> {
   const { id } = await params;
+  const prefill = parseChangeOrderPrefill(await searchParams);
 
   const user = await getCurrentUser();
   if (!user) {
@@ -138,6 +174,7 @@ export default async function ChangeOrderComposerPage({
         hourlyRateCents={engagement.rateCents}
         milestones={milestones}
         order={order}
+        prefillLine={prefillLineFor(prefill, milestones)}
       />
     </>
   );

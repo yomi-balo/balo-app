@@ -911,9 +911,10 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'engagement-scope-changed-client': (data) => {
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
     const summary = (data.changeSummary as string) ?? 'updated the delivery plan';
+    const detail = data.changeDetail as string | undefined;
     return engagementNotice(
       'Delivery plan updated',
-      `${actor} updated the delivery plan: ${summary}.`,
+      `${actor} updated the delivery plan: ${summary}.${detail === undefined ? '' : ` What changed: ${detail}`}`,
       data
     );
   },

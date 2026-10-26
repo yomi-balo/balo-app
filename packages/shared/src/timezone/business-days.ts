@@ -17,6 +17,16 @@ function addUtcDays(date: Date, days: number): Date {
 }
 
 /**
+ * `date` itself on a weekday; on a weekend, the Friday before it at the same UTC time of day.
+ */
+export function lastWeekdayOnOrBefore(date: Date): Date {
+  const day = date.getUTCDay();
+  if (day === 6) return addUtcDays(date, -1);
+  if (day === 0) return addUtcDays(date, -2);
+  return date;
+}
+
+/**
  * Moves `from` by `days` business days (negative moves back), keeping the UTC time of day.
  * Each step lands on the next weekday in that direction, so a weekend start is first
  * counted from the nearest weekday boundary in the direction of travel.

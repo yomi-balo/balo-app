@@ -7,10 +7,13 @@ import {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
   type EngagementMilestoneStatus,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
+import type { ScopeChangeRedirect } from '@balo/shared/engagements';
 import type { MilestoneChangeKind } from '@balo/shared/notifications';
+import { scopeChangeMessage } from '@/lib/engagement/scope-change-redirect';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import {
   deriveEngagementParties,
@@ -36,7 +39,7 @@ export type EngagementMilestoneNode = ProjectEngagementWithMilestones['milestone
  */
 export type MilestoneActionResult =
   | { success: true; milestoneId: string; status: EngagementMilestoneStatus }
-  | { success: false; error: string };
+  | { success: false; error: string; scopeChange?: ScopeChangeRedirect };
 
 // ── Friendly, non-leaking copy (returned verbatim; the client toasts it) ─────
 export const NOT_SIGNED_IN = 'You are not signed in.';
@@ -245,14 +248,19 @@ export async function requireExpertUser(): Promise<
 /**
  * Delegate a milestone transition to the repo, mapping the two typed race errors to
  * friendly copy (`EngagementNotActiveError → ENGAGEMENT_LOCKED`,
- * `InvalidMilestoneTransitionError → STALE_TRANSITION`). Any other error RETHROWS to
+ * `InvalidMilestoneTransitionError → STALE_TRANSITION`). A write that needs the client's
+ * approval (`ScopeChangeRequiresChangeOrderError`) returns its reason as `scopeChange` plus
+ * copy naming `clientCompanyName`, so the rail can link to the change-order composer. Any other error RETHROWS to
  * the action's `GENERIC_FAILURE` boundary. This double-guards the two-experts /
  * stale-tab race where the row changed between the step-7 pre-check and the locked
  * transition. Shared so the three actions never re-implement the mapping.
  */
 export async function runMilestoneTransition<T>(
-  fn: () => Promise<T>
-): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  fn: () => Promise<T>,
+  clientCompanyName = 'the client'
+): Promise<
+  { ok: true; value: T } | { ok: false; error: string; scopeChange?: ScopeChangeRedirect }
+> {
   try {
     return { ok: true, value: await fn() };
   } catch (error) {
@@ -264,6 +272,13 @@ export async function runMilestoneTransition<T>(
     }
     if (error instanceof MilestoneChangePendingError) {
       return { ok: false, error: MILESTONE_CHANGE_PENDING };
+    }
+    if (error instanceof ScopeChangeRequiresChangeOrderError) {
+      return {
+        ok: false,
+        error: scopeChangeMessage(error.reason, clientCompanyName),
+        scopeChange: { reason: error.reason, pricingMethod: error.pricingMethod },
+      };
     }
     throw error;
   }
@@ -410,6 +425,8 @@ export async function publishScopeChange(
     milestoneId: string;
     milestoneTitle: string;
     correlationId: string;
+    /** A short before/after, set only for a wording edit to a proposal-origin milestone. */
+    changeDetail?: string;
   }
 ): Promise<void> {
   const parties = deriveEngagementParties(engagement);
@@ -423,6 +440,7 @@ export async function publishScopeChange(
     projectTitle: deriveEngagementTitle(engagement, parties),
     changeKind: input.changeKind,
     changeSummary: buildChangeSummary(input.changeKind, input.milestoneTitle),
+    ...(input.changeDetail === undefined ? {} : { changeDetail: input.changeDetail }),
   }).catch(() => {
     // publishNotificationEvent logs internally.
   });

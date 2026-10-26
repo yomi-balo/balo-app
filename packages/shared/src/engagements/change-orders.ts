@@ -7,9 +7,62 @@
  * the fee applied to the expert delta: rounding the delta alone drifts from the difference of the two rounded prices.
  */
 import { applyBaloFee } from '../pricing';
+import { addBusinessDays, lastWeekdayOnOrBefore } from '../timezone/business-days';
 
 /** Whole business days a sent change order may wait before the Balo team is alerted. */
 export const CHANGE_ORDER_STALE_BUSINESS_DAYS = 5;
+
+/**
+ * The latest `sent_at` a change order may carry at `now` and count as stale. A weekend `now`
+ * is anchored to the Friday before it (same UTC time of day), so the cutoff is
+ * {@link CHANGE_ORDER_STALE_BUSINESS_DAYS} full business days back and an order never reads
+ * as stale on the fourth.
+ */
+export function changeOrderStaleCutoff(now: Date): Date {
+  return addBusinessDays(lastWeekdayOnOrBefore(now), -CHANGE_ORDER_STALE_BUSINESS_DAYS);
+}
+
+/** Whether an order sent at `sentAt` is stale at `now`: sent on or before the cutoff. */
+export function isChangeOrderStale(sentAt: Date, now: Date): boolean {
+  return sentAt.getTime() <= changeOrderStaleCutoff(now).getTime();
+}
+
+/**
+ * Why a plain milestone write was refused and must go through a change order instead:
+ * changing an estimate on time and materials, adding a milestone on time and materials, or
+ * removing contracted scope on a fixed price.
+ */
+export const SCOPE_CHANGE_REDIRECT_REASONS = [
+  'estimate_change',
+  'add_on_tm',
+  'remove_contracted',
+] as const;
+
+/** @see SCOPE_CHANGE_REDIRECT_REASONS */
+export type ScopeChangeRedirectReason = (typeof SCOPE_CHANGE_REDIRECT_REASONS)[number];
+
+/** A refused milestone write, with the project's pricing method. */
+export interface ScopeChangeRedirect {
+  reason: ScopeChangeRedirectReason;
+  pricingMethod: 'fixed' | 'tm';
+}
+
+/**
+ * Whether a milestone is scope the client agreed to, so removing it on a fixed price needs a
+ * change order: it was snapshotted from the accepted proposal, it carries a value, or an
+ * approved change order's `add` line created it (`addedByApprovedChangeOrder`). A milestone
+ * the expert added with a plain add has none of these and stays removable.
+ */
+export function isContractedMilestone(
+  milestone: { sourceProposalMilestoneId: string | null; valueCents: number | null },
+  addedByApprovedChangeOrder: boolean
+): boolean {
+  return (
+    milestone.sourceProposalMilestoneId !== null ||
+    milestone.valueCents !== null ||
+    addedByApprovedChangeOrder
+  );
+}
 
 /** What a change-order line does to a milestone. */
 export type ChangeOrderLineOp = 'add' | 'edit' | 'remove';

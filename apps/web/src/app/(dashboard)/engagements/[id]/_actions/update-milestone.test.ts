@@ -26,10 +26,21 @@ const {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
+  MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
+  class MilestoneChangePendingError extends Error {}
+  class ScopeChangeRequiresChangeOrderError extends Error {
+    constructor(
+      public readonly reason: string,
+      public readonly pricingMethod: string
+    ) {
+      super(reason);
+    }
+  }
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
@@ -37,6 +48,8 @@ const {
     EngagementNotActiveError,
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
+    MilestoneChangePendingError,
+    ScopeChangeRequiresChangeOrderError,
   };
 });
 
@@ -49,6 +62,8 @@ vi.mock('@balo/db', () => ({
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
+  MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 }));
 
 const mockTrack = vi.fn();
@@ -324,5 +339,62 @@ describe('updateMilestoneAction', () => {
     expect(mockEdit).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateMilestoneAction · scope-change refusal', () => {
+  it('returns the typed scopeChange and client-naming copy when the repo needs a change order', async () => {
+    mockEdit.mockRejectedValue(new ScopeChangeRequiresChangeOrderError('estimate_change', 'tm'));
+    const res = await updateMilestoneAction({
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+      title: 'Renamed',
+    });
+    expect(res).toEqual({
+      success: false,
+      error: expect.stringContaining('Northwind Industrial'),
+      scopeChange: { reason: 'estimate_change', pricingMethod: 'tm' },
+    });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateMilestoneAction · changeDetail', () => {
+  it('sends a before/after for a wording edit to a proposal-origin milestone', async () => {
+    mockFindEngagement.mockResolvedValue(
+      engagement({ milestones: [milestone({ sourceProposalMilestoneId: 'src-1' })] })
+    );
+    await updateMilestoneAction({
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+      title: 'Renamed',
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.changeDetail).toBe('Title: “Discovery” → “Renamed”');
+  });
+
+  it('sends no changeDetail for a milestone the expert added', async () => {
+    await updateMilestoneAction({
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+      title: 'Renamed',
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload).not.toHaveProperty('changeDetail');
+  });
+
+  it('sends no changeDetail for an estimate-only edit on a proposal-origin milestone', async () => {
+    mockFindEngagement.mockResolvedValue(
+      engagement({ milestones: [milestone({ sourceProposalMilestoneId: 'src-1' })] })
+    );
+    await updateMilestoneAction({
+      engagementId: ENGAGEMENT_ID,
+      milestoneId: MILESTONE_ID,
+      estimatedMinutes: 300,
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload).not.toHaveProperty('changeDetail');
   });
 });

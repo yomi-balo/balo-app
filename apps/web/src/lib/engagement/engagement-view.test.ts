@@ -26,6 +26,7 @@ function makeMilestone(over: Partial<Milestone> = {}): Milestone {
     acceptanceCriteria: 'Design doc signed off.',
     valueCents: null,
     estimatedMinutes: null,
+    contentEditedAt: null,
     status: 'pending',
     startedByUserId: null,
     startedAt: null,
@@ -812,6 +813,18 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
       NOW
     );
     expect(view.emptyState?.title).toBe('Shape the delivery plan');
+    expect(view.emptyState?.body).toMatch(/^Add your first milestone so Northwind/);
+  });
+
+  it('expert empty state on T&M invites proposing the first milestone', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [], pricingMethod: 'tm' }),
+      ctxFor('expert'),
+      NOW
+    );
+    expect(view.emptyState?.body).toMatch(
+      /^Propose the first milestone — Northwind Industrial approves it before work is tracked against it\./
+    );
   });
 
   it('emptyState is null when milestones exist', () => {
@@ -1213,5 +1226,134 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       ).completionCard;
       expect(card?.canRequest).toBe(true);
     });
+  });
+});
+
+describe('mapEngagementToWorkspaceView — scope guards and changed-since-proposal (BAL-623)', () => {
+  const EDITED_AT = new Date('2026-06-30T00:00:00.000Z');
+  const reworded = makeMilestone({
+    id: 'ms-reworded',
+    title: 'Discovery & design',
+    sourceProposalMilestoneId: 'pm-1',
+    contentEditedAt: EDITED_AT,
+  });
+  const directEdit = {
+    milestoneId: 'ms-reworded',
+    kind: 'direct' as const,
+    before: { title: 'Discovery' },
+  };
+
+  function inReview(
+    lens: EngagementLens,
+    milestones: Milestone[],
+    edits = [directEdit]
+  ): ReturnType<typeof mapEngagementToWorkspaceView> {
+    return mapEngagementToWorkspaceView(
+      makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW, milestones }),
+      ctxFor(lens),
+      NOW,
+      [],
+      edits
+    );
+  }
+
+  it('derives the reworded fields for a stamped milestone', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [reworded] }),
+      ctxFor('client'),
+      NOW,
+      [],
+      [directEdit]
+    );
+    expect(view.milestones[0]?.proposalChanges).toEqual([
+      { field: 'title', label: 'Title', before: 'Discovery', after: 'Discovery & design' },
+    ]);
+  });
+
+  it('shows nothing for an unstamped milestone, even with an edit row', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [makeMilestone({ id: 'ms-reworded' })] }),
+      ctxFor('client'),
+      NOW,
+      [],
+      [directEdit]
+    );
+    expect(view.milestones[0]?.proposalChanges).toEqual([]);
+  });
+
+  it('drops a field edited back to its original wording', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [{ ...reworded, title: 'Discovery' }] }),
+      ctxFor('client'),
+      NOW,
+      [],
+      [directEdit]
+    );
+    expect(view.milestones[0]?.proposalChanges).toEqual([]);
+  });
+
+  it('lists the reworded milestones on the client review banner only', () => {
+    const banner = inReview('client', [reworded]).reviewBanner;
+    expect(banner?.changedSinceProposal).toEqual({
+      heading: 'Changed since proposal',
+      intro:
+        'Priya revised the wording of 1 milestone after the proposal was accepted. Each is marked below.',
+      items: [
+        { milestoneId: 'ms-reworded', milestoneTitle: 'Discovery & design', fieldsLabel: 'Title' },
+      ],
+    });
+    expect(inReview('expert', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
+    expect(inReview('admin', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
+  });
+
+  it('has no review list when nothing was reworded', () => {
+    const banner = inReview('client', [makeMilestone()], []).reviewBanner;
+    expect(banner?.changedSinceProposal).toBeNull();
+  });
+
+  describe('fixed-price removal needs a change order', () => {
+    const removable = (milestone: Milestone, over = {}): boolean | undefined =>
+      mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: [milestone], ...over }),
+        ctxFor('expert'),
+        NOW
+      ).milestones[0]?.removalNeedsChangeOrder;
+
+    it('is true for proposal-origin and valued milestones', () => {
+      expect(removable(makeMilestone({ sourceProposalMilestoneId: 'pm-1' }))).toBe(true);
+      expect(removable(makeMilestone({ valueCents: 100_000 }))).toBe(true);
+    });
+
+    it('is false for a milestone the expert added', () => {
+      expect(removable(makeMilestone())).toBe(false);
+    });
+
+    it('is false on time and materials, where removal is unguarded', () => {
+      expect(
+        removable(makeMilestone({ sourceProposalMilestoneId: 'pm-1' }), { pricingMethod: 'tm' })
+      ).toBe(false);
+    });
+
+    it('is true for a milestone an approved change order added', () => {
+      const approved = makeOrder({
+        status: 'approved',
+        lines: [makeLine({ op: 'add', engagementMilestoneId: 'ms-1', title: 'Added' })],
+      });
+      const view = mapEngagementToWorkspaceView(
+        makeEngagement({ milestones: [makeMilestone()] }),
+        ctxFor('expert'),
+        NOW,
+        [approved]
+      );
+      expect(view.milestones[0]?.removalNeedsChangeOrder).toBe(true);
+    });
+  });
+
+  it('flags adding a milestone as needing a change order on time and materials only', () => {
+    const add = (pricingMethod: 'fixed' | 'tm'): boolean =>
+      mapEngagementToWorkspaceView(makeEngagement({ pricingMethod }), ctxFor('expert'), NOW)
+        .addMilestoneNeedsChangeOrder;
+    expect(add('tm')).toBe(true);
+    expect(add('fixed')).toBe(false);
   });
 });

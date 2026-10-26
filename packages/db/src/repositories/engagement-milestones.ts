@@ -1,6 +1,8 @@
-import { and, asc, eq, isNull, max } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, max, or, sql } from 'drizzle-orm';
+import { isContractedMilestone } from '@balo/shared/engagements';
 import { db } from '../client';
 import {
+  auditEvents,
   engagementMilestones,
   type Engagement,
   type EngagementMilestone,
@@ -8,7 +10,14 @@ import {
 } from '../schema';
 import { recordDeliveryAudit, type DeliveryAuditAction } from './_shared/delivery-audit';
 import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
-import { assertMilestoneNotPendingChangeTx } from './_shared/change-order-guards';
+import {
+  assertMilestoneNotPendingChangeTx,
+  isAddedByApprovedChangeOrderTx,
+  MILESTONE_CONTENT_FIELDS,
+  readProjectTermsTx,
+  ScopeChangeRequiresChangeOrderError,
+  type MilestoneContentField,
+} from './_shared/change-order-guards';
 
 // Re-export so the established public path `import { EngagementNotActiveError } from '@balo/db'`
 // (via repositories/index.ts) stays intact after the lock helper moved to _shared.
@@ -65,6 +74,60 @@ export class MilestoneReorderMismatchError extends Error {
     super(`Reorder id set does not match the live milestones of engagement ${engagementId}`);
     this.name = 'MilestoneReorderMismatchError';
   }
+}
+
+/**
+ * The prior values of the fields a direct `editDescriptive` changed, recorded as
+ * `metadata.before` on its `engagement_milestone.edited` audit row. Only keys whose value
+ * actually changed are present.
+ */
+export type MilestoneEditBefore = Partial<{
+  title: string;
+  descriptionHtml: string | null;
+  acceptanceCriteria: string | null;
+  estimatedMinutes: number | null;
+}>;
+
+/**
+ * One `engagement_milestone.edited` audit row that bears on "changed since the proposal", from
+ * {@link engagementMilestonesRepository.listProposalContentEdits}. `direct` is an expert's
+ * plain edit and carries the prior values; `change_order` is an approved change order's edit
+ * and names the wording fields it wrote (`resetFields`): the client approved that wording, so
+ * those fields' baselines reset. A change-order row recorded before the field list existed
+ * resets all three.
+ */
+export type MilestoneContentEditRow =
+  | { milestoneId: string; kind: 'direct'; before: MilestoneEditBefore }
+  | {
+      milestoneId: string;
+      kind: 'change_order';
+      resetFields: readonly MilestoneContentField[];
+    };
+
+export type { MilestoneContentField };
+
+/** A change-order edit row's `metadata.fields`, narrowed to the wording fields; absent (a legacy row) → all three. */
+function parseResetFields(raw: unknown): MilestoneContentField[] {
+  if (!Array.isArray(raw)) return [...MILESTONE_CONTENT_FIELDS];
+  return MILESTONE_CONTENT_FIELDS.filter((field) => raw.some((value) => value === field));
+}
+
+/** Narrows an audit row's `metadata.before` key by key, dropping any key of the wrong type. */
+function parseEditBefore(raw: unknown): MilestoneEditBefore {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const record = raw as Record<string, unknown>;
+  const before: MilestoneEditBefore = {};
+  if (typeof record.title === 'string') before.title = record.title;
+  if (typeof record.descriptionHtml === 'string' || record.descriptionHtml === null) {
+    before.descriptionHtml = record.descriptionHtml;
+  }
+  if (typeof record.acceptanceCriteria === 'string' || record.acceptanceCriteria === null) {
+    before.acceptanceCriteria = record.acceptanceCriteria;
+  }
+  if (typeof record.estimatedMinutes === 'number' || record.estimatedMinutes === null) {
+    before.estimatedMinutes = record.estimatedMinutes;
+  }
+  return before;
 }
 
 /**
@@ -299,8 +362,17 @@ export const engagementMilestonesRepository = {
    * Edit a milestone's DESCRIPTIVE fields (no status change). `valueCents` is
    * DELIBERATELY absent from the signature — after the snapshot only an approved
    * change order writes it. Only provided keys are written (an explicit `null`
-   * clears; `undefined`/omitted skips). Refuses a milestone targeted by a sent change
-   * order (`MilestoneChangePendingError`). Audits `engagement_milestone.edited`.
+   * clears; `undefined`/omitted skips).
+   *
+   * Refuses, in this order and writing nothing:
+   *   - a milestone targeted by a sent change order (`MilestoneChangePendingError`);
+   *   - on time and materials, an estimate that differs from the current one
+   *     (`ScopeChangeRequiresChangeOrderError('estimate_change')`). Re-sending the same
+   *     estimate is not a change.
+   *
+   * A changed title, description or acceptance criteria on a milestone that came from the
+   * accepted proposal stamps `content_edited_at`. Audits `engagement_milestone.edited` with
+   * `{ fields, before? }`, where `before` holds the prior value of each field that changed.
    */
   async editDescriptive(input: {
     milestoneId: string;
@@ -313,8 +385,48 @@ export const engagementMilestonesRepository = {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
       await assertMilestoneNotPendingChangeTx(tx, milestone.engagementId, milestone.id);
+      const { pricingMethod } = await readProjectTermsTx(tx, milestone.engagementId);
 
-      const set: Partial<typeof engagementMilestones.$inferInsert> = { updatedAt: new Date() };
+      const before: MilestoneEditBefore = {};
+      if (input.title !== undefined && input.title !== milestone.title) {
+        before.title = milestone.title;
+      }
+      if (
+        input.descriptionHtml !== undefined &&
+        input.descriptionHtml !== milestone.descriptionHtml
+      ) {
+        before.descriptionHtml = milestone.descriptionHtml;
+      }
+      if (
+        input.acceptanceCriteria !== undefined &&
+        input.acceptanceCriteria !== milestone.acceptanceCriteria
+      ) {
+        before.acceptanceCriteria = milestone.acceptanceCriteria;
+      }
+      if (
+        input.estimatedMinutes !== undefined &&
+        input.estimatedMinutes !== milestone.estimatedMinutes
+      ) {
+        before.estimatedMinutes = milestone.estimatedMinutes;
+      }
+
+      if (pricingMethod === 'tm' && 'estimatedMinutes' in before) {
+        throw new ScopeChangeRequiresChangeOrderError(
+          'estimate_change',
+          pricingMethod,
+          milestone.engagementId,
+          milestone.id
+        );
+      }
+
+      const now = new Date();
+      const set: Partial<typeof engagementMilestones.$inferInsert> = { updatedAt: now };
+      if (
+        milestone.sourceProposalMilestoneId !== null &&
+        MILESTONE_CONTENT_FIELDS.some((field) => field in before)
+      ) {
+        set.contentEditedAt = now;
+      }
       const fields: string[] = [];
       if (input.title !== undefined) {
         set.title = input.title;
@@ -348,7 +460,7 @@ export const engagementMilestonesRepository = {
         entityType: 'engagement_milestone',
         entityId: milestone.id,
         engagementId: milestone.engagementId,
-        metadata: { fields },
+        metadata: { fields, ...(Object.keys(before).length > 0 ? { before } : {}) },
       });
       return updated;
     });
@@ -360,7 +472,9 @@ export const engagementMilestonesRepository = {
    * milestones carry a null value). Inserts `status='pending'`,
    * `source_proposal_milestone_id=null`, `created_by_user_id=userId`,
    * `sort_order = sortOrder ?? (max live sort_order + 1)`. Audits
-   * `engagement_milestone.added`.
+   * `engagement_milestone.added`. Refuses on time and materials, writing nothing
+   * (`ScopeChangeRequiresChangeOrderError('add_on_tm')`): a new milestone there grows the
+   * billable estimate, so it goes through a change order.
    */
   async add(input: {
     engagementId: string;
@@ -373,6 +487,15 @@ export const engagementMilestonesRepository = {
   }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       await lockActiveEngagement(tx, input.engagementId, { requireType: 'project' });
+      const { pricingMethod } = await readProjectTermsTx(tx, input.engagementId);
+      if (pricingMethod === 'tm') {
+        throw new ScopeChangeRequiresChangeOrderError(
+          'add_on_tm',
+          pricingMethod,
+          input.engagementId,
+          null
+        );
+      }
 
       let sortOrder = input.sortOrder;
       if (sortOrder === undefined) {
@@ -423,13 +546,30 @@ export const engagementMilestonesRepository = {
    * Soft-delete a milestone (`deleted_at = now`) under a live, active engagement.
    * The row then disappears from `listByEngagement`. Audits
    * `engagement_milestone.removed`. (D0 permits removing a completed milestone; D3
-   * may tighten that policy.) Refuses a milestone targeted by a sent change order
-   * (`MilestoneChangePendingError`).
+   * may tighten that policy.) Refuses, writing nothing, a milestone targeted by a sent
+   * change order (`MilestoneChangePendingError`), then — on a fixed price — contracted scope
+   * (`ScopeChangeRequiresChangeOrderError('remove_contracted')`): a milestone from the
+   * accepted proposal, one carrying a value, or one an approved change order added
+   * (`isContractedMilestone`). On time and materials any milestone is removable.
    */
   async softDelete(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
       await assertMilestoneNotPendingChangeTx(tx, milestone.engagementId, milestone.id);
+      const { pricingMethod } = await readProjectTermsTx(tx, milestone.engagementId);
+      if (pricingMethod === 'fixed') {
+        const addedByApprovedChangeOrder =
+          !isContractedMilestone(milestone, false) &&
+          (await isAddedByApprovedChangeOrderTx(tx, milestone.id));
+        if (isContractedMilestone(milestone, addedByApprovedChangeOrder)) {
+          throw new ScopeChangeRequiresChangeOrderError(
+            'remove_contracted',
+            pricingMethod,
+            milestone.engagementId,
+            milestone.id
+          );
+        }
+      }
 
       const now = new Date();
       const [updated] = await tx
@@ -450,6 +590,50 @@ export const engagementMilestonesRepository = {
         metadata: {},
       });
       return updated;
+    });
+  },
+
+  /**
+   * The `engagement_milestone.edited` audit rows for `milestoneIds` that bear on "changed since
+   * the proposal": direct edits that recorded `before`, and approved change-order edits (which
+   * carry `changeOrderId` and reset the baseline of the wording fields they wrote). Edits that
+   * recorded neither are left out. Ordered by the audit trail contract (`created_at`, then
+   * `seq`). Empty input returns `[]` without a query.
+   */
+  async listProposalContentEdits(
+    milestoneIds: readonly string[]
+  ): Promise<MilestoneContentEditRow[]> {
+    if (milestoneIds.length === 0) return [];
+    const rows = await db
+      .select({ entityId: auditEvents.entityId, metadata: auditEvents.metadata })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, 'engagement_milestone'),
+          inArray(auditEvents.entityId, [...milestoneIds]),
+          eq(auditEvents.action, 'engagement_milestone.edited'),
+          or(
+            isNotNull(sql`${auditEvents.metadata} -> 'before'`),
+            isNotNull(sql`${auditEvents.metadata} -> 'changeOrderId'`)
+          )
+        )
+      )
+      .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
+
+    return rows.map((row): MilestoneContentEditRow => {
+      const metadata = row.metadata ?? {};
+      if (metadata.changeOrderId !== undefined && metadata.changeOrderId !== null) {
+        return {
+          milestoneId: row.entityId,
+          kind: 'change_order',
+          resetFields: parseResetFields(metadata.fields),
+        };
+      }
+      return {
+        milestoneId: row.entityId,
+        kind: 'direct',
+        before: parseEditBefore(metadata.before),
+      };
     });
   },
 

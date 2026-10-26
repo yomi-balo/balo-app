@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ENGAGEMENT_SERVER_EVENTS } from './engagement';
+import { ENGAGEMENT_EVENTS, ENGAGEMENT_SERVER_EVENTS } from './engagement';
 
 describe('ENGAGEMENT_SERVER_EVENTS', () => {
   it('exposes workspace-viewed + the BAL-332 transition + BAL-333 scope-edit + BAL-334 lifecycle + BAL-338 review server events', () => {
@@ -59,5 +59,18 @@ describe('ENGAGEMENT_SERVER_EVENTS', () => {
     for (const value of Object.values(ENGAGEMENT_SERVER_EVENTS)) {
       expect(value).toMatch(/^engagement_[a-z]+(_[a-z]+)*$/);
     }
+  });
+});
+
+describe('ENGAGEMENT_EVENTS', () => {
+  it('exposes exactly the client-side engagement events', () => {
+    expect(Object.keys(ENGAGEMENT_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'COMPLETION_BLOCKED_VIEW',
+      'SCOPE_CHANGE_REDIRECTED',
+    ]);
+  });
+
+  it('maps the scope-change redirect to its exact snake_case event name', () => {
+    expect(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED).toBe('engagement_scope_change_redirected');
   });
 });

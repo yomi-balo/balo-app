@@ -405,6 +405,7 @@ const engagementScopeChangedPayload = z.object({
   projectTitle: z.string().min(1).max(200),
   changeKind: z.enum(MILESTONE_CHANGE_KINDS),
   changeSummary: z.string().min(1).max(240),
+  changeDetail: z.string().min(1).max(320).optional(),
 });
 
 // BAL-334 (D4) expert requested project completion (expert → client owner + admins).

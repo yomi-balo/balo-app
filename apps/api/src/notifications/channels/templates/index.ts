@@ -982,6 +982,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         firstName: (data.recipientName as string) ?? 'there',
         actorExpertLabel: (data.actorExpertLabel as string) ?? 'Your expert',
         changeSummary: (data.changeSummary as string) ?? 'updated the delivery plan',
+        changeDetail: data.changeDetail as string | undefined,
         projectTitle,
         engagementId: (data.engagementId as string) ?? '',
         baseUrl: BASE_URL,

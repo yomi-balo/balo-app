@@ -20,7 +20,11 @@ import {
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
 } from './engagement-milestones';
-import { MilestoneChangePendingError } from './_shared/change-order-guards';
+import {
+  MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
+} from './_shared/change-order-guards';
+import { recordDeliveryAudit } from './_shared/delivery-audit';
 
 /**
  * Read delivery audit rows for one polymorphic entity from main's generic
@@ -720,5 +724,407 @@ describe('engagementMilestonesRepository — milestones locked by a sent change 
       userId: draft.userId,
     });
     expect(removed.deletedAt).toBeInstanceOf(Date);
+  });
+});
+
+// ── Scope guards and "changed since the proposal" (BAL-623) ─────────────────
+
+const TM_TERMS = {
+  pricingMethod: 'tm',
+  priceCents: 900_000,
+  rateCents: 20_000,
+  cadence: 'monthly',
+} as const;
+
+/** A live proposal milestone to point `source_proposal_milestone_id` at. */
+async function seedProposalMilestoneId(): Promise<string> {
+  const source = await proposalFactory();
+  const [row] = await db
+    .insert(proposalMilestones)
+    .values({ proposalId: source.proposal.id, sortOrder: 0, title: 'From the proposal' })
+    .returning({ id: proposalMilestones.id });
+  if (row === undefined) throw new Error('proposal milestone insert failed');
+  return row.id;
+}
+
+/** An active project on `pricing` with one milestone carrying `values`, and an acting user. */
+async function seedOn(
+  pricing: 'fixed' | 'tm',
+  values: Partial<typeof engagementMilestones.$inferInsert> = {}
+): Promise<{ engagementId: string; milestoneId: string; userId: string }> {
+  const { engagement } = await engagementFactory(
+    pricing === 'tm' ? { projectValues: TM_TERMS } : {}
+  );
+  const { milestone } = await engagementMilestoneFactory({ engagementId: engagement.id, values });
+  const user = await userFactory();
+  return { engagementId: engagement.id, milestoneId: milestone.id, userId: user.id };
+}
+
+type EngagementMilestoneRow = typeof engagementMilestones.$inferSelect;
+
+async function milestoneRow(milestoneId: string): Promise<EngagementMilestoneRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(engagementMilestones)
+    .where(eq(engagementMilestones.id, milestoneId));
+  return row;
+}
+
+async function expectScopeRefusal(
+  promise: Promise<unknown>,
+  expected: Pick<ScopeChangeRequiresChangeOrderError, 'reason' | 'pricingMethod' | 'milestoneId'>
+): Promise<void> {
+  const error: unknown = await promise.then(
+    () => undefined,
+    (e: unknown) => e
+  );
+  expect(error).toBeInstanceOf(ScopeChangeRequiresChangeOrderError);
+  expect(error).toMatchObject(expected);
+}
+
+describe('engagementMilestonesRepository.editDescriptive — the T&M estimate guard', () => {
+  it('refuses a different estimate on T&M and writes nothing', async () => {
+    const { milestoneId, userId } = await seedOn('tm', { estimatedMinutes: 600, title: 'Build' });
+
+    await expectScopeRefusal(
+      engagementMilestonesRepository.editDescriptive({
+        milestoneId,
+        userId,
+        title: 'Build v2',
+        estimatedMinutes: 900,
+      }),
+      { reason: 'estimate_change', pricingMethod: 'tm', milestoneId }
+    );
+
+    const row = await milestoneRow(milestoneId);
+    expect(row?.estimatedMinutes).toBe(600);
+    expect(row?.title).toBe('Build');
+    expect(await auditEventsForEntity(milestoneId)).toHaveLength(0);
+  });
+
+  it('accepts the same estimate re-sent on T&M alongside a wording change', async () => {
+    const { milestoneId, userId } = await seedOn('tm', { estimatedMinutes: 600, title: 'Build' });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      title: 'Build v2',
+      estimatedMinutes: 600,
+    });
+
+    expect(updated.title).toBe('Build v2');
+    expect(updated.estimatedMinutes).toBe(600);
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata).toMatchObject({
+      fields: ['title', 'estimatedMinutes'],
+      before: { title: 'Build' },
+    });
+    expect(event?.metadata?.before).not.toHaveProperty('estimatedMinutes');
+  });
+
+  it('lets a fixed-price estimate change through, without stamping a proposal-origin milestone', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+      estimatedMinutes: 600,
+    });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      estimatedMinutes: 900,
+    });
+
+    expect(updated.estimatedMinutes).toBe(900);
+    expect(updated.contentEditedAt).toBeNull();
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata).toMatchObject({ before: { estimatedMinutes: 600 } });
+  });
+
+  it('a pending sent change wins over the scope guard', async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('tm', { estimatedMinutes: 600 });
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'sent',
+      lines: [{ op: 'edit', engagementMilestoneId: milestoneId, title: 'Next' }],
+    });
+
+    await expect(
+      engagementMilestonesRepository.editDescriptive({ milestoneId, userId, estimatedMinutes: 1 })
+    ).rejects.toBeInstanceOf(MilestoneChangePendingError);
+  });
+});
+
+describe('engagementMilestonesRepository.editDescriptive — marking proposal wording edits', () => {
+  it('stamps content_edited_at on a proposal-origin title edit and audits the old title', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+      title: 'Discovery',
+      descriptionHtml: '<p>Map it</p>',
+    });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      title: 'Discovery and design',
+      descriptionHtml: '<p>Map it</p>',
+    });
+
+    expect(updated.contentEditedAt).toBeInstanceOf(Date);
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata).toMatchObject({
+      fields: ['title', 'descriptionHtml'],
+      before: { title: 'Discovery' },
+    });
+    expect(event?.metadata?.before).toEqual({ title: 'Discovery' });
+  });
+
+  it('stamps on a description or acceptance-criteria change, recording a null prior value', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+      acceptanceCriteria: null,
+    });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      acceptanceCriteria: 'Signed off by the client',
+    });
+
+    expect(updated.contentEditedAt).toBeInstanceOf(Date);
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata?.before).toEqual({ acceptanceCriteria: null });
+  });
+
+  it('records before on an expert-added milestone but never stamps it', async () => {
+    const { milestoneId, userId } = await seedOn('fixed', { title: 'Expert added' });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      title: 'Expert added v2',
+    });
+
+    expect(updated.contentEditedAt).toBeNull();
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata?.before).toEqual({ title: 'Expert added' });
+  });
+
+  it('an edit that changes nothing records no before and stamps nothing', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+      title: 'Discovery',
+    });
+
+    const updated = await engagementMilestonesRepository.editDescriptive({
+      milestoneId,
+      userId,
+      title: 'Discovery',
+    });
+
+    expect(updated.contentEditedAt).toBeNull();
+    const [event] = await auditEventsForEntity(milestoneId);
+    expect(event?.metadata).not.toHaveProperty('before');
+  });
+});
+
+describe('engagementMilestonesRepository.add — the T&M guard', () => {
+  it('refuses an add on T&M and inserts nothing', async () => {
+    const { engagement } = await engagementFactory({ projectValues: TM_TERMS });
+    const user = await userFactory();
+
+    await expectScopeRefusal(
+      engagementMilestonesRepository.add({
+        engagementId: engagement.id,
+        userId: user.id,
+        title: 'Data migration',
+      }),
+      { reason: 'add_on_tm', pricingMethod: 'tm', milestoneId: null }
+    );
+
+    expect(await engagementMilestonesRepository.listByEngagement(engagement.id)).toHaveLength(0);
+  });
+
+  it('adds on a fixed price', async () => {
+    const { engagement } = await engagementFactory({ projectValues: { pricingMethod: 'fixed' } });
+    const user = await userFactory();
+
+    const added = await engagementMilestonesRepository.add({
+      engagementId: engagement.id,
+      userId: user.id,
+      title: 'Data migration',
+    });
+
+    expect(added.valueCents).toBeNull();
+  });
+});
+
+describe('engagementMilestonesRepository.softDelete — contracted scope on a fixed price', () => {
+  async function expectRemoveRefused(milestoneId: string, userId: string): Promise<void> {
+    await expectScopeRefusal(engagementMilestonesRepository.softDelete({ milestoneId, userId }), {
+      reason: 'remove_contracted',
+      pricingMethod: 'fixed',
+      milestoneId,
+    });
+    expect((await milestoneRow(milestoneId))?.deletedAt).toBeNull();
+    expect(await auditEventsForEntity(milestoneId)).toHaveLength(0);
+  }
+
+  it('refuses a proposal-origin milestone', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('fixed', { sourceProposalMilestoneId });
+    await expectRemoveRefused(milestoneId, userId);
+  });
+
+  it('refuses a milestone carrying a value', async () => {
+    const { milestoneId, userId } = await seedOn('fixed', { valueCents: 0 });
+    await expectRemoveRefused(milestoneId, userId);
+  });
+
+  it('refuses a milestone an approved change order added', async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('fixed');
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'approved',
+      lines: [{ op: 'add', engagementMilestoneId: milestoneId, title: 'Discovery & design' }],
+    });
+    await expectRemoveRefused(milestoneId, userId);
+  });
+
+  it('removes an expert-added milestone, including one a declined order or a deleted line named', async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('fixed');
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'declined',
+      lines: [{ op: 'add', engagementMilestoneId: milestoneId, title: 'Discovery & design' }],
+    });
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'approved',
+      lines: [
+        {
+          op: 'add',
+          engagementMilestoneId: milestoneId,
+          title: 'Discovery & design',
+          deletedAt: new Date(),
+        },
+      ],
+    });
+
+    const removed = await engagementMilestonesRepository.softDelete({ milestoneId, userId });
+    expect(removed.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('removes a proposal-origin milestone on T&M', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { milestoneId, userId } = await seedOn('tm', { sourceProposalMilestoneId });
+
+    const removed = await engagementMilestonesRepository.softDelete({ milestoneId, userId });
+    expect(removed.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('a pending sent change wins over the scope guard', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { engagementId, milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+    });
+    await engagementChangeOrderFactory({
+      engagementId,
+      status: 'sent',
+      lines: [{ op: 'remove', engagementMilestoneId: milestoneId, title: 'Discovery & design' }],
+    });
+
+    await expect(
+      engagementMilestonesRepository.softDelete({ milestoneId, userId })
+    ).rejects.toBeInstanceOf(MilestoneChangePendingError);
+  });
+});
+
+describe('engagementMilestonesRepository.listProposalContentEdits', () => {
+  it('returns [] for no ids', async () => {
+    expect(await engagementMilestonesRepository.listProposalContentEdits([])).toEqual([]);
+  });
+
+  it('returns direct and change-order edit rows in trail order, leaving out edits with neither', async () => {
+    const sourceProposalMilestoneId = await seedProposalMilestoneId();
+    const { engagementId, milestoneId, userId } = await seedOn('fixed', {
+      sourceProposalMilestoneId,
+      title: 'Discovery',
+    });
+    const { milestoneId: otherId } = await seedOn('fixed', { title: 'Other' });
+
+    await engagementMilestonesRepository.editDescriptive({ milestoneId, userId, title: 'D2' });
+    await engagementMilestonesRepository.editDescriptive({ milestoneId, userId, title: 'D2' });
+    await db.transaction((tx) =>
+      recordDeliveryAudit(tx, {
+        actorUserId: userId,
+        action: 'engagement_milestone.edited',
+        entityType: 'engagement_milestone',
+        entityId: milestoneId,
+        engagementId,
+        metadata: { changeOrderId: randomUUID() },
+      })
+    );
+    await engagementMilestonesRepository.editDescriptive({ milestoneId, userId, title: 'D3' });
+    await engagementMilestonesRepository.editDescriptive({
+      milestoneId: otherId,
+      userId,
+      title: 'Other v2',
+    });
+    await engagementMilestonesRepository.start({ milestoneId, userId });
+
+    const rows = await engagementMilestonesRepository.listProposalContentEdits([milestoneId]);
+
+    expect(rows).toEqual([
+      { milestoneId, kind: 'direct', before: { title: 'Discovery' } },
+      {
+        milestoneId,
+        kind: 'change_order',
+        resetFields: ['title', 'descriptionHtml', 'acceptanceCriteria'],
+      },
+      { milestoneId, kind: 'direct', before: { title: 'D2' } },
+    ]);
+  });
+
+  it("narrows a change-order row's recorded fields to the wording fields", async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('fixed');
+    await db.transaction((tx) =>
+      recordDeliveryAudit(tx, {
+        actorUserId: userId,
+        action: 'engagement_milestone.edited',
+        entityType: 'engagement_milestone',
+        entityId: milestoneId,
+        engagementId,
+        metadata: { changeOrderId: randomUUID(), fields: ['acceptanceCriteria', 'title', 42] },
+      })
+    );
+
+    expect(await engagementMilestonesRepository.listProposalContentEdits([milestoneId])).toEqual([
+      { milestoneId, kind: 'change_order', resetFields: ['title', 'acceptanceCriteria'] },
+    ]);
+  });
+
+  it('drops a before key of the wrong type', async () => {
+    const { engagementId, milestoneId, userId } = await seedOn('fixed');
+    await db.transaction((tx) =>
+      recordDeliveryAudit(tx, {
+        actorUserId: userId,
+        action: 'engagement_milestone.edited',
+        entityType: 'engagement_milestone',
+        entityId: milestoneId,
+        engagementId,
+        metadata: {
+          fields: ['title', 'estimatedMinutes'],
+          before: { title: 42, descriptionHtml: null, estimatedMinutes: 'ten' },
+        },
+      })
+    );
+
+    expect(await engagementMilestonesRepository.listProposalContentEdits([milestoneId])).toEqual([
+      { milestoneId, kind: 'direct', before: { descriptionHtml: null } },
+    ]);
   });
 });

@@ -474,6 +474,24 @@ describe('mapChangeOrdersToView — footnote and admin line', () => {
     expect(view([], 'admin').adminStateLine).toBeNull();
   });
 
+  it.each([
+    ['09:00Z, before the cutoff', '2026-11-02T09:00:00Z', false],
+    ['15:00Z, exactly at the cutoff', '2026-11-02T15:00:00Z', true],
+    ['16:00Z, after the cutoff', '2026-11-02T16:00:00Z', true],
+  ])('gates the queue note on the stale cutoff at %s', (_label, nowIso, inQueue) => {
+    const sentMonday = makeOrder({ ...sentFixed, sentAt: new Date('2026-10-26T15:00:00Z') });
+    const engagement = makeProject();
+    const line = mapChangeOrdersToView(
+      [sentMonday],
+      engagement,
+      ctxFor('admin'),
+      deriveEngagementParties(engagement),
+      true,
+      new Date(nowIso)
+    ).adminStateLine;
+    expect(line?.includes("It's in the pending-actions queue.")).toBe(inQueue);
+  });
+
   it('keeps a sent order under five business days out of the queue note', () => {
     const recent = makeOrder({ ...sentFixed, sentAt: new Date('2026-10-22T00:00:00Z') });
     expect(view([recent], 'admin').adminStateLine).toBe(

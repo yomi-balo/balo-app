@@ -21,7 +21,13 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
+import { track, ENGAGEMENT_EVENTS } from '@/lib/analytics';
 import type { EmptyStateView, MilestoneNodeView } from '@/lib/engagement/engagement-view';
+import {
+  changeOrderPrefillHref,
+  scopeChangeMessage,
+  type ChangeOrderPrefill,
+} from '@/lib/engagement/scope-change-redirect';
 import { MilestoneRow } from './milestone-row';
 import { MilestoneEmptyState } from './milestone-empty-state';
 import { CompleteMilestoneModal } from './complete-milestone-modal';
@@ -32,6 +38,7 @@ import {
   type MilestoneFormValues,
 } from './milestone-form-modal';
 import { RemoveMilestoneModal } from './remove-milestone-modal';
+import { ScopeChangeNotice, type ScopeChangeCta } from './scope-change-notice';
 import { startMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/start-milestone';
 import { completeMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/complete-milestone';
 import { revertMilestoneAction } from '@/app/(dashboard)/engagements/[id]/_actions/revert-milestone';
@@ -62,6 +69,14 @@ interface ExpertMilestoneRailProps {
   clientCompanyName: string;
   /** The change-order composer entry; omitted when the viewer cannot propose changes. */
   proposeChange?: ProposeChangeLink;
+  /** Time-and-materials: new milestones need the client's approval, so "Add milestone" is hidden. */
+  addNeedsChangeOrder: boolean;
+}
+
+/** A refused write, explained: the message plus the way into the composer. */
+interface ScopeRedirectState {
+  message: string;
+  cta: ScopeChangeCta;
 }
 
 /** Optimistic patch instructions applied by the reducer. */
@@ -139,6 +154,24 @@ function ProposeChangeButton({ link }: Readonly<{ link: ProposeChangeLink }>): R
   );
 }
 
+/** The empty-plan entry on a time-and-materials project, where a first milestone needs approval. */
+function ProposeFirstMilestone({
+  cta,
+}: Readonly<{ cta: ScopeChangeCta }>): React.JSX.Element | null {
+  if (cta === null) return null;
+  if ('disabledReason' in cta) {
+    return <p className="text-muted-foreground text-sm">{cta.disabledReason}</p>;
+  }
+  return (
+    <Button asChild className="min-h-11">
+      <Link href={cta.href}>
+        <Plus className="size-4" aria-hidden />
+        Propose the first milestone
+      </Link>
+    </Button>
+  );
+}
+
 /**
  * The interactive delivery rail for the delivering expert while the engagement is
  * `active` (BAL-332 / D2 + BAL-333 / D3). Owns `useOptimistic` + `useTransition`,
@@ -159,6 +192,7 @@ export function ExpertMilestoneRail({
   expertPersonShort,
   clientCompanyName,
   proposeChange,
+  addNeedsChangeOrder,
 }: Readonly<ExpertMilestoneRailProps>): React.JSX.Element {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -166,6 +200,18 @@ export function ExpertMilestoneRail({
   const [revertTarget, setRevertTarget] = useState<MilestoneNodeView | null>(null);
   const [formModal, setFormModal] = useState<FormModalState | null>(null);
   const [removeTarget, setRemoveTarget] = useState<MilestoneNodeView | null>(null);
+  const [redirect, setRedirect] = useState<ScopeRedirectState | null>(null);
+
+  const ctaFor = useCallback(
+    (prefill: ChangeOrderPrefill | null): ScopeChangeCta => {
+      if (proposeChange === undefined) return null;
+      if (proposeChange.disabledReason !== null) {
+        return { disabledReason: proposeChange.disabledReason };
+      }
+      return { href: changeOrderPrefillHref(proposeChange.href, prefill) };
+    },
+    [proposeChange]
+  );
 
   const reducer = useCallback(
     (list: MilestoneNodeView[], action: MilestoneAction): MilestoneNodeView[] => {
@@ -238,14 +284,32 @@ export function ExpertMilestoneRail({
     : (optimistic.find((m) => m.status === 'pending')?.id ?? null);
 
   const settle = useCallback(
-    (res: MilestoneActionResult, okMsg: string): void => {
-      if (res.success) toast.success(okMsg);
-      else toast.error(res.error);
+    (
+      res: MilestoneActionResult,
+      okMsg: string,
+      attempted: ChangeOrderPrefill | null = null
+    ): void => {
+      if (res.success) {
+        toast.success(okMsg);
+        setRedirect(null);
+      } else if (res.scopeChange === undefined) {
+        toast.error(res.error);
+      } else {
+        // The write needs the client's approval: the notice explains and links to the
+        // composer, so no error toast.
+        setRedirect({ message: res.error, cta: ctaFor(attempted) });
+        track(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED, {
+          engagement_id: engagementId,
+          reason: res.scopeChange.reason,
+          pricing_method: res.scopeChange.pricingMethod,
+          trigger: 'refused',
+        });
+      }
       // Reconcile on BOTH outcomes — the RSC payload snaps the rail (and the D1
       // banners / progress bar above it) back to server truth.
       router.refresh();
     },
-    [router]
+    [router, ctaFor, engagementId]
   );
 
   const runStart = useCallback(
@@ -312,6 +376,8 @@ export function ExpertMilestoneRail({
         feedback: null,
         changePending: false,
         changeProvenance: null,
+        proposalChanges: [],
+        removalNeedsChangeOrder: false,
       };
       startTransition(async () => {
         applyOptimistic({ kind: 'add', node: optimisticNode });
@@ -323,7 +389,8 @@ export function ExpertMilestoneRail({
             descriptionText: textOrNull(values.descriptionText) ?? undefined,
             acceptanceCriteria: textOrNull(values.acceptanceCriteria) ?? undefined,
           }),
-          'Milestone added'
+          'Milestone added',
+          { op: 'add' }
         );
       });
     },
@@ -364,7 +431,8 @@ export function ExpertMilestoneRail({
         setRemoveTarget(null);
         settle(
           await removeMilestoneAction({ engagementId, milestoneId: node.id }),
-          'Milestone removed'
+          'Milestone removed',
+          { op: 'remove', milestoneId: node.id }
         );
       });
     },
@@ -429,6 +497,32 @@ export function ExpertMilestoneRail({
   const closeRevert = useCallback((): void => setRevertTarget(null), []);
   const closeForm = useCallback((): void => setFormModal(null), []);
   const closeRemove = useCallback((): void => setRemoveTarget(null), []);
+  const dismissRedirect = useCallback((): void => setRedirect(null), []);
+
+  // Removing agreed scope needs the client's approval: explain that up front instead of
+  // offering a confirm the server would refuse.
+  const openRemove = useCallback(
+    (node: MilestoneNodeView): void => {
+      setRemoveTarget(node);
+      if (node.removalNeedsChangeOrder) {
+        track(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED, {
+          engagement_id: engagementId,
+          reason: 'remove_contracted',
+          pricing_method: 'fixed',
+          trigger: 'pre_empted',
+        });
+      }
+    },
+    [engagementId]
+  );
+
+  const removeRedirect = useMemo<ScopeRedirectState | undefined>(() => {
+    if (removeTarget?.removalNeedsChangeOrder !== true) return undefined;
+    return {
+      message: scopeChangeMessage('remove_contracted', clientCompanyName),
+      cta: ctaFor({ op: 'remove', milestoneId: removeTarget.id }),
+    };
+  }, [removeTarget, clientCompanyName, ctaFor]);
 
   const formInitial = useMemo<MilestoneFormInitial | null>(() => {
     if (formModal?.mode !== 'edit' || formModal.target === null) return null;
@@ -539,7 +633,7 @@ export function ExpertMilestoneRail({
               variant="ghost"
               className="text-muted-foreground hover:text-destructive size-7"
               disabled={isPending}
-              onClick={() => setRemoveTarget(node)}
+              onClick={() => openRemove(node)}
               aria-label={`Remove ${node.title}`}
             >
               <Trash2 className="size-3.5" aria-hidden />
@@ -569,6 +663,7 @@ export function ExpertMilestoneRail({
         pending={isPending}
         onConfirm={handleRemoveConfirm}
         onCancel={closeRemove}
+        redirect={removeRedirect}
       />
       <CompleteMilestoneModal
         open={completeTarget !== null}
@@ -600,25 +695,38 @@ export function ExpertMilestoneRail({
             </div>
             <h2 className="text-foreground text-lg font-semibold">Shape the delivery plan</h2>
             <p className="text-muted-foreground mx-auto mt-2 max-w-[420px] text-sm leading-relaxed">
-              Add your first milestone so {clientCompanyName} can follow progress.
+              {addNeedsChangeOrder
+                ? `Propose the first milestone — ${clientCompanyName} approves it before work is tracked against it.`
+                : `Add your first milestone so ${clientCompanyName} can follow progress.`}
             </p>
           </Card>
         ) : (
           <MilestoneEmptyState emptyState={emptyState} />
         )}
+        {redirect !== null && (
+          <ScopeChangeNotice
+            message={redirect.message}
+            cta={redirect.cta}
+            onDismiss={dismissRedirect}
+          />
+        )}
         <div className="mt-4 flex justify-center">
-          <button
-            type="button"
-            disabled={isPending}
-            onClick={openAdd}
-            className={cn(
-              'focus-visible:ring-ring inline-flex h-10 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50',
-              PROPOSAL_CTA_GRADIENT_CLASS
-            )}
-          >
-            <Plus className="size-4" aria-hidden />
-            Add the first milestone
-          </button>
+          {addNeedsChangeOrder ? (
+            <ProposeFirstMilestone cta={ctaFor({ op: 'add' })} />
+          ) : (
+            <button
+              type="button"
+              disabled={isPending}
+              onClick={openAdd}
+              className={cn(
+                'focus-visible:ring-ring inline-flex h-10 items-center justify-center gap-2 rounded-md px-5 text-sm font-semibold hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50',
+                PROPOSAL_CTA_GRADIENT_CLASS
+              )}
+            >
+              <Plus className="size-4" aria-hidden />
+              Add the first milestone
+            </button>
+          )}
         </div>
         {modals}
       </>
@@ -634,13 +742,22 @@ export function ExpertMilestoneRail({
             Delivery plan
           </div>
           <div className="flex flex-wrap items-center gap-1">
-            <Button size="sm" variant="ghost" disabled={isPending} onClick={openAdd}>
-              <Plus className="size-3.5" aria-hidden />
-              Add milestone
-            </Button>
+            {!addNeedsChangeOrder && (
+              <Button size="sm" variant="ghost" disabled={isPending} onClick={openAdd}>
+                <Plus className="size-3.5" aria-hidden />
+                Add milestone
+              </Button>
+            )}
             {proposeChange !== undefined && <ProposeChangeButton link={proposeChange} />}
           </div>
         </div>
+        {redirect !== null && (
+          <ScopeChangeNotice
+            message={redirect.message}
+            cta={redirect.cta}
+            onDismiss={dismissRedirect}
+          />
+        )}
         <div className="mt-4">
           {optimistic.map((node, index) => (
             <MilestoneRow
@@ -657,7 +774,7 @@ export function ExpertMilestoneRail({
           plan. The project goes to {clientCompanyName} for review as a whole when you mark it
           complete.{' '}
           {proposeChange === undefined
-            ? 'Pricing is fixed from the accepted proposal — changes to price go through a new proposal.'
+            ? `Pricing is fixed from the accepted proposal — changes to price go through a change ${clientCompanyName} approves.`
             : `Changes to scope or price go to ${clientCompanyName} as a proposed change, and nothing changes until they approve.`}
         </p>
       </Card>

@@ -1,16 +1,37 @@
 import { and, asc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
-import { engagementChangeOrderLines, engagementChangeOrders } from '../../schema';
+import type { ScopeChangeRedirectReason } from '@balo/shared/engagements';
+import {
+  engagementChangeOrderLines,
+  engagementChangeOrders,
+  projectEngagements,
+} from '../../schema';
 import type { EngagementChangeOrder } from '../../schema';
+import type { PricingMethod } from '../proposal-types';
+import type { DbExecutor } from './db-executor';
 import type { DbTx } from './engagement-supertype';
 
 /**
- * Change-order guards consumed by OTHER delivery repositories (`engagement-milestones.ts`,
- * `project-engagements.ts`). They live in `_shared/` so neither of those files imports
+ * Change-order and scope guards consumed by OTHER delivery repositories
+ * (`engagement-milestones.ts`, `project-engagements.ts`) as well as by
+ * `engagement-change-orders.ts`. They live in `_shared/` so neither of the first two imports
  * `engagement-change-orders.ts`, which itself imports `engagement-milestones.ts`.
  *
+ * Two kinds of guard: the change-order guards (an open or sent order blocks a write) and the
+ * scope guards (a plain milestone write that would move money must go through a change order
+ * instead, {@link ScopeChangeRequiresChangeOrderError}).
+ *
  * Every `…Tx` helper here takes no lock: call it under the engagement lock the caller
- * already holds, so the order it reads cannot change before the caller's write.
+ * already holds, so the rows it reads cannot change before the caller's write.
  */
+
+/**
+ * A milestone's wording columns: the fields "changed since the proposal" tracks. A direct edit
+ * to one on a proposal-origin milestone stamps `content_edited_at`; an approved change order
+ * that writes one resets that field's baseline.
+ */
+export const MILESTONE_CONTENT_FIELDS = ['title', 'descriptionHtml', 'acceptanceCriteria'] as const;
+
+export type MilestoneContentField = (typeof MILESTONE_CONTENT_FIELDS)[number];
 
 /** The SQL predicate for an OPEN change order: undecided, unwithdrawn, live. Timestamps only. */
 export function openChangeOrderPredicate(): SQL {
@@ -65,6 +86,83 @@ export class MilestoneChangePendingError extends Error {
     super(`Milestone ${milestoneId} has a change waiting on change order ${changeOrderId}`);
     this.name = 'MilestoneChangePendingError';
   }
+}
+
+/**
+ * Thrown by `engagementMilestonesRepository.editDescriptive` / `add` / `softDelete` when the
+ * write would change what the client agreed to pay for, so it needs the client's approval
+ * through a change order: an estimate change or an add on time and materials
+ * (`estimate_change`, `add_on_tm`), or removing contracted scope on a fixed price
+ * (`remove_contracted`). Nothing is written. `milestoneId` is null for a refused add.
+ */
+export class ScopeChangeRequiresChangeOrderError extends Error {
+  constructor(
+    public readonly reason: ScopeChangeRedirectReason,
+    public readonly pricingMethod: PricingMethod,
+    public readonly engagementId: string,
+    public readonly milestoneId: string | null
+  ) {
+    super(
+      `Engagement ${engagementId} needs a change order for this milestone change (${reason}, ${pricingMethod})`
+    );
+    this.name = 'ScopeChangeRequiresChangeOrderError';
+  }
+}
+
+/** The live project child's commercial terms. Throws when the engagement has no project child. */
+export async function readProjectTermsTx(
+  exec: DbExecutor,
+  engagementId: string
+): Promise<{
+  pricingMethod: PricingMethod;
+  priceCents: number;
+  depositCents: number | null;
+  sourceProposalId: string | null;
+}> {
+  const [child] = await exec
+    .select({
+      pricingMethod: projectEngagements.pricingMethod,
+      priceCents: projectEngagements.priceCents,
+      depositCents: projectEngagements.depositCents,
+      sourceProposalId: projectEngagements.sourceProposalId,
+    })
+    .from(projectEngagements)
+    .where(
+      and(eq(projectEngagements.engagementId, engagementId), isNull(projectEngagements.deletedAt))
+    );
+  if (child === undefined) {
+    throw new Error(`Project engagement not found: ${engagementId}`);
+  }
+  return child;
+}
+
+/**
+ * Whether a live `add` line of a live APPROVED change order created `milestoneId`. The line's
+ * `engagement_milestone_id` is set only when the order is approved, so a draft or sent add
+ * line never matches.
+ */
+export async function isAddedByApprovedChangeOrderTx(
+  tx: DbTx,
+  milestoneId: string
+): Promise<boolean> {
+  const [line] = await tx
+    .select({ id: engagementChangeOrderLines.id })
+    .from(engagementChangeOrderLines)
+    .innerJoin(
+      engagementChangeOrders,
+      eq(engagementChangeOrders.id, engagementChangeOrderLines.changeOrderId)
+    )
+    .where(
+      and(
+        eq(engagementChangeOrderLines.engagementMilestoneId, milestoneId),
+        eq(engagementChangeOrderLines.op, 'add'),
+        isNull(engagementChangeOrderLines.deletedAt),
+        eq(engagementChangeOrders.status, 'approved'),
+        isNull(engagementChangeOrders.deletedAt)
+      )
+    )
+    .limit(1);
+  return line !== undefined;
 }
 
 /** The engagement's open change order that blocks marking it ready, or `null`. */

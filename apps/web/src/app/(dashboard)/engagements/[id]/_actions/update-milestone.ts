@@ -6,6 +6,11 @@ import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import {
+  diffProposalContent,
+  summarizeProposalChanges,
+} from '@/lib/engagement/proposal-content-changes';
 import { log } from '@/lib/logging';
 import {
   EDIT_COSMETIC_DEBOUNCE_MS,
@@ -133,17 +138,25 @@ export async function updateMilestoneAction(
         return { success: true, milestoneId: milestone.id, status: milestone.status };
       }
 
-      const outcome = await runMilestoneTransition(() =>
-        engagementMilestonesRepository.editDescriptive({
-          milestoneId: milestone.id,
-          userId: user.id,
-          ...editArgs,
-        })
+      const outcome = await runMilestoneTransition(
+        () =>
+          engagementMilestonesRepository.editDescriptive({
+            milestoneId: milestone.id,
+            userId: user.id,
+            ...editArgs,
+          }),
+        deriveEngagementParties(engagement).clientCompanyName
       );
       if (!outcome.ok) {
-        return { success: false, error: outcome.error };
+        return { success: false, error: outcome.error, scopeChange: outcome.scopeChange };
       }
       const updated = outcome.value;
+
+      // A wording edit to scope the client agreed to carries its before/after in the email.
+      const changeDetail =
+        milestone.sourceProposalMilestoneId === null
+          ? ''
+          : summarizeProposalChanges(diffProposalContent(milestone, editArgs));
 
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.MILESTONE_EDITED, {
         engagement_id: engagement.id,
@@ -164,6 +177,7 @@ export async function updateMilestoneAction(
         milestoneId: updated.id,
         milestoneTitle: updated.title,
         correlationId,
+        ...(changeDetail === '' ? {} : { changeDetail }),
       });
 
       log.info('Milestone updated', {

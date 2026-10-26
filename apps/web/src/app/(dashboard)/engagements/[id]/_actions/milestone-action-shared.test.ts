@@ -25,16 +25,26 @@ const {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class ScopeChangeRequiresChangeOrderError extends Error {
+    constructor(
+      public readonly reason: string,
+      public readonly pricingMethod: string
+    ) {
+      super(reason);
+    }
+  }
   return {
     mockFindEngagement: vi.fn(),
     mockFindOwner: vi.fn(),
     EngagementNotActiveError,
     InvalidMilestoneTransitionError,
     MilestoneChangePendingError,
+    ScopeChangeRequiresChangeOrderError,
   };
 });
 
@@ -46,6 +56,7 @@ vi.mock('@balo/db', () => ({
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  ScopeChangeRequiresChangeOrderError,
 }));
 
 const mockPublish = vi.fn();
@@ -226,6 +237,17 @@ describe('runMilestoneTransition', () => {
     expect(res).toEqual({
       ok: false,
       error: 'This milestone is locked while a proposed change to it is reviewed.',
+    });
+  });
+
+  it('maps ScopeChangeRequiresChangeOrderError → scopeChange plus copy naming the client', async () => {
+    const res = await runMilestoneTransition(() => {
+      throw new ScopeChangeRequiresChangeOrderError('add_on_tm', 'tm');
+    }, 'Northwind');
+    expect(res).toEqual({
+      ok: false,
+      error: expect.stringContaining("Northwind's approval"),
+      scopeChange: { reason: 'add_on_tm', pricingMethod: 'tm' },
     });
   });
 
@@ -486,6 +508,18 @@ describe('publishScopeChange', () => {
       changeKind: 'added',
       changeSummary: "added 'Discovery'",
     });
+  });
+
+  it('adds changeDetail to the payload only when given', async () => {
+    await publishScopeChange(engagement() as never, {
+      changeKind: 'edited',
+      milestoneId: MILESTONE_ID,
+      milestoneTitle: 'Discovery',
+      correlationId: `${MILESTONE_ID}:edited`,
+      changeDetail: 'Title: “A” → “B”',
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.changeDetail).toBe('Title: “A” → “B”');
   });
 
   it('omits recipientId when the owner lookup fails', async () => {

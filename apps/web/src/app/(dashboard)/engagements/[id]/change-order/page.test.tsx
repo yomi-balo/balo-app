@@ -72,7 +72,7 @@ function engagement(
     currency: 'aud',
     milestones: [
       {
-        id: 'ms-1',
+        id: '3f1c2b4e-8a6d-4c1e-9f2a-5b7d8e9f0a1b',
         title: 'Discovery',
         sortOrder: 0,
         descriptionHtml: '<p>Workshops.</p>',
@@ -80,7 +80,7 @@ function engagement(
         estimatedMinutes: 600,
       },
       {
-        id: 'ms-2',
+        id: '4a2d3c5f-9b7e-4d2f-8a3b-6c8e9f0a1b2c',
         title: 'Build',
         sortOrder: 1,
         descriptionHtml: null,
@@ -138,8 +138,11 @@ function order(overrides: Record<string, unknown> = {}): ChangeOrderWithLines {
   } as unknown as ChangeOrderWithLines;
 }
 
-async function renderPage(): Promise<void> {
-  const ui = await ChangeOrderComposerPage({ params: Promise.resolve({ id: ENGAGEMENT_ID }) });
+async function renderPage(search: Record<string, string> = {}): Promise<void> {
+  const ui = await ChangeOrderComposerPage({
+    params: Promise.resolve({ id: ENGAGEMENT_ID }),
+    searchParams: Promise.resolve(search),
+  });
   render(ui);
 }
 
@@ -214,6 +217,41 @@ describe('change-order composer page · redirects', () => {
   });
 });
 
+describe('change-order composer page · prefill', () => {
+  it('turns a remove prefill for a live milestone into a line with its live title', async () => {
+    await renderPage({ prefill: 'remove', milestone: '3f1c2b4e-8a6d-4c1e-9f2a-5b7d8e9f0a1b' });
+    expect(composerProps().prefillLine).toEqual({
+      op: 'remove',
+      milestoneId: '3f1c2b4e-8a6d-4c1e-9f2a-5b7d8e9f0a1b',
+      title: 'Discovery',
+      descriptionText: null,
+      estimatedMinutes: null,
+    });
+  });
+
+  it('ignores a milestone id that is not part of this engagement', async () => {
+    await renderPage({ prefill: 'remove', milestone: '11111111-1111-4111-8111-111111111111' });
+    expect(composerProps().prefillLine).toBeNull();
+  });
+
+  it('turns an add prefill into a blank new-milestone line', async () => {
+    await renderPage({ prefill: 'add', title: 'Reporting', description: 'Weekly pack.' });
+    // A title or description in the link is ignored: an add opens blank.
+    expect(composerProps().prefillLine).toEqual({
+      op: 'add',
+      milestoneId: null,
+      title: '',
+      descriptionText: null,
+      estimatedMinutes: null,
+    });
+  });
+
+  it('opens normally for a malformed prefill', async () => {
+    await renderPage({ prefill: 'remove', milestone: 'not-a-uuid' });
+    expect(composerProps().prefillLine).toBeNull();
+  });
+});
+
 describe('change-order composer page · props', () => {
   it('hands the composer expert-side figures and the live plan for a fresh change', async () => {
     await renderPage();
@@ -226,14 +264,14 @@ describe('change-order composer page · props', () => {
       currentPriceCents: 5_800_000,
       milestones: [
         {
-          id: 'ms-1',
+          id: '3f1c2b4e-8a6d-4c1e-9f2a-5b7d8e9f0a1b',
           title: 'Discovery',
           descriptionText: 'Workshops.',
           status: 'completed',
           estimatedMinutes: 600,
         },
         {
-          id: 'ms-2',
+          id: '4a2d3c5f-9b7e-4d2f-8a3b-6c8e9f0a1b2c',
           title: 'Build',
           descriptionText: null,
           status: 'in_progress',
@@ -241,6 +279,7 @@ describe('change-order composer page · props', () => {
         },
       ],
       order: null,
+      prefillLine: null,
     });
   });
 
@@ -299,7 +338,7 @@ describe('change-order composer page · props', () => {
           },
           {
             op: 'remove',
-            engagementMilestoneId: 'ms-2',
+            engagementMilestoneId: '4a2d3c5f-9b7e-4d2f-8a3b-6c8e9f0a1b2c',
             title: 'Build',
             descriptionHtml: null,
             estimatedMinutes: null,
@@ -326,7 +365,7 @@ describe('change-order composer page · props', () => {
         },
         {
           op: 'remove',
-          milestoneId: 'ms-2',
+          milestoneId: '4a2d3c5f-9b7e-4d2f-8a3b-6c8e9f0a1b2c',
           title: 'Build',
           descriptionText: null,
           estimatedMinutes: null,
