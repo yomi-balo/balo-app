@@ -7,7 +7,7 @@ import { timestamps, softDelete } from './helpers';
 
 /**
  * engagement_time_entries — time an expert logs against a milestone of a time-and-materials
- * project: a UTC work date, whole minutes and a required note the client sees.
+ * project: the author's local work date, whole minutes and a required note the client sees.
  *
  * FK TARGET IS THE SUPERTYPE (`engagements.id`) with CASCADE, so a later retainer engagement
  * can log time here too. Entries are PROJECT-only and T&M-only by writer, not by constraint:
@@ -27,8 +27,7 @@ import { timestamps, softDelete } from './helpers';
  * Supabase-shaped policy would be decoration; every reader is the admin `db` client and
  * the boundary is the application layer (the engagement axis for the expert's writes,
  * membership for the client's reads). ⚠ This deviates from the `drizzle-schema` skill
- * ("Forgetting RLS on new tables") and is flagged in the PR body, as
- * `engagement-change-orders.ts` does.
+ * ("Forgetting RLS on new tables"), as `engagement-change-orders.ts` does.
  */
 export const engagementTimeEntries = pgTable(
   'engagement_time_entries',
@@ -48,7 +47,7 @@ export const engagementTimeEntries = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
 
-    /** The UTC calendar day the work was done, as 'YYYY-MM-DD'. */
+    /** The author's local calendar day the work was done (`users.timezone`), as 'YYYY-MM-DD'. */
     workedOn: date('worked_on', { mode: 'string' }).notNull(),
 
     minutes: integer('minutes').notNull(),

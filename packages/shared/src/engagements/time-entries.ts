@@ -3,7 +3,7 @@
  * Pure and client-safe. Time is stored and passed as whole minutes; hours appear only in labels.
  */
 
-/** 'YYYY-MM-DD', a UTC calendar date. */
+/** A calendar date, 'YYYY-MM-DD'. */
 export type IsoDate = string;
 
 /** A billing window. `endOn` is exclusive and is also the next invoice date. */

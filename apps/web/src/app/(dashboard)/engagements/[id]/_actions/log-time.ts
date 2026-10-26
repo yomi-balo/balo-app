@@ -3,7 +3,8 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { engagementTimeEntriesRepository } from '@balo/db';
+import { engagementTimeEntriesRepository, usersRepository } from '@balo/db';
+import { localIsoDate } from '@balo/shared/timezone';
 import {
   INVALID_REQUEST,
   NOT_TIME_AND_MATERIALS,
@@ -27,7 +28,8 @@ const logTimeSchema = z
 /**
  * The delivering expert (or an agency owner or admin) logs time against an in-progress
  * milestone of an active time-and-materials project. Gated on the engagement capability
- * `manage_engagement`; the entry is dated today (UTC). The repository records the first
+ * `manage_engagement`; the entry is dated today in the author's own time zone
+ * (`users.timezone`, UTC when unset). The repository records the first
  * crossing of the milestone's estimate in the same transaction, and the client and admins
  * are told once.
  */
@@ -60,13 +62,14 @@ export async function logTimeAction(input: {
       if (engagement.pricingMethod !== 'tm') {
         return { success: false, error: NOT_TIME_AND_MATERIALS };
       }
+      const author = await usersRepository.findById(user.id);
       const result = await engagementTimeEntriesRepository.log({
         engagementId,
         milestoneId,
         userId: user.id,
         minutes,
         note,
-        workedOn: new Date().toISOString().slice(0, 10),
+        workedOn: localIsoDate(new Date(), author?.timezone),
       });
       await afterTimeWrite({ kind: 'logged', userId: user.id, engagement, result });
       return { success: true };

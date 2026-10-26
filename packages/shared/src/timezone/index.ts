@@ -653,3 +653,8 @@ export * from './utc-date';
 //
 // `addBusinessDays` / `businessDaysBetween` — see `./business-days`.
 export * from './business-days';
+
+// ── Local calendar date (BAL-624) ────────────────────────────────
+//
+// `localIsoDate` — the YYYY-MM-DD date an instant falls on in a zone; see `./local-date`.
+export * from './local-date';

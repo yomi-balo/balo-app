@@ -25,7 +25,8 @@ project ready, the review card also lists every milestone whose wording changed.
 
 - **Time and materials.** New milestones need a change the client approves. On these projects
   the **Add milestone** button is replaced by **Propose a change**, or by **Propose the first
-  milestone** while the plan is empty. Either one opens the change composer.
+  milestone** while the plan is empty. Either one opens the change composer. A milestone with
+  time logged on it can't be removed, so complete it instead.
 - **Fixed price.** Removing a milestone from the agreed scope needs a change. That covers
   milestones from the accepted proposal and ones added by an approved change. Choosing **Remove**
   on one of these opens a **Needs approval first** dialog instead of removing it. Its **Propose a

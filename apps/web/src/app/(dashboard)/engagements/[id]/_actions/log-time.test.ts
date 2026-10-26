@@ -26,8 +26,8 @@ vi.mock('@/lib/authz/engagement', () => ({
   hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
 }));
 
-const { mockFindEngagement, mockWrite, mockFindOwner, TimeEntryWriteRefusedError } = vi.hoisted(
-  () => {
+const { mockFindEngagement, mockWrite, mockFindOwner, mockFindUser, TimeEntryWriteRefusedError } =
+  vi.hoisted(() => {
     class TimeEntryWriteRefusedError extends Error {
       constructor(public readonly reason: string) {
         super(reason);
@@ -37,10 +37,10 @@ const { mockFindEngagement, mockWrite, mockFindOwner, TimeEntryWriteRefusedError
       mockFindEngagement: vi.fn(),
       mockWrite: vi.fn(),
       mockFindOwner: vi.fn(),
+      mockFindUser: vi.fn(),
       TimeEntryWriteRefusedError,
     };
-  }
-);
+  });
 
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: {
@@ -52,6 +52,7 @@ vi.mock('@balo/db', () => ({
     remove: (...a: unknown[]) => mockWrite(...a),
   },
   companiesRepository: { findOwnerByCompanyId: (...a: unknown[]) => mockFindOwner(...a) },
+  usersRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
   TimeEntryWriteRefusedError,
   ChangeOrderAlreadyOpenError: class extends Error {},
   ChangeOrderCoherenceError: class extends Error {},
@@ -124,6 +125,7 @@ beforeEach(() => {
   mockHasExpertCapability.mockResolvedValue(true);
   mockWrite.mockResolvedValue(written());
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
+  mockFindUser.mockResolvedValue({ id: CHARLES.id, timezone: 'Australia/Melbourne' });
 });
 
 describe('logTimeAction', () => {
@@ -171,7 +173,8 @@ describe('logTimeAction', () => {
     });
   });
 
-  it('logs the entry dated today (UTC), tracks it and does not notify below the estimate', async () => {
+  it("logs the entry dated today in the author's time zone, tracks it and does not notify below the estimate", async () => {
+    // 23:30Z on 14 Oct is 10:30 on 15 Oct in Melbourne (AEDT, UTC+11).
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-14T23:30:00Z'));
     try {
@@ -185,8 +188,9 @@ describe('logTimeAction', () => {
       userId: CHARLES.id,
       minutes: 90,
       note: 'Mapped the flows',
-      workedOn: '2026-10-14',
+      workedOn: '2026-10-15',
     });
+    expect(mockFindUser).toHaveBeenCalledWith(CHARLES.id);
     expect(mockTrack).toHaveBeenCalledTimes(1);
     expect(mockTrack).toHaveBeenCalledWith('engagement_time_logged', {
       engagement_id: ENGAGEMENT_ID,
@@ -197,6 +201,18 @@ describe('logTimeAction', () => {
       distinct_id: CHARLES.id,
     });
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('dates the entry in UTC when the author has no time zone', async () => {
+    mockFindUser.mockResolvedValue({ id: CHARLES.id, timezone: null });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T23:30:00Z'));
+    try {
+      expect(await logTimeAction(INPUT)).toEqual({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mockWrite).toHaveBeenCalledWith(expect.objectContaining({ workedOn: '2026-10-14' }));
   });
 
   it('publishes the estimate-exceeded notice once, with hours only, on a first crossing', async () => {

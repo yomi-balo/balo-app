@@ -32,7 +32,7 @@ delete them while the project is active, whatever the milestone's status. Use th
 entry in the milestone's time log. You can't change an entry someone else logged. Edits and
 deletions are recorded, and the client sees the entry as it now stands.
 
-One day can't add up to more than 24 hours across your entries. A milestone with logged time can't
+One day can't add up to more than 24 hours of your entries on a project. A milestone with logged time can't
 be removed from the project, so complete it instead.
 
 ## When a milestone nears its estimate
@@ -57,5 +57,5 @@ new estimate.
 The totals card shows the hours logged in the current billing period and the date of the next
 invoice. A period starts on the day the project kicked off and runs for the billing cadence you
 agreed, either monthly or every two weeks. A monthly period that starts on the 31st moves to the
-last day of shorter months, then returns to the 31st. Each entry is dated the day you log it and
+last day of shorter months, then returns to the 31st. Each entry is dated the day you log it, in your time zone, and
 counts towards the period that day falls in.
