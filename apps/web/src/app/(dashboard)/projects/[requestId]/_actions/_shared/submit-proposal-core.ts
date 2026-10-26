@@ -7,6 +7,7 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   projectRequestsRepository,
+  proposalDraftGenerationsRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   ProposalNotDraftError,
@@ -240,6 +241,23 @@ async function didRequestAdvance(requestId: string, beforeStatus: string): Promi
   return after !== undefined && after.status !== beforeStatus;
 }
 
+/**
+ * Whether the relationship has a `succeeded` AI draft generation, for the submit event's
+ * `ai_draft_generated`. The submit has already been promoted by the time this runs, so a lookup
+ * failure must never fail it: it warns and reads as `false`.
+ */
+async function hasGeneratedAiDraft(relationshipId: string): Promise<boolean> {
+  try {
+    return await proposalDraftGenerationsRepository.hasSucceededForRelationship(relationshipId);
+  } catch (error) {
+    log.warn('Proposal draft lookup failed at submit — recording ai_draft_generated as false', {
+      relationshipId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 export async function runSubmitProposal(
   user: SessionUser,
   input: SubmitProposalInput
@@ -364,6 +382,10 @@ async function runSubmit(
     transitioned,
   });
 
+  // True iff the relationship has a `succeeded` AI generation: a draft was generated, not that
+  // the expert kept it. Adoption subtracts PROPOSAL_DRAFT_CLEARED and PROPOSAL_DRAFT_DISCARDED.
+  const aiDraftGenerated = await hasGeneratedAiDraft(relationshipId);
+
   // BAL-357: emit PROJECT_PROPOSAL_SUBMITTED SERVER-SIDE (audience boundary). The
   // Balo fee + client-charged price are derived here and NEVER returned to the
   // expert's browser, so a client can't back out the expert's payout. `distinct_id`
@@ -378,6 +400,7 @@ async function runSubmit(
     pricing_method: draft.pricingMethod,
     balo_fee_bps: draft.baloFeeBps,
     client_price_cents: clientPriceCents,
+    ai_draft_generated: aiDraftGenerated,
     distinct_id: user.id,
   });
 

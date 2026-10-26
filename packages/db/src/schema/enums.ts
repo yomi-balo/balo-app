@@ -207,6 +207,30 @@ export const proposalChangeSectionEnum = pgEnum('proposal_change_section', [
 export const proposalDocumentKindEnum = pgEnum('proposal_document_kind', ['terms', 'ref']);
 
 /**
+ * BAL-611 — the lifecycle of ONE AI proposal-draft generation
+ * (`schema/proposal-draft-generations.ts`).
+ *
+ *   pending   → the row exists; the worker has not finished. `completed_at` IS NULL.
+ *   succeeded → TERMINAL. `output` holds the validated model answer.
+ *   failed    → TERMINAL. `failure_reason` holds a `PROPOSAL_DRAFT_FAILURE_REASONS` literal.
+ *
+ * A timeout is not a label: a `pending` row past `DRAFT_DEADLINE_MS` is derived as failed when
+ * it is read.
+ *
+ * ⚠ ENUM-LITERAL CAVEAT. The table's three biconditional CHECKs name these labels. That is safe
+ * in the migration that creates this type (a standalone `CREATE TYPE`, so every label commits
+ * atomically with it). A label added later by `ALTER TYPE … ADD VALUE` must not be USED in a
+ * default, CHECK, index predicate or data statement in that same migration (memory
+ * `reference_enum_default_same_tx_migration_hazard`). The live-row unique index predicates on
+ * `deleted_at` only. APPEND-ONLY: a new label goes at the END.
+ */
+export const proposalDraftGenerationStatusEnum = pgEnum('proposal_draft_generation_status', [
+  'pending',
+  'succeeded',
+  'failed',
+]);
+
+/**
  * Engagement product type — the supertype discriminator (BAL-417 / ADR-1045 §1).
  * `engagements` is a SUPERTYPE; the concrete shape lives in a 1:1 child table keyed
  * on `engagement_id`. `project` → `project_engagements`, `case` → `case_engagements`.

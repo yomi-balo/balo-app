@@ -8,6 +8,8 @@ interface ComposerSectionProps {
   help?: React.ReactNode;
   /** Trailing slot of the heading row. */
   aside?: React.ReactNode;
+  /** The section's content is still being produced (sets `aria-busy`). */
+  busy?: boolean;
   children: React.ReactNode;
 }
 
@@ -22,11 +24,17 @@ export function ComposerSection({
   optional = false,
   help,
   aside,
+  busy = false,
   children,
 }: Readonly<ComposerSectionProps>): React.JSX.Element {
   const headingId = `${id}-heading`;
   return (
-    <section id={id} aria-labelledby={headingId} className="scroll-mt-24 pt-11 first:pt-0">
+    <section
+      id={id}
+      aria-labelledby={headingId}
+      aria-busy={busy || undefined}
+      className="scroll-mt-24 pt-11 first:pt-0"
+    >
       <div
         className={cn(
           'flex flex-wrap items-center justify-between gap-3',

@@ -28,6 +28,7 @@ const {
   mockResolveRequestLens,
   mockLogWarn,
   mockLogError,
+  mockLoadDraftGeneration,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockFindCurrentByRelationship: vi.fn(),
@@ -46,6 +47,7 @@ const {
   mockResolveRequestLens: vi.fn(),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
+  mockLoadDraftGeneration: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -55,6 +57,9 @@ vi.mock('@balo/db', () => ({
   proposalPaymentInstallmentsRepository: { listByProposal: mockListInstallments },
   proposalDocumentsRepository: { listByProposal: mockListDocuments },
   proposalChangeRequestsRepository: { listByProposal: mockListChangeRequests },
+}));
+vi.mock('@/lib/project-request/proposal/proposal-draft-view', () => ({
+  loadProposalDraftGenerationView: (...args: unknown[]) => mockLoadDraftGeneration(...args),
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('next/navigation', () => ({
@@ -361,6 +366,45 @@ describe('ProposalSurfacePage (RSC) — auth + dispatch gating', () => {
 });
 
 describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
+  beforeEach(() => {
+    mockLoadDraftGeneration.mockReset();
+    mockLoadDraftGeneration.mockResolvedValue({ status: 'none' });
+  });
+
+  it('loads the AI draft generation view when no proposal exists yet', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(undefined);
+    mockListMilestones.mockResolvedValue([]);
+    mockListInstallments.mockResolvedValue([]);
+    mockListDocuments.mockResolvedValue([]);
+    const generation = { status: 'pending', generationId: 'gen-1' };
+    mockLoadDraftGeneration.mockResolvedValue(generation);
+
+    await renderPage();
+
+    expect(mockLoadDraftGeneration).toHaveBeenCalledWith(RELATIONSHIP_ID);
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.draftGeneration).toEqual(generation);
+  });
+
+  it('passes no draft generation once a proposal exists and never loads one', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
+    mockListMilestones.mockResolvedValue([milestone()]);
+    mockListInstallments.mockResolvedValue([installment()]);
+    mockListDocuments.mockResolvedValue([]);
+
+    await renderPage();
+
+    expect(mockLoadDraftGeneration).not.toHaveBeenCalled();
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.draftGeneration).toBeNull();
+  });
+
   it('redirects when the expert is on a DIFFERENT relationship than the URL', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(request());
@@ -746,6 +790,7 @@ describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', (
 
     // Loads the latest change-request note against the CURRENT proposal.
     expect(mockListChangeRequests).toHaveBeenCalledWith(PROPOSAL_ID);
+    expect(mockLoadDraftGeneration).not.toHaveBeenCalled();
     expect(screen.getByTestId('composer-stub')).toBeInTheDocument();
     // The revise shell: company line, version chip and request title. The save note
     // belongs to the composer's save-status slot, never the server shell.

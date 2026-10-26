@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   COMPOSER_TARGET,
+  applyDraftPatch,
   INSTALLMENT_PRESETS,
   blankMilestone,
   computeTotalCents,
@@ -833,5 +834,61 @@ describe('milestoneAllocation', () => {
   it('reports allPriced false when a milestone has no amount, even if the sum matches', () => {
     const r = milestoneAllocation({ milestones: ms([1000, null]), fixedPriceCents: 1000 });
     expect(r).toMatchObject({ kind: 'unbalanced', diffCents: 0, allPriced: false });
+  });
+});
+
+describe('applyDraftPatch', () => {
+  const patch = {
+    overviewHtml: '<p>Drafted overview.</p>',
+    milestones: [
+      {
+        title: 'Discovery',
+        descriptionHtml: '<p>Map the process.</p>',
+        acceptanceCriteria: 'Signed off',
+      },
+      { title: 'Build', descriptionHtml: '<p>Configure.</p>', acceptanceCriteria: 'Demo passes' },
+    ],
+  };
+
+  it('sets the overview and one milestone per drafted milestone', () => {
+    const next = applyDraftPatch(readyFixed(), patch);
+    expect(next.overview).toBe('<p>Drafted overview.</p>');
+    expect(next.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
+    expect(next.milestones[0]?.descriptionHtml).toBe('<p>Map the process.</p>');
+    expect(next.milestones[0]?.acceptanceCriteria).toBe('Signed off');
+    expect(new Set(next.milestones.map((m) => m.key)).size).toBe(2);
+  });
+
+  it('leaves pricing, installments, timeframe and exclusions unchanged', () => {
+    const before = { ...readyFixed(), exclusions: 'Data migration', depositCents: 5_000 };
+    const next = applyDraftPatch(before, patch);
+    expect(next.pricingMethod).toBe(before.pricingMethod);
+    expect(next.fixedPriceCents).toBe(before.fixedPriceCents);
+    expect(next.rateCents).toBe(before.rateCents);
+    expect(next.depositCents).toBe(before.depositCents);
+    expect(next.installments).toBe(before.installments);
+    expect(next.timeframeWeeks).toBe(before.timeframeWeeks);
+    expect(next.exclusions).toBe(before.exclusions);
+    expect(next.milestonePricingEnabled).toBe(before.milestonePricingEnabled);
+  });
+
+  it('gives drafted rows no amount, and a 0-minute estimate under T&M', () => {
+    const fixed = applyDraftPatch(readyFixed(), patch);
+    expect(
+      fixed.milestones.every((m) => m.valueCents === null && m.estimatedMinutes === null)
+    ).toBe(true);
+    const tm = applyDraftPatch({ ...readyFixed(), pricingMethod: 'tm' }, patch);
+    expect(tm.milestones.every((m) => m.estimatedMinutes === 0)).toBe(true);
+  });
+
+  it('regenerates a per-milestone payment schedule from the drafted rows', () => {
+    const base = readyFixed();
+    const perMilestone = syncPerMilestoneInstallments(base, {
+      ...base,
+      installments: presetInstallments('per-milestone', base),
+    });
+    const next = applyDraftPatch(perMilestone, patch);
+    expect(next.installments).toHaveLength(2);
+    expect(matchInstallmentPreset(next)).toBe('per-milestone');
   });
 });

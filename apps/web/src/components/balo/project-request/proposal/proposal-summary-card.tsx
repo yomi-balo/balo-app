@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { PayoutAssuranceNote } from './payout-assurance-note';
+import { DraftingLabel, draftingLabel } from './proposal-draft-indicators';
 import { pricingMethodLabel } from './proposal-summary-cells';
 import type {
   ProposalDraftState,
@@ -25,6 +26,9 @@ interface ProposalSummaryCardProps {
   reviseMode: boolean;
   /** Bumped by the composer to replay the checklist nudge when the CTA is hit with issues left. */
   nudgeKey: number;
+  /** An AI draft is being written: Milestones reads "—" and the checklist head reads drafting. */
+  drafting?: boolean;
+  clientFirstName?: string;
   onJump: (issue: ReadinessIssue) => void;
   onPreview: () => void;
 }
@@ -127,6 +131,8 @@ export function ProposalSummaryCard({
   termsAttached,
   reviseMode,
   nudgeKey,
+  drafting = false,
+  clientFirstName = 'the client',
   onJump,
   onPreview,
 }: Readonly<ProposalSummaryCardProps>): React.JSX.Element {
@@ -136,7 +142,7 @@ export function ProposalSummaryCard({
 
   const rows: { label: string; value: string }[] = [
     { label: 'Pricing', value: pricingMethodLabel(state.pricingMethod) },
-    { label: 'Milestones', value: String(state.milestones.length) },
+    { label: 'Milestones', value: drafting ? '—' : String(state.milestones.length) },
     { label: 'Timeframe', value: timeframeSummary(state.timeframeWeeks) },
     { label: isFixed ? 'Payments' : 'Billing', value: paymentsSummary(state) },
     { label: 'Terms', value: termsAttached ? 'Balo and yours' : 'Balo standard' },
@@ -178,7 +184,10 @@ export function ProposalSummaryCard({
           nudgeKey > 0 && 'animate-shake motion-reduce:animate-none'
         )}
       >
-        {issueCount > 0 ? (
+        {drafting && (
+          <DraftingLabel label={draftingLabel(clientFirstName)} className="min-h-6" decorative />
+        )}
+        {!drafting && issueCount > 0 && (
           <>
             <p className="text-warning-strong mb-1.5 flex items-center gap-2 text-[13px] font-semibold">
               <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -188,7 +197,8 @@ export function ProposalSummaryCard({
               <IssueButton key={`${issue.id}:${issue.targetId}`} issue={issue} onJump={onJump} />
             ))}
           </>
-        ) : (
+        )}
+        {!drafting && issueCount === 0 && (
           <>
             <p className="text-success-strong mb-1.5 flex items-center gap-2 text-[13px] font-semibold">
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />

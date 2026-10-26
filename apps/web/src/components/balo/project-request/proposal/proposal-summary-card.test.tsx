@@ -225,3 +225,23 @@ describe('ProposalSummaryCard', () => {
     expect(container).not.toHaveTextContent('A$6,250');
   });
 });
+
+describe('ProposalSummaryCard — AI draft', () => {
+  it('reads Milestones as a dash and the checklist head as drafting', () => {
+    renderCard({ readiness: NOT_READY, drafting: true, clientFirstName: 'Dana' });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    const head = screen.getByText("Drafting from Dana's request…");
+    expect(head).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('Milestones').nextElementSibling).toHaveTextContent('—');
+    expect(screen.queryByText(/left before you can send/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready to send')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add an overview')).not.toBeInTheDocument();
+  });
+
+  it('keeps the issue count and milestone total when not drafting', () => {
+    renderCard({ readiness: NOT_READY });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByText('Milestones').nextElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('2 things left before you can send')).toBeInTheDocument();
+  });
+});

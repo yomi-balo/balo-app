@@ -827,6 +827,13 @@
       "when": 1792960495644,
       "tag": "0117_bal622_engagement_change_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1792966727227,
+      "tag": "0118_bal611_proposal_draft_generations",
+      "breakpoints": true
     }
   ]
 }

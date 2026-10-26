@@ -3,6 +3,7 @@
 import { cn } from '@/lib/utils';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { pluralise, previewCtaLabel, railTotal } from './proposal-summary-card';
+import { MOBILE_DRAFTING } from './proposal-draft-indicators';
 import type { ProposalDraftState, ReadinessResult } from './proposal-composer-state';
 
 interface ComposerMobileBarProps {
@@ -11,6 +12,8 @@ interface ComposerMobileBarProps {
   readiness: ReadinessResult;
   /** Revise mode relabels the CTA to "Preview and resend". */
   reviseMode: boolean;
+  /** An AI draft is being written: "Drafting…" replaces the issue/ready line. */
+  drafting?: boolean;
   /** Jump to the first outstanding readiness issue. */
   onJumpFirst: () => void;
   onPreview: () => void;
@@ -26,6 +29,7 @@ export function ComposerMobileBar({
   totalCents,
   readiness,
   reviseMode,
+  drafting = false,
   onJumpFirst,
   onPreview,
 }: Readonly<ComposerMobileBarProps>): React.JSX.Element {
@@ -46,7 +50,8 @@ export function ComposerMobileBar({
             {total.amount}
             {total.unit}
           </p>
-          {issueCount > 0 ? (
+          {drafting && <p className="text-violet text-[12.5px]">{MOBILE_DRAFTING}</p>}
+          {!drafting && issueCount > 0 && (
             <button
               type="button"
               onClick={onJumpFirst}
@@ -54,7 +59,8 @@ export function ComposerMobileBar({
             >
               {issueCount} {pluralise(issueCount, 'thing', 'things')} left
             </button>
-          ) : (
+          )}
+          {!drafting && issueCount === 0 && (
             <p className="text-success-strong text-[12.5px]">Ready to send</p>
           )}
         </div>

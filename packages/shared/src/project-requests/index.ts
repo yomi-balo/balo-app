@@ -25,6 +25,11 @@
 // the failure vocabulary — three consumers with nothing to do with the lifecycle unions below.
 export * from './brief-parse';
 
+// BAL-611 — the AI-drafted proposal's contract (caps, polling budget, the closed failure
+// vocabulary, and the persisted output shape). Its own file for the same three-consumer reason
+// as `brief-parse`: `@balo/db` imports it type-only, `apps/api` and `apps/web` for values.
+export * from './proposal-draft';
+
 // BAL-254 W9 — the draft-stage document-key boundary (Ruling A). Its own file, and here rather
 // than in `apps/web`, because `apps/api`'s worker re-asserts the SAME predicate against the
 // persisted row and cannot import from `apps/web`. See `document-key.ts`'s docblock.

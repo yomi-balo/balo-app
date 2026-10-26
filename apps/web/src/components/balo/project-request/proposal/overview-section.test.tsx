@@ -73,3 +73,76 @@ describe('OverviewSection', () => {
     expect(onOverviewChange).toHaveBeenLastCalledWith('A');
   });
 });
+
+function renderDrafting(props: Partial<React.ComponentProps<typeof OverviewSection>> = {}): {
+  onOverviewChange: ReturnType<typeof vi.fn>;
+  onClear: ReturnType<typeof vi.fn>;
+} {
+  const onOverviewChange = vi.fn();
+  const onClear = vi.fn();
+  render(
+    <OverviewSection
+      overview=""
+      onOverviewChange={onOverviewChange}
+      companyName="Northwind"
+      clientFirstName="Dana"
+      onClear={onClear}
+      {...props}
+    />
+  );
+  return { onOverviewChange, onClear };
+}
+
+describe('OverviewSection — AI draft', () => {
+  it('draws the skeleton and drafting line over the mounted, typeable editor', () => {
+    renderDrafting({ drafting: true });
+    expect(screen.getByTestId('draft-skeleton-overview')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Drafting from Dana's request…");
+    expect(screen.getByLabelText('Proposal overview')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-skeleton-overview').parentElement).toHaveClass(
+      'pointer-events-none'
+    );
+  });
+
+  it('hides the skeleton once the editor takes focus, and forwards the typing', async () => {
+    const user = userEvent.setup();
+    const { onOverviewChange } = renderDrafting({ drafting: true });
+    await user.type(screen.getByLabelText('Proposal overview'), 'H');
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+    expect(onOverviewChange).toHaveBeenLastCalledWith('H');
+  });
+
+  it('draws no skeleton when not drafting', () => {
+    renderDrafting();
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drafted from/)).not.toBeInTheDocument();
+  });
+
+  it('shows the badge with Clear for a drafted overview', async () => {
+    const user = userEvent.setup();
+    const { onClear } = renderDrafting({ overview: '<p>Hi</p>', drafted: true });
+    expect(screen.getByText("Drafted from Dana's request")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear drafted overview' }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the drafting line above the editor once it is focused while still drafting', async () => {
+    const user = userEvent.setup();
+    renderDrafting({ drafting: true });
+    await user.click(screen.getByLabelText('Proposal overview'));
+    expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent("Drafting from Dana's request…");
+  });
+
+  it('shows no drafting line on focus when not drafting', async () => {
+    const user = userEvent.setup();
+    renderDrafting();
+    await user.click(screen.getByLabelText('Proposal overview'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('shows the quiet failure line verbatim', () => {
+    renderDrafting({ failed: true });
+    expect(screen.getByText("Couldn't draft this one. Start from scratch.")).toBeInTheDocument();
+  });
+});

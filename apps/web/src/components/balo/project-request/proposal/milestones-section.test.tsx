@@ -390,3 +390,65 @@ describe('MilestonesSection — Time & materials', () => {
     expect(latest()[1]).toMatchObject({ valueCents: null, estimatedMinutes: 0 });
   });
 });
+
+describe('MilestonesSection — AI draft', () => {
+  function renderDrafted(props: Partial<React.ComponentProps<typeof MilestonesSection>> = {}): {
+    onClear: ReturnType<typeof vi.fn>;
+  } {
+    const onClear = vi.fn();
+    render(
+      <MilestonesSection
+        milestones={[milestone({ title: 'Discovery' })]}
+        pricingMethod="fixed"
+        milestonePricingEnabled={false}
+        fixedPriceCents={null}
+        totalCents={0}
+        currency="aud"
+        onChange={vi.fn()}
+        onToggleMilestonePricing={vi.fn()}
+        onSetPrice={vi.fn()}
+        onClear={onClear}
+        {...props}
+      />
+    );
+    return { onClear };
+  }
+
+  it('replaces the rows with the skeleton and disables Add milestone while drafting', () => {
+    renderDrafted({ drafting: true, suggested: true });
+    expect(screen.getByTestId('draft-skeleton-milestones')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Milestone title')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add milestone/ })).toBeDisabled();
+    expect(screen.queryByText('Suggested from the brief')).not.toBeInTheDocument();
+  });
+
+  it('shows the rows and an enabled Add milestone when not drafting', () => {
+    renderDrafted();
+    expect(screen.queryByTestId('draft-skeleton-milestones')).not.toBeInTheDocument();
+    expect(titles()).toEqual(['Discovery']);
+    expect(screen.getByRole('button', { name: /Add milestone/ })).toBeEnabled();
+    expect(screen.queryByText('Suggested from the brief')).not.toBeInTheDocument();
+  });
+
+  it('marks suggested milestones and fires Clear', async () => {
+    const user = userEvent.setup();
+    const { onClear } = renderDrafted({ suggested: true });
+    expect(screen.getByText('Suggested from the brief')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear suggested milestones' }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the section busy while drafting', () => {
+    renderDrafted({ drafting: true });
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Milestones' }).closest('section')
+    ).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('is not busy once the draft has landed', () => {
+    renderDrafted();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Milestones' }).closest('section')
+    ).not.toHaveAttribute('aria-busy');
+  });
+});
