@@ -9,6 +9,7 @@ const base = {
   replacedMinutes: 0,
   addMinutes: 30,
   clientCompanyName: 'Northwind',
+  overNoticeSent: false,
 };
 
 describe('logTimeWarning', () => {
@@ -25,6 +26,12 @@ describe('logTimeWarning', () => {
   it('says how far over this entry takes the milestone, and that the client is told', () => {
     expect(logTimeWarning({ ...base, addMinutes: 120 })).toBe(
       'This takes Build 1 hr over its 8 hrs estimate. Northwind will be notified.'
+    );
+  });
+
+  it('does not promise a second notice when the client was already told at this estimate', () => {
+    expect(logTimeWarning({ ...base, addMinutes: 120, overNoticeSent: true })).toBe(
+      'This takes Build 1 hr over its 8 hrs estimate. Northwind was told when it first went over.'
     );
   });
 

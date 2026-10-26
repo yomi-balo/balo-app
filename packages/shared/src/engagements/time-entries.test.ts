@@ -91,6 +91,41 @@ describe('currentBillingPeriod', () => {
       currentBillingPeriod(activated, 'monthly', new Date('2026-01-16T00:10:00Z'))
     ).toMatchObject({ startOn: '2026-01-15' });
   });
+
+  describe('in a time zone', () => {
+    it("rolls into the new period on the morning it starts in the expert's zone", () => {
+      // Activated 1 Oct (Melbourne). 20:00Z on 31 Oct is 07:00 on 1 Nov in Melbourne (AEDT).
+      const activated = new Date('2026-10-01T00:00:00Z');
+      const now = new Date('2026-10-31T20:00:00Z');
+      expect(currentBillingPeriod(activated, 'monthly', now)).toMatchObject({
+        startOn: '2026-10-01',
+        endOn: '2026-11-01',
+      });
+      expect(currentBillingPeriod(activated, 'monthly', now, 'Australia/Melbourne')).toEqual({
+        startOn: '2026-11-01',
+        endOn: '2026-12-01',
+        nextInvoiceOn: '2026-12-01',
+      });
+    });
+
+    it('anchors on the activation day in that zone', () => {
+      // 20:00Z on 30 Sep is 06:00 on 1 Oct in Melbourne (AEST, UTC+10).
+      const activated = new Date('2026-09-30T20:00:00Z');
+      const now = new Date('2026-10-10T00:00:00Z');
+      expect(currentBillingPeriod(activated, 'monthly', now)?.startOn).toBe('2026-09-30');
+      expect(currentBillingPeriod(activated, 'monthly', now, 'Australia/Melbourne')).toMatchObject({
+        startOn: '2026-10-01',
+        endOn: '2026-11-01',
+      });
+    });
+
+    it('matches UTC when the zone is null', () => {
+      const activated = d('2026-01-15');
+      expect(currentBillingPeriod(activated, 'fortnightly', d('2026-02-01'), null)).toEqual(
+        currentBillingPeriod(activated, 'fortnightly', d('2026-02-01'))
+      );
+    });
+  });
 });
 
 describe('estimateCrossed', () => {

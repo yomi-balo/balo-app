@@ -10,6 +10,8 @@ interface LogTimeWarningInput {
   /** The minutes typed into the form. */
   addMinutes: number;
   clientCompanyName: string;
+  /** The client was already told this milestone went over its current estimate. */
+  overNoticeSent: boolean;
 }
 
 /**
@@ -27,5 +29,8 @@ export function logTimeWarning(input: Readonly<LogTimeWarningInput>): string | n
   if (before > estimatedMinutes) {
     return `${milestoneTitle} is already over its ${estimate} estimate. This takes it to ${hoursLabel(projected)}.`;
   }
-  return `This takes ${milestoneTitle} ${hoursLabel(projected - estimatedMinutes)} over its ${estimate} estimate. ${input.clientCompanyName} will be notified.`;
+  const crossing = `This takes ${milestoneTitle} ${hoursLabel(projected - estimatedMinutes)} over its ${estimate} estimate.`;
+  return input.overNoticeSent
+    ? `${crossing} ${input.clientCompanyName} was told when it first went over.`
+    : `${crossing} ${input.clientCompanyName} will be notified.`;
 }

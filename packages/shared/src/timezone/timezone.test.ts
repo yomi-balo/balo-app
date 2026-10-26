@@ -180,6 +180,17 @@ describe('isValidTimezone', () => {
   it('rejects an empty string', () => {
     expect(isValidTimezone('')).toBe(false);
   });
+
+  it.each(['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh', 'Etc/UTC'])(
+    'accepts %s, a current IANA name ICU lists only as an alias',
+    (zone) => {
+      expect(isValidTimezone(zone)).toBe(true);
+    }
+  );
+
+  it('rejects a UTC offset', () => {
+    expect(isValidTimezone('+05:30')).toBe(false);
+  });
 });
 
 describe('getNextSpringForwardGap', () => {

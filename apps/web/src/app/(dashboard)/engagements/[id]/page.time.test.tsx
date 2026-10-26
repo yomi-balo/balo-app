@@ -31,6 +31,7 @@ vi.mock('@balo/db', () => ({
   engagementTimeEntriesRepository: {
     listByEngagement: mockListEntries,
     sumsForEngagement: mockSums,
+    listNotifiedAtCurrentEstimate: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
@@ -165,6 +166,28 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
       expect(mockSums).toHaveBeenCalledWith(ENGAGEMENT_ID, null);
     }
   );
+
+  it("dates the billing period in the delivering expert's time zone", async () => {
+    // 20:00Z on 31 Oct is 07:00 on 1 Nov in Melbourne, so the November period has begun there.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T20:00:00Z'));
+    try {
+      const base = engagement({});
+      mockFindWithMilestones.mockResolvedValue(
+        engagement({
+          expertProfile: { ...base.expertProfile, timezone: 'Australia/Melbourne' },
+        } as Partial<ProjectEngagementWithMilestones>)
+      );
+      await renderPage();
+      expect(mockSums).toHaveBeenCalledWith(ENGAGEMENT_ID, {
+        startOn: '2026-11-01',
+        endOn: '2026-12-01',
+        nextInvoiceOn: '2026-12-01',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('passes no time view and reads no entries for a fixed-price project', async () => {
     mockFindWithMilestones.mockResolvedValue(engagement({ pricingMethod: 'fixed' }));

@@ -28,6 +28,7 @@ export function milestoneTimeView(overrides: Partial<MilestoneTimeView> = {}): M
     authorsLabel: 'Logged by Priya',
     canLog: false,
     emptyLabel: null,
+    overNoticeSent: false,
     ...overrides,
   };
 }

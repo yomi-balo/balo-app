@@ -46,6 +46,7 @@ const NO_TIME_SUMS: Promise<TimeEntrySums> = Promise.resolve({
   periodMinutes: null,
   byMilestone: {},
 });
+const NO_NOTIFIED_MILESTONES: Promise<string[]> = Promise.resolve([]);
 
 /**
  * Request-scoped memo so `generateMetadata` and the page share a single DB read
@@ -173,46 +174,67 @@ export default async function EngagementWorkspacePage({
   const now = new Date();
   const isTm = engagement.pricingMethod === 'tm';
   // A billing period only exists while the project is in flight; once it is completed or
-  // cancelled the totals card drops the period row.
+  // cancelled the totals card drops the period row. Its days are read in the delivering
+  // expert's time zone, the calendar their entries are dated in.
   const inFlight = engagement.status === 'active' || engagement.status === 'pending_acceptance';
   const billingPeriod =
-    isTm && inFlight ? currentBillingPeriod(engagement.activatedAt, engagement.cadence, now) : null;
-  const [rating, actionItems, changeOrderRows, contentEdits, timeEntries, timeSums, canLogTime] =
-    await Promise.all([
-      offersRatingCard(engagement.status, ctx.lens)
-        ? readRatingCard({
-            engagementId: engagement.id,
-            viewerUserId: user.id,
-            requireHeldConsultation: false,
-            now: new Date(),
-          })
-        : Promise.resolve(null),
-      // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
-      // engagement graph, so the workspace loader stays a single query.
-      actionItemsRepository.listByEngagement(engagement.id),
-      // The engagement's change orders (BAL-622), oldest first — they move the effective price,
-      // lock milestones and feed the change-order panel.
-      engagementChangeOrdersRepository.listForEngagement(engagement.id),
-      // What the expert reworded after the proposal, for the "Changed since proposal" chip.
-      // Empty when no milestone carries the stamp (the repo returns without querying).
-      engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
-      // Time and materials only (BAL-624): the logged hours and their totals for the current
-      // billing period.
-      isTm ? engagementTimeEntriesRepository.listByEngagement(engagement.id) : NO_TIME_ENTRIES,
-      isTm
-        ? engagementTimeEntriesRepository.sumsForEngagement(engagement.id, billingPeriod)
-        : NO_TIME_SUMS,
-      // Logging time is a delivery act on the engagement axis, so it is resolved by capability
-      // rather than read off the lens, and only for an active time and materials project.
-      isTm && engagement.status === 'active'
-        ? hasExpertDeliveryCapability(
-            user,
-            ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-            engagement.expertProfileId,
-            { contextType: 'project', contextId: engagement.id }
-          )
-        : Promise.resolve(false),
-    ]);
+    isTm && inFlight
+      ? currentBillingPeriod(
+          engagement.activatedAt,
+          engagement.cadence,
+          now,
+          engagement.expertProfile?.timezone ?? null
+        )
+      : null;
+  const [
+    rating,
+    actionItems,
+    changeOrderRows,
+    contentEdits,
+    timeEntries,
+    timeSums,
+    notifiedMilestoneIds,
+    canLogTime,
+  ] = await Promise.all([
+    offersRatingCard(engagement.status, ctx.lens)
+      ? readRatingCard({
+          engagementId: engagement.id,
+          viewerUserId: user.id,
+          requireHeldConsultation: false,
+          now: new Date(),
+        })
+      : Promise.resolve(null),
+    // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
+    // engagement graph, so the workspace loader stays a single query.
+    actionItemsRepository.listByEngagement(engagement.id),
+    // The engagement's change orders (BAL-622), oldest first — they move the effective price,
+    // lock milestones and feed the change-order panel.
+    engagementChangeOrdersRepository.listForEngagement(engagement.id),
+    // What the expert reworded after the proposal, for the "Changed since proposal" chip.
+    // Empty when no milestone carries the stamp (the repo returns without querying).
+    engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
+    // Time and materials only (BAL-624): the logged hours and their totals for the current
+    // billing period.
+    isTm ? engagementTimeEntriesRepository.listByEngagement(engagement.id) : NO_TIME_ENTRIES,
+    isTm
+      ? engagementTimeEntriesRepository.sumsForEngagement(engagement.id, billingPeriod)
+      : NO_TIME_SUMS,
+    // Milestones the client was already told went over their current estimate, so the Log
+    // time warning doesn't promise a second notice.
+    isTm
+      ? engagementTimeEntriesRepository.listNotifiedAtCurrentEstimate(engagement.id)
+      : NO_NOTIFIED_MILESTONES,
+    // Logging time is a delivery act on the engagement axis, so it is resolved by capability
+    // rather than read off the lens, and only for an active time and materials project.
+    isTm && engagement.status === 'active'
+      ? hasExpertDeliveryCapability(
+          user,
+          ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+          engagement.expertProfileId,
+          { contextType: 'project', contextId: engagement.id }
+        )
+      : Promise.resolve(false),
+  ]);
   const view = mapEngagementToWorkspaceView(engagement, ctx, now, changeOrderRows, contentEdits);
   const time = mapTimeToView({
     engagement,
@@ -222,6 +244,7 @@ export default async function EngagementWorkspacePage({
     period: billingPeriod,
     viewerUserId: user.id,
     canLogTime,
+    notifiedMilestoneIds,
   });
   const canCancelEngagement = hasPlatformCapability(
     user,

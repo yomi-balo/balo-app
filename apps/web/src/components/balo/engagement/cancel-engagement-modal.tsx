@@ -42,7 +42,8 @@ const REASON_FIELD_ID = 'cancel-engagement-reason';
  * easy path: "Keep the project" is the primary button and takes initial focus, while
  * "Cancel project" is a quiet destructive-text button that stays disabled until the reason
  * is non-blank. Keep, Escape and an overlay click all close it and are tracked as a keep;
- * none of them is ever blocked by a save in flight.
+ * none of them is ever blocked by a save in flight. Closing it while a cancel is in flight
+ * is not a keep (the cancel still completes), so it is not tracked.
  */
 export function CancelEngagementModal({
   open,
@@ -62,14 +63,16 @@ export function CancelEngagementModal({
 
   const keep = useCallback(
     (via: 'button' | 'dismiss'): void => {
-      track(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT, {
-        engagement_id: engagementId,
-        delivery_status: deliveryStatus,
-        via,
-      });
+      if (!isPending) {
+        track(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT, {
+          engagement_id: engagementId,
+          delivery_status: deliveryStatus,
+          via,
+        });
+      }
       onClose();
     },
-    [engagementId, deliveryStatus, onClose]
+    [isPending, engagementId, deliveryStatus, onClose]
   );
   const handleOpenChange = useCallback(
     (next: boolean): void => {

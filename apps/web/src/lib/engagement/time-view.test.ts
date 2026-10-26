@@ -60,6 +60,7 @@ function view(
     sums?: TimeEntrySums;
     canLogTime?: boolean;
     period?: typeof period | null;
+    notifiedMilestoneIds?: string[];
   } = {}
 ): WorkspaceTimeView {
   const result = mapTimeToView({
@@ -70,6 +71,7 @@ function view(
     period: over.period === undefined ? period : over.period,
     viewerUserId: VIEWER,
     canLogTime: over.canLogTime ?? true,
+    notifiedMilestoneIds: over.notifiedMilestoneIds ?? [],
   });
   if (result === null) throw new Error('expected a time view');
   return result;
@@ -93,6 +95,7 @@ describe('mapTimeToView', () => {
         period,
         viewerUserId: VIEWER,
         canLogTime: true,
+        notifiedMilestoneIds: [],
       })
     ).toBeNull();
   });
@@ -232,8 +235,17 @@ describe('mapTimeToView', () => {
     });
   });
 
+  describe('over-estimate notice', () => {
+    it('marks a milestone whose notice was already sent at its current estimate', () => {
+      expect(
+        view(project(), { notifiedMilestoneIds: [MS] }).byMilestoneId[MS]?.overNoticeSent
+      ).toBe(true);
+      expect(view(project()).byMilestoneId[MS]?.overNoticeSent).toBe(false);
+    });
+  });
+
   describe('totals', () => {
-    it('sums the non-null estimates and counts every logged minute, removed milestones included', () => {
+    it('measures only time on estimated milestones against the summed estimate', () => {
       const engagement = project(
         {},
         {
@@ -244,16 +256,40 @@ describe('mapTimeToView', () => {
           ],
         }
       );
-      const { totals } = view(engagement, { sums: sums({ totalMinutes: 360 }) });
+      const { totals } = view(engagement, {
+        sums: sums({ totalMinutes: 420, byMilestone: { [MS]: 300, 'ms-2': 60, 'ms-3': 60 } }),
+      });
       expect(totals).toMatchObject({
-        loggedLabel: '6 of 8 hrs logged against the estimate',
+        loggedLabel: '6 of 8 hrs logged against the estimate · 7 hrs in all',
         fillPercent: 75,
         over: false,
       });
     });
 
+    it('is not over when only time on a milestone without an estimate takes the total past it', () => {
+      const engagement = project(
+        {},
+        {
+          milestones: [
+            makeMilestone({ id: MS, status: 'in_progress', estimatedMinutes: 480 }),
+            makeMilestone({ id: 'ms-3', estimatedMinutes: null }),
+          ],
+        }
+      );
+      const { totals } = view(engagement, {
+        sums: sums({ totalMinutes: 900, byMilestone: { [MS]: 300, 'ms-3': 600 } }),
+      });
+      expect(totals).toMatchObject({ over: false, fillPercent: 63 });
+    });
+
+    it('leaves out the "in all" note when every minute is on an estimated milestone', () => {
+      expect(view(project()).totals.loggedLabel).toBe('1.5 of 8 hrs logged against the estimate');
+    });
+
     it('is over once the project total passes the summed estimate', () => {
-      expect(view(project(), { sums: sums({ totalMinutes: 500 }) }).totals).toMatchObject({
+      expect(
+        view(project(), { sums: sums({ totalMinutes: 500, byMilestone: { [MS]: 500 } }) }).totals
+      ).toMatchObject({
         over: true,
         fillPercent: 100,
       });
@@ -272,10 +308,14 @@ describe('mapTimeToView', () => {
 
     it('reads a zero total estimate with time logged as full', () => {
       expect(
-        view(project({ estimatedMinutes: 0 }), { sums: sums({ totalMinutes: 60 }) }).totals
+        view(project({ estimatedMinutes: 0 }), {
+          sums: sums({ totalMinutes: 60, byMilestone: { [MS]: 60 } }),
+        }).totals
       ).toMatchObject({ fillPercent: 100, over: true });
       expect(
-        view(project({ estimatedMinutes: 0 }), { sums: sums({ totalMinutes: 0 }) }).totals
+        view(project({ estimatedMinutes: 0 }), {
+          sums: sums({ totalMinutes: 0, byMilestone: {} }),
+        }).totals
       ).toMatchObject({ fillPercent: 0, over: false });
     });
 

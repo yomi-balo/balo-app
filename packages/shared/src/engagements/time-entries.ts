@@ -3,6 +3,8 @@
  * Pure and client-safe. Time is stored and passed as whole minutes; hours appear only in labels.
  */
 
+import { localIsoDate } from '../timezone';
+
 /** A calendar date, 'YYYY-MM-DD'. */
 export type IsoDate = string;
 
@@ -26,8 +28,9 @@ function toIsoDate(ms: number): IsoDate {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-function utcDayStart(date: Date): number {
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+/** Midnight UTC of the calendar day `date` falls on in `timeZone` (UTC when null). */
+function dayStartIn(date: Date, timeZone: string | null): number {
+  return Date.parse(localIsoDate(date, timeZone));
 }
 
 /** The start of the monthly period `monthOffset` months after the anchor, clamped to the month length. */
@@ -40,7 +43,8 @@ function monthlyStart(anchorMs: number, monthOffset: number): number {
 }
 
 /**
- * The billing period containing `now`, anchored on the activation date (UTC). Monthly periods
+ * The billing period containing `now`, anchored on the activation date. Both days are read in
+ * `timeZone` (UTC when null), the same calendar time entries are dated in. Monthly periods
  * start on the anchor's day-of-month, clamped to short months without drifting the anchor;
  * fortnightly periods are 14-day blocks. Before activation the first period is returned.
  * Null when the project has no activation date or no cadence.
@@ -48,11 +52,12 @@ function monthlyStart(anchorMs: number, monthOffset: number): number {
 export function currentBillingPeriod(
   activatedAt: Date | null,
   cadence: 'monthly' | 'fortnightly' | null,
-  now: Date
+  now: Date,
+  timeZone: string | null = null
 ): BillingPeriod | null {
   if (activatedAt === null || cadence === null) return null;
-  const anchorMs = utcDayStart(activatedAt);
-  const todayMs = Math.max(utcDayStart(now), anchorMs);
+  const anchorMs = dayStartIn(activatedAt, timeZone);
+  const todayMs = Math.max(dayStartIn(now, timeZone), anchorMs);
 
   let startMs: number;
   let endMs: number;

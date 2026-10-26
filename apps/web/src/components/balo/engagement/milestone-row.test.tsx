@@ -243,6 +243,7 @@ describe('MilestoneRow', () => {
             logToggleLabel: 'Time log (0)',
             authorsLabel: null,
             emptyLabel: 'Log time as you work — Northwind sees every entry and its note.',
+            overNoticeSent: false,
           })}
         />
       );

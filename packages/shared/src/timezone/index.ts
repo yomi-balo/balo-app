@@ -454,8 +454,21 @@ const VALID_TIMEZONES = new Set<string>([...Intl.supportedValuesOf('timeZone'), 
  * Node omits from that list). Empty strings and unknown zones are false. Shared by
  * the API and web validation layers so the valid-zone set is defined in one place.
  */
+/**
+ * True for any zone `Intl` recognises whose canonical name is a supported zone. That
+ * covers the current IANA names ICU lists only as aliases (`Asia/Kolkata` →
+ * `Asia/Calcutta`, `Europe/Kyiv` → `Europe/Kiev`, `Etc/UTC` → `UTC`), and still rejects
+ * UTC offsets such as `+05:30` and unknown names.
+ */
 export function isValidTimezone(tz: string): boolean {
-  return VALID_TIMEZONES.has(tz);
+  if (VALID_TIMEZONES.has(tz)) return true;
+  if (tz === '') return false;
+  try {
+    const canonical = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
+    return VALID_TIMEZONES.has(canonical);
+  } catch {
+    return false;
+  }
 }
 
 // ── DST spring-forward gap detection (pure, Intl-only) ──────────────

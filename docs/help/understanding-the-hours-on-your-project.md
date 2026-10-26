@@ -24,9 +24,10 @@ milestone has one "Logged by …" line naming who logged the time.
 
 ## The totals card
 
-The totals card adds up the project. It shows the hours logged against the total estimate, the
-hours in the current billing period and the date of the next invoice. Billing periods follow the
-cadence agreed for the project, either monthly or every two weeks.
+The totals card adds up the project. It shows the hours logged on milestones that have an estimate
+against their total estimate, the hours in the current billing period and the date of the next
+invoice. Billing periods follow the cadence agreed for the project, either monthly or every two
+weeks, and run by the expert's calendar.
 
 ## When a milestone goes over its estimate
 
@@ -36,7 +37,8 @@ hours went on.
 
 Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the
 work, and a project can need more time than planned. You won't be told again about the same
-estimate, but you will be if the estimate is raised and the milestone passes the new figure.
+estimate. You will be if the estimate changes and the milestone goes over the new figure,
+including when an approved change sets an estimate below the hours already logged.
 
 ## Asking for a change
 

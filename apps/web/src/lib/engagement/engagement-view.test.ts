@@ -996,6 +996,7 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
           agencyId: 'agency-cloudpeak',
           type: 'agency',
           headline: 'CPQ Specialist',
+          timezone: 'UTC',
           user: { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
           agency: { id: 'agency-cloudpeak', name: 'CloudPeak Consulting', logoUrl: null },
         },

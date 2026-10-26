@@ -29,6 +29,44 @@ export const noteSchema = z.string().trim().min(1).max(TIME_ENTRY_NOTE_MAX);
 export type TimeWriteKind = 'logged' | 'updated' | 'removed';
 
 /**
+ * Tell the client (email + in-app) and admins (in-app) that a milestone went over its
+ * estimate, and track it. Called once the over-estimate audit is recorded: by a time write
+ * that crosses the estimate, or by an approved change order that sets an estimate below the
+ * time already logged.
+ */
+export async function notifyEstimateExceeded(input: {
+  engagement: ProjectEngagementWithMilestones;
+  milestone: { id: string; title: string; estimatedMinutes: number };
+  loggedMinutes: number;
+  milestonesOverCount: number;
+  userId: string;
+}): Promise<void> {
+  const { engagement, milestone, loggedMinutes, milestonesOverCount, userId } = input;
+  const parties = deriveEngagementParties(engagement);
+  const recipientId = await resolveClientRecipientId(engagement.company.id);
+  publishNotificationEvent('engagement.milestone_estimate_exceeded', {
+    correlationId: `${milestone.id}:estimate_exceeded:${milestone.estimatedMinutes}`,
+    engagementId: engagement.id,
+    milestoneId: milestone.id,
+    recipientId,
+    expertPartyLabel: parties.expertParty,
+    actorExpertLabel: parties.expertRetroFirstMention,
+    projectTitle: deriveEngagementTitle(engagement, parties),
+    milestoneTitle: milestone.title,
+    loggedHoursLabel: hoursLabel(loggedMinutes),
+    estimatedHoursLabel: hoursLabel(milestone.estimatedMinutes),
+  }).catch(() => {
+    // publishNotificationEvent logs internally.
+  });
+  trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED, {
+    engagement_id: engagement.id,
+    milestone_id: milestone.id,
+    milestones_over_count: milestonesOverCount,
+    distinct_id: userId,
+  });
+}
+
+/**
  * What follows a committed time write: the `TIME_LOGGED` event (log only), the first-crossing
  * notice to the client owner and admins plus its event, and one structured log line. The log
  * carries ids and minutes only, never the note. Notifying is fire-and-forget.
@@ -59,27 +97,12 @@ export async function afterTimeWrite(input: {
     milestone.estimatedMinutes !== null &&
     loggedAfterMinutes !== undefined
   ) {
-    const parties = deriveEngagementParties(engagement);
-    const recipientId = await resolveClientRecipientId(engagement.company.id);
-    publishNotificationEvent('engagement.milestone_estimate_exceeded', {
-      correlationId: `${milestone.id}:estimate_exceeded:${milestone.estimatedMinutes}`,
-      engagementId: engagement.id,
-      milestoneId: milestone.id,
-      recipientId,
-      expertPartyLabel: parties.expertParty,
-      actorExpertLabel: parties.expertRetroFirstMention,
-      projectTitle: deriveEngagementTitle(engagement, parties),
-      milestoneTitle: milestone.title,
-      loggedHoursLabel: hoursLabel(loggedAfterMinutes),
-      estimatedHoursLabel: hoursLabel(milestone.estimatedMinutes),
-    }).catch(() => {
-      // publishNotificationEvent logs internally.
-    });
-    trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED, {
-      engagement_id: engagement.id,
-      milestone_id: milestone.id,
-      milestones_over_count: milestonesOverCount ?? 0,
-      distinct_id: userId,
+    await notifyEstimateExceeded({
+      engagement,
+      milestone: { ...milestone, estimatedMinutes: milestone.estimatedMinutes },
+      loggedMinutes: loggedAfterMinutes,
+      milestonesOverCount: milestonesOverCount ?? 0,
+      userId,
     });
   }
 

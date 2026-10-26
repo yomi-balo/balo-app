@@ -45,6 +45,8 @@ export interface MilestoneTimeView {
   canLog: boolean;
   /** The invitation shown when the viewer can log and nothing is logged yet; otherwise null. */
   emptyLabel: string | null;
+  /** The client was already told this milestone went over its current estimate. */
+  overNoticeSent: boolean;
 }
 
 export interface TimeTotalsView {
@@ -133,7 +135,12 @@ function milestoneTimeView(
   milestone: MilestoneNode,
   entries: readonly TimeEntryListRow[],
   loggedMinutes: number,
-  input: { viewerUserId: string; canLogTime: boolean; clientCompanyName: string }
+  input: {
+    viewerUserId: string;
+    canLogTime: boolean;
+    clientCompanyName: string;
+    overNoticeSent: boolean;
+  }
 ): MilestoneTimeView {
   const estimate = milestone.estimatedMinutes;
   const inProgress = milestone.status === 'in_progress';
@@ -159,6 +166,7 @@ function milestoneTimeView(
       canLog && entries.length === 0
         ? `Log time as you work — ${input.clientCompanyName} sees every entry and its note.`
         : null,
+    overNoticeSent: input.overNoticeSent,
   };
 }
 
@@ -183,12 +191,15 @@ function totalsView(input: {
   parties: EngagementParties;
 }): TimeTotalsView {
   const { milestones, sums, period, lens, parties } = input;
-  const estimates = milestones
-    .map((m) => m.estimatedMinutes)
-    .filter((minutes): minutes is number => minutes !== null);
-  const logged = sums.totalMinutes;
-  const hasEstimate = estimates.length > 0;
-  const estimate = estimates.reduce((sum, minutes) => sum + minutes, 0);
+  const estimated = milestones.filter((m) => m.estimatedMinutes !== null);
+  const hasEstimate = estimated.length > 0;
+  const estimate = estimated.reduce((sum, m) => sum + (m.estimatedMinutes ?? 0), 0);
+  // Only time on a milestone that carries an estimate is measured against the estimate.
+  const logged = estimated.reduce((sum, m) => sum + (sums.byMilestone[m.id] ?? 0), 0);
+  const unestimatedNote =
+    hasEstimate && sums.totalMinutes > logged
+      ? ` · ${hoursFigure(sums.totalMinutes)} hrs in all`
+      : '';
 
   let periodView: TimeTotalsView['period'] = null;
   if (period !== null && sums.periodMinutes !== null) {
@@ -205,8 +216,8 @@ function totalsView(input: {
 
   return {
     loggedLabel: hasEstimate
-      ? `${hoursFigure(logged)} of ${hoursFigure(estimate)} hrs logged against the estimate`
-      : `${hoursFigure(logged)} hrs logged`,
+      ? `${hoursFigure(logged)} of ${hoursFigure(estimate)} hrs logged against the estimate${unestimatedNote}`
+      : `${hoursFigure(sums.totalMinutes)} hrs logged`,
     fillPercent: hasEstimate ? totalFill(logged, estimate) : null,
     over: hasEstimate && logged > estimate,
     period: periodView,
@@ -245,6 +256,8 @@ export function mapTimeToView(input: {
   period: BillingPeriod | null;
   viewerUserId: string;
   canLogTime: boolean;
+  /** Milestones whose over-estimate notice was already sent at their current estimate. */
+  notifiedMilestoneIds: readonly string[];
 }): WorkspaceTimeView | null {
   const { engagement, ctx, entries, sums, period, viewerUserId, canLogTime } = input;
   if (engagement.pricingMethod !== 'tm') return null;
@@ -258,6 +271,7 @@ export function mapTimeToView(input: {
       viewerUserId,
       canLogTime,
       clientCompanyName: parties.clientCompanyName,
+      overNoticeSent: input.notifiedMilestoneIds.includes(milestone.id),
     });
     byMilestoneId[milestone.id] = view;
     if (view.tone === 'over') overTitles.push(milestone.title);

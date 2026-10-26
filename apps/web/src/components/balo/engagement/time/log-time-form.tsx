@@ -24,6 +24,8 @@ interface LogTimeFormProps {
   /** The milestone's live total, including `entry` when editing. */
   loggedMinutes: number;
   clientCompanyName: string;
+  /** The client was already told this milestone went over its current estimate. */
+  overNoticeSent: boolean;
   /** Present when editing: the form is prefilled from it and saves over it. */
   entry?: TimeEntryView;
   /** Closes the form, after a save and on Cancel / Escape. */
@@ -54,6 +56,7 @@ export function LogTimeForm({
   estimatedMinutes,
   loggedMinutes,
   clientCompanyName,
+  overNoticeSent,
   entry,
   onClose,
 }: Readonly<LogTimeFormProps>): React.JSX.Element {
@@ -77,8 +80,17 @@ export function LogTimeForm({
         replacedMinutes: entry?.minutes ?? 0,
         addMinutes: minutes ?? 0,
         clientCompanyName,
+        overNoticeSent,
       }),
-    [milestoneTitle, estimatedMinutes, loggedMinutes, entry, minutes, clientCompanyName]
+    [
+      milestoneTitle,
+      estimatedMinutes,
+      loggedMinutes,
+      entry,
+      minutes,
+      clientCompanyName,
+      overNoticeSent,
+    ]
   );
 
   const submit = useCallback((): void => {

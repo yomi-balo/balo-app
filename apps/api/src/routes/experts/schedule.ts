@@ -30,8 +30,9 @@ const ruleSchema = z
     message: 'A range needs a different start and end time.',
   });
 
-// `isValidTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`
-// plus the special-cased 'UTC' (which Node omits). 'UTC' is the
+// `isValidTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`,
+// the current IANA names ICU lists only as aliases (e.g. 'Asia/Kolkata'), and the
+// special-cased 'UTC' (which Node omits). 'UTC' is the
 // `expert_profiles.timezone` column default, so it must validate — otherwise an
 // expert who never changes their timezone can't save their schedule.
 const timezoneSchema = z.string().refine(isValidTimezone, 'Invalid timezone');

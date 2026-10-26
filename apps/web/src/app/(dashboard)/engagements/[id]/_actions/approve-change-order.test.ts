@@ -80,7 +80,10 @@ vi.mock('@/lib/admin-alerts/raise-admin-alert', () => ({
 const mockTrack = vi.fn();
 vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: (...a: unknown[]) => mockTrack(...a),
-  ENGAGEMENT_SERVER_EVENTS: { CHANGE_ORDER_APPROVED: 'engagement_change_order_approved' },
+  ENGAGEMENT_SERVER_EVENTS: {
+    CHANGE_ORDER_APPROVED: 'engagement_change_order_approved',
+    MILESTONE_ESTIMATE_EXCEEDED: 'engagement_milestone_estimate_exceeded',
+  },
 }));
 
 const mockPublish = vi.fn();
@@ -114,6 +117,8 @@ function approval(over: Record<string, unknown> = {}): Record<string, unknown> {
     appliedMilestoneIds: ['ms-new'],
     previousEffectivePriceCents: 1_000_000,
     effectivePriceCents: 1_100_000,
+    estimatesExceeded: [],
+    milestonesOverCount: 0,
     ...over,
   };
 }
@@ -275,6 +280,56 @@ describe('approveChangeOrderAction', () => {
     expect(mockPublish.mock.calls[0]?.[1]).not.toHaveProperty('expertPriceChangeLabel');
     expect(mockLoadSettlement).not.toHaveBeenCalled();
     expect(mockRaiseAlert).not.toHaveBeenCalled();
+  });
+
+  it('time and materials: tells the client when an approved estimate is below the time logged', async () => {
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        milestones: [makeMilestone({ id: 'ms-1', title: 'Discovery', estimatedMinutes: 300 })],
+      })
+    );
+    mockApprove.mockResolvedValue(
+      approval({
+        estimatesExceeded: [
+          { id: 'ms-1', title: 'Discovery', estimatedMinutes: 300, loggedMinutes: 360 },
+        ],
+        milestonesOverCount: 1,
+      })
+    );
+
+    await approveChangeOrderAction(INPUT);
+
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.milestone_estimate_exceeded',
+      expect.objectContaining({
+        correlationId: 'ms-1:estimate_exceeded:300',
+        milestoneId: 'ms-1',
+        milestoneTitle: 'Discovery',
+        loggedHoursLabel: '6 hrs',
+        estimatedHoursLabel: '5 hrs',
+      })
+    );
+    expect(mockTrack).toHaveBeenCalledWith('engagement_milestone_estimate_exceeded', {
+      engagement_id: ENGAGEMENT_ID,
+      milestone_id: 'ms-1',
+      milestones_over_count: 1,
+      distinct_id: expect.any(String),
+    });
+  });
+
+  it('sends no over-estimate notice when the approval leaves every estimate covered', async () => {
+    mockFindEngagement.mockResolvedValue(
+      makeProject({ pricingMethod: 'tm', milestones: [makeMilestone({ estimatedMinutes: 3000 })] })
+    );
+    mockApprove.mockResolvedValue(approval());
+
+    await approveChangeOrderAction(INPUT);
+
+    expect(mockPublish).not.toHaveBeenCalledWith(
+      'engagement.milestone_estimate_exceeded',
+      expect.anything()
+    );
   });
 
   it('time and materials: a cap that moved reads as the new cap, in expert figures', async () => {

@@ -30,6 +30,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof LogTimeForm>> = {}
       estimatedMinutes={480}
       loggedMinutes={420}
       clientCompanyName="Northwind"
+      overNoticeSent={false}
       onClose={onClose}
       {...overrides}
     />

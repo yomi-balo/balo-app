@@ -603,6 +603,27 @@ describe('engagementTimeEntriesRepository.sumsForEngagement', () => {
   });
 });
 
+describe('engagementTimeEntriesRepository.listNotifiedAtCurrentEstimate', () => {
+  it('lists a milestone once its notice is sent, and drops it when the estimate changes', async () => {
+    const seeded = await seedTm(); // 8h estimate
+    expect(await repo.listNotifiedAtCurrentEstimate(seeded.engagementId)).toEqual([]);
+
+    await repo.log(logInput(seeded, 465));
+    expect(await repo.listNotifiedAtCurrentEstimate(seeded.engagementId)).toEqual([]);
+
+    await repo.log(logInput(seeded, 30)); // crosses 8h
+    expect(await repo.listNotifiedAtCurrentEstimate(seeded.engagementId)).toEqual([
+      seeded.milestone.id,
+    ]);
+
+    await db
+      .update(engagementMilestones)
+      .set({ estimatedMinutes: 600 })
+      .where(eq(engagementMilestones.id, seeded.milestone.id));
+    expect(await repo.listNotifiedAtCurrentEstimate(seeded.engagementId)).toEqual([]);
+  });
+});
+
 describe('engagementTimeEntriesRepository.listOverEstimateForAlerts', () => {
   async function seedWithLogged(
     logged: number,
@@ -639,11 +660,15 @@ describe('engagementTimeEntriesRepository.listOverEstimateForAlerts', () => {
     });
   });
 
-  it('sums logged time across milestones, including removed ones, against live estimates', async () => {
-    const seeded = await seedTm();
+  it('compares only time on live milestones that have an estimate', async () => {
+    const seeded = await seedTm(); // one live milestone, 8h estimate
+    const { milestone: unestimated } = await engagementMilestoneFactory({
+      engagementId: seeded.engagementId,
+      values: { sortOrder: 1, estimatedMinutes: null },
+    });
     const { milestone: gone } = await engagementMilestoneFactory({
       engagementId: seeded.engagementId,
-      values: { sortOrder: 1, estimatedMinutes: 600, deletedAt: new Date() },
+      values: { sortOrder: 2, estimatedMinutes: 600, deletedAt: new Date() },
     });
     await engagementTimeEntryFactory({
       milestone: seeded.milestone,
@@ -651,11 +676,24 @@ describe('engagementTimeEntriesRepository.listOverEstimateForAlerts', () => {
       values: { minutes: 300 },
     });
     await engagementTimeEntryFactory({
+      milestone: unestimated,
+      userId: seeded.userId,
+      values: { minutes: 600 },
+    });
+    await engagementTimeEntryFactory({
       milestone: gone,
       userId: seeded.userId,
       values: { minutes: 240 },
     });
 
+    // 1,140 minutes logged in all, but only 300 against the 480-minute estimate.
+    expect(await listedAmong([seeded.engagementId])).toEqual([]);
+
+    await engagementTimeEntryFactory({
+      milestone: seeded.milestone,
+      userId: seeded.userId,
+      values: { minutes: 181 },
+    });
     expect(await listedAmong([seeded.engagementId])).toEqual([seeded.engagementId]);
   });
 

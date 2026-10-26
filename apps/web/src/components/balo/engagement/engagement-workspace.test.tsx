@@ -525,6 +525,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           authorsLabel: null,
           canLog: false,
           emptyLabel: null,
+          overNoticeSent: false,
         },
       },
       totals: { loggedLabel: '9 of 16 hrs logged', fillPercent: 56, over: false, period: null },

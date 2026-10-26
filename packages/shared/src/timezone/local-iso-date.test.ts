@@ -65,6 +65,11 @@ describe('localIsoDate', () => {
       expect(localIsoDate(instant, 'Mars/Olympus_Mons')).toBe('2026-10-26');
     });
 
+    it('dates an aliased zone in that zone, not UTC', () => {
+      // 22:30Z on 26 Oct is 04:00 on 27 Oct in India (UTC+5:30).
+      expect(localIsoDate(instant, 'Asia/Kolkata')).toBe('2026-10-27');
+    });
+
     it('accepts UTC itself', () => {
       expect(localIsoDate(instant, 'UTC')).toBe('2026-10-26');
     });

@@ -618,6 +618,7 @@ export function ExpertMilestoneRail({
               estimatedMinutes={milestoneTime.estimatedMinutes}
               loggedMinutes={milestoneTime.loggedMinutes}
               clientCompanyName={clientCompanyName}
+              overNoticeSent={milestoneTime.overNoticeSent}
               entry={timeForm.entry}
               onClose={closeTimeForm}
             />

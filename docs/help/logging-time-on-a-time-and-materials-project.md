@@ -43,7 +43,8 @@ turns amber, so you can see the estimate coming up.
 When you log time, the form tells you if the entry takes the milestone past its estimate, and by
 how much. Logging is never blocked. The first time a milestone goes over its estimate, the client
 is sent a notice that says how many hours are logged against the estimate and points to the time
-log. They aren't told again for that estimate unless you raise it and then pass the new figure.
+log. They aren't told again for that estimate. If an approved change sets a new estimate and the
+milestone is over it, whether straight away or once more time is logged, they're told once more.
 
 ## Raising an estimate
 
@@ -55,7 +56,7 @@ new estimate.
 ## Billing periods
 
 The totals card shows the hours logged in the current billing period and the date of the next
-invoice. A period starts on the day the project kicked off and runs for the billing cadence you
+invoice. A period starts on the day the project kicked off, by your calendar, and runs for the billing cadence you
 agreed, either monthly or every two weeks. A monthly period that starts on the 31st moves to the
 last day of shorter months, then returns to the 31st. Each entry is dated the day you log it, in your time zone, and
 counts towards the period that day falls in.

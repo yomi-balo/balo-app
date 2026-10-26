@@ -136,4 +136,14 @@ describe('CancelEngagementModal', () => {
     await user.click(keep);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('does not track a keep when the dialog is closed while a cancel is in flight', async () => {
+    const user = userEvent.setup();
+    mockPending = true;
+    const { onClose } = setup();
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Keep the project' }));
+    expect(onClose).toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT, expect.anything());
+  });
 });
