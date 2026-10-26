@@ -58,7 +58,8 @@ function BeforeAfter({
 /**
  * The milestone lines of a change order: New / Edited / Removed, with a before / after pair
  * for each edited field. Server-safe and presentational; every string is pre-derived on the
- * view, and an edit line shows only the fields that actually differ.
+ * view, and an edit line shows only the fields that actually differ, plus, on an open T&M
+ * order, the hours already logged on a milestone whose estimate it changes.
  */
 export function ChangeOrderLines({ lines }: Readonly<ChangeOrderLinesProps>): React.JSX.Element {
   if (lines.length === 0) {
@@ -112,6 +113,9 @@ export function ChangeOrderLines({ lines }: Readonly<ChangeOrderLinesProps>): Re
                     after={line.estimateLabel}
                     inline
                   />
+                )}
+                {line.loggedLabel !== null && (
+                  <p className="text-muted-foreground text-xs">{line.loggedLabel}</p>
                 )}
               </div>
             )}

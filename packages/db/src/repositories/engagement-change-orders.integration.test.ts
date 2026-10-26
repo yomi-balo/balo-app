@@ -15,6 +15,7 @@ import {
   engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
+  engagementTimeEntryFactory,
   proposalFactory,
   proposalPaymentInstallmentFactory,
   userFactory,
@@ -1227,5 +1228,250 @@ describe('engagementChangeOrdersRepository.approve — not bound by the plain-wr
     );
     expect(edited?.metadata).toMatchObject({ changeOrderId: draft.id });
     expect(edited?.metadata?.fields).toEqual(['title', 'descriptionHtml']);
+  });
+});
+
+describe('engagementChangeOrdersRepository — cap_below_logged', () => {
+  /** A T&M project capped at A$5,000 at A$200/hr, with 10 hours (A$2,000) logged. */
+  async function seedLoggedTm(): Promise<{
+    engagementId: string;
+    userId: string;
+    first: EngagementMilestone;
+  }> {
+    const seeded = await seedProject({
+      projectValues: {
+        pricingMethod: 'tm',
+        priceCents: 500_000,
+        rateCents: 20_000,
+        cadence: 'monthly',
+      },
+    });
+    await engagementTimeEntryFactory({
+      milestone: seeded.first,
+      userId: seeded.userId,
+      values: { minutes: 600 },
+    });
+    return seeded;
+  }
+
+  async function capOrder(
+    engagementId: string,
+    userId: string,
+    newTotalCents: number
+  ): Promise<string> {
+    const draft = await repo.createDraft({
+      engagementId,
+      userId,
+      note: 'Trims the cap to what is left.',
+      newTotalCents,
+      lines: [],
+    });
+    return draft.id;
+  }
+
+  it('refuses to send a cap below the value of the time logged', async () => {
+    const { engagementId, userId } = await seedLoggedTm();
+    const orderId = await capOrder(engagementId, userId, 199_999);
+
+    const attempt = repo.send({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toBeInstanceOf(ChangeOrderCoherenceError);
+    await expect(attempt).rejects.toMatchObject({ rule: 'cap_below_logged' });
+  });
+
+  it('accepts a cap equal to the value of the time logged', async () => {
+    const { engagementId, userId } = await seedLoggedTm();
+    const orderId = await capOrder(engagementId, userId, 200_000);
+
+    await repo.send({ engagementId, orderId, userId });
+    const result = await repo.approve({ engagementId, orderId, userId });
+
+    expect(result.effectivePriceCents).toBe(200_000);
+  });
+
+  it('refuses the approval when time logged after the send overtakes the new cap', async () => {
+    const { engagementId, userId, first } = await seedLoggedTm();
+    const orderId = await capOrder(engagementId, userId, 250_000);
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 180 } });
+
+    const attempt = repo.approve({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toMatchObject({ rule: 'cap_below_logged' });
+    expect(await repo.effectivePriceCents(engagementId)).toBe(500_000);
+  });
+});
+
+describe('engagementChangeOrdersRepository — remove_has_logged_time', () => {
+  async function seedTmWithOrder(): Promise<{
+    engagementId: string;
+    userId: string;
+    first: EngagementMilestone;
+    orderId: string;
+  }> {
+    const seeded = await seedProject({
+      projectValues: {
+        pricingMethod: 'tm',
+        priceCents: 500_000,
+        rateCents: 20_000,
+        cadence: 'monthly',
+      },
+    });
+    await db
+      .update(engagementMilestones)
+      .set({ valueCents: null, estimatedMinutes: 600 })
+      .where(eq(engagementMilestones.engagementId, seeded.engagementId));
+    const draft = await repo.createDraft({
+      engagementId: seeded.engagementId,
+      userId: seeded.userId,
+      note: 'Discovery is folded into the build.',
+      newTotalCents: null,
+      lines: [line({ op: 'remove', engagementMilestoneId: seeded.first.id, title: 'Discovery' })],
+    });
+    return { ...seeded, orderId: draft.id };
+  }
+
+  it('refuses to send a remove line on a milestone with time logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder();
+    await engagementTimeEntryFactory({ milestone: first, userId });
+
+    const attempt = repo.send({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toBeInstanceOf(ChangeOrderCoherenceError);
+    await expect(attempt).rejects.toMatchObject({ rule: 'remove_has_logged_time' });
+  });
+
+  it('refuses the approval when time is logged on the milestone after the send', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder();
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId });
+
+    const attempt = repo.approve({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toMatchObject({ rule: 'remove_has_logged_time' });
+    expect((await liveMilestones(engagementId)).map((m) => m.id)).toContain(first.id);
+  });
+
+  it('⚠ POSITIVE CONTROL — approves the remove when no time is logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder();
+    await repo.send({ engagementId, orderId, userId });
+
+    await repo.approve({ engagementId, orderId, userId });
+
+    expect((await liveMilestones(engagementId)).map((m) => m.id)).not.toContain(first.id);
+  });
+});
+
+describe('engagementChangeOrdersRepository — estimate_below_logged', () => {
+  /** A T&M project whose first milestone has an 8-hour estimate, and an order that resizes it. */
+  async function seedTmWithOrder(estimatedMinutes: number): Promise<{
+    engagementId: string;
+    userId: string;
+    first: EngagementMilestone;
+    orderId: string;
+  }> {
+    const seeded = await seedProject({
+      projectValues: {
+        pricingMethod: 'tm',
+        priceCents: 500_000,
+        rateCents: 20_000,
+        cadence: 'monthly',
+      },
+    });
+    await db
+      .update(engagementMilestones)
+      .set({ valueCents: null, estimatedMinutes: 480 })
+      .where(eq(engagementMilestones.engagementId, seeded.engagementId));
+    const draft = await repo.createDraft({
+      engagementId: seeded.engagementId,
+      userId: seeded.userId,
+      note: 'Resizes the discovery estimate.',
+      newTotalCents: null,
+      lines: [
+        line({
+          op: 'edit',
+          engagementMilestoneId: seeded.first.id,
+          title: seeded.first.title,
+          estimatedMinutes,
+        }),
+      ],
+    });
+    return { ...seeded, orderId: draft.id };
+  }
+
+  it('refuses to send an estimate below the time already logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(300);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
+
+    const attempt = repo.send({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toBeInstanceOf(ChangeOrderCoherenceError);
+    await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
+  });
+
+  it('refuses the approval of a lowered estimate that time logged since the send passes', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(300);
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
+
+    const attempt = repo.approve({ engagementId, orderId, userId });
+
+    await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(480);
+  });
+
+  it('approves a raise that time logged since the send overtook, and records the crossing once', async () => {
+    // 7.5 of 8 hours logged; the expert sends a raise to 10 and keeps working to 10.5.
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(600);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 450 } });
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 180 } });
+
+    const result = await repo.approve({ engagementId, orderId, userId });
+
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(600);
+    expect(result.estimatesExceeded).toEqual([
+      { id: first.id, title: first.title, estimatedMinutes: 600, loggedMinutes: 630 },
+    ]);
+    expect(result.milestonesOverCount).toBe(1);
+    const crossings = await db
+      .select({ metadata: auditEvents.metadata })
+      .from(auditEvents)
+      .where(
+        sql`${auditEvents.entityId} = ${first.id} AND ${auditEvents.action} = 'engagement_milestone.estimate_exceeded'`
+      );
+    expect(crossings).toEqual([
+      {
+        metadata: expect.objectContaining({
+          estimatedMinutes: 600,
+          loggedMinutes: 630,
+          changeOrderId: orderId,
+        }),
+      },
+    ]);
+  });
+
+  it('records nothing when a raise still covers the time logged at approval', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(600);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 450 } });
+    await repo.send({ engagementId, orderId, userId });
+
+    const result = await repo.approve({ engagementId, orderId, userId });
+
+    expect(result.estimatesExceeded).toEqual([]);
+    expect(result.milestonesOverCount).toBe(0);
+  });
+
+  it('⚠ POSITIVE CONTROL — approves an estimate equal to the time logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(360);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
+    await repo.send({ engagementId, orderId, userId });
+
+    await repo.approve({ engagementId, orderId, userId });
+
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(360);
   });
 });

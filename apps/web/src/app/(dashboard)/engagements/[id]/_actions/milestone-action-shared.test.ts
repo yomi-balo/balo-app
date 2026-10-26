@@ -25,11 +25,13 @@ const {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class MilestoneHasLoggedTimeError extends Error {}
   class ScopeChangeRequiresChangeOrderError extends Error {
     constructor(
       public readonly reason: string,
@@ -44,6 +46,7 @@ const {
     EngagementNotActiveError,
     InvalidMilestoneTransitionError,
     MilestoneChangePendingError,
+    MilestoneHasLoggedTimeError,
     ScopeChangeRequiresChangeOrderError,
   };
 });
@@ -56,6 +59,7 @@ vi.mock('@balo/db', () => ({
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 }));
 
@@ -237,6 +241,16 @@ describe('runMilestoneTransition', () => {
     expect(res).toEqual({
       ok: false,
       error: 'This milestone is locked while a proposed change to it is reviewed.',
+    });
+  });
+
+  it('maps MilestoneHasLoggedTimeError → MILESTONE_HAS_LOGGED_TIME', async () => {
+    const res = await runMilestoneTransition(() => {
+      throw new MilestoneHasLoggedTimeError('x');
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: "Time has been logged on this milestone, so it can't be removed. Complete it instead.",
     });
   });
 

@@ -902,6 +902,31 @@ describe('notificationRules', () => {
       });
     });
 
+    it('milestone_estimate_exceeded: client email + in-app, admins in-app, no expert rule', () => {
+      const rules = notificationRules['engagement.milestone_estimate_exceeded'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(3);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-milestone-estimate-exceeded-client');
+      }
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules).toHaveLength(1);
+      expect(adminRules[0]).toMatchObject({
+        channel: 'in-app',
+        template: 'engagement-milestone-estimate-exceeded-admin',
+        timing: 'immediate',
+      });
+
+      expect(rules!.some((r) => r.recipient === 'expert')).toBe(false);
+    });
+
     it('milestone_reverted: client + admins, in-app ONLY, one shared template', () => {
       const rules = notificationRules['engagement.milestone_reverted'];
       expect(rules).toBeDefined();

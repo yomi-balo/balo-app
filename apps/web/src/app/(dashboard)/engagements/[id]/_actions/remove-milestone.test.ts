@@ -26,12 +26,14 @@ const {
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class MilestoneHasLoggedTimeError extends Error {}
   class ScopeChangeRequiresChangeOrderError extends Error {
     constructor(
       public readonly reason: string,
@@ -48,6 +50,7 @@ const {
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
     MilestoneChangePendingError,
+    MilestoneHasLoggedTimeError,
     ScopeChangeRequiresChangeOrderError,
   };
 });
@@ -62,6 +65,7 @@ vi.mock('@balo/db', () => ({
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 }));
 
@@ -139,6 +143,14 @@ beforeEach(() => {
 });
 
 describe('removeMilestoneAction', () => {
+  it('refuses a milestone with logged time and tells the expert to complete it', async () => {
+    mockSoftDelete.mockRejectedValue(new MilestoneHasLoggedTimeError('x'));
+    expect(await removeMilestoneAction(INPUT)).toEqual({
+      success: false,
+      error: "Time has been logged on this milestone, so it can't be removed. Complete it instead.",
+    });
+  });
+
   it('rejects when not signed in', async () => {
     mockRequireUser.mockRejectedValue(new Error('Unauthorized'));
     expect(await removeMilestoneAction(INPUT)).toEqual({

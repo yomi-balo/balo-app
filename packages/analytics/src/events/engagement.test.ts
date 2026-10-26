@@ -17,10 +17,12 @@ describe('ENGAGEMENT_SERVER_EVENTS', () => {
       'MILESTONE_ADDED',
       'MILESTONE_COMPLETED',
       'MILESTONE_EDITED',
+      'MILESTONE_ESTIMATE_EXCEEDED',
       'MILESTONE_REMOVED',
       'MILESTONE_REVERTED',
       'MILESTONE_STARTED',
       'REVIEW_REMINDER_SENT',
+      'TIME_LOGGED',
       'WORKSPACE_VIEWED',
     ]);
   });
@@ -62,9 +64,20 @@ describe('ENGAGEMENT_SERVER_EVENTS', () => {
   });
 });
 
+describe('ENGAGEMENT_SERVER_EVENTS — time entries (BAL-624)', () => {
+  it('maps the time-entry constants to their exact event names', () => {
+    expect(ENGAGEMENT_SERVER_EVENTS.TIME_LOGGED).toBe('engagement_time_logged');
+    expect(ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED).toBe(
+      'engagement_milestone_estimate_exceeded'
+    );
+  });
+});
+
 describe('ENGAGEMENT_EVENTS', () => {
   it('exposes exactly the client-side engagement events', () => {
     expect(Object.keys(ENGAGEMENT_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'CANCEL_DIALOG_KEPT',
+      'CANCEL_DIALOG_OPENED',
       'COMPLETION_BLOCKED_VIEW',
       'SCOPE_CHANGE_REDIRECTED',
     ]);
@@ -72,5 +85,10 @@ describe('ENGAGEMENT_EVENTS', () => {
 
   it('maps the scope-change redirect to its exact snake_case event name', () => {
     expect(ENGAGEMENT_EVENTS.SCOPE_CHANGE_REDIRECTED).toBe('engagement_scope_change_redirected');
+  });
+
+  it('maps the cancel-dialog constants to their exact event names', () => {
+    expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED).toBe('engagement_cancel_dialog_opened');
+    expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT).toBe('engagement_cancel_dialog_kept');
   });
 });

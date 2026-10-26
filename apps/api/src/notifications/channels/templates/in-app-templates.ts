@@ -883,6 +883,31 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-624 milestone over estimate — CLIENT owner. Hours only, never money.
+  'engagement-milestone-estimate-exceeded-client': (data) => {
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const logged = (data.loggedHoursLabel as string) ?? '';
+    const estimate = (data.estimatedHoursLabel as string) ?? '';
+    return engagementNotice(
+      'Milestone over estimate',
+      `'${milestone}' is at ${logged}; the estimate is ${estimate}.`,
+      data
+    );
+  },
+
+  // BAL-624 milestone over estimate — ADMIN ops signal (project-scoped).
+  'engagement-milestone-estimate-exceeded-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const logged = (data.loggedHoursLabel as string) ?? '';
+    const estimate = (data.estimatedHoursLabel as string) ?? '';
+    return engagementNotice(
+      'Milestone over estimate',
+      `${title}: '${milestone}' is over its estimate (${logged} of ${estimate}).`,
+      data
+    );
+  },
+
   // BAL-332 (D2) milestone completed — ADMIN ops signal (project-scoped).
   'engagement-milestone-completed-admin': (data) => {
     const title = (data.projectTitle as string) ?? 'A project';

@@ -37,7 +37,9 @@ to the price box.
 - **Time and materials.** Set the estimate on each milestone. The composer shows how the total
   estimate moves. The cap box starts at the current cap. If your rate times the new estimate comes
   to more than the cap, the composer says so and offers **Raise cap**, so the approved scope can
-  still be billed. Enter a higher cap and the client approves it along with the change.
+  still be billed. Enter a higher cap and the client approves it along with the change. The cap can't be lowered
+  below the value of time already logged, a milestone's estimate can't be set below the hours
+  already logged on it, and a milestone with logged time can't be removed.
 
 ## Draft or send
 

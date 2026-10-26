@@ -71,6 +71,13 @@ interface ChangeOrderComposerProps {
   currentPriceCents: number;
   /** T&M: the expert's hourly rate in cents, when the project has one. Ignored on fixed. */
   hourlyRateCents?: number | null;
+  /** T&M: the value of the time already logged, in cents; the cap cannot be lowered below it. */
+  loggedValueCents?: number | null;
+  /**
+   * T&M: minutes of live time logged per milestone. Removing a milestone with time is refused,
+   * and so is changing its estimate to less than the time logged.
+   */
+  loggedMinutesByMilestone?: Readonly<Record<string, number>>;
   milestones: ComposerMilestone[];
   order: ChangeOrderComposerOrder | null;
   /** An attempted change to open with as an extra line, from the redirect link. */
@@ -86,6 +93,7 @@ function formatRate(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
+const NO_LOGGED_MINUTES: Readonly<Record<string, number>> = {};
 const NOTE_MAX_LENGTH = 2000;
 const TITLE_MAX_LENGTH = 200;
 const DESCRIPTION_MAX_LENGTH = 4000;
@@ -251,6 +259,8 @@ export function ChangeOrderComposer({
   currency,
   currentPriceCents,
   hourlyRateCents = null,
+  loggedValueCents = null,
+  loggedMinutesByMilestone = NO_LOGGED_MINUTES,
   milestones,
   order,
   prefillLine,
@@ -286,8 +296,24 @@ export function ChangeOrderComposer({
         lines,
         priceDeltaCents,
         priceValid: totalCents !== null,
+        loggedValueCents,
+        nextCapCents: totalCents ?? currentPriceCents,
+        currency,
+        milestones,
+        loggedMinutesByMilestone,
       }),
-    [pricingMethod, note, lines, priceDeltaCents, totalCents]
+    [
+      pricingMethod,
+      note,
+      lines,
+      priceDeltaCents,
+      totalCents,
+      loggedValueCents,
+      currentPriceCents,
+      currency,
+      milestones,
+      loggedMinutesByMilestone,
+    ]
   );
   const estimates = useMemo(() => estimateTotals(milestones, rows), [milestones, rows]);
   const estimateCostCap = estimateCostCents(hourlyRateCents, estimates.nextMinutes);

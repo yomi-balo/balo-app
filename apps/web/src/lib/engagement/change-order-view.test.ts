@@ -35,7 +35,8 @@ function view(
   orders: Parameters<typeof mapChangeOrdersToView>[0],
   lens: EngagementLens,
   engagement = makeProject(),
-  canDecide = true
+  canDecide = true,
+  loggedMinutesByMilestone: Record<string, number> = {}
 ): ReturnType<typeof mapChangeOrdersToView> {
   return mapChangeOrdersToView(
     orders,
@@ -43,7 +44,8 @@ function view(
     ctxFor(lens),
     deriveEngagementParties(engagement),
     canDecide,
-    NOW
+    NOW,
+    loggedMinutesByMilestone
   );
 }
 
@@ -338,6 +340,66 @@ describe('mapChangeOrdersToView — time and materials', () => {
       op: 'edit',
       estimateLabel: '8 hrs',
       before: { title: 'Old', estimateLabel: '6 hrs' },
+    });
+  });
+
+  describe('the hours already logged on an estimate edit', () => {
+    // ms-2 goes from 6 to 8 hours.
+    const editOf = (v: ReturnType<typeof view>): unknown =>
+      v.open?.lines.find((l) => l.op === 'edit')?.loggedLabel;
+
+    it('shows them on a sent order, to the client and the expert', () => {
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 300 }))).toBe(
+        '5 hrs logged so far'
+      );
+      expect(editOf(view([sentTm], 'expert', tm, true, { 'ms-2': 300 }))).toBe(
+        '5 hrs logged so far'
+      );
+    });
+
+    it('notes when the time logged is at or past the new estimate', () => {
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 480 }))).toBe(
+        '8 hrs logged so far · already past the new estimate'
+      );
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 630 }))).toBe(
+        '10.5 hrs logged so far · already past the new estimate'
+      );
+    });
+
+    it('is absent on the add line, and when nothing is logged on the milestone', () => {
+      const v = view([sentTm], 'client', tm, true, { 'ms-1': 120 });
+      expect(v.open?.lines.map((l) => l.loggedLabel)).toEqual([null, null]);
+    });
+
+    it('is absent when the edit leaves the estimate unchanged', () => {
+      const unchanged = makeOrder({
+        ...sentTm,
+        lines: [
+          makeLine({
+            op: 'edit',
+            engagementMilestoneId: 'ms-2',
+            title: 'Renamed',
+            estimatedMinutes: 360,
+            beforeTitle: 'Old',
+            beforeEstimatedMinutes: 360,
+          }),
+        ],
+      });
+      expect(editOf(view([unchanged], 'client', tm, true, { 'ms-2': 300 }))).toBeNull();
+    });
+
+    it('is absent on a fixed-price project', () => {
+      const fixedProject = makeProject({ milestones: tm.milestones });
+      expect(editOf(view([sentTm], 'client', fixedProject, true, { 'ms-2': 300 }))).toBeNull();
+    });
+
+    it.each([
+      ['approved', { status: 'approved' as const, decidedAt: NOW, decidedByUserId: DANA.id }],
+      ['withdrawn', { status: 'withdrawn' as const, withdrawnAt: NOW }],
+    ])('is absent once the order is %s', (_, decided) => {
+      const v = view([makeOrder({ ...sentTm, ...decided })], 'client', tm, true, { 'ms-2': 300 });
+      expect(v.open).toBeNull();
+      expect(v.history[0]?.lines.find((l) => l.op === 'edit')?.loggedLabel).toBeNull();
     });
   });
 

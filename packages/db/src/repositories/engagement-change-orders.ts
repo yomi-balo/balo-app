@@ -21,6 +21,12 @@ import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
+import {
+  loggedMinutesByMilestoneTx,
+  loggedMinutesTx,
+  recordEstimatesExceededByChangeTx,
+  type EstimateExceededMilestone,
+} from './engagement-time-entries';
 import { isUniqueViolation } from './experts';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
 import type { PricingMethod } from './proposal-types';
@@ -97,6 +103,13 @@ export interface ChangeOrderApproval {
   appliedMilestoneIds: string[];
   previousEffectivePriceCents: number;
   effectivePriceCents: number;
+  /**
+   * T&M milestones whose raised estimate the time logged since the send had already passed,
+   * recorded once per estimate value; the caller notifies the client and admins.
+   */
+  estimatesExceeded: EstimateExceededMilestone[];
+  /** Milestones over their estimate after the approval; 0 when none was newly exceeded. */
+  milestonesOverCount: number;
 }
 
 export interface ChangeOrderSettlementTerms {
@@ -372,24 +385,52 @@ async function liveMilestonesTx(tx: DbTx, engagementId: string): Promise<Engagem
     .for('update');
 }
 
-/** Assemble the coherence snapshot under the engagement lock and assert it. */
+/**
+ * Assemble the coherence snapshot under the engagement lock and assert it. The logged time is
+ * read under the same lock, so time logged between send and approve is counted at approve.
+ */
 async function assertCoherentTx(
   tx: DbTx,
+  stage: 'send' | 'approve',
   order: EngagementChangeOrder,
   lines: readonly EngagementChangeOrderLine[],
   live: readonly EngagementMilestone[]
 ): Promise<{ pricingMethod: PricingMethod; currentEffectivePriceCents: number }> {
-  const { pricingMethod } = await readProjectTermsTx(tx, order.engagementId);
+  const { pricingMethod, rateCents } = await readProjectTermsTx(tx, order.engagementId);
   const currentEffectivePriceCents = await effectivePriceCentsTx(tx, order.engagementId);
+  const loggedByMilestone = await loggedMinutesByMilestoneTx(tx, order.engagementId);
   assertChangeOrderCoherent({
+    stage,
     pricingMethod,
     currentEffectivePriceCents,
     priceDeltaCents: order.priceDeltaCents,
     note: order.note,
     lines,
-    liveMilestoneIds: new Set(live.map((m) => m.id)),
+    liveMilestones: new Map(
+      live.map((m) => [
+        m.id,
+        { estimatedMinutes: m.estimatedMinutes, loggedMinutes: loggedByMilestone[m.id] ?? 0 },
+      ])
+    ),
+    loggedMinutes: await loggedMinutesTx(tx, order.engagementId),
+    rateCents,
   });
   return { pricingMethod, currentEffectivePriceCents };
+}
+
+/** Milestones whose estimate an edit line raises, or sets where there was none. */
+function raisedEstimateIds(
+  lines: readonly EngagementChangeOrderLine[],
+  live: readonly EngagementMilestone[]
+): string[] {
+  const before = new Map(live.map((m) => [m.id, m.estimatedMinutes]));
+  return lines.flatMap((l) => {
+    if (l.op !== 'edit' || l.engagementMilestoneId === null || l.estimatedMinutes === null) {
+      return [];
+    }
+    const previous = before.get(l.engagementMilestoneId) ?? null;
+    return previous === null || l.estimatedMinutes > previous ? [l.engagementMilestoneId] : [];
+  });
 }
 
 function lineCounts(
@@ -776,7 +817,7 @@ export const engagementChangeOrdersRepository = {
           })
           .where(eq(engagementChangeOrderLines.id, line.id));
       }
-      await assertCoherentTx(tx, current, lines, live);
+      await assertCoherentTx(tx, 'send', current, lines, live);
 
       const order = await updateOrderTx(tx, current.id, {
         status: 'sent',
@@ -915,6 +956,7 @@ export const engagementChangeOrdersRepository = {
       const lines = await liveLinesTx(tx, current.id);
       const { pricingMethod, currentEffectivePriceCents } = await assertCoherentTx(
         tx,
+        'approve',
         current,
         lines,
         live
@@ -926,6 +968,16 @@ export const engagementChangeOrdersRepository = {
         pricingMethod,
         userId: input.userId,
       });
+
+      const { exceeded, milestonesOverCount } =
+        pricingMethod === 'tm'
+          ? await recordEstimatesExceededByChangeTx(tx, {
+              engagementId: input.engagementId,
+              milestoneIds: raisedEstimateIds(lines, live),
+              actorUserId: input.userId,
+              changeOrderId: current.id,
+            })
+          : { exceeded: [], milestonesOverCount: 0 };
 
       const order = await updateOrderTx(tx, current.id, {
         status: 'approved',
@@ -949,6 +1001,8 @@ export const engagementChangeOrdersRepository = {
         appliedMilestoneIds,
         previousEffectivePriceCents: currentEffectivePriceCents,
         effectivePriceCents: await effectivePriceCentsTx(tx, input.engagementId),
+        estimatesExceeded: exceeded,
+        milestonesOverCount,
       };
     });
   },

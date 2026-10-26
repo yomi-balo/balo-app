@@ -541,7 +541,8 @@ function queryProjectEngagementWithMilestones(id: string) {
       // and the expert's email/phone. A later Server Action can safely return this to
       // a client component. Notification/billing slices query their own data.
       expertProfile: {
-        columns: { id: true, agencyId: true, type: true, headline: true },
+        // `timezone` dates the T&M billing period in the expert's own calendar (BAL-624).
+        columns: { id: true, agencyId: true, type: true, headline: true, timezone: true },
         with: {
           user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
           agency: { columns: { id: true, name: true, logoUrl: true } },

@@ -29,6 +29,7 @@ function makeEngagement(opts: {
     agencyId: opts.agency ? opts.agency.id : null,
     type: opts.type ?? (opts.agency ? 'agency' : 'freelancer'),
     headline: 'headline' in opts ? (opts.headline ?? null) : 'CPQ Specialist',
+    timezone: 'UTC',
     user: {
       id: 'user-priya',
       firstName: 'firstName' in opts ? (opts.firstName ?? null) : 'Priya',

@@ -36,6 +36,7 @@ const {
   ChangeOrderNotFoundError,
   ChangeOrderPendingError,
   InvalidChangeOrderTransitionError,
+  TimeEntryWriteRefusedError,
 } = vi.hoisted(() => {
   class MilestonesIncompleteError extends Error {}
   class InvalidEngagementTransitionError extends Error {}
@@ -44,6 +45,11 @@ const {
   class ChangeOrderNotFoundError extends Error {}
   class ChangeOrderPendingError extends Error {}
   class InvalidChangeOrderTransitionError extends Error {}
+  class TimeEntryWriteRefusedError extends Error {
+    constructor(public readonly reason: string) {
+      super(reason);
+    }
+  }
   class ChangeOrderCoherenceError extends Error {
     constructor(public readonly rule: string) {
       super(rule);
@@ -59,6 +65,7 @@ const {
     ChangeOrderNotFoundError,
     ChangeOrderPendingError,
     InvalidChangeOrderTransitionError,
+    TimeEntryWriteRefusedError,
   };
 });
 
@@ -76,6 +83,7 @@ vi.mock('@balo/db', () => ({
   ChangeOrderNotFoundError,
   ChangeOrderPendingError,
   InvalidChangeOrderTransitionError,
+  TimeEntryWriteRefusedError,
 }));
 
 import {
@@ -299,6 +307,46 @@ describe('runEngagementLifecycleAction', () => {
       'ChangeOrderCoherenceError (line_target_not_live)',
       () => new ChangeOrderCoherenceError('line_target_not_live'),
       'The delivery plan changed since you loaded the page. Refresh and try again.',
+    ],
+    [
+      'ChangeOrderCoherenceError (cap_below_logged)',
+      () => new ChangeOrderCoherenceError('cap_below_logged'),
+      "The cap can't go below the value of the time already logged.",
+    ],
+    [
+      'TimeEntryWriteRefusedError (not_time_and_materials)',
+      () => new TimeEntryWriteRefusedError('not_time_and_materials'),
+      'Time is only logged on time and materials projects.',
+    ],
+    [
+      'TimeEntryWriteRefusedError (milestone_not_in_progress)',
+      () => new TimeEntryWriteRefusedError('milestone_not_in_progress'),
+      "Time can only be logged on a milestone that's in progress.",
+    ],
+    [
+      'TimeEntryWriteRefusedError (milestone_not_found)',
+      () => new TimeEntryWriteRefusedError('milestone_not_found'),
+      'This milestone is no longer part of this engagement — refresh and try again.',
+    ],
+    [
+      'ChangeOrderCoherenceError (remove_has_logged_time)',
+      () => new ChangeOrderCoherenceError('remove_has_logged_time'),
+      "A milestone with time logged on it can't be removed. Complete it instead.",
+    ],
+    [
+      'ChangeOrderCoherenceError (estimate_below_logged)',
+      () => new ChangeOrderCoherenceError('estimate_below_logged'),
+      "A milestone's estimate can't go below the hours already logged on it.",
+    ],
+    [
+      'TimeEntryWriteRefusedError (daily_limit_exceeded)',
+      () => new TimeEntryWriteRefusedError('daily_limit_exceeded'),
+      "That's more than 24 hours logged for one day.",
+    ],
+    [
+      'TimeEntryWriteRefusedError (entry_not_found)',
+      () => new TimeEntryWriteRefusedError('entry_not_found'),
+      'This time entry has changed or been removed. Refresh and try again.',
     ],
     [
       'EngagementNotActiveError',

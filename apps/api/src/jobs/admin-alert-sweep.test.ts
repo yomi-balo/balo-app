@@ -42,6 +42,7 @@ const {
   mockMeetingStranded,
   mockSessionPresenceStuck,
   mockProjectChangeOrderStale,
+  mockProjectOverEstimate,
 } = vi.hoisted(() => ({
   mockExpertApplicationPending: vi.fn(),
   mockReceivableOpen: vi.fn(),
@@ -54,6 +55,7 @@ const {
   mockMeetingStranded: vi.fn(),
   mockSessionPresenceStuck: vi.fn(),
   mockProjectChangeOrderStale: vi.fn(),
+  mockProjectOverEstimate: vi.fn(),
 }));
 
 vi.mock('./admin-alert-finders.js', () => ({
@@ -71,6 +73,7 @@ vi.mock('./admin-alert-finders.js', () => ({
     meetingStranded: mockMeetingStranded,
     sessionPresenceStuck: mockSessionPresenceStuck,
     projectChangeOrderStale: mockProjectChangeOrderStale,
+    projectOverEstimate: mockProjectOverEstimate,
   },
 }));
 
@@ -101,6 +104,7 @@ beforeEach(() => {
     mockMeetingStranded,
     mockSessionPresenceStuck,
     mockProjectChangeOrderStale,
+    mockProjectOverEstimate,
   ]) {
     mock.mockResolvedValue(EMPTY_OUTCOME);
   }
@@ -159,11 +163,17 @@ describe('runAdminAlertSweep', () => {
     expect(mockCalendarSubscriptionLapse).toHaveBeenCalledTimes(1);
     // BAL-622 — `project.change_order_stale` is 15m.
     expect(mockProjectChangeOrderStale).toHaveBeenCalledTimes(1);
+    // BAL-624 — `project.over_estimate` is 15m.
+    expect(mockProjectOverEstimate).toHaveBeenCalledTimes(1);
     expect(mockMeetingStranded).not.toHaveBeenCalled();
     expect(mockSessionPresenceStuck).not.toHaveBeenCalled();
-    expect(mockReconcileKind).toHaveBeenCalledTimes(2);
+    expect(mockReconcileKind).toHaveBeenCalledTimes(3);
     expect(new Set(mockReconcileKind.mock.calls.map(([input]) => input.kind))).toEqual(
-      new Set(['calendar.subscription_lapse', 'project.change_order_stale'])
+      new Set([
+        'calendar.subscription_lapse',
+        'project.change_order_stale',
+        'project.over_estimate',
+      ])
     );
     expect(mockMeetingUnprovisioned).not.toHaveBeenCalled();
   });

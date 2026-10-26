@@ -7,6 +7,7 @@ import {
   EngagementNotActiveError,
   InvalidMilestoneTransitionError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
   type EngagementMilestoneStatus,
   type ProjectEngagementWithMilestones,
@@ -55,6 +56,8 @@ export const PLAN_CHANGED =
   'The delivery plan changed since you loaded the page. Refresh and try again.';
 export const MILESTONE_CHANGE_PENDING =
   'This milestone is locked while a proposed change to it is reviewed.';
+export const MILESTONE_HAS_LOGGED_TIME =
+  "Time has been logged on this milestone, so it can't be removed. Complete it instead.";
 export const GENERIC_FAILURE = 'Something went wrong. Please try again.';
 
 /**
@@ -272,6 +275,9 @@ export async function runMilestoneTransition<T>(
     }
     if (error instanceof MilestoneChangePendingError) {
       return { ok: false, error: MILESTONE_CHANGE_PENDING };
+    }
+    if (error instanceof MilestoneHasLoggedTimeError) {
+      return { ok: false, error: MILESTONE_HAS_LOGGED_TIME };
     }
     if (error instanceof ScopeChangeRequiresChangeOrderError) {
       return {

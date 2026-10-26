@@ -26,14 +26,14 @@ const ALL_GROUPS: readonly AdminAlertGroup[] = [...ADMIN_ALERT_GROUP_ORDER, 'pla
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 describe('ADMIN_ALERT_KINDS — the registry', () => {
-  it('has exactly the twenty kinds (eleven finder + eight event-driven + sweep.failed)', () => {
-    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(20);
-    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(20);
+  it('has exactly the twenty-one kinds (twelve finder + eight event-driven + sweep.failed)', () => {
+    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(21);
+    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(21);
   });
 
-  it('has exactly eleven finder kinds', () => {
+  it('has exactly twelve finder kinds', () => {
     const finderKinds = ADMIN_ALERT_KIND_KEYS.filter((k) => ADMIN_ALERT_KINDS[k].finder !== null);
-    expect(finderKinds).toHaveLength(11);
+    expect(finderKinds).toHaveLength(12);
   });
 
   it('finder === null iff cadence === null, for every kind', () => {

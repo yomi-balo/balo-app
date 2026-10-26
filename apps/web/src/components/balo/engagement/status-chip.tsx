@@ -8,6 +8,7 @@ import {
   FileText,
   Target,
   Flag,
+  Receipt,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -26,6 +27,7 @@ const ICONS: Record<ViewIcon, LucideIcon> = {
   FileText,
   Target,
   Flag,
+  Receipt,
 };
 
 /** Semantic tone → tinted token classes (dark-mode safe). */

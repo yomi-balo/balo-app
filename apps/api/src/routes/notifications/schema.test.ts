@@ -863,6 +863,53 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.milestone_estimate_exceeded (BAL-624)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:estimate_exceeded:480',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestoneTitle: 'Discovery',
+      loggedHoursLabel: '8.5 hrs',
+      estimatedHoursLabel: '8 hrs',
+    };
+
+    it('accepts a valid payload, with or without recipientId', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: valid,
+        }).success
+      ).toBe(true);
+      const { recipientId: _r, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: rest,
+        }).success
+      ).toBe(true);
+    });
+
+    it('rejects a non-uuid milestoneId and a missing hours label', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: { ...valid, milestoneId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      const { loggedHoursLabel: _l, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: rest,
+        }).success
+      ).toBe(false);
+    });
+  });
+
   describe('engagement.milestone_completed (BAL-332)', () => {
     const valid = {
       correlationId: '550e8400-e29b-41d4-a716-446655440002:1719705600000',

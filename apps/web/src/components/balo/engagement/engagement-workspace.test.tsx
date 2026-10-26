@@ -71,7 +71,7 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/decline-change-order', () =
   declineChangeOrderAction: vi.fn(),
 }));
 
-// The D4 lifecycle islands (review-banner-actions, admin-cancel-button,
+// The D4 lifecycle islands (review-banner-actions, the cancel menu,
 // expert-completion-card) call the shared hook (useRouter + toast) and import the
 // lifecycle Server Actions. Mock the router/toast and the action modules so this
 // composition test never pulls @balo/db through them.
@@ -85,6 +85,15 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/withdraw-completion-request
 }));
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/cancel-engagement', () => ({
   cancelEngagementAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/log-time', () => ({
+  logTimeAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/update-time-entry', () => ({
+  updateTimeEntryAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/engagements/[id]/_actions/remove-time-entry', () => ({
+  removeTimeEntryAction: vi.fn(),
 }));
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/accept-project', () => ({
   acceptProjectAction: vi.fn(),
@@ -270,7 +279,7 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
     completedBanner: null,
     cancelledBanner: null,
     emptyState: null,
-    adminOversight: null,
+    cancelDialog: null,
     completionCard: null,
     addMilestoneNeedsChangeOrder: false,
     ...overrides,
@@ -358,11 +367,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
           reviewBanner: {
             title: 'Priya has marked the project complete',
             body: 'Review the delivery plan below, then accept or request changes.',
-            countdown: {
-              autoOnDate: '11 Jul 2026',
-              daysRemaining: 5,
-              autoInLabel: 'Auto-accepts in 5 days',
-            },
+            autoAcceptOn: '11 Jul 2026',
             clientDecision: null,
             lastRequest: null,
             changedSinceProposal: null,
@@ -371,7 +376,7 @@ describe('EngagementWorkspace — state × lens matrix', () => {
       />
     );
     expect(screen.getByText('Priya has marked the project complete')).toBeInTheDocument();
-    expect(screen.getByText(/Auto-accepts in 5 days/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Auto-accepts in/i)).not.toBeInTheDocument();
   });
 
   it('expert lens · active with a change request renders the change-request banner', () => {
@@ -478,23 +483,70 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     expect(screen.getByRole('button', { name: /Mark project ready/i })).toBeEnabled();
   });
 
-  it('admin lens renders the oversight strip above the progress/rail', () => {
-    render(
-      <EngagementWorkspace
-        view={view({
-          lens: 'admin',
-          archetype: 'observer',
-          isClientOwner: false,
-          adminOversight: {
-            lastActivityLabel: 'Last delivery activity: 2d ago',
-            stalled: false,
-            stalledNote: null,
-          },
-        })}
-      />
-    );
-    expect(screen.getByText('Oversight')).toBeInTheDocument();
-    expect(screen.getByText('Last delivery activity: 2d ago')).toBeInTheDocument();
+  describe('More actions menu', () => {
+    const cancelDialog = {
+      body: "Delivery stops straight away for Northwind and CloudPeak, and it can't be undone.",
+      reasonHint: 'Northwind and CloudPeak both see this.',
+      reviewNote: null,
+    };
+
+    it('shows no standing Cancel button, and no menu without the capability', () => {
+      render(<EngagementWorkspace view={view({ lens: 'admin', cancelDialog })} />);
+      expect(screen.queryByRole('button', { name: /^Cancel/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
+    });
+
+    it('renders the menu when the viewer can cancel and the project has dialog copy', () => {
+      render(<EngagementWorkspace view={view({ cancelDialog })} canCancelEngagement />);
+      expect(screen.getByRole('button', { name: 'More actions' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Cancel/ })).not.toBeInTheDocument();
+    });
+
+    it('renders no menu when the capability is held but the project is not cancellable', () => {
+      render(<EngagementWorkspace view={view({ cancelDialog: null })} canCancelEngagement />);
+      expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('time and materials', () => {
+    const time = {
+      byMilestoneId: {
+        a: {
+          milestoneId: 'a',
+          milestoneTitle: 'Discovery workshop',
+          loggedMinutes: 540,
+          estimatedMinutes: 480,
+          tone: 'over' as const,
+          fillPercent: 100,
+          loggedLabel: '9 of 8 hrs logged',
+          remainingLabel: '1 hr over estimate',
+          entries: [],
+          logToggleLabel: 'Time log (0)',
+          authorsLabel: null,
+          canLog: false,
+          emptyLabel: null,
+          overNoticeSent: false,
+        },
+      },
+      totals: { loggedLabel: '9 of 16 hrs logged', fillPercent: 56, over: false, period: null },
+      overEstimateBanner: {
+        title: 'Discovery workshop has gone over estimate.',
+        body: 'The time log on each milestone shows what the hours went on.',
+      },
+      clientCompanyName: 'Northwind Industrial',
+    };
+
+    it('renders the over-estimate notice, the milestone hours and the totals', () => {
+      render(<EngagementWorkspace view={view()} time={time} />);
+      expect(screen.getByText('Discovery workshop has gone over estimate.')).toBeInTheDocument();
+      expect(screen.getByText('1 hr over estimate')).toBeInTheDocument();
+      expect(screen.getByText('9 of 16 hrs logged')).toBeInTheDocument();
+    });
+
+    it('renders no time surfaces on fixed price', () => {
+      render(<EngagementWorkspace view={view()} />);
+      expect(screen.queryByText(/hrs logged/)).not.toBeInTheDocument();
+    });
   });
 });
 

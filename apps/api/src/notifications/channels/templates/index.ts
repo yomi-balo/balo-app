@@ -39,6 +39,7 @@ import { ProjectTrackDeclinedEmail } from './project-track-declined.js';
 import { ProjectTrackPassedAdminEmail } from './project-track-passed-admin.js';
 import { ProjectTrackPassedClientEmail } from './project-track-passed-client.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
+import { EngagementMilestoneEstimateExceededClientEmail } from './engagement-milestone-estimate-exceeded.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
@@ -969,6 +970,24 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(expertParty)} completed a milestone on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-624 milestone over estimate — CLIENT owner email. Hours only, never money.
+  'engagement-milestone-estimate-exceeded-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const milestoneTitle = (data.milestoneTitle as string) ?? 'a milestone';
+    return {
+      component: React.createElement(EngagementMilestoneEstimateExceededClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: (data.actorExpertLabel as string) ?? 'Your expert',
+        milestoneTitle,
+        loggedHoursLabel: (data.loggedHoursLabel as string) ?? '',
+        estimatedHoursLabel: (data.estimatedHoursLabel as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(milestoneTitle)} has gone over its estimate on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 

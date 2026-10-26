@@ -449,13 +449,32 @@ export function extractCityFromTimezone(timezone: string | null | undefined): st
 const VALID_TIMEZONES = new Set<string>([...Intl.supportedValuesOf('timeZone'), 'UTC']);
 
 /**
- * True when `tz` is an IANA timezone identifier this platform accepts — any zone
- * from `Intl.supportedValuesOf('timeZone')` plus the special-cased `'UTC'` (which
- * Node omits from that list). Empty strings and unknown zones are false. Shared by
+ * The name to store for a zone a user picked or their browser reported, or null when it
+ * isn't one this platform accepts. A zone from `Intl.supportedValuesOf('timeZone')`, `'UTC'`,
+ * or a current IANA name in {@link TIMEZONE_TO_COUNTRY} that ICU lists only as an alias
+ * (`Asia/Kolkata`, `Europe/Kyiv`) is kept as given. Any other name `Intl` recognises is stored
+ * as the zone it resolves to (`US/Pacific` → `America/Los_Angeles`, `GB` → `Europe/London`,
+ * `Etc/UTC` → `UTC`), so the city and country helpers can read it. UTC offsets such as
+ * `+05:30` and unknown names are null.
+ */
+export function canonicalTimezone(tz: string): string | null {
+  if (VALID_TIMEZONES.has(tz)) return tz;
+  if (tz === '') return null;
+  try {
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
+    if (!VALID_TIMEZONES.has(resolved)) return null;
+    return Object.hasOwn(TIMEZONE_TO_COUNTRY, tz) ? tz : resolved;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when `tz` is a zone this platform accepts (see {@link canonicalTimezone}). Shared by
  * the API and web validation layers so the valid-zone set is defined in one place.
  */
 export function isValidTimezone(tz: string): boolean {
-  return VALID_TIMEZONES.has(tz);
+  return canonicalTimezone(tz) !== null;
 }
 
 // ── DST spring-forward gap detection (pure, Intl-only) ──────────────
@@ -653,3 +672,16 @@ export * from './utc-date';
 //
 // `addBusinessDays` / `businessDaysBetween` — see `./business-days`.
 export * from './business-days';
+
+// ── Local calendar date (BAL-624) ────────────────────────────────
+
+/**
+ * The calendar date (`YYYY-MM-DD`) that `now` falls on in `timeZone`. Built from the zone's
+ * wall-clock parts rather than a locale's date format. A missing or unrecognised zone falls
+ * back to UTC, so the result is always a valid date.
+ */
+export function localIsoDate(now: Date, timeZone: string | null | undefined): string {
+  const zone = timeZone && isValidTimezone(timeZone) ? timeZone : 'UTC';
+  const { year, month, day } = tzWallClock(zone, now);
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}

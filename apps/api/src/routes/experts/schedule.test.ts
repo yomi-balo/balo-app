@@ -565,6 +565,27 @@ describe('experts schedule API routes', () => {
       );
       expectRebuildEnqueued();
     });
+
+    it('stores a legacy zone name as the zone it resolves to', async () => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/experts/${EXPERT_UUID}/timezone`,
+        headers: AUTH_HEADERS,
+        payload: { timezone: 'US/Pacific', actorUserId: ACTOR_UUID },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockUpdateProfile).toHaveBeenCalledWith(
+        EXPERT_UUID,
+        { timezone: 'America/Los_Angeles' },
+        { __tx: true }
+      );
+      expect(mockUpdateTimezone).toHaveBeenCalledWith(USER_UUID, 'America/Los_Angeles', {
+        __tx: true,
+      });
+    });
   });
 
   // ── PUT /api/experts/:expertProfileId/work-availability ────────

@@ -4,6 +4,7 @@ import {
   deriveCountryFromTimezone,
   extractCityFromTimezone,
   isValidTimezone,
+  canonicalTimezone,
   getNextSpringForwardGap,
   isWallClockInSpringForwardGap,
 } from './index';
@@ -179,6 +180,46 @@ describe('isValidTimezone', () => {
 
   it('rejects an empty string', () => {
     expect(isValidTimezone('')).toBe(false);
+  });
+
+  it.each(['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh', 'Etc/UTC'])(
+    'accepts %s, a current IANA name ICU lists only as an alias',
+    (zone) => {
+      expect(isValidTimezone(zone)).toBe(true);
+    }
+  );
+
+  it('rejects a UTC offset', () => {
+    expect(isValidTimezone('+05:30')).toBe(false);
+  });
+});
+
+describe('canonicalTimezone', () => {
+  it.each(['UTC', 'Australia/Melbourne', 'Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh'])(
+    'keeps %s as given',
+    (zone) => {
+      expect(canonicalTimezone(zone)).toBe(zone);
+    }
+  );
+
+  it.each([
+    ['US/Pacific', 'America/Los_Angeles'],
+    ['Australia/ACT', 'Australia/Sydney'],
+    ['GB', 'Europe/London'],
+    ['Japan', 'Asia/Tokyo'],
+    ['Etc/UTC', 'UTC'],
+  ])('stores the legacy name %s as %s', (legacy, resolved) => {
+    expect(canonicalTimezone(legacy)).toBe(resolved);
+  });
+
+  it('gives the city and country helpers a name they can read', () => {
+    const stored = canonicalTimezone('US/Pacific') ?? '';
+    expect(extractCityFromTimezone(stored)).toBe('Los Angeles');
+    expect(deriveCountryFromTimezone(stored)?.countryCode).toBe('US');
+  });
+
+  it.each(['', '+05:30', 'Not/AZone'])('is null for %j', (zone) => {
+    expect(canonicalTimezone(zone)).toBeNull();
   });
 });
 

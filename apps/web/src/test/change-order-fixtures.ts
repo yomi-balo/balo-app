@@ -118,6 +118,7 @@ export function makeProject(
       agencyId: null,
       type: 'freelancer',
       headline: null,
+      timezone: 'UTC',
       user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
       agency: null,
     },

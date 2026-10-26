@@ -8,7 +8,7 @@ import {
   recordScheduleAudit,
   type ExpertProfile,
 } from '@balo/db';
-import { isValidTimezone } from '@balo/shared/timezone';
+import { canonicalTimezone } from '@balo/shared/timezone';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { invalidateExpertSlots } from '../../services/availability/expert-slots-cache.js';
@@ -30,11 +30,20 @@ const ruleSchema = z
     message: 'A range needs a different start and end time.',
   });
 
-// `isValidTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`
-// plus the special-cased 'UTC' (which Node omits). 'UTC' is the
+// `canonicalTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`,
+// the current IANA names ICU lists only as aliases (e.g. 'Asia/Kolkata'), and the
+// special-cased 'UTC' (which Node omits). 'UTC' is the
 // `expert_profiles.timezone` column default, so it must validate — otherwise an
-// expert who never changes their timezone can't save their schedule.
-const timezoneSchema = z.string().refine(isValidTimezone, 'Invalid timezone');
+// expert who never changes their timezone can't save their schedule. Legacy names
+// ('US/Pacific') are stored as the zone they resolve to.
+const timezoneSchema = z.string().transform((tz, ctx) => {
+  const canonical = canonicalTimezone(tz);
+  if (canonical === null) {
+    ctx.issues.push({ code: 'custom', message: 'Invalid timezone', input: tz });
+    return z.NEVER;
+  }
+  return canonical;
+});
 
 // Bounds mirror the CHECK constraints on `expert_profiles` (BAL-234). No
 // booking-window field: the look-ahead horizon is platform config (BAL-398).

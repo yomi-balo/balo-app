@@ -45,6 +45,7 @@ vi.mock('@balo/db', () => ({
   ChangeOrderCoherenceError: class extends Error {},
   ChangeOrderNotFoundError: class extends Error {},
   ChangeOrderPendingError: class extends Error {},
+  TimeEntryWriteRefusedError: class extends Error {},
   InvalidChangeOrderTransitionError: class extends Error {},
   MilestonesIncompleteError: class extends Error {},
   InvalidEngagementTransitionError: class extends Error {},

@@ -4,12 +4,15 @@ import { db } from '../client';
 import {
   auditEvents,
   engagementMilestones,
-  type Engagement,
   type EngagementMilestone,
   type ProposalMilestone,
 } from '../schema';
 import { recordDeliveryAudit, type DeliveryAuditAction } from './_shared/delivery-audit';
-import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
+import {
+  lockActiveEngagement,
+  lockEngagementAndMilestone,
+  type DbTx,
+} from './_shared/engagement-lock';
 import {
   assertMilestoneNotPendingChangeTx,
   isAddedByApprovedChangeOrderTx,
@@ -18,6 +21,7 @@ import {
   ScopeChangeRequiresChangeOrderError,
   type MilestoneContentField,
 } from './_shared/change-order-guards';
+import { milestoneIdsWithLoggedTimeTx } from './engagement-time-entries';
 
 // Re-export so the established public path `import { EngagementNotActiveError } from '@balo/db'`
 // (via repositories/index.ts) stays intact after the lock helper moved to _shared.
@@ -77,6 +81,21 @@ export class MilestoneReorderMismatchError extends Error {
 }
 
 /**
+ * Thrown by {@link engagementMilestonesRepository.softDelete} when a time-and-materials
+ * milestone has live time logged against it. Removing it would orphan entries the client has
+ * seen; the milestone is completed instead. Nothing is written.
+ */
+export class MilestoneHasLoggedTimeError extends Error {
+  constructor(
+    public readonly engagementId: string,
+    public readonly milestoneId: string
+  ) {
+    super(`Milestone ${milestoneId} of engagement ${engagementId} has logged time`);
+    this.name = 'MilestoneHasLoggedTimeError';
+  }
+}
+
+/**
  * The prior values of the fields a direct `editDescriptive` changed, recorded as
  * `metadata.before` on its `engagement_milestone.edited` audit row. Only keys whose value
  * actually changed are present.
@@ -128,58 +147,6 @@ function parseEditBefore(raw: unknown): MilestoneEditBefore {
     before.estimatedMinutes = record.estimatedMinutes;
   }
   return before;
-}
-
-/**
- * CONCURRENCY (document once, obeyed everywhere): every milestone transition locks
- * the parent `engagements` row FOR UPDATE FIRST, THEN the milestone row. Holding
- * the engagement lock is a single-writer gate over the whole engagement, so an
- * engagement-level guard (e.g. "all milestones completed" in `requestCompletion`)
- * cannot be raced by a concurrent milestone transition. LOCK ORDER EVERYWHERE:
- * engagement row → then milestone row. Never the reverse (deadlock hazard). This
- * mirrors `proposals.accept`'s documented "proposal first, then relationship".
- */
-
-/**
- * The shared lock dance for milestone-scoped transitions:
- *   1. Unlocked read of the LIVE milestone → discover its `engagement_id`
- *      (lock-order discovery only; the guards run against the FOR-UPDATE re-read).
- *   2. Lock the engagement FOR UPDATE + assert active (`lockActiveEngagement`).
- *   3. Re-read the milestone FOR UPDATE (under the engagement lock).
- * Missing milestone at step 1 or 3 → `Error('Milestone not found')`.
- */
-async function lockEngagementAndMilestone(
-  tx: DbTx,
-  milestoneId: string
-): Promise<{ engagement: Engagement; milestone: EngagementMilestone }> {
-  const [discovered] = await tx
-    .select({ engagementId: engagementMilestones.engagementId })
-    .from(engagementMilestones)
-    .where(and(eq(engagementMilestones.id, milestoneId), isNull(engagementMilestones.deletedAt)));
-
-  if (discovered === undefined) {
-    throw new Error(`Milestone not found: ${milestoneId}`);
-  }
-
-  // `{ requireType: 'project' }` (BAL-417): milestones are a PROJECT-shaped concept.
-  // A Case is not milestone-shaped and `aggregateMilestoneProgress` must never count
-  // Case milestones, so the widening that `action_items` / `transcripts` deliberately
-  // allow is structurally BLOCKED here.
-  const engagement = await lockActiveEngagement(tx, discovered.engagementId, {
-    requireType: 'project',
-  });
-
-  const [milestone] = await tx
-    .select()
-    .from(engagementMilestones)
-    .where(and(eq(engagementMilestones.id, milestoneId), isNull(engagementMilestones.deletedAt)))
-    .for('update');
-
-  if (milestone === undefined) {
-    throw new Error(`Milestone not found: ${milestoneId}`);
-  }
-
-  return { engagement, milestone };
 }
 
 /**
@@ -550,13 +517,20 @@ export const engagementMilestonesRepository = {
    * change order (`MilestoneChangePendingError`), then — on a fixed price — contracted scope
    * (`ScopeChangeRequiresChangeOrderError('remove_contracted')`): a milestone from the
    * accepted proposal, one carrying a value, or one an approved change order added
-   * (`isContractedMilestone`). On time and materials any milestone is removable.
+   * (`isContractedMilestone`). On time and materials, a milestone with live time logged
+   * (`MilestoneHasLoggedTimeError`); any other T&M milestone is removable.
    */
   async softDelete(input: { milestoneId: string; userId: string }): Promise<EngagementMilestone> {
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, input.milestoneId);
       await assertMilestoneNotPendingChangeTx(tx, milestone.engagementId, milestone.id);
       const { pricingMethod } = await readProjectTermsTx(tx, milestone.engagementId);
+      if (
+        pricingMethod === 'tm' &&
+        (await milestoneIdsWithLoggedTimeTx(tx, milestone.engagementId)).has(milestone.id)
+      ) {
+        throw new MilestoneHasLoggedTimeError(milestone.engagementId, milestone.id);
+      }
       if (pricingMethod === 'fixed') {
         const addedByApprovedChangeOrder =
           !isContractedMilestone(milestone, false) &&

@@ -24,6 +24,7 @@ const {
   mockFindPresenceUnsettled,
   mockListPresenceAlertLabels,
   mockListStaleSentForAlerts,
+  mockListOverEstimateForAlerts,
 } = vi.hoisted(() => ({
   mockListPendingApplicationsForAlerts: vi.fn(),
   mockListOpen: vi.fn(),
@@ -41,10 +42,12 @@ const {
   mockFindPresenceUnsettled: vi.fn(),
   mockListPresenceAlertLabels: vi.fn(),
   mockListStaleSentForAlerts: vi.fn(),
+  mockListOverEstimateForAlerts: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   engagementChangeOrdersRepository: { listStaleSentForAlerts: mockListStaleSentForAlerts },
+  engagementTimeEntriesRepository: { listOverEstimateForAlerts: mockListOverEstimateForAlerts },
   expertsRepository: { listPendingApplicationsForAlerts: mockListPendingApplicationsForAlerts },
   creditReceivablesRepository: { listOpen: mockListOpen },
   creditSessionsRepository: {
@@ -946,5 +949,66 @@ describe('projectChangeOrderStale', () => {
     const [finding] = outcome.findings;
     expect(finding?.detail.entityLabel).toBe('Project · Northwind');
     expect(finding?.detail.facts).toContainEqual(['Expert', 'An expert']);
+  });
+});
+
+describe('projectOverEstimate', () => {
+  const row = {
+    engagementId: 'eng_1',
+    projectTitle: 'CPQ implementation',
+    clientCompanyName: 'Northwind',
+    expertFirstName: 'Priya',
+    expertLastName: 'Nair',
+    agencyName: 'CloudPeak',
+    loggedMinutes: 510,
+    estimatedMinutes: 480,
+  };
+
+  it('reads with the limit and reports batchFilled at the limit', async () => {
+    mockListOverEstimateForAlerts.mockResolvedValue(
+      Array.from({ length: LIMIT }, (_, i) => ({ ...row, engagementId: `eng_${i}` }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectOverEstimate({ now: NOW, limit: LIMIT });
+
+    expect(mockListOverEstimateForAlerts).toHaveBeenCalledWith(LIMIT);
+    expect(outcome.batchFilled).toBe(true);
+  });
+
+  it('produces an engagement-grained finding with hours only', async () => {
+    mockListOverEstimateForAlerts.mockResolvedValue([row]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectOverEstimate({ now: NOW, limit: LIMIT });
+
+    expect(outcome.batchFilled).toBe(false);
+    expect(outcome.findings).toEqual([
+      {
+        entityType: 'engagement',
+        entityId: 'eng_1',
+        detail: {
+          title: 'A project has gone over its estimate',
+          entityLabel: 'CPQ implementation · Northwind',
+          evidence: 'Priya Nair @ CloudPeak has logged 8.5 hrs; the estimate is 8 hrs.',
+          facts: [
+            ['Client', 'Northwind'],
+            ['Expert', 'Priya Nair @ CloudPeak'],
+            ['Logged', '8.5 hrs'],
+            ['Estimate', '8 hrs'],
+          ],
+        },
+      },
+    ]);
+    expect(JSON.stringify(outcome.findings)).not.toMatch(/\$|A\$|AUD/);
+  });
+
+  it('falls back for an independent expert and a missing title', async () => {
+    mockListOverEstimateForAlerts.mockResolvedValue([
+      { ...row, agencyName: null, projectTitle: null },
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectOverEstimate({ now: NOW, limit: LIMIT });
+
+    expect(outcome.findings[0]?.detail.entityLabel).toBe('Project · Northwind');
+    expect(outcome.findings[0]?.detail.facts).toContainEqual(['Expert', 'Priya Nair']);
   });
 });

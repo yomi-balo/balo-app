@@ -78,4 +78,48 @@ describe('EngagementHeader', () => {
       screen.getByRole('heading', { name: 'Salesforce revenue-cloud rollout' })
     ).toBeInTheDocument();
   });
+
+  it('renders an actions slot beside the status chip', () => {
+    render(<EngagementHeader header={header()} actions={<button type="button">More</button>} />);
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+  });
+
+  it('renders the Receipt billing chip on time and materials', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          terms: [
+            { icon: 'Clock', label: 'Pricing', value: 'Time & materials' },
+            { icon: 'Receipt', label: 'Billing', value: 'Billed monthly' },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByLabelText('Billing: Billed monthly')).toBeInTheDocument();
+  });
+
+  it('renders a warning-toned chip in the warning colours, and a plain chip neutral', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          terms: [
+            { icon: 'Clock', label: 'Pricing', value: 'Time & materials' },
+            {
+              icon: 'Clock',
+              label: 'Last delivery activity',
+              value: 'Quiet for 16 days · worth a check-in with Priya',
+              tone: 'warning',
+            },
+          ],
+        })}
+      />
+    );
+    const quiet = screen.getByLabelText(
+      'Last delivery activity: Quiet for 16 days · worth a check-in with Priya'
+    );
+    expect(quiet).toHaveClass('text-warning-strong', 'bg-warning/10');
+    const plain = screen.getByLabelText('Pricing: Time & materials');
+    expect(plain).toHaveClass('text-muted-foreground');
+    expect(plain).not.toHaveClass('text-warning-strong');
+  });
 });

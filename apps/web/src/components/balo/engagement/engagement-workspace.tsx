@@ -9,7 +9,9 @@ import type { ReviewInitialAction } from './review-banner-actions';
 import { ChangeRequestBanner } from './change-request-banner';
 import { CompletedBanner } from './completed-banner';
 import { CancelledBanner } from './cancelled-banner';
-import { AdminOversightStrip } from './admin-oversight-strip';
+import type { WorkspaceTimeView } from '@/lib/engagement/time-view';
+import { EngagementMoreActionsMenu } from './engagement-more-actions-menu';
+import { OverEstimateBanner } from './time/over-estimate-banner';
 import { EngagementProgress } from './engagement-progress';
 import { MilestoneRail } from './milestone-rail';
 import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-rail';
@@ -48,6 +50,16 @@ interface EngagementWorkspaceProps {
    * capability (the page resolves it). Null / omitted → not rendered.
    */
   adminMoney?: ChangeOrderAdminMoneyView | null;
+  /**
+   * BAL-624 — time-and-materials hours (per-milestone bars, time logs, totals, the
+   * over-estimate notice); null / omitted on fixed price.
+   */
+  time?: WorkspaceTimeView | null;
+  /**
+   * BAL-624 — whether the viewer holds the platform capability to cancel any project (the page
+   * resolves it). Gates the header's "More actions" menu; nothing here reads the lens.
+   */
+  canCancelEngagement?: boolean;
 }
 
 /**
@@ -59,7 +71,7 @@ interface EngagementWorkspaceProps {
  * Order mirrors the design-reference `Workspace` return (read-only slice — all
  * mutation affordances are D2–D4/D7 and omitted): header → state banners
  * (review / change-request / completed / cancelled, mutually exclusive by status)
- * → admin oversight → progress → milestone rail | empty state. Each section is
+ * → over-estimate notice → progress → milestone rail | empty state. Each section is
  * wrapped in `<Reveal>` for the staggered entrance vocabulary; the view object
  * never crosses the client boundary through `Reveal` (it wraps rendered nodes).
  */
@@ -70,6 +82,8 @@ export function EngagementWorkspace({
   rating = null,
   changeOrders,
   adminMoney = null,
+  time = null,
+  canCancelEngagement = false,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // Render the action-items panel only when it has something to show — live items OR a
   // writable (active) engagement inviting the first add. A read-only, empty panel is
@@ -97,13 +111,14 @@ export function EngagementWorkspace({
           clientCompanyName={view.parties.clientCompanyName}
           proposeChange={proposeChangeFor(changeOrders)}
           addNeedsChangeOrder={view.addMilestoneNeedsChangeOrder}
+          time={time}
         />
       </Reveal>
     );
   } else if (view.hasMilestones) {
     milestoneSection = (
       <Reveal delay={0.2}>
-        <MilestoneRail milestones={view.milestones} />
+        <MilestoneRail milestones={view.milestones} time={time} />
       </Reveal>
     );
   } else if (view.emptyState !== null) {
@@ -114,10 +129,23 @@ export function EngagementWorkspace({
     );
   }
 
+  const overEstimateBanner = time?.overEstimateBanner ?? null;
+
+  // Cancelling is a capability, not a view: the menu renders only when the page resolved the
+  // platform capability and the project is in a cancellable state (it has dialog copy).
+  const moreActions =
+    canCancelEngagement && view.cancelDialog !== null && isCancellableStatus(view.status) ? (
+      <EngagementMoreActionsMenu
+        engagementId={view.engagementId}
+        deliveryStatus={view.status}
+        cancelDialog={view.cancelDialog}
+      />
+    ) : undefined;
+
   return (
     <div className="space-y-5">
       <Reveal>
-        <EngagementHeader header={view.header} />
+        <EngagementHeader header={view.header} actions={moreActions} />
       </Reveal>
 
       {adminMoney !== null && (
@@ -172,9 +200,9 @@ export function EngagementWorkspace({
         </Reveal>
       )}
 
-      {view.adminOversight !== null && (
-        <Reveal delay={0.1}>
-          <AdminOversightStrip oversight={view.adminOversight} engagementId={view.engagementId} />
+      {overEstimateBanner !== null && (
+        <Reveal delay={0.08}>
+          <OverEstimateBanner banner={overEstimateBanner} />
         </Reveal>
       )}
 
@@ -237,6 +265,11 @@ export function EngagementWorkspace({
       )}
     </div>
   );
+}
+
+/** The two statuses a project can be cancelled from. */
+function isCancellableStatus(status: string): status is 'active' | 'pending_acceptance' {
+  return status === 'active' || status === 'pending_acceptance';
 }
 
 /** The rail's "Propose a change" entry, or undefined when the viewer has no such affordance. */

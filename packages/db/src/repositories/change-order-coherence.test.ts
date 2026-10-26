@@ -31,16 +31,27 @@ function editLine(overrides: Partial<ChangeOrderCoherenceLine> = {}): ChangeOrde
   };
 }
 
+/** LIVE_A (60 min estimate) and LIVE_B (no estimate), with the given minutes logged on each. */
+function live(logged: { a?: number; b?: number }): ChangeOrderCoherenceSnapshot['liveMilestones'] {
+  return new Map([
+    [LIVE_A, { estimatedMinutes: 60, loggedMinutes: logged.a ?? 0 }],
+    [LIVE_B, { estimatedMinutes: null, loggedMinutes: logged.b ?? 0 }],
+  ]);
+}
+
 function fixed(
   overrides: Partial<ChangeOrderCoherenceSnapshot> = {}
 ): ChangeOrderCoherenceSnapshot {
   return {
+    stage: 'send',
     pricingMethod: 'fixed',
     currentEffectivePriceCents: 500_000,
     priceDeltaCents: 100_000,
     note: 'Adds a migration.',
     lines: [addLine()],
-    liveMilestoneIds: new Set([LIVE_A, LIVE_B]),
+    liveMilestones: live({}),
+    loggedMinutes: 0,
+    rateCents: null,
     ...overrides,
   };
 }
@@ -109,5 +120,117 @@ describe('assertChangeOrderCoherent', () => {
 
   it('allows a remove line with no estimate on T&M', () => {
     expect(ruleOf(tm({ lines: [{ ...editLine(), op: 'remove' }] }))).toBeNull();
+  });
+
+  describe('remove_has_logged_time', () => {
+    const withTime = { liveMilestones: live({ a: 30 }) };
+
+    it('refuses a remove line on a milestone with time logged', () => {
+      expect(ruleOf(tm({ ...withTime, lines: [{ ...editLine(), op: 'remove' }] }))).toBe(
+        'remove_has_logged_time'
+      );
+    });
+
+    it('accepts removing a milestone with no time, and editing one with time', () => {
+      const removeB = { ...editLine({ engagementMilestoneId: LIVE_B }), op: 'remove' as const };
+      expect(ruleOf(tm({ ...withTime, lines: [removeB] }))).toBeNull();
+      expect(ruleOf(tm({ ...withTime, lines: [editLine({ estimatedMinutes: 60 })] }))).toBeNull();
+    });
+  });
+
+  describe('estimate_below_logged', () => {
+    // LIVE_A is estimated at 60 minutes; 90 are logged on it.
+    const over = { liveMilestones: live({ a: 90 }) };
+    const lines = (estimatedMinutes: number): ChangeOrderCoherenceLine[] => [
+      editLine({ estimatedMinutes }),
+    ];
+
+    it('refuses an edit that sets the estimate below the time logged', () => {
+      expect(ruleOf(tm({ liveMilestones: live({ a: 45 }), lines: lines(30) }))).toBe(
+        'estimate_below_logged'
+      );
+    });
+
+    it('refuses a raise that still leaves the estimate below the time logged', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(75) }))).toBe('estimate_below_logged');
+    });
+
+    it('accepts an estimate of exactly the time logged, or more', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(90) }))).toBeNull();
+      expect(ruleOf(tm({ ...over, lines: lines(120) }))).toBeNull();
+    });
+
+    it('accepts an edit that keeps the estimate a milestone is already over', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(60) }))).toBeNull();
+    });
+
+    it('checks an estimate set on a milestone that had none', () => {
+      const onB = (estimatedMinutes: number): ChangeOrderCoherenceLine[] => [
+        editLine({ engagementMilestoneId: LIVE_B, estimatedMinutes }),
+      ];
+      const bLogged = { liveMilestones: live({ b: 120 }) };
+      expect(ruleOf(tm({ ...bLogged, lines: onB(60) }))).toBe('estimate_below_logged');
+      expect(ruleOf(tm({ ...bLogged, lines: onB(120) }))).toBeNull();
+    });
+
+    describe('at approve', () => {
+      const approve = { stage: 'approve' as const };
+
+      it('accepts a raise that time logged since the send has overtaken', () => {
+        expect(ruleOf(tm({ ...approve, ...over, lines: lines(75) }))).toBeNull();
+      });
+
+      it('accepts an estimate set on a milestone that had none, even below the time logged', () => {
+        const onB = [editLine({ engagementMilestoneId: LIVE_B, estimatedMinutes: 60 })];
+        expect(ruleOf(tm({ ...approve, liveMilestones: live({ b: 120 }), lines: onB }))).toBeNull();
+      });
+
+      it('still refuses an estimate lowered below the time logged', () => {
+        expect(ruleOf(tm({ ...approve, liveMilestones: live({ a: 45 }), lines: lines(30) }))).toBe(
+          'estimate_below_logged'
+        );
+      });
+    });
+  });
+
+  describe('cap_below_logged', () => {
+    // 10 hours at $150/hr: logged value 150_000 cents.
+    const logged = { loggedMinutes: 600, rateCents: 15_000, currentEffectivePriceCents: 400_000 };
+
+    it('refuses a cap decrease below the value of the time logged', () => {
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -250_001 }))).toBe('cap_below_logged');
+    });
+
+    it('accepts a cap decrease to exactly the logged value, or above it', () => {
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -250_000 }))).toBeNull();
+      expect(ruleOf(tm({ ...logged, priceDeltaCents: -100_000 }))).toBeNull();
+    });
+
+    it('rounds the logged value up to the cent', () => {
+      // 1 minute at 100 cents/hr is 1.67 cents, valued at 2.
+      const oneMinute = { loggedMinutes: 1, rateCents: 100, currentEffectivePriceCents: 3 };
+      expect(ruleOf(tm({ ...oneMinute, priceDeltaCents: -2 }))).toBe('cap_below_logged');
+      expect(ruleOf(tm({ ...oneMinute, priceDeltaCents: -1 }))).toBeNull();
+    });
+
+    it('always accepts a raise, even one that leaves the cap below the logged value', () => {
+      const over = { ...logged, currentEffectivePriceCents: 50_000 };
+      expect(ruleOf(tm({ ...over, priceDeltaCents: 10_000 }))).toBeNull();
+    });
+
+    it('skips a scope-only order on a project already over its cap', () => {
+      const over = { ...logged, currentEffectivePriceCents: 50_000 };
+      expect(ruleOf(tm({ ...over, priceDeltaCents: null }))).toBeNull();
+    });
+
+    it('values logged time at zero without a rate', () => {
+      expect(ruleOf(tm({ ...logged, rateCents: null, priceDeltaCents: -400_000 }))).toBeNull();
+    });
+
+    it('never applies on a fixed-price project', () => {
+      expect(
+        ruleOf(fixed({ ...logged, currentEffectivePriceCents: 500_000, priceDeltaCents: -499_000 }))
+      ).toBeNull();
+    });
   });
 });
