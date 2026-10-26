@@ -31,6 +31,14 @@ function editLine(overrides: Partial<ChangeOrderCoherenceLine> = {}): ChangeOrde
   };
 }
 
+/** LIVE_A (60 min estimate) and LIVE_B (no estimate), with the given minutes logged on each. */
+function live(logged: { a?: number; b?: number }): ChangeOrderCoherenceSnapshot['liveMilestones'] {
+  return new Map([
+    [LIVE_A, { estimatedMinutes: 60, loggedMinutes: logged.a ?? 0 }],
+    [LIVE_B, { estimatedMinutes: null, loggedMinutes: logged.b ?? 0 }],
+  ]);
+}
+
 function fixed(
   overrides: Partial<ChangeOrderCoherenceSnapshot> = {}
 ): ChangeOrderCoherenceSnapshot {
@@ -40,8 +48,7 @@ function fixed(
     priceDeltaCents: 100_000,
     note: 'Adds a migration.',
     lines: [addLine()],
-    liveMilestoneIds: new Set([LIVE_A, LIVE_B]),
-    milestoneIdsWithTime: new Set<string>(),
+    liveMilestones: live({}),
     loggedMinutes: 0,
     rateCents: null,
     ...overrides,
@@ -115,7 +122,7 @@ describe('assertChangeOrderCoherent', () => {
   });
 
   describe('remove_has_logged_time', () => {
-    const withTime = { milestoneIdsWithTime: new Set([LIVE_A]) };
+    const withTime = { liveMilestones: live({ a: 30 }) };
 
     it('refuses a remove line on a milestone with time logged', () => {
       expect(ruleOf(tm({ ...withTime, lines: [{ ...editLine(), op: 'remove' }] }))).toBe(
@@ -127,6 +134,42 @@ describe('assertChangeOrderCoherent', () => {
       const removeB = { ...editLine({ engagementMilestoneId: LIVE_B }), op: 'remove' as const };
       expect(ruleOf(tm({ ...withTime, lines: [removeB] }))).toBeNull();
       expect(ruleOf(tm({ ...withTime, lines: [editLine({ estimatedMinutes: 60 })] }))).toBeNull();
+    });
+  });
+
+  describe('estimate_below_logged', () => {
+    // LIVE_A is estimated at 60 minutes; 90 are logged on it.
+    const over = { liveMilestones: live({ a: 90 }) };
+    const lines = (estimatedMinutes: number): ChangeOrderCoherenceLine[] => [
+      editLine({ estimatedMinutes }),
+    ];
+
+    it('refuses an edit that sets the estimate below the time logged', () => {
+      expect(ruleOf(tm({ liveMilestones: live({ a: 45 }), lines: lines(30) }))).toBe(
+        'estimate_below_logged'
+      );
+    });
+
+    it('refuses a raise that still leaves the estimate below the time logged', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(75) }))).toBe('estimate_below_logged');
+    });
+
+    it('accepts an estimate of exactly the time logged, or more', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(90) }))).toBeNull();
+      expect(ruleOf(tm({ ...over, lines: lines(120) }))).toBeNull();
+    });
+
+    it('accepts an edit that keeps the estimate a milestone is already over', () => {
+      expect(ruleOf(tm({ ...over, lines: lines(60) }))).toBeNull();
+    });
+
+    it('checks an estimate set on a milestone that had none', () => {
+      const onB = (estimatedMinutes: number): ChangeOrderCoherenceLine[] => [
+        editLine({ engagementMilestoneId: LIVE_B, estimatedMinutes }),
+      ];
+      const bLogged = { liveMilestones: live({ b: 120 }) };
+      expect(ruleOf(tm({ ...bLogged, lines: onB(60) }))).toBe('estimate_below_logged');
+      expect(ruleOf(tm({ ...bLogged, lines: onB(120) }))).toBeNull();
     });
   });
 

@@ -83,6 +83,7 @@ const COHERENCE_MESSAGES: Record<ChangeOrderCoherenceRule, string> = {
   cap_below_logged: "The cap can't go below the value of the time already logged.",
   remove_has_logged_time:
     "A milestone with time logged on it can't be removed. Complete it instead.",
+  estimate_below_logged: "A milestone's estimate can't go below the hours already logged on it.",
 };
 
 /** The friendly sentence for a failed change-order coherence rule. */

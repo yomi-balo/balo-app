@@ -283,7 +283,7 @@ describe('change-order composer page · props', () => {
         },
       ],
       order: null,
-      milestoneIdsWithTime: [],
+      loggedMinutesByMilestone: {},
       loggedValueCents: null,
       prefillLine: null,
     });
@@ -316,7 +316,7 @@ describe('change-order composer page · props', () => {
     expect(composerProps().loggedValueCents).toBe(22_500);
   });
 
-  it('hands the composer the ids of milestones with logged time', async () => {
+  it('hands the composer the time logged on each milestone', async () => {
     mockFindWithMilestones.mockResolvedValue(engagement({ pricingMethod: 'tm' }));
     mockSums.mockResolvedValue({
       totalMinutes: 90,
@@ -324,7 +324,7 @@ describe('change-order composer page · props', () => {
       byMilestone: { 'ms-a': 90, 'ms-b': 0 },
     });
     await renderPage();
-    expect(composerProps().milestoneIdsWithTime).toEqual(['ms-a']);
+    expect(composerProps().loggedMinutesByMilestone).toEqual({ 'ms-a': 90, 'ms-b': 0 });
   });
 
   it('reads no logged time for a fixed-price project', async () => {

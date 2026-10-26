@@ -43,15 +43,14 @@ turns amber, so you can see the estimate coming up.
 When you log time, the form tells you if the entry takes the milestone past its estimate, and by
 how much. Logging is never blocked. The first time a milestone goes over its estimate, the client
 is sent a notice that says how many hours are logged against the estimate and points to the time
-log. They aren't told again for that estimate. If an approved change sets a new estimate and the
-milestone is over it, whether straight away or once more time is logged, they're told once more.
+log. They aren't told again for that estimate unless you raise it and then pass the new figure.
 
 ## Raising an estimate
 
 If the work needs more hours than planned, propose a change from the project page and set the
 milestone's new estimate. The client approves it like any other change. See **Proposing a change
-to a live project** for how to build one. Once it's approved, the hours bar measures against the
-new estimate.
+to a live project** for how to build one. A new estimate can't be lower than the hours already
+logged on the milestone. Once it's approved, the hours bar measures against the new estimate.
 
 ## Billing periods
 

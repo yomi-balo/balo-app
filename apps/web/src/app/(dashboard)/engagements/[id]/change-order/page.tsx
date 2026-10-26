@@ -181,13 +181,7 @@ export default async function ChangeOrderComposerPage({
         currency={engagement.currency}
         currentPriceCents={effectiveExpertPriceCents(engagement.priceCents, orders)}
         hourlyRateCents={engagement.rateCents}
-        milestoneIdsWithTime={
-          loggedSums === null
-            ? []
-            : Object.entries(loggedSums.byMilestone)
-                .filter(([, minutes]) => minutes > 0)
-                .map(([milestoneId]) => milestoneId)
-        }
+        loggedMinutesByMilestone={loggedSums?.byMilestone ?? {}}
         loggedValueCents={
           loggedSums === null
             ? null

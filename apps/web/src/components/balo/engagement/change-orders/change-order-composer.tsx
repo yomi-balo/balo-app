@@ -73,8 +73,11 @@ interface ChangeOrderComposerProps {
   hourlyRateCents?: number | null;
   /** T&M: the value of the time already logged, in cents; the cap cannot be lowered below it. */
   loggedValueCents?: number | null;
-  /** T&M: milestones with live time entries; removing one is refused. */
-  milestoneIdsWithTime?: string[];
+  /**
+   * T&M: minutes of live time logged per milestone. Removing a milestone with time is refused,
+   * and so is changing its estimate to less than the time logged.
+   */
+  loggedMinutesByMilestone?: Readonly<Record<string, number>>;
   milestones: ComposerMilestone[];
   order: ChangeOrderComposerOrder | null;
   /** An attempted change to open with as an extra line, from the redirect link. */
@@ -90,7 +93,7 @@ function formatRate(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
-const NO_MILESTONES_WITH_TIME: string[] = [];
+const NO_LOGGED_MINUTES: Readonly<Record<string, number>> = {};
 const NOTE_MAX_LENGTH = 2000;
 const TITLE_MAX_LENGTH = 200;
 const DESCRIPTION_MAX_LENGTH = 4000;
@@ -257,7 +260,7 @@ export function ChangeOrderComposer({
   currentPriceCents,
   hourlyRateCents = null,
   loggedValueCents = null,
-  milestoneIdsWithTime = NO_MILESTONES_WITH_TIME,
+  loggedMinutesByMilestone = NO_LOGGED_MINUTES,
   milestones,
   order,
   prefillLine,
@@ -296,7 +299,8 @@ export function ChangeOrderComposer({
         loggedValueCents,
         nextCapCents: totalCents ?? currentPriceCents,
         currency,
-        milestoneIdsWithTime,
+        milestones,
+        loggedMinutesByMilestone,
       }),
     [
       pricingMethod,
@@ -307,7 +311,8 @@ export function ChangeOrderComposer({
       loggedValueCents,
       currentPriceCents,
       currency,
-      milestoneIdsWithTime,
+      milestones,
+      loggedMinutesByMilestone,
     ]
   );
   const estimates = useMemo(() => estimateTotals(milestones, rows), [milestones, rows]);

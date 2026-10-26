@@ -134,6 +134,26 @@ describe('updateTimezoneAction', () => {
       });
     });
 
+    it('stores a legacy zone name as the zone it resolves to', async () => {
+      await updateTimezoneAction('US/Pacific');
+      expect(mockUpdate).toHaveBeenCalledWith('user-1', {
+        timezone: 'America/Los_Angeles',
+        country: 'United States',
+        countryCode: 'US',
+      });
+    });
+
+    it('accepts UTC and current IANA names ICU lists only as aliases', async () => {
+      await updateTimezoneAction('UTC');
+      expect(mockUpdate).toHaveBeenLastCalledWith('user-1', { timezone: 'UTC' });
+      await updateTimezoneAction('Asia/Kolkata');
+      expect(mockUpdate).toHaveBeenLastCalledWith('user-1', {
+        timezone: 'Asia/Kolkata',
+        country: 'India',
+        countryCode: 'IN',
+      });
+    });
+
     it('returns success on valid timezone update', async () => {
       const result = await updateTimezoneAction('America/New_York');
       expect(result).toEqual({ success: true });

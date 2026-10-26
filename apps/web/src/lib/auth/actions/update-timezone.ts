@@ -6,16 +6,22 @@ import { getSession } from '@/lib/auth/session';
 import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { usersRepository } from '@balo/db';
 import { type AuthResult } from '@/lib/auth/errors';
-import { deriveCountryFromTimezone } from '@balo/shared/timezone';
+import { canonicalTimezone, deriveCountryFromTimezone } from '@balo/shared/timezone';
 import { log } from '@/lib/logging';
 import { z } from 'zod';
 
-const VALID_TIMEZONES = new Set(Intl.supportedValuesOf('timeZone'));
-
+// Legacy names ('US/Pacific') are stored as the zone they resolve to.
 const timezoneSchema = z
   .string()
   .min(1, 'Timezone is required')
-  .refine((tz) => VALID_TIMEZONES.has(tz), 'Invalid timezone');
+  .transform((tz, ctx) => {
+    const canonical = canonicalTimezone(tz);
+    if (canonical === null) {
+      ctx.issues.push({ code: 'custom', message: 'Invalid timezone', input: tz });
+      return z.NEVER;
+    }
+    return canonical;
+  });
 
 export async function updateTimezoneAction(timezone: string): Promise<AuthResult> {
   // BAL-568 — ACCOUNT LIVENESS against the LIVE row, ABOVE THE PARSE (R9; fix round 1, F4). One of

@@ -124,7 +124,8 @@ async function milestoneLoggedMinutesTx(tx: DbTx, milestoneId: string): Promise<
   return Number(row?.total ?? 0);
 }
 
-async function sumsByMilestoneTx(
+/** Minutes of live time logged on each of the engagement's milestones that has any. */
+export async function loggedMinutesByMilestoneTx(
   exec: DbExecutor,
   engagementId: string
 ): Promise<Record<string, number>> {
@@ -144,7 +145,7 @@ export async function milestoneIdsWithLoggedTimeTx(
   exec: DbExecutor,
   engagementId: string
 ): Promise<Set<string>> {
-  return new Set(Object.keys(await sumsByMilestoneTx(exec, engagementId)));
+  return new Set(Object.keys(await loggedMinutesByMilestoneTx(exec, engagementId)));
 }
 
 /**
@@ -182,7 +183,7 @@ async function assertWithinDailyLimitTx(
 
 /** Live milestones with an estimate whose logged total is over it. */
 async function milestonesOverCountTx(tx: DbTx, engagementId: string): Promise<number> {
-  const byMilestone = await sumsByMilestoneTx(tx, engagementId);
+  const byMilestone = await loggedMinutesByMilestoneTx(tx, engagementId);
   const milestones = await tx
     .select({
       id: engagementMilestones.id,
@@ -280,96 +281,6 @@ async function lockOwnEntryTx(
   return entry;
 }
 
-/** Whether the over-estimate notice was already recorded for this milestone at this estimate. */
-async function crossingRecordedAtTx(
-  tx: DbTx,
-  milestoneId: string,
-  estimatedMinutes: number
-): Promise<boolean> {
-  const [prior] = await tx
-    .select({ id: auditEvents.id })
-    .from(auditEvents)
-    .where(
-      and(
-        eq(auditEvents.entityType, 'engagement_milestone'),
-        eq(auditEvents.entityId, milestoneId),
-        eq(auditEvents.action, 'engagement_milestone.estimate_exceeded'),
-        sql`${auditEvents.metadata}->>'estimatedMinutes' = ${String(estimatedMinutes)}`
-      )
-    )
-    .limit(1);
-  return prior !== undefined;
-}
-
-export interface EstimateExceededMilestone {
-  id: string;
-  title: string;
-  estimatedMinutes: number;
-  loggedMinutes: number;
-}
-
-/**
- * After an approved change order sets milestone estimates: for each milestone whose time
- * already logged is over its new estimate, record `engagement_milestone.estimate_exceeded`
- * (once per estimate value, as a time write does) and return it so the caller can notify.
- * Runs inside the approval's transaction, under its engagement lock.
- */
-export async function recordEstimatesExceededByChangeTx(
-  tx: DbTx,
-  input: {
-    engagementId: string;
-    milestoneIds: readonly string[];
-    actorUserId: string;
-    changeOrderId: string;
-  }
-): Promise<{ exceeded: EstimateExceededMilestone[]; milestonesOverCount: number }> {
-  const exceeded: EstimateExceededMilestone[] = [];
-  for (const milestoneId of input.milestoneIds) {
-    const [milestone] = await tx
-      .select({
-        id: engagementMilestones.id,
-        title: engagementMilestones.title,
-        estimatedMinutes: engagementMilestones.estimatedMinutes,
-      })
-      .from(engagementMilestones)
-      .where(
-        and(
-          eq(engagementMilestones.id, milestoneId),
-          eq(engagementMilestones.engagementId, input.engagementId),
-          isNull(engagementMilestones.deletedAt)
-        )
-      );
-    const est = milestone?.estimatedMinutes ?? null;
-    if (milestone === undefined || est === null) continue;
-    const logged = await milestoneLoggedMinutesTx(tx, milestone.id);
-    if (logged <= est || (await crossingRecordedAtTx(tx, milestone.id, est))) continue;
-
-    await recordDeliveryAudit(tx, {
-      actorUserId: input.actorUserId,
-      action: 'engagement_milestone.estimate_exceeded',
-      entityType: 'engagement_milestone',
-      entityId: milestone.id,
-      engagementId: input.engagementId,
-      metadata: {
-        estimatedMinutes: est,
-        loggedMinutes: logged,
-        changeOrderId: input.changeOrderId,
-      },
-    });
-    exceeded.push({
-      id: milestone.id,
-      title: milestone.title,
-      estimatedMinutes: est,
-      loggedMinutes: logged,
-    });
-  }
-  return {
-    exceeded,
-    milestonesOverCount:
-      exceeded.length > 0 ? await milestonesOverCountTx(tx, input.engagementId) : 0,
-  };
-}
-
 /**
  * Record `engagement_milestone.estimate_exceeded` when the write crosses the estimate and no
  * crossing has been recorded for this milestone at this estimate. Runs under the engagement
@@ -390,7 +301,19 @@ async function recordFirstCrossingTx(
   if (est === null || !estimateCrossed(input.beforeMinutes, input.afterMinutes, est)) {
     return false;
   }
-  if (await crossingRecordedAtTx(tx, input.milestone.id, est)) return false;
+  const [prior] = await tx
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'engagement_milestone'),
+        eq(auditEvents.entityId, input.milestone.id),
+        eq(auditEvents.action, 'engagement_milestone.estimate_exceeded'),
+        sql`${auditEvents.metadata}->>'estimatedMinutes' = ${String(est)}`
+      )
+    )
+    .limit(1);
+  if (prior !== undefined) return false;
 
   await recordDeliveryAudit(tx, {
     actorUserId: input.actorUserId,
@@ -624,7 +547,7 @@ export const engagementTimeEntriesRepository = {
     engagementId: string,
     period: { startOn: IsoDate; endOn: IsoDate } | null
   ): Promise<TimeEntrySums> {
-    const byMilestone = await sumsByMilestoneTx(db, engagementId);
+    const byMilestone = await loggedMinutesByMilestoneTx(db, engagementId);
     const totalMinutes = Object.values(byMilestone).reduce((acc, m) => acc + m, 0);
     if (period === null) return { totalMinutes, periodMinutes: null, byMilestone };
 

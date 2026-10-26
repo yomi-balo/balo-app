@@ -21,12 +21,7 @@ import { lockActiveEngagement, type DbTx } from './_shared/engagement-lock';
 import { openChangeOrderPredicate, readProjectTermsTx } from './_shared/change-order-guards';
 import type { DbExecutor } from './_shared/db-executor';
 import { assertChangeOrderCoherent, ChangeOrderCoherenceError } from './change-order-coherence';
-import {
-  loggedMinutesTx,
-  milestoneIdsWithLoggedTimeTx,
-  recordEstimatesExceededByChangeTx,
-  type EstimateExceededMilestone,
-} from './engagement-time-entries';
+import { loggedMinutesByMilestoneTx, loggedMinutesTx } from './engagement-time-entries';
 import { isUniqueViolation } from './experts';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
 import type { PricingMethod } from './proposal-types';
@@ -103,13 +98,6 @@ export interface ChangeOrderApproval {
   appliedMilestoneIds: string[];
   previousEffectivePriceCents: number;
   effectivePriceCents: number;
-  /**
-   * T&M milestones whose new estimate the time already logged is over, recorded once per
-   * estimate value; the caller notifies the client and admins.
-   */
-  estimatesExceeded: EstimateExceededMilestone[];
-  /** Milestones over their estimate after the approval; 0 when none was newly exceeded. */
-  milestonesOverCount: number;
 }
 
 export interface ChangeOrderSettlementTerms {
@@ -397,14 +385,19 @@ async function assertCoherentTx(
 ): Promise<{ pricingMethod: PricingMethod; currentEffectivePriceCents: number }> {
   const { pricingMethod, rateCents } = await readProjectTermsTx(tx, order.engagementId);
   const currentEffectivePriceCents = await effectivePriceCentsTx(tx, order.engagementId);
+  const loggedByMilestone = await loggedMinutesByMilestoneTx(tx, order.engagementId);
   assertChangeOrderCoherent({
     pricingMethod,
     currentEffectivePriceCents,
     priceDeltaCents: order.priceDeltaCents,
     note: order.note,
     lines,
-    liveMilestoneIds: new Set(live.map((m) => m.id)),
-    milestoneIdsWithTime: await milestoneIdsWithLoggedTimeTx(tx, order.engagementId),
+    liveMilestones: new Map(
+      live.map((m) => [
+        m.id,
+        { estimatedMinutes: m.estimatedMinutes, loggedMinutes: loggedByMilestone[m.id] ?? 0 },
+      ])
+    ),
     loggedMinutes: await loggedMinutesTx(tx, order.engagementId),
     rateCents,
   });
@@ -946,19 +939,6 @@ export const engagementChangeOrdersRepository = {
         userId: input.userId,
       });
 
-      const { exceeded, milestonesOverCount } =
-        pricingMethod === 'tm'
-          ? await recordEstimatesExceededByChangeTx(tx, {
-              engagementId: input.engagementId,
-              milestoneIds: lines
-                .filter((l) => l.op === 'edit' && l.estimatedMinutes !== null)
-                .map((l) => l.engagementMilestoneId)
-                .filter((id): id is string => id !== null),
-              actorUserId: input.userId,
-              changeOrderId: current.id,
-            })
-          : { exceeded: [], milestonesOverCount: 0 };
-
       const order = await updateOrderTx(tx, current.id, {
         status: 'approved',
         decidedByUserId: input.userId,
@@ -981,8 +961,6 @@ export const engagementChangeOrdersRepository = {
         appliedMilestoneIds,
         previousEffectivePriceCents: currentEffectivePriceCents,
         effectivePriceCents: await effectivePriceCentsTx(tx, input.engagementId),
-        estimatesExceeded: exceeded,
-        milestonesOverCount,
       };
     });
   },

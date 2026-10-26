@@ -12,7 +12,8 @@
  * the effective price (or cap) after the delta stays at or above zero. On T&M, an order that
  * lowers the cap may not take it below the value of the time already logged; a raise is always
  * allowed, since logging is not blocked by the cap and a raise moves toward coherence. A
- * milestone with live time logged against it cannot be removed.
+ * milestone with live time logged against it cannot be removed, and an order that changes a
+ * milestone's estimate may not set it below the time already logged on it.
  */
 
 import { loggedValueCents } from '@balo/shared/engagements';
@@ -32,6 +33,7 @@ export type ChangeOrderCoherenceRule =
   | 'add_has_target' // add ⇒ no target milestone
   | 'duplicate_target' // a milestone is targeted by at most one line
   | 'remove_has_logged_time' // remove ⇒ the target has no live time logged
+  | 'estimate_below_logged' // tm ∧ edit changes the estimate ⇒ new estimate >= time logged
   | 'note_missing' // the expert's note is present and non-blank
   | 'empty_change'; // at least one line, or a non-zero price delta
 
@@ -49,6 +51,13 @@ export interface ChangeOrderCoherenceLine {
   estimatedMinutes: number | null;
 }
 
+/** A live milestone of the engagement, as read under the engagement lock. */
+export interface CoherenceLiveMilestone {
+  estimatedMinutes: number | null;
+  /** Minutes of live time logged against it. */
+  loggedMinutes: number;
+}
+
 export interface ChangeOrderCoherenceSnapshot {
   pricingMethod: CoherencePricingMethod;
   /**
@@ -59,17 +68,18 @@ export interface ChangeOrderCoherenceSnapshot {
   priceDeltaCents: number | null;
   note: string | null;
   lines: readonly ChangeOrderCoherenceLine[];
-  /** The engagement's live milestone ids, read under the engagement lock. */
-  liveMilestoneIds: ReadonlySet<string>;
-  /** Milestone ids with live time logged against them, read under the engagement lock. */
-  milestoneIdsWithTime: ReadonlySet<string>;
+  /** The engagement's live milestones by id, read under the engagement lock. */
+  liveMilestones: ReadonlyMap<string, CoherenceLiveMilestone>;
   /** Minutes of live time logged on the engagement, read under the engagement lock. */
   loggedMinutes: number;
   /** The expert-side hourly rate (T&M); null when the project has none. */
   rateCents: number | null;
 }
 
-function checkTargets(lines: readonly ChangeOrderCoherenceLine[], live: ReadonlySet<string>): void {
+function checkTargets(
+  lines: readonly ChangeOrderCoherenceLine[],
+  live: ReadonlyMap<string, CoherenceLiveMilestone>
+): void {
   const seen = new Set<string>();
   for (const line of lines) {
     if (line.op === 'add') {
@@ -117,6 +127,29 @@ function checkPricing(snapshot: ChangeOrderCoherenceSnapshot): void {
   if (lines.some((l) => l.op === 'edit' && l.estimatedMinutes === null)) {
     throw new ChangeOrderCoherenceError('tm_edit_missing_estimate');
   }
+  if (lines.some((l) => setsEstimateBelowLogged(l, snapshot.liveMilestones))) {
+    throw new ChangeOrderCoherenceError('estimate_below_logged');
+  }
+}
+
+/**
+ * An edit that changes a milestone's estimate to less than the time already logged on it. An
+ * edit that leaves the estimate as it is passes, so a milestone already over its estimate can
+ * still be renamed or redescribed.
+ */
+function setsEstimateBelowLogged(
+  line: ChangeOrderCoherenceLine,
+  live: ReadonlyMap<string, CoherenceLiveMilestone>
+): boolean {
+  if (line.op !== 'edit' || line.engagementMilestoneId === null || line.estimatedMinutes === null) {
+    return false;
+  }
+  const target = live.get(line.engagementMilestoneId);
+  return (
+    target !== undefined &&
+    line.estimatedMinutes !== target.estimatedMinutes &&
+    line.estimatedMinutes < target.loggedMinutes
+  );
 }
 
 /**
@@ -130,13 +163,13 @@ export function assertChangeOrderCoherent(snapshot: ChangeOrderCoherenceSnapshot
   if (snapshot.lines.length === 0 && (snapshot.priceDeltaCents ?? 0) === 0) {
     throw new ChangeOrderCoherenceError('empty_change');
   }
-  checkTargets(snapshot.lines, snapshot.liveMilestoneIds);
+  checkTargets(snapshot.lines, snapshot.liveMilestones);
   if (
     snapshot.lines.some(
       (l) =>
         l.op === 'remove' &&
         l.engagementMilestoneId !== null &&
-        snapshot.milestoneIdsWithTime.has(l.engagementMilestoneId)
+        (snapshot.liveMilestones.get(l.engagementMilestoneId)?.loggedMinutes ?? 0) > 0
     )
   ) {
     throw new ChangeOrderCoherenceError('remove_has_logged_time');

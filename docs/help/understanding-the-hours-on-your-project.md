@@ -37,8 +37,7 @@ hours went on.
 
 Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the
 work, and a project can need more time than planned. You won't be told again about the same
-estimate. You will be if the estimate changes and the milestone goes over the new figure,
-including when an approved change sets an estimate below the hours already logged.
+estimate, but you will be if the estimate is raised and the milestone passes the new figure.
 
 ## Asking for a change
 

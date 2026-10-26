@@ -1,3 +1,4 @@
+import { hoursLabel } from '@balo/shared/engagements';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 /** The two pricing methods a project can be delivered under. */
 export type ComposerPricing = 'fixed' | 'tm';
@@ -274,13 +275,38 @@ interface ComposerIssueInput {
   nextCapCents: number;
   /** Currency code, to name the cap floor. */
   currency: string;
-  /** Milestones with live time entries; a remove line against one is refused. */
-  milestoneIdsWithTime: readonly string[];
+  /** The live milestones as the composer opened on them, for their current estimates. */
+  milestones: readonly ComposerMilestone[];
+  /**
+   * T&M: minutes of live time logged per milestone. Removing a milestone with time is refused,
+   * and so is changing its estimate to less than the time logged.
+   */
+  loggedMinutesByMilestone: Readonly<Record<string, number>>;
 }
 
 function capBelowLoggedMessage(loggedValueCents: number, currency: string): string {
   const floor = formatWholeCurrency(Math.ceil(loggedValueCents / 100) * 100, currency);
   return `The cap can't go below ${floor} — the value of the time already logged.`;
+}
+
+/** Why a line can't go, given the time already logged on its milestone; null when it can. */
+function loggedTimeIssue(
+  line: ComposerLineDraft,
+  milestones: readonly ComposerMilestone[],
+  loggedMinutesByMilestone: Readonly<Record<string, number>>
+): string | null {
+  if (line.milestoneId === undefined) return null;
+  const logged = loggedMinutesByMilestone[line.milestoneId] ?? 0;
+  if (logged <= 0) return null;
+  if (line.op === 'remove') {
+    return `Time has been logged on ${line.title}, so it can't be removed. Complete it instead.`;
+  }
+  const current = milestones.find((m) => m.id === line.milestoneId)?.estimatedMinutes ?? null;
+  const next = line.estimatedMinutes ?? null;
+  if (line.op === 'edit' && next !== null && next !== current && next < logged) {
+    return `The estimate for ${line.title} can't go below the ${hoursLabel(logged)} already logged.`;
+  }
+  return null;
 }
 
 /** What stops one line from being sent. */
@@ -306,7 +332,8 @@ export function composerIssues(input: ComposerIssueInput): string[] {
     loggedValueCents,
     nextCapCents,
     currency,
-    milestoneIdsWithTime,
+    milestones,
+    loggedMinutesByMilestone,
   } = input;
   const issues: string[] = [];
   if (note.trim() === '') issues.push("Add a short summary of what's changing and why.");
@@ -315,15 +342,8 @@ export function composerIssues(input: ComposerIssueInput): string[] {
   }
   for (const line of lines) {
     issues.push(...lineIssues(line, pricing));
-    if (
-      line.op === 'remove' &&
-      line.milestoneId !== undefined &&
-      milestoneIdsWithTime.includes(line.milestoneId)
-    ) {
-      issues.push(
-        `Time has been logged on ${line.title}, so it can't be removed. Complete it instead.`
-      );
-    }
+    const loggedIssue = loggedTimeIssue(line, milestones, loggedMinutesByMilestone);
+    if (loggedIssue !== null) issues.push(loggedIssue);
   }
   if (!priceValid) {
     issues.push(

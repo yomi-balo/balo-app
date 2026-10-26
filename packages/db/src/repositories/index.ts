@@ -372,7 +372,6 @@ export {
   type TimeEntryListRow,
   type TimeEntrySums,
   type OverEstimateAlertRow,
-  type EstimateExceededMilestone,
 } from './engagement-time-entries';
 export type { EngagementTimeEntry, NewEngagementTimeEntry } from '../schema';
 export {

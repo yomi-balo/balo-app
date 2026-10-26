@@ -334,6 +334,11 @@ describe('runEngagementLifecycleAction', () => {
       "A milestone with time logged on it can't be removed. Complete it instead.",
     ],
     [
+      'ChangeOrderCoherenceError (estimate_below_logged)',
+      () => new ChangeOrderCoherenceError('estimate_below_logged'),
+      "A milestone's estimate can't go below the hours already logged on it.",
+    ],
+    [
       'TimeEntryWriteRefusedError (daily_limit_exceeded)',
       () => new TimeEntryWriteRefusedError('daily_limit_exceeded'),
       "That's more than 24 hours logged for one day.",

@@ -1362,12 +1362,13 @@ describe('engagementChangeOrdersRepository — remove_has_logged_time', () => {
   });
 });
 
-describe('engagementChangeOrdersRepository.approve — estimates the logged time is already over', () => {
-  /** A T&M project whose first milestone has an 8-hour estimate and 6 hours logged. */
-  async function seedTmWithLogged(): Promise<{
+describe('engagementChangeOrdersRepository — estimate_below_logged', () => {
+  /** A T&M project whose first milestone has an 8-hour estimate, and an order that resizes it. */
+  async function seedTmWithOrder(estimatedMinutes: number): Promise<{
     engagementId: string;
     userId: string;
     first: EngagementMilestone;
+    orderId: string;
   }> {
     const seeded = await seedProject({
       projectValues: {
@@ -1381,18 +1382,6 @@ describe('engagementChangeOrdersRepository.approve — estimates the logged time
       .update(engagementMilestones)
       .set({ valueCents: null, estimatedMinutes: 480 })
       .where(eq(engagementMilestones.engagementId, seeded.engagementId));
-    await engagementTimeEntryFactory({
-      milestone: seeded.first,
-      userId: seeded.userId,
-      values: { minutes: 360 },
-    });
-    return seeded;
-  }
-
-  async function approveEstimate(
-    seeded: { engagementId: string; userId: string; first: EngagementMilestone },
-    estimatedMinutes: number
-  ): Promise<Awaited<ReturnType<typeof repo.approve>>> {
     const draft = await repo.createDraft({
       engagementId: seeded.engagementId,
       userId: seeded.userId,
@@ -1407,49 +1396,39 @@ describe('engagementChangeOrdersRepository.approve — estimates the logged time
         }),
       ],
     });
-    await repo.send({
-      engagementId: seeded.engagementId,
-      orderId: draft.id,
-      userId: seeded.userId,
-    });
-    return repo.approve({
-      engagementId: seeded.engagementId,
-      orderId: draft.id,
-      userId: seeded.userId,
-    });
+    return { ...seeded, orderId: draft.id };
   }
 
-  async function crossingAuditsFor(milestoneId: string): Promise<unknown[]> {
-    const rows = await db
-      .select({ metadata: auditEvents.metadata })
-      .from(auditEvents)
-      .where(
-        sql`${auditEvents.entityId} = ${milestoneId} AND ${auditEvents.action} = 'engagement_milestone.estimate_exceeded'`
-      );
-    return rows.map((r) => r.metadata);
-  }
+  it('refuses to send an estimate below the time already logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(300);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
 
-  it('records and returns a milestone whose new estimate is below the time logged', async () => {
-    const seeded = await seedTmWithLogged();
+    const attempt = repo.send({ engagementId, orderId, userId });
 
-    const result = await approveEstimate(seeded, 300); // 6h logged against a new 5h estimate
-
-    expect(result.estimatesExceeded).toEqual([
-      { id: seeded.first.id, title: seeded.first.title, estimatedMinutes: 300, loggedMinutes: 360 },
-    ]);
-    expect(result.milestonesOverCount).toBe(1);
-    expect(await crossingAuditsFor(seeded.first.id)).toEqual([
-      expect.objectContaining({ estimatedMinutes: 300, loggedMinutes: 360 }),
-    ]);
+    await expect(attempt).rejects.toBeInstanceOf(ChangeOrderCoherenceError);
+    await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
   });
 
-  it('returns nothing when the new estimate still covers the time logged', async () => {
-    const seeded = await seedTmWithLogged();
+  it('refuses the approval when time logged after the send passes the new estimate', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(300);
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
 
-    const result = await approveEstimate(seeded, 360); // equal is not over
+    const attempt = repo.approve({ engagementId, orderId, userId });
 
-    expect(result.estimatesExceeded).toEqual([]);
-    expect(result.milestonesOverCount).toBe(0);
-    expect(await crossingAuditsFor(seeded.first.id)).toEqual([]);
+    await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(480);
+  });
+
+  it('⚠ POSITIVE CONTROL — approves an estimate equal to the time logged', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(360);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
+    await repo.send({ engagementId, orderId, userId });
+
+    await repo.approve({ engagementId, orderId, userId });
+
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(360);
   });
 });
