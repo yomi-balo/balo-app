@@ -235,7 +235,18 @@ export default async function EngagementWorkspacePage({
         )
       : Promise.resolve(false),
   ]);
-  const view = mapEngagementToWorkspaceView(engagement, ctx, now, changeOrderRows, contentEdits);
+  const lastTimeLoggedAt = timeEntries.reduce<Date | null>(
+    (latest, entry) => (latest === null || entry.createdAt > latest ? entry.createdAt : latest),
+    null
+  );
+  const view = mapEngagementToWorkspaceView(
+    engagement,
+    ctx,
+    now,
+    changeOrderRows,
+    contentEdits,
+    lastTimeLoggedAt
+  );
   const time = mapTimeToView({
     engagement,
     ctx,

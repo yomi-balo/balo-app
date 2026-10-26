@@ -1409,7 +1409,7 @@ describe('engagementChangeOrdersRepository — estimate_below_logged', () => {
     await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
   });
 
-  it('refuses the approval when time logged after the send passes the new estimate', async () => {
+  it('refuses the approval of a lowered estimate that time logged since the send passes', async () => {
     const { engagementId, userId, first, orderId } = await seedTmWithOrder(300);
     await repo.send({ engagementId, orderId, userId });
     await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 360 } });
@@ -1419,6 +1419,49 @@ describe('engagementChangeOrdersRepository — estimate_below_logged', () => {
     await expect(attempt).rejects.toMatchObject({ rule: 'estimate_below_logged' });
     const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
     expect(milestone?.estimatedMinutes).toBe(480);
+  });
+
+  it('approves a raise that time logged since the send overtook, and records the crossing once', async () => {
+    // 7.5 of 8 hours logged; the expert sends a raise to 10 and keeps working to 10.5.
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(600);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 450 } });
+    await repo.send({ engagementId, orderId, userId });
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 180 } });
+
+    const result = await repo.approve({ engagementId, orderId, userId });
+
+    const [milestone] = (await liveMilestones(engagementId)).filter((m) => m.id === first.id);
+    expect(milestone?.estimatedMinutes).toBe(600);
+    expect(result.estimatesExceeded).toEqual([
+      { id: first.id, title: first.title, estimatedMinutes: 600, loggedMinutes: 630 },
+    ]);
+    expect(result.milestonesOverCount).toBe(1);
+    const crossings = await db
+      .select({ metadata: auditEvents.metadata })
+      .from(auditEvents)
+      .where(
+        sql`${auditEvents.entityId} = ${first.id} AND ${auditEvents.action} = 'engagement_milestone.estimate_exceeded'`
+      );
+    expect(crossings).toEqual([
+      {
+        metadata: expect.objectContaining({
+          estimatedMinutes: 600,
+          loggedMinutes: 630,
+          changeOrderId: orderId,
+        }),
+      },
+    ]);
+  });
+
+  it('records nothing when a raise still covers the time logged at approval', async () => {
+    const { engagementId, userId, first, orderId } = await seedTmWithOrder(600);
+    await engagementTimeEntryFactory({ milestone: first, userId, values: { minutes: 450 } });
+    await repo.send({ engagementId, orderId, userId });
+
+    const result = await repo.approve({ engagementId, orderId, userId });
+
+    expect(result.estimatesExceeded).toEqual([]);
+    expect(result.milestonesOverCount).toBe(0);
   });
 
   it('⚠ POSITIVE CONTROL — approves an estimate equal to the time logged', async () => {

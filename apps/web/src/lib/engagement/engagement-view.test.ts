@@ -958,6 +958,24 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
     expect(chip?.value).toBe('Last delivery activity: 2d ago');
   });
 
+  it('counts recently logged time as delivery activity, keeping the chip neutral', () => {
+    const quiet = new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const loggedYesterday = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    const chip = mapEngagementToWorkspaceView(
+      makeEngagement({ status: 'active', activatedAt: quiet, createdAt: quiet }),
+      ctxFor('admin'),
+      NOW,
+      [],
+      [],
+      loggedYesterday
+    ).header.terms.find((t) => t.label === 'Last delivery activity');
+    expect(chip).toEqual({
+      icon: 'Clock',
+      label: 'Last delivery activity',
+      value: 'Last delivery activity: 1d ago',
+    });
+  });
+
   it('turns to a check-in warning once delivery has been quiet for the threshold', () => {
     const quiet = new Date(NOW.getTime() - DELIVERY_QUIET_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
     expect(chipOf({ status: 'active', activatedAt: quiet, createdAt: quiet }, 'admin')).toEqual({

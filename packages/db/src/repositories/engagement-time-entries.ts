@@ -281,6 +281,97 @@ async function lockOwnEntryTx(
   return entry;
 }
 
+/** Whether the over-estimate notice was already recorded for this milestone at this estimate. */
+async function crossingRecordedAtTx(
+  tx: DbTx,
+  milestoneId: string,
+  estimatedMinutes: number
+): Promise<boolean> {
+  const [prior] = await tx
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'engagement_milestone'),
+        eq(auditEvents.entityId, milestoneId),
+        eq(auditEvents.action, 'engagement_milestone.estimate_exceeded'),
+        sql`${auditEvents.metadata}->>'estimatedMinutes' = ${String(estimatedMinutes)}`
+      )
+    )
+    .limit(1);
+  return prior !== undefined;
+}
+
+export interface EstimateExceededMilestone {
+  id: string;
+  title: string;
+  estimatedMinutes: number;
+  loggedMinutes: number;
+}
+
+/**
+ * After an approved change order raises milestone estimates: for each raised milestone whose
+ * time logged since the order was sent has already passed its new estimate, record
+ * `engagement_milestone.estimate_exceeded` (once per estimate value, as a time write does) and
+ * return it so the caller can notify. No later time write crosses that estimate, so the
+ * approval is the crossing. Runs inside the approval's transaction, under its engagement lock.
+ */
+export async function recordEstimatesExceededByChangeTx(
+  tx: DbTx,
+  input: {
+    engagementId: string;
+    milestoneIds: readonly string[];
+    actorUserId: string;
+    changeOrderId: string;
+  }
+): Promise<{ exceeded: EstimateExceededMilestone[]; milestonesOverCount: number }> {
+  const exceeded: EstimateExceededMilestone[] = [];
+  for (const milestoneId of input.milestoneIds) {
+    const [milestone] = await tx
+      .select({
+        id: engagementMilestones.id,
+        title: engagementMilestones.title,
+        estimatedMinutes: engagementMilestones.estimatedMinutes,
+      })
+      .from(engagementMilestones)
+      .where(
+        and(
+          eq(engagementMilestones.id, milestoneId),
+          eq(engagementMilestones.engagementId, input.engagementId),
+          isNull(engagementMilestones.deletedAt)
+        )
+      );
+    const est = milestone?.estimatedMinutes ?? null;
+    if (milestone === undefined || est === null) continue;
+    const logged = await milestoneLoggedMinutesTx(tx, milestone.id);
+    if (logged <= est || (await crossingRecordedAtTx(tx, milestone.id, est))) continue;
+
+    await recordDeliveryAudit(tx, {
+      actorUserId: input.actorUserId,
+      action: 'engagement_milestone.estimate_exceeded',
+      entityType: 'engagement_milestone',
+      entityId: milestone.id,
+      engagementId: input.engagementId,
+      metadata: {
+        estimatedMinutes: est,
+        loggedMinutes: logged,
+        changeOrderId: input.changeOrderId,
+      },
+    });
+    exceeded.push({
+      id: milestone.id,
+      title: milestone.title,
+      estimatedMinutes: est,
+      loggedMinutes: logged,
+    });
+  }
+  return {
+    exceeded,
+    milestonesOverCount:
+      exceeded.length > 0 ? await milestonesOverCountTx(tx, input.engagementId) : 0,
+  };
+}
+
 /**
  * Record `engagement_milestone.estimate_exceeded` when the write crosses the estimate and no
  * crossing has been recorded for this milestone at this estimate. Runs under the engagement
@@ -301,19 +392,7 @@ async function recordFirstCrossingTx(
   if (est === null || !estimateCrossed(input.beforeMinutes, input.afterMinutes, est)) {
     return false;
   }
-  const [prior] = await tx
-    .select({ id: auditEvents.id })
-    .from(auditEvents)
-    .where(
-      and(
-        eq(auditEvents.entityType, 'engagement_milestone'),
-        eq(auditEvents.entityId, input.milestone.id),
-        eq(auditEvents.action, 'engagement_milestone.estimate_exceeded'),
-        sql`${auditEvents.metadata}->>'estimatedMinutes' = ${String(est)}`
-      )
-    )
-    .limit(1);
-  if (prior !== undefined) return false;
+  if (await crossingRecordedAtTx(tx, input.milestone.id, est)) return false;
 
   await recordDeliveryAudit(tx, {
     actorUserId: input.actorUserId,

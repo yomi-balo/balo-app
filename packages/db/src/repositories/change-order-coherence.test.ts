@@ -43,6 +43,7 @@ function fixed(
   overrides: Partial<ChangeOrderCoherenceSnapshot> = {}
 ): ChangeOrderCoherenceSnapshot {
   return {
+    stage: 'send',
     pricingMethod: 'fixed',
     currentEffectivePriceCents: 500_000,
     priceDeltaCents: 100_000,
@@ -170,6 +171,25 @@ describe('assertChangeOrderCoherent', () => {
       const bLogged = { liveMilestones: live({ b: 120 }) };
       expect(ruleOf(tm({ ...bLogged, lines: onB(60) }))).toBe('estimate_below_logged');
       expect(ruleOf(tm({ ...bLogged, lines: onB(120) }))).toBeNull();
+    });
+
+    describe('at approve', () => {
+      const approve = { stage: 'approve' as const };
+
+      it('accepts a raise that time logged since the send has overtaken', () => {
+        expect(ruleOf(tm({ ...approve, ...over, lines: lines(75) }))).toBeNull();
+      });
+
+      it('accepts an estimate set on a milestone that had none, even below the time logged', () => {
+        const onB = [editLine({ engagementMilestoneId: LIVE_B, estimatedMinutes: 60 })];
+        expect(ruleOf(tm({ ...approve, liveMilestones: live({ b: 120 }), lines: onB }))).toBeNull();
+      });
+
+      it('still refuses an estimate lowered below the time logged', () => {
+        expect(ruleOf(tm({ ...approve, liveMilestones: live({ a: 45 }), lines: lines(30) }))).toBe(
+          'estimate_below_logged'
+        );
+      });
     });
   });
 

@@ -189,6 +189,31 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
     }
   });
 
+  it('hands the latest logged time to the admin activity chip', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-30T12:00:00Z'));
+    try {
+      mockGetCurrentUser.mockResolvedValue({
+        ...expert,
+        id: 'user-admin',
+        platformRole: 'admin',
+        expertProfileId: null,
+      });
+      mockFindWithMilestones.mockResolvedValue(engagement({}));
+      mockListEntries.mockResolvedValue([
+        { id: 'te-1', createdAt: new Date('2026-11-10T09:00:00Z') },
+        { id: 'te-2', createdAt: new Date('2026-11-29T09:00:00Z') },
+      ]);
+      const props = await renderPage();
+      const view = props.view as { header: { terms: { label: string; value: string }[] } };
+      expect(view.header.terms.find((t) => t.label === 'Last delivery activity')?.value).toBe(
+        'Last delivery activity: 1d ago'
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('passes no time view and reads no entries for a fixed-price project', async () => {
     mockFindWithMilestones.mockResolvedValue(engagement({ pricingMethod: 'fixed' }));
     const props = await renderPage();

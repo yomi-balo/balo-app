@@ -29,6 +29,7 @@ import {
   gateChangeOrderClient,
   payloadBase,
 } from './change-order-action-shared';
+import { notifyEstimateExceeded } from './time-entry-action-shared';
 
 const approveChangeOrderSchema = z.object({ engagementId: z.uuid(), orderId: z.uuid() }).strict();
 
@@ -103,6 +104,17 @@ export async function approveChangeOrderAction(input: {
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });
+
+      // A T&M raise that time logged since the send already passed: the approval is the crossing.
+      for (const milestone of approval.estimatesExceeded) {
+        await notifyEstimateExceeded({
+          engagement,
+          milestone,
+          loggedMinutes: milestone.loggedMinutes,
+          milestonesOverCount: approval.milestonesOverCount,
+          userId: user.id,
+        });
+      }
 
       if (isFixed) {
         await raiseCreditAlertIfOwed(engagementId, {

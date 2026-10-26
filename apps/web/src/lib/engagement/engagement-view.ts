@@ -829,13 +829,20 @@ function deriveEmptyState(
   };
 }
 
-/** Latest delivery-signal timestamp: milestone starts / completions, activation, request. */
-function deriveLastActivityAt(engagement: ProjectEngagementWithMilestones): Date {
+/**
+ * Latest delivery-signal timestamp: milestone starts / completions, activation, the completion
+ * request, and the most recent time logged.
+ */
+function deriveLastActivityAt(
+  engagement: ProjectEngagementWithMilestones,
+  lastTimeLoggedAt: Date | null
+): Date {
   // `createdAt` always exists, so it seeds the fold — the reduce can never run on
   // an empty array (S6959) while still yielding the max of every delivery signal.
   const candidates: Date[] = [];
   if (engagement.activatedAt !== null) candidates.push(engagement.activatedAt);
   if (engagement.completionRequestedAt !== null) candidates.push(engagement.completionRequestedAt);
+  if (lastTimeLoggedAt !== null) candidates.push(lastTimeLoggedAt);
   for (const m of engagement.milestones) {
     if (m.startedAt !== null) candidates.push(m.startedAt);
     if (m.completedAt !== null) candidates.push(m.completedAt);
@@ -855,11 +862,12 @@ function deriveLastActivityChip(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
-  now: Date
+  now: Date,
+  lastTimeLoggedAt: Date | null
 ): TermsStripItem | null {
   if (lens !== 'admin') return null;
   if (engagement.status !== 'active' && engagement.status !== 'pending_acceptance') return null;
-  const lastActivityAt = deriveLastActivityAt(engagement);
+  const lastActivityAt = deriveLastActivityAt(engagement, lastTimeLoggedAt);
   const quietDays = wholeDaysSince(lastActivityAt, now);
   if (quietDays >= DELIVERY_QUIET_THRESHOLD_DAYS) {
     return {
@@ -961,13 +969,16 @@ function deriveCompletionCard(
  * `now` is injectable for deterministic tests (default `new Date()`). `changeOrders` are the
  * engagement's live change orders, oldest first: they move the terms strip to the effective
  * price, lock and badge milestones, and block the completion card while one is open.
+ * `lastTimeLoggedAt` is when the latest live time entry was logged (T&M), a delivery signal for
+ * the admin activity chip.
  */
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
   now: Date = new Date(),
   changeOrders: readonly ChangeOrderWithLines[] = [],
-  contentEdits: readonly MilestoneContentEditRow[] = []
+  contentEdits: readonly MilestoneContentEditRow[] = [],
+  lastTimeLoggedAt: Date | null = null
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -1001,7 +1012,7 @@ export function mapEngagementToWorkspaceView(
     provenance,
     terms: [
       ...deriveTermsStrip(engagement, ctx.lens, changeOrders),
-      ...[deriveLastActivityChip(engagement, ctx.lens, parties, now)].filter(
+      ...[deriveLastActivityChip(engagement, ctx.lens, parties, now, lastTimeLoggedAt)].filter(
         (item) => item !== null
       ),
     ],

@@ -13,7 +13,9 @@
  * lowers the cap may not take it below the value of the time already logged; a raise is always
  * allowed, since logging is not blocked by the cap and a raise moves toward coherence. A
  * milestone with live time logged against it cannot be removed, and an order that changes a
- * milestone's estimate may not set it below the time already logged on it.
+ * milestone's estimate may not set it below the time already logged on it. At approve that last
+ * rule applies only to an estimate the order lowers: a raise overtaken by time logged since the
+ * send still approves, as a cap raise always does.
  */
 
 import { loggedValueCents } from '@balo/shared/engagements';
@@ -33,7 +35,7 @@ export type ChangeOrderCoherenceRule =
   | 'add_has_target' // add ⇒ no target milestone
   | 'duplicate_target' // a milestone is targeted by at most one line
   | 'remove_has_logged_time' // remove ⇒ the target has no live time logged
-  | 'estimate_below_logged' // tm ∧ edit changes the estimate ⇒ new estimate >= time logged
+  | 'estimate_below_logged' // tm ∧ edit changes (at approve: lowers) the estimate ⇒ new >= logged
   | 'note_missing' // the expert's note is present and non-blank
   | 'empty_change'; // at least one line, or a non-zero price delta
 
@@ -59,6 +61,8 @@ export interface CoherenceLiveMilestone {
 }
 
 export interface ChangeOrderCoherenceSnapshot {
+  /** Which transition is being checked: `send`, or `approve` (re-checked under the lock). */
+  stage: 'send' | 'approve';
   pricingMethod: CoherencePricingMethod;
   /**
    * `price_cents` (the price, or the cap on T&M) plus every approved delta, read under the
@@ -127,7 +131,7 @@ function checkPricing(snapshot: ChangeOrderCoherenceSnapshot): void {
   if (lines.some((l) => l.op === 'edit' && l.estimatedMinutes === null)) {
     throw new ChangeOrderCoherenceError('tm_edit_missing_estimate');
   }
-  if (lines.some((l) => setsEstimateBelowLogged(l, snapshot.liveMilestones))) {
+  if (lines.some((l) => setsEstimateBelowLogged(l, snapshot.liveMilestones, snapshot.stage))) {
     throw new ChangeOrderCoherenceError('estimate_below_logged');
   }
 }
@@ -135,21 +139,22 @@ function checkPricing(snapshot: ChangeOrderCoherenceSnapshot): void {
 /**
  * An edit that changes a milestone's estimate to less than the time already logged on it. An
  * edit that leaves the estimate as it is passes, so a milestone already over its estimate can
- * still be renamed or redescribed.
+ * still be renamed or redescribed. At approve only a lowered estimate is refused: the expert
+ * sent a raise against the time logged then, and the client approving it can't change the time
+ * logged since.
  */
 function setsEstimateBelowLogged(
   line: ChangeOrderCoherenceLine,
-  live: ReadonlyMap<string, CoherenceLiveMilestone>
+  live: ReadonlyMap<string, CoherenceLiveMilestone>,
+  stage: ChangeOrderCoherenceSnapshot['stage']
 ): boolean {
   if (line.op !== 'edit' || line.engagementMilestoneId === null || line.estimatedMinutes === null) {
     return false;
   }
   const target = live.get(line.engagementMilestoneId);
-  return (
-    target !== undefined &&
-    line.estimatedMinutes !== target.estimatedMinutes &&
-    line.estimatedMinutes < target.loggedMinutes
-  );
+  if (target === undefined || line.estimatedMinutes >= target.loggedMinutes) return false;
+  if (stage === 'send') return line.estimatedMinutes !== target.estimatedMinutes;
+  return target.estimatedMinutes !== null && line.estimatedMinutes < target.estimatedMinutes;
 }
 
 /**

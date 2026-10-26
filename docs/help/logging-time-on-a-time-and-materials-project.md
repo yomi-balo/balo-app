@@ -50,7 +50,9 @@ log. They aren't told again for that estimate unless you raise it and then pass 
 If the work needs more hours than planned, propose a change from the project page and set the
 milestone's new estimate. The client approves it like any other change. See **Proposing a change
 to a live project** for how to build one. A new estimate can't be lower than the hours already
-logged on the milestone. Once it's approved, the hours bar measures against the new estimate.
+logged on the milestone when you send it. You can keep logging while the client decides. If your
+hours pass the new estimate before they approve, the change still goes through and they're told
+the milestone is over. Once it's approved, the hours bar measures against the new estimate.
 
 ## Billing periods
 
