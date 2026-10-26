@@ -108,7 +108,8 @@ export const creditSessions = pgTable(
     // ── Snapshots (immutable for the life of the session; economics never drift) ──
     // Sizes the hold (estimated MAX cost).
     estimatedMinutes: integer('estimated_minutes').notNull(),
-    // Raw expert quote snapshot (reconciliation/audit). NEVER on a client view.
+    // Raw expert quote snapshot (reconciliation/audit), per HOUR: `open()` writes the per-minute
+    // `expert_profiles.rate_cents` × 60. NEVER on a client view.
     expertRateMinorPerHour: integer('expert_rate_minor_per_hour').notNull(),
     // Fee snapshot (BAL-357 pattern; audience-keyed). NEVER on a client view.
     // ⚠ THIS COLUMN IS THE SSOT FOR A CASE'S MARGIN (BAL-417 / D3) — it is the fee

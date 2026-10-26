@@ -6,7 +6,6 @@ import {
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   DEFAULT_TOPUP_RELOAD_MINOR,
   DEFAULT_TOPUP_THRESHOLD_MINOR,
-  deriveMinuteRateCents,
   deriveTmTotalCents,
   DORMANCY_REMINDER_WINDOWS_DAYS,
   feeBpsToPercent,
@@ -460,32 +459,6 @@ describe('auto-top-up reconcile cadence (BAL-515)', () => {
     // is still an ordinary race rather than a fault.
     expect(TOPUP_RECONCILE_ESCALATE_AFTER_MS).toBeGreaterThan(TOPUP_IN_FLIGHT_TTL_MS);
     expect(TOPUP_RECONCILE_ESCALATE_AFTER_MS).toBeGreaterThan(TOPUP_RECONCILE_AFTER_MS);
-  });
-});
-
-describe('deriveMinuteRateCents (BAL-378)', () => {
-  it('derives A$180/hr (18_000c) → A$3.00/min (300c) — exact', () => {
-    // 18_000 / 60 = 300 exactly.
-    expect(deriveMinuteRateCents(18_000)).toBe(300);
-  });
-
-  it('rounds half away from zero (10_000c/hr → round(166.66…) = 167c/min)', () => {
-    // 10_000 / 60 = 166.66… → 167.
-    expect(deriveMinuteRateCents(10_000)).toBe(167);
-  });
-
-  it('rounds a half-way case up (15_030c/hr → round(250.5) = 251c/min)', () => {
-    // 15_030 / 60 = 250.5 → 251 (half away from zero).
-    expect(deriveMinuteRateCents(15_030)).toBe(251);
-  });
-
-  it('returns 0 for a zero rate', () => {
-    expect(deriveMinuteRateCents(0)).toBe(0);
-  });
-
-  it('composes with applyBaloFee (expert A$120/hr @25% → client A$150/hr → 250c/min)', () => {
-    // 12_000 × 1.25 = 15_000/hr → 15_000/60 = 250c/min.
-    expect(deriveMinuteRateCents(applyBaloFee(12_000, DEFAULT_BALO_FEE_BPS))).toBe(250);
   });
 });
 

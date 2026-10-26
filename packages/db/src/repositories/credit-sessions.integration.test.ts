@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import {
   applyBaloFee,
-  deriveMinuteRateCents,
   DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   MAX_SESSION_MINUTES,
@@ -71,12 +70,9 @@ import { creditWalletsRepository } from './credit-wallets';
  * and the reaper-finder queries. Factories only; deterministic `now`.
  */
 
-// Expert A$120/hr → client A$150/hr (25% fee) → 250c/min client, 200c/min expert.
-const EXPERT_HOURLY = 12_000;
-const CLIENT_RATE_PER_MIN = deriveMinuteRateCents(
-  applyBaloFee(EXPERT_HOURLY, DEFAULT_BALO_FEE_BPS)
-);
-const EXPERT_RATE_PER_MIN = deriveMinuteRateCents(EXPERT_HOURLY);
+// Expert A$2.00/min (`rate_cents`) → client A$2.50/min (25% fee).
+const EXPERT_RATE_PER_MIN = 200;
+const CLIENT_RATE_PER_MIN = applyBaloFee(EXPERT_RATE_PER_MIN, DEFAULT_BALO_FEE_BPS);
 const BASE = new Date('2027-01-01T00:00:00.000Z');
 /**
  * BAL-412 (F13/D6) — the billing floor `meterSessionToNow` now REQUIRES, matching the shipped
@@ -105,7 +101,7 @@ interface SetupOpts {
   lowBalanceMode?: 'auto_topup' | 'keep_going' | 'notify_only';
   overdraftCeilingMinor?: number | null;
   estimatedMinutes?: number;
-  expertHourlyCents?: number | null;
+  expertRateCents?: number | null;
 }
 
 /** Seed a wallet (+optional mandate/balance), an expert with a rate, and a member. */
@@ -133,7 +129,7 @@ async function setup(opts: SetupOpts = {}): Promise<{
   await db
     .update(expertProfiles)
     .set({
-      rateCents: opts.expertHourlyCents === undefined ? EXPERT_HOURLY : opts.expertHourlyCents,
+      rateCents: opts.expertRateCents === undefined ? EXPERT_RATE_PER_MIN : opts.expertRateCents,
     })
     .where(eq(expertProfiles.id, expert.id));
 
@@ -213,7 +209,7 @@ describe('creditSessionsRepository.open — gate', () => {
     expect(s.settlementStatus).toBe('not_required');
     expect(s.clientRateMinorPerMinute).toBe(CLIENT_RATE_PER_MIN); // 250
     expect(s.expertRateMinorPerMinute).toBe(EXPERT_RATE_PER_MIN); // 200
-    expect(s.expertRateMinorPerHour).toBe(EXPERT_HOURLY);
+    expect(s.expertRateMinorPerHour).toBe(EXPERT_RATE_PER_MIN * 60);
     expect(s.baloFeeBps).toBe(DEFAULT_BALO_FEE_BPS);
     expect(s.effectiveCeilingMinor).toBe(DEFAULT_OVERDRAFT_CEILING_MINOR);
     expect(s.graceBoundMinutes).toBe(30);
@@ -314,7 +310,7 @@ describe('creditSessionsRepository.open — gate', () => {
   });
 
   it('rejects expert_rate_missing when the expert has no rate (Q9 hard-stop)', async () => {
-    const ctx = await setup({ balanceMinor: 50_000, expertHourlyCents: null });
+    const ctx = await setup({ balanceMinor: 50_000, expertRateCents: null });
     const res = await creditSessionsRepository.open({
       walletId: ctx.walletId,
       companyId: ctx.companyId,
@@ -4876,7 +4872,7 @@ describe('creditSessionsRepository.open — funding policies and provenance (BAL
       await creditSessionsRepository.open(tolerantInput(busy, await caseMeeting()))
     ).toEqual<OpenSessionResult>({ ok: false, code: 'session_in_progress' });
 
-    const rateless = await setup({ balanceMinor: 50_000, expertHourlyCents: null });
+    const rateless = await setup({ balanceMinor: 50_000, expertRateCents: null });
     expect(
       await creditSessionsRepository.open(tolerantInput(rateless, await caseMeeting()))
     ).toEqual<OpenSessionResult>({ ok: false, code: 'expert_rate_missing' });
@@ -5111,7 +5107,7 @@ describe('creditSessionsRepository.openAndSettleFromPresence (BAL-474 AD-3)', ()
   });
 
   it('a refusal writes NOTHING — no session, no hold, no audit', async () => {
-    const ctx = await setup({ balanceMinor: 50_000, expertHourlyCents: null });
+    const ctx = await setup({ balanceMinor: 50_000, expertRateCents: null });
     const meeting = await caseMeeting();
     const res = await creditSessionsRepository.openAndSettleFromPresence(input(ctx, meeting));
     expect(res).toEqual({ ok: false, code: 'expert_rate_missing' });

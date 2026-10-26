@@ -379,7 +379,7 @@ describe('platformLookupRepository.search — project requests', () => {
 
 // ── 12: credit sessions — the money-safe projection ──────────────────────────────────
 
-const EXPERT_HOURLY = 12_000;
+const EXPERT_RATE_PER_MIN = 200;
 
 /** Seed one openable credit session. There is no credit-session factory. */
 async function seedSession(paymentIntentId: string): Promise<{
@@ -392,7 +392,7 @@ async function seedSession(paymentIntentId: string): Promise<{
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, expert.id));
 
   const opened = await creditSessionsRepository.open({

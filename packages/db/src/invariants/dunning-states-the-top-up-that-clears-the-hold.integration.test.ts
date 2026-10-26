@@ -24,7 +24,7 @@ import { creditSessionsRepository } from '../repositories/credit-sessions';
  * `listWalletsDueForDailyDunning` and `stampDailyDunning` existed.
  */
 
-const EXPERT_HOURLY = 12_000;
+const EXPERT_RATE_PER_MIN = 200;
 const HOUR_MS = 60 * 60_000;
 
 interface DebtWallet {
@@ -53,7 +53,7 @@ async function seedTwoEndedSessions(): Promise<DebtWallet> {
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, expert.id));
 
   const endedAt = new Date(Date.now() - HOUR_MS);

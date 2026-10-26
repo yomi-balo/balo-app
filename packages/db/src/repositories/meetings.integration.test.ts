@@ -3118,7 +3118,7 @@ describe('meetingsRepository.listCalendarForExpert', () => {
 describe('meetingsRepository.listReservableCaseBookings (BAL-474, plan §I.2)', () => {
   const MINUTE_MS = 60_000;
   /** Client 700 / minute at the default fee. */
-  const RATE = 33_600;
+  const RATE = 560;
 
   function window(startOffsetMinutes: number, minutes: number): { start: Date; end: Date } {
     const base = Math.ceil(Date.now() / MINUTE_MS) * MINUTE_MS;
@@ -3339,10 +3339,7 @@ async function sessionOn(
   const { wallet, companyId } = await creditWalletFactory({ values: { balanceMinor: 100_000 } });
   const member = await userFactory();
   const expert = await expertFactory();
-  await db
-    .update(expertProfiles)
-    .set({ rateCents: 12_000 })
-    .where(eq(expertProfiles.id, expert.id));
+  await db.update(expertProfiles).set({ rateCents: 200 }).where(eq(expertProfiles.id, expert.id));
   const opened = await creditSessionsRepository.open({
     walletId: wallet.id,
     companyId,

@@ -102,13 +102,13 @@ import { runReceivableDunningSweep } from './receivable-dunning-sweep.js';
 
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
-/** A$300.00/h raw expert rate. */
-const EXPERT_HOURLY_MINOR = 30_000;
+/** A$5.00/min raw expert rate. */
+const EXPERT_RATE_MINOR_PER_MINUTE = 500;
 /** 40% — with the rate above, `deriveSessionEstimate` yields exactly the plan's 700 / 500. */
 const BALO_FEE_BPS = 4_000;
 const FLOOR_MINUTES = 15;
 const PLAN_RATES = deriveSessionEstimate({
-  expertHourlyMinor: EXPERT_HOURLY_MINOR,
+  expertRateMinorPerMinute: EXPERT_RATE_MINOR_PER_MINUTE,
   estimatedMinutes: 1,
   baloFeeBps: BALO_FEE_BPS,
 });
@@ -146,7 +146,7 @@ async function seedCardlessWallet(balanceMinor: number): Promise<Ctx> {
   const parties = await seedBookingParties();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY_MINOR })
+    .set({ rateCents: EXPERT_RATE_MINOR_PER_MINUTE })
     .where(eq(expertProfiles.id, parties.expertProfileId));
   const [wallet] = await db
     .insert(creditWallets)
@@ -721,7 +721,7 @@ describe('the dunning claim race — a deterministic two-connection lock order (
         userId: expertUser.id,
         verticalId: vertical.id,
         type: 'freelancer',
-        rateCents: EXPERT_HOURLY_MINOR,
+        rateCents: EXPERT_RATE_MINOR_PER_MINUTE,
       })
       .returning({ id: expertProfiles.id });
     if (profile === undefined) {
@@ -749,7 +749,7 @@ describe('the dunning claim race — a deterministic two-connection lock order (
         settlementStatus: 'failed',
         durationSource: 'presence',
         estimatedMinutes: FLOOR_MINUTES,
-        expertRateMinorPerHour: EXPERT_HOURLY_MINOR,
+        expertRateMinorPerHour: EXPERT_RATE_MINOR_PER_MINUTE * 60,
         baloFeeBps: BALO_FEE_BPS,
         clientRateMinorPerMinute: PLAN_RATES.clientRateMinorPerMinute,
         expertRateMinorPerMinute: PLAN_RATES.expertRateMinorPerMinute,

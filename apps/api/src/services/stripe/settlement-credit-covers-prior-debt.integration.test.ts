@@ -106,13 +106,13 @@ import { applyStripeEffect } from './dispatch.js';
 // ── The plan's rates (§A.4): client 700/min, expert 500/min, floor 15 ─────────────────────
 
 const MS_PER_MINUTE = 60_000;
-/** A$300.00/h raw expert rate. */
-const EXPERT_HOURLY_MINOR = 30_000;
+/** A$5.00/min raw expert rate. */
+const EXPERT_RATE_MINOR_PER_MINUTE = 500;
 /** 40% — with the rate above, `deriveSessionEstimate` yields exactly the plan's 700 / 500. */
 const BALO_FEE_BPS = 4_000;
 const FLOOR_MINUTES = 15;
 const PLAN_RATES = deriveSessionEstimate({
-  expertHourlyMinor: EXPERT_HOURLY_MINOR,
+  expertRateMinorPerMinute: EXPERT_RATE_MINOR_PER_MINUTE,
   estimatedMinutes: 1,
   baloFeeBps: BALO_FEE_BPS,
 });
@@ -152,7 +152,7 @@ async function seedMandateWallet(opts: {
   const parties = await seedBookingParties();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY_MINOR })
+    .set({ rateCents: EXPERT_RATE_MINOR_PER_MINUTE })
     .where(eq(expertProfiles.id, parties.expertProfileId));
   const [wallet] = await db
     .insert(creditWallets)

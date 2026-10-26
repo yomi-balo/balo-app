@@ -1537,8 +1537,11 @@ async function settlementPendingRefuses(
   return false;
 }
 
-/** Step 3 — the expert's hourly rate snapshot (`null` ⇒ no rate set); throws on a missing profile. */
-async function readExpertHourlyRate(
+/**
+ * Step 3 — the expert's rate snapshot: `expert_profiles.rate_cents`, cents PER MINUTE (`null` ⇒ no
+ * rate set); throws on a missing profile.
+ */
+async function readExpertMinuteRate(
   tx: DbExecutor,
   expertProfileId: string
 ): Promise<number | null> {
@@ -1560,7 +1563,6 @@ async function insertPendingSession(
   snapshot: {
     wallet: CreditWallet;
     holdId: string;
-    expertHourly: number;
     baloFeeBps: number;
     clientRateMinorPerMinute: number;
     expertRateMinorPerMinute: number;
@@ -1576,7 +1578,7 @@ async function insertPendingSession(
       initiatingMemberId: input.initiatingMemberId,
       holdId: snapshot.holdId,
       estimatedMinutes: input.estimatedMinutes,
-      expertRateMinorPerHour: snapshot.expertHourly,
+      expertRateMinorPerHour: snapshot.expertRateMinorPerMinute * 60,
       baloFeeBps: snapshot.baloFeeBps,
       clientRateMinorPerMinute: snapshot.clientRateMinorPerMinute,
       expertRateMinorPerMinute: snapshot.expertRateMinorPerMinute,
@@ -1702,18 +1704,16 @@ async function openInTx(tx: DbExecutor, input: OpenSessionInput): Promise<OpenSe
   }
 
   // 3. Snapshot the expert rate (Q9 hard-stop on a rate-less expert — both policies).
-  const expertHourly = await readExpertHourlyRate(tx, input.expertProfileId);
-  if (expertHourly === null) {
+  const expertRate = await readExpertMinuteRate(tx, input.expertProfileId);
+  if (expertRate === null) {
     return { ok: false, code: 'expert_rate_missing' };
   }
 
-  // BAL-478 — ONE estimator. This block used to inline the arithmetic; it now calls the
-  // shared pure helper the booking pre-check also calls, so the advisory gate and this
-  // authoritative one can never drift. Figures are byte-identical (see
-  // `packages/shared/src/credit/session-estimate.test.ts`).
+  // BAL-478 — ONE estimator, shared with the booking pre-check, so the advisory gate and this
+  // authoritative one can never drift (see `packages/shared/src/credit/session-estimate.ts`).
   const { baloFeeBps, clientRateMinorPerMinute, expertRateMinorPerMinute, estimateMinor } =
     deriveSessionEstimate({
-      expertHourlyMinor: expertHourly,
+      expertRateMinorPerMinute: expertRate,
       estimatedMinutes: input.estimatedMinutes,
       baloFeeBps: input.baloFeeBps,
     });
@@ -1749,7 +1749,6 @@ async function openInTx(tx: DbExecutor, input: OpenSessionInput): Promise<OpenSe
   const session = await insertPendingSession(tx, input, {
     wallet,
     holdId: hold.id,
-    expertHourly,
     baloFeeBps,
     clientRateMinorPerMinute,
     expertRateMinorPerMinute,
