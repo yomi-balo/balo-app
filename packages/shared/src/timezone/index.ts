@@ -655,6 +655,14 @@ export * from './utc-date';
 export * from './business-days';
 
 // ── Local calendar date (BAL-624) ────────────────────────────────
-//
-// `localIsoDate` — the YYYY-MM-DD date an instant falls on in a zone; see `./local-date`.
-export * from './local-date';
+
+/**
+ * The calendar date (`YYYY-MM-DD`) that `now` falls on in `timeZone`. Built from the zone's
+ * wall-clock parts rather than a locale's date format. A missing or unrecognised zone falls
+ * back to UTC, so the result is always a valid date.
+ */
+export function localIsoDate(now: Date, timeZone: string | null | undefined): string {
+  const zone = timeZone && isValidTimezone(timeZone) ? timeZone : 'UTC';
+  const { year, month, day } = tzWallClock(zone, now);
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}

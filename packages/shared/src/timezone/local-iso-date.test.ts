@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localIsoDate } from './local-date';
+import { localIsoDate } from './index';
 
 describe('localIsoDate', () => {
   describe('Australia/Melbourne in AEDT (UTC+11)', () => {
