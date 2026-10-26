@@ -50,27 +50,43 @@ function stripLinks(html: string): string {
   return sanitizeHtml(html, { allowedTags: DRAFT_ALLOWED_TAGS, allowedAttributes: {} });
 }
 
+const MILESTONE_NARROW_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [...PROPOSAL_DRAFT_MILESTONE_TAGS],
+  allowedAttributes: {},
+};
+
 /**
- * The milestone counterpart of {@link stripLinks}: narrows already-sanitised description HTML
- * to exactly `PROPOSAL_DRAFT_MILESTONE_TAGS`, what the composer's light milestone editor can
- * show. Anything else would be saved and reach the client without the expert ever seeing it,
- * so structure degrades to the nearest tag the editor renders (a numbered list becomes bullets,
- * a heading becomes a paragraph, `b`/`i` become `strong`/`em`) and every other tag, anchors
- * included, is unwrapped to its text. No attribute survives.
+ * The milestone counterpart of {@link stripLinks}: narrows raw model description HTML to exactly
+ * `PROPOSAL_DRAFT_MILESTONE_TAGS`, what the composer's light milestone editor can show. Anything
+ * else would be saved and reach the client without the expert ever seeing it, so structure
+ * degrades to the nearest tag the editor renders (a numbered list becomes bullets, headings,
+ * blockquotes and divs become paragraphs, `b`/`i` become `strong`/`em`) and every other tag,
+ * anchors included, is unwrapped to its text (the contents of `script` and `style` are dropped).
+ * No attribute survives.
+ *
+ * A second pass drops the empty paragraphs that nesting leaves behind: a blockquote wrapping a
+ * paragraph maps to a paragraph inside a paragraph, which the parser splits around the inner one.
  */
 function narrowMilestoneHtml(html: string): string {
-  return sanitizeHtml(html, {
-    allowedTags: [...PROPOSAL_DRAFT_MILESTONE_TAGS],
-    allowedAttributes: {},
+  const mapped = sanitizeHtml(html, {
+    ...MILESTONE_NARROW_OPTIONS,
     transformTags: {
       ol: 'ul',
       h1: 'p',
       h2: 'p',
       h3: 'p',
       h4: 'p',
+      h5: 'p',
+      h6: 'p',
+      blockquote: 'p',
+      div: 'p',
       b: 'strong',
       i: 'em',
     },
+  });
+  return sanitizeHtml(mapped, {
+    ...MILESTONE_NARROW_OPTIONS,
+    exclusiveFilter: (frame) => frame.tag === 'p' && frame.text.trim() === '',
   });
 }
 
@@ -82,8 +98,9 @@ function narrowMilestoneHtml(html: string): string {
  * same split `submit-proposal-core.ts` applies: `sanitizeProposalOverviewHtml` for the overview,
  * `sanitizeProjectHtml` for milestone descriptions. Titles and acceptance criteria are plain
  * text rendered as input values, so they are trimmed and never treated as HTML. Links are
- * unwrapped to their text in both HTML fields, and each milestone description is then narrowed
- * to what the light milestone editor renders (see {@link narrowMilestoneHtml}).
+ * unwrapped to their text in both HTML fields. Each milestone description is narrowed first to
+ * what the light milestone editor renders (see {@link narrowMilestoneHtml}) and sanitised last,
+ * the same order submit applies.
  */
 export function toProposalDraftPatch(output: unknown): ProposalDraftPatch | null {
   const parsed = storedOutputSchema.safeParse(output);
@@ -96,7 +113,7 @@ export function toProposalDraftPatch(output: unknown): ProposalDraftPatch | null
     overviewHtml,
     milestones: parsed.data.milestones.map((milestone) => ({
       title: milestone.title.trim(),
-      descriptionHtml: narrowMilestoneHtml(sanitizeProjectHtml(milestone.descriptionHtml)),
+      descriptionHtml: sanitizeProjectHtml(narrowMilestoneHtml(milestone.descriptionHtml)),
       acceptanceCriteria: milestone.acceptanceCriteria.trim(),
     })),
   };
