@@ -252,7 +252,8 @@ export const proposalDraftGenerationsRepository = {
    * `pending` row past the deadline, so storing a success after that moment would show the
    * expert a draft once they had already been told it failed. The worker's own deadline checks
    * still run first; they save the paid model call, this one keeps the stored outcome honest.
-   * The row then stays `pending`, which every read already derives as failed.
+   * The worker re-reads the row and fails a still-pending one as `deadline_exceeded`; until that
+   * write lands, every read already derives the row as failed.
    *
    * ⚠ `status`, `output` and `completed_at` are set in ONE `.set()`: the table's three
    * biconditional CHECKs reject any of them alone.
