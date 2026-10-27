@@ -9,7 +9,7 @@ import {
   AUTO_ACCEPT_DAYS,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -113,7 +113,7 @@ export async function requestCompletionAction(input: {
         recipientId,
         clientCompanyName: parties.clientCompanyName,
         expertPartyLabel: parties.expertParty,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         projectTitle: deriveEngagementTitle(engagement, parties),
         milestonesTotal: engagement.milestones.length,
         requestedDate: formatShortUtc(requestedAt),

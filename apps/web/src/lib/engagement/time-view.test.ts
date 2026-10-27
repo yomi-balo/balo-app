@@ -59,6 +59,7 @@ function view(
     entries?: TimeEntryListRow[];
     sums?: TimeEntrySums;
     canLogTime?: boolean;
+    canManageAnyEntry?: boolean;
     period?: typeof period | null;
     notifiedMilestoneIds?: string[];
   } = {}
@@ -71,6 +72,7 @@ function view(
     period: over.period === undefined ? period : over.period,
     viewerUserId: VIEWER,
     canLogTime: over.canLogTime ?? true,
+    canManageAnyEntry: over.canManageAnyEntry ?? false,
     notifiedMilestoneIds: over.notifiedMilestoneIds ?? [],
   });
   if (result === null) throw new Error('expected a time view');
@@ -95,6 +97,7 @@ describe('mapTimeToView', () => {
         period,
         viewerUserId: VIEWER,
         canLogTime: true,
+        canManageAnyEntry: false,
         notifiedMilestoneIds: [],
       })
     ).toBeNull();
@@ -179,6 +182,27 @@ describe('mapTimeToView', () => {
     it("never offers edit or delete on someone else's entry", () => {
       const [e] = milestone(
         view(project(), { entries: [entry({ userId: 'user-other' })] })
+      ).entries;
+      expect(e).toMatchObject({ canEdit: false, canDelete: false });
+    });
+
+    it("lets an agency owner/admin edit and delete another author's entry", () => {
+      const [e] = milestone(
+        view(project(), {
+          entries: [entry({ userId: 'user-other' })],
+          canManageAnyEntry: true,
+        })
+      ).entries;
+      expect(e).toMatchObject({ canEdit: true, canDelete: true });
+    });
+
+    it('any-entry management still needs the time-logging capability', () => {
+      const [e] = milestone(
+        view(project(), {
+          entries: [entry({ userId: 'user-other' })],
+          canLogTime: false,
+          canManageAnyEntry: true,
+        })
       ).entries;
       expect(e).toMatchObject({ canEdit: false, canDelete: false });
     });

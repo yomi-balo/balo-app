@@ -30,6 +30,7 @@ import { deriveProposalChanges, type ProposalContentChange } from './proposal-co
 import {
   deriveEngagementParties,
   engagementHeaderLine,
+  expertSideActorLabel,
   personAtCompany,
   projectEngagementTitle,
   type EngagementParties,
@@ -654,6 +655,14 @@ function acceptedWhenPhrase(autoAcceptOn: string | null): string {
   return autoAcceptOn === null ? 'at the end of the review window' : `on ${autoAcceptOn}`;
 }
 
+/** Who marked the project ready, named as the acting person; no recorded person → the expert side. */
+function completionRequesterLabel(
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string {
+  return expertSideActorLabel(engagement, parties, engagement.completionRequestedBy);
+}
+
 function deriveReviewBanner(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
@@ -670,7 +679,7 @@ function deriveReviewBanner(
   if (lens === 'client') {
     const expertShort = parties.expertPersonShort;
     return {
-      title: `${parties.expertRetroFirstMention} says the project is ready`,
+      title: `${completionRequesterLabel(engagement, parties)} says the project is ready`,
       body: `Have a look through the milestones below, then accept the project or request changes. If you don't respond, it's accepted ${acceptedWhen}.`,
       autoAcceptOn,
       lastRequest: deriveLastRequest(engagement),
@@ -696,7 +705,7 @@ function deriveReviewBanner(
   }
   return {
     title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
-    body: `Requested ${requestedAtLabel} by ${parties.expertRetroFirstMention}. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
+    body: `Requested ${requestedAtLabel} by ${completionRequesterLabel(engagement, parties)}. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
     autoAcceptOn,
     clientDecision: null,
     lastRequest: null,
@@ -794,28 +803,34 @@ function deriveCancelledBanner(
 
 function deriveEmptyState(
   engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens,
+  ctx: EngagementViewerContext,
   parties: EngagementParties
 ): EmptyStateView | null {
   if (engagement.milestones.length > 0) return null;
   // Terminal engagements show only their completed/cancelled banner — a
   // forward-looking "shaping the delivery plan" invitation would be stale.
   if (engagement.status === 'completed' || engagement.status === 'cancelled') return null;
-  if (lens === 'expert') {
+  if (ctx.lens === 'expert') {
     const client = parties.clientCompanyName;
+    // The delivering expert is addressed directly; an agency owner/admin viewing the same
+    // plan is told what the agency does (prospective copy names the party).
+    const firstMilestone = ctx.isDeliveringExpert ? 'your first milestone' : 'the first milestone';
     // On T&M a milestone is added through a change the client approves, so the invitation
     // matches the "Propose the first milestone" CTA.
     const opener =
       engagement.pricingMethod === 'tm'
         ? `Propose the first milestone — ${client} approves it before work is tracked against it.`
-        : `Add your first milestone so ${client} can follow progress.`;
+        : `Add ${firstMilestone} so ${client} can follow progress.`;
+    const closer = ctx.isDeliveringExpert
+      ? `you mark the project ready and ${client} reviews it as a whole.`
+      : `${parties.expertPartyShort} marks the project ready and ${client} reviews it as a whole.`;
     return {
       icon: 'Flag',
       title: 'Shape the delivery plan',
-      body: `${opener} When everything is delivered, you mark the project ready and ${client} reviews it as a whole.`,
+      body: `${opener} When everything is delivered, ${closer}`,
     };
   }
-  if (lens === 'client') {
+  if (ctx.lens === 'client') {
     return {
       icon: 'Flag',
       title: `${parties.expertPartyShort} is shaping the delivery plan`,
@@ -896,7 +911,7 @@ function deriveCancelDialog(
   const client = parties.clientCompanyName;
   const reviewNote =
     engagement.status === 'pending_acceptance'
-      ? `${parties.expertRetroFirstMention} has marked the project ready and ${client} is reviewing it. If they don't respond, it's accepted ${acceptedWhenPhrase(autoAcceptDate(engagement))}.`
+      ? `${completionRequesterLabel(engagement, parties)} has marked the project ready and ${client} is reviewing it. If they don't respond, it's accepted ${acceptedWhenPhrase(autoAcceptDate(engagement))}.`
       : null;
   return {
     body: `Delivery stops straight away for ${client} and ${parties.expertParty}, and it can't be undone. Both are told, with your reason.`,
@@ -1035,7 +1050,7 @@ export function mapEngagementToWorkspaceView(
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
     completedBanner: deriveCompletedBanner(engagement, ctx.lens, parties),
     cancelledBanner: deriveCancelledBanner(engagement),
-    emptyState: deriveEmptyState(engagement, ctx.lens, parties),
+    emptyState: deriveEmptyState(engagement, ctx, parties),
     cancelDialog: deriveCancelDialog(engagement, parties),
     completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
     addMilestoneNeedsChangeOrder: engagement.pricingMethod === 'tm',

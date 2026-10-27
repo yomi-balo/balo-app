@@ -491,7 +491,7 @@ async function lockTaggedMilestonesTx(
 // parent rows by a nested relation's columns.
 //
 // CONSEQUENCE: the four relocated relations (`projectRequest`, `acceptedBy`,
-// `cancelledBy`, `changeRequestedBy`) are GRANDCHILDREN here — declared under
+// `cancelledBy`, `changeRequestedBy`, `completionRequestedBy`) are GRANDCHILDREN here — declared under
 // `with: { projectEngagement: { with: { … } } }` — and each fold HOISTS them back to
 // the top level, because every consumer reads them flat.
 
@@ -554,8 +554,10 @@ function queryProjectEngagementWithMilestones(id: string) {
       //   - projectRequest: the header title (LEFT-JOIN `one` → null for a retainer
       //     engagement with no `project_request_id`; the caller falls back).
       //   - acceptedBy / changeRequestedBy: retrospective client-person attribution
-      //     (each nullable — `acceptedBy` is NULL on the D7 auto path, and both are
+      //     (each nullable — `acceptedBy` is NULL on the D7 auto path, and all are
       //     NULL until the corresponding transition happens).
+      //   - completionRequestedBy: the person who marked the project ready for review
+      //     (NULL until requested, and after a withdrawal).
       company: { columns: { id: true, name: true } },
       projectEngagement: {
         columns: {
@@ -585,6 +587,7 @@ function queryProjectEngagementWithMilestones(id: string) {
           projectRequest: { columns: { id: true, title: true } },
           acceptedBy: { columns: { id: true, firstName: true, lastName: true } },
           changeRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
+          completionRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
         },
       },
       // BAL-621: every LIVE change-request round, oldest → newest (ties by id), with the
@@ -644,7 +647,14 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
       `Project engagement ${row.id} has a NULL balo_fee_bps — engagement_balo_fee_bps_case_null violated`
     );
   }
-  const { deliveryStatus, projectRequest, acceptedBy, changeRequestedBy, ...childScalars } = child;
+  const {
+    deliveryStatus,
+    projectRequest,
+    acceptedBy,
+    changeRequestedBy,
+    completionRequestedBy,
+    ...childScalars
+  } = child;
   // The change-request rounds are the durable history (the legacy `changeRequestNote` is
   // nulled by `requestCompletion`), so every "latest round" surface reads these.
   const changeRequestRounds = changeRequests.map((round) => ({
@@ -661,6 +671,7 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
     projectRequest, // HOISTED grandchild
     acceptedBy, // HOISTED grandchild
     changeRequestedBy, // HOISTED grandchild
+    completionRequestedBy, // HOISTED grandchild
     changeRequestRounds, // oldest → newest
     latestChangeRequest: changeRequestRounds.at(-1) ?? null,
     changeRequestRoundCount: changeRequestRounds.length,

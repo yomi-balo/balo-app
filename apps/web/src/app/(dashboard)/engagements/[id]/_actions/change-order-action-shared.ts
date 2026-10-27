@@ -3,16 +3,12 @@ import 'server-only';
 import { z } from 'zod';
 import {
   companiesRepository,
-  projectEngagementsRepository,
   type ChangeOrderLineInput,
   type ChangeOrderRecord,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
-import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
-import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
-import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import type { EngagementParties } from '@/lib/engagement/engagement-parties';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
@@ -27,9 +23,10 @@ import {
 } from './engagement-lifecycle-shared';
 import {
   INVALID_REQUEST,
-  NOT_FOUND,
   PLAN_CHANGED,
   descriptionTextToSafeHtml,
+  gateExpertSideAct,
+  type ExpertSideGateResult,
 } from './milestone-action-shared';
 
 export {
@@ -87,28 +84,19 @@ export async function gateChangeOrderClient(
 export async function gateChangeOrderExpert(
   user: SessionUser,
   engagementId: string
-): Promise<GateResult> {
-  const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
-  if (engagement === undefined) {
-    deny(engagementId, user.id, 'engagement_not_found');
-    return { ok: false, error: NOT_FOUND };
+): Promise<ExpertSideGateResult> {
+  const gate = await gateExpertSideAct(user, engagementId, {
+    notHolder: ONLY_EXPERT,
+    logMessage: 'Engagement lifecycle denied',
+  });
+  if (!gate.ok) {
+    return gate;
   }
-  const allowed = await hasExpertDeliveryCapability(
-    user,
-    ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-    engagement.expertProfileId,
-    { contextType: 'project', contextId: engagementId }
-  );
-  if (!allowed) {
-    const isParty = resolveEngagementLens(user, engagement) !== null;
-    deny(engagementId, user.id, isParty ? 'no_capability' : 'not_a_party');
-    return { ok: false, error: isParty ? ONLY_EXPERT : NOT_FOUND };
-  }
-  if (engagement.status !== 'active') {
+  if (gate.engagement.status !== 'active') {
     deny(engagementId, user.id, 'wrong_status');
     return { ok: false, error: NOT_ACTIVE };
   }
-  return { ok: true, engagement };
+  return gate;
 }
 
 /**

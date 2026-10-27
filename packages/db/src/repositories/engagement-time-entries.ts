@@ -228,14 +228,21 @@ async function discoverMilestone(milestoneId: string, engagementId: string): Pro
 }
 
 /**
- * Unlocked lock-order discovery of the milestone a live entry sits on. A missing or removed
- * entry, one on another engagement or by another author, or one whose milestone was removed
- * all refuse with the same `entry_not_found`, so authorship does not leak.
+ * Whose entries a write may reach: `'own'` only the actor's, `'any'` any author's on the
+ * engagement. The repository is role-free; the caller decides the scope.
  */
-async function discoverOwnEntryMilestoneId(input: {
+export type TimeEntryAuthorScope = 'own' | 'any';
+
+/**
+ * Unlocked lock-order discovery of the milestone a live entry sits on. A missing or removed
+ * entry, one on another engagement, one by another author (scope `'own'`), or one whose
+ * milestone was removed all refuse with the same `entry_not_found`, so authorship does not leak.
+ */
+async function discoverEntryMilestoneId(input: {
   engagementId: string;
   entryId: string;
   userId: string;
+  authorScope: TimeEntryAuthorScope;
 }): Promise<string> {
   const [row] = await db
     .select({ milestoneId: engagementTimeEntries.engagementMilestoneId })
@@ -251,7 +258,7 @@ async function discoverOwnEntryMilestoneId(input: {
       and(
         eq(engagementTimeEntries.id, input.entryId),
         eq(engagementTimeEntries.engagementId, input.engagementId),
-        eq(engagementTimeEntries.userId, input.userId),
+        input.authorScope === 'own' ? eq(engagementTimeEntries.userId, input.userId) : undefined,
         liveEntry
       )
     );
@@ -259,10 +266,16 @@ async function discoverOwnEntryMilestoneId(input: {
   return row.milestoneId;
 }
 
-/** Re-read the caller's entry FOR UPDATE under the engagement and milestone locks. */
-async function lockOwnEntryTx(
+/** Re-read the entry FOR UPDATE under the engagement and milestone locks. */
+async function lockEntryTx(
   tx: DbTx,
-  input: { engagementId: string; entryId: string; userId: string; milestoneId: string }
+  input: {
+    engagementId: string;
+    entryId: string;
+    userId: string;
+    milestoneId: string;
+    authorScope: TimeEntryAuthorScope;
+  }
 ): Promise<EngagementTimeEntry> {
   const [entry] = await tx
     .select()
@@ -272,7 +285,7 @@ async function lockOwnEntryTx(
         eq(engagementTimeEntries.id, input.entryId),
         eq(engagementTimeEntries.engagementId, input.engagementId),
         eq(engagementTimeEntries.engagementMilestoneId, input.milestoneId),
-        eq(engagementTimeEntries.userId, input.userId),
+        input.authorScope === 'own' ? eq(engagementTimeEntries.userId, input.userId) : undefined,
         liveEntry
       )
     )
@@ -503,26 +516,28 @@ export const engagementTimeEntriesRepository = {
   },
 
   /**
-   * Change the minutes and note of the caller's own entry on an in-progress milestone, and
-   * re-check the estimate crossing. Throws `EngagementNotActiveError` or
-   * `TimeEntryWriteRefusedError`.
+   * Change the minutes and note of an entry on an in-progress milestone, and re-check the
+   * estimate crossing. `userId` is the actor (audit); `authorScope` decides whether the entry
+   * must be theirs. The daily limit is checked against the entry's author. Throws
+   * `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
    */
   async update(input: {
     engagementId: string;
     entryId: string;
     userId: string;
+    authorScope: TimeEntryAuthorScope;
     minutes: number;
     note: string;
   }): Promise<TimeEntryWriteResult> {
-    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    const milestoneId = await discoverEntryMilestoneId(input);
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, milestoneId);
-      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      const current = await lockEntryTx(tx, { ...input, milestoneId });
       await assertTimeAndMaterialsTx(tx, input.engagementId);
       assertInProgress(milestone);
       await assertWithinDailyLimitTx(tx, {
         engagementId: input.engagementId,
-        userId: input.userId,
+        userId: current.userId,
         workedOn: current.workedOn,
         minutes: input.minutes,
         excludeEntryId: current.id,
@@ -561,18 +576,20 @@ export const engagementTimeEntriesRepository = {
   },
 
   /**
-   * Soft-delete the caller's own entry, on a milestone in any status. No crossing check.
-   * Throws `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
+   * Soft-delete an entry, on a milestone in any status. No crossing check. `userId` is the
+   * actor (audit); `authorScope` decides whether the entry must be theirs. Throws
+   * `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
    */
   async remove(input: {
     engagementId: string;
     entryId: string;
     userId: string;
+    authorScope: TimeEntryAuthorScope;
   }): Promise<EngagementTimeEntry> {
-    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    const milestoneId = await discoverEntryMilestoneId(input);
     return db.transaction(async (tx) => {
       await lockEngagementAndMilestone(tx, milestoneId);
-      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      const current = await lockEntryTx(tx, { ...input, milestoneId });
       await assertTimeAndMaterialsTx(tx, input.engagementId);
 
       const now = new Date();

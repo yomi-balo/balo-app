@@ -26,6 +26,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   MilestonesIncompleteError,
@@ -95,16 +100,17 @@ import {
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
-const USER = { id: 'user-1', platformRole: 'user' } as never;
+const USER = { id: 'user-1', platformRole: 'user', expertProfileId: 'expert-1' } as never;
 const BALO_USER = { id: 'balo-1', platformRole: 'admin' } as never;
 const SUPER_USER = { id: 'su-1', platformRole: 'super_admin' } as never;
 
 function engagement(status = 'active') {
-  return { id: ENGAGEMENT_ID, status, milestones: [] };
+  return { id: ENGAGEMENT_ID, status, expertProfileId: 'expert-1', milestones: [] };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockFindEngagement.mockResolvedValue(engagement('active'));
   mockResolveLens.mockReturnValue({ lens: 'expert' });
 });
@@ -117,15 +123,27 @@ describe('gateExpertEngagement', () => {
   });
 
   it('returns NOT_FOUND for a stranger (null lens) — no existence leak', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue(null);
     const res = await gateExpertEngagement(USER, ENGAGEMENT_ID, 'active');
     expect(res).toEqual({ ok: false, error: 'This engagement could not be found.' });
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ lens: 'admin' });
     const res = await gateExpertEngagement(USER, ENGAGEMENT_ID, 'active');
     expect(res).toEqual({ ok: false, error: 'Only the delivering expert can do that.' });
+  });
+
+  it('returns the agency_admin actor for a holder who is not the delivering expert', async () => {
+    mockResolveLens.mockReturnValue(null);
+    const res = await gateExpertEngagement(
+      { id: 'admin-1', expertProfileId: 'ep-other' } as never,
+      ENGAGEMENT_ID,
+      'active'
+    );
+    expect(res).toMatchObject({ ok: true, actor: { actingAs: 'agency_admin' } });
   });
 
   it('returns NOT_ACTIVE when requiredStatus is active but the engagement is under review', async () => {

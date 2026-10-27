@@ -135,6 +135,25 @@ describe('removeTimeEntryAction', () => {
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
+  it('lets an agency admin remove any author entry', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    mockWrite.mockResolvedValue(entry);
+    expect(await removeTimeEntryAction(INPUT)).toEqual({ success: true });
+    expect(mockWrite).toHaveBeenCalledWith({
+      engagementId: ENGAGEMENT_ID,
+      entryId: ENTRY_ID,
+      userId: 'admin-1',
+      authorScope: 'any',
+    });
+  });
+
   it('deletes the entry as the actor and sends no notice', async () => {
     mockWrite.mockResolvedValue(entry);
     expect(await removeTimeEntryAction(INPUT)).toEqual({ success: true });
@@ -142,6 +161,7 @@ describe('removeTimeEntryAction', () => {
       engagementId: ENGAGEMENT_ID,
       entryId: ENTRY_ID,
       userId: CHARLES.id,
+      authorScope: 'own',
     });
     expect(mockTrack).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();

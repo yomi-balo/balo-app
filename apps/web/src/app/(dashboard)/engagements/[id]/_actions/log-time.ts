@@ -71,7 +71,7 @@ export async function logTimeAction(input: {
         note,
         workedOn: localIsoDate(new Date(), author?.timezone),
       });
-      await afterTimeWrite({ kind: 'logged', userId: user.id, engagement, result });
+      await afterTimeWrite({ kind: 'logged', actor: user, engagement, result });
       return { success: true };
     }
   );

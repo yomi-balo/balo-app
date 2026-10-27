@@ -173,6 +173,7 @@ export async function updateMilestoneAction(
         : `${updated.id}:edited:${Math.floor(Date.now() / EDIT_COSMETIC_DEBOUNCE_MS)}`;
 
       await publishScopeChange(engagement, {
+        actor: user,
         changeKind: 'edited',
         milestoneId: updated.id,
         milestoneTitle: updated.title,

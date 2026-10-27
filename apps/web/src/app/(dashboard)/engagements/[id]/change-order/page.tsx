@@ -10,7 +10,7 @@ import { loggedValueCents } from '@balo/shared/engagements';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { log } from '@/lib/logging';
-import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import { resolveEngagementViewer } from '@/lib/engagement/resolve-engagement-viewer';
 import {
   deriveEngagementParties,
   projectEngagementTitle,
@@ -102,7 +102,7 @@ export default async function ChangeOrderComposerPage({
     notFound();
   }
 
-  const ctx = resolveEngagementLens(user, engagement);
+  const ctx = await resolveEngagementViewer(user, engagement);
   if (!ctx) {
     notFound();
   }
@@ -135,7 +135,8 @@ export default async function ChangeOrderComposerPage({
 
   const parties = deriveEngagementParties(engagement);
   const requestedHeading =
-    mapChangeOrdersToView(orders, engagement, ctx, parties, false).open?.requestedHeading ?? null;
+    mapChangeOrdersToView(orders, engagement, ctx, parties, false, new Date(), {}, user.id).open
+      ?.requestedHeading ?? null;
   const projectTitle = projectEngagementTitle(
     engagement.projectRequest?.title ?? null,
     parties.expertPartyShort

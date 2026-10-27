@@ -2052,6 +2052,27 @@ describe('projectEngagementsRepository.findWithMilestones — BAL-331 additive p
     expect(hydrated?.projectRequest).toBeNull();
   });
 
+  it('completionRequestedBy is null when unset', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.completionRequestedBy).toBeNull();
+  });
+
+  it('hydrates completionRequestedBy as a name-only projection (PII-safe)', async () => {
+    const requester = await userFactory({ firstName: 'Charles', lastName: 'Admin' });
+    const { engagement } = await engagementFactory({
+      projectValues: { completionRequestedByUserId: requester.id },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+
+    expect(hydrated?.completionRequestedBy).toEqual({
+      id: requester.id,
+      firstName: 'Charles',
+      lastName: 'Admin',
+    });
+  });
+
   it('acceptedBy / changeRequestedBy are null when unset', async () => {
     const { engagement } = await engagementFactory();
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);

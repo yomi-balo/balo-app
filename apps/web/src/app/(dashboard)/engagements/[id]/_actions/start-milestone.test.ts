@@ -17,6 +17,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -100,6 +105,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({
@@ -142,6 +148,7 @@ describe('startMilestoneAction', () => {
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({
       lens: 'admin',
       archetype: 'observer',

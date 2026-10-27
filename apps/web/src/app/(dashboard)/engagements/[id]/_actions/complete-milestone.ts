@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -97,7 +97,7 @@ export async function completeMilestoneAction(input: {
         milestoneId: updated.id,
         recipientId,
         expertPartyLabel: parties.expertParty,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         projectTitle: deriveEngagementTitle(engagement, parties),
         milestoneTitle: updated.title,
         completedOn: formatCompletedOn(updated.completedAt ?? new Date()),

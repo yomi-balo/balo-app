@@ -83,6 +83,7 @@ export async function removeMilestoneAction(
       });
 
       await publishScopeChange(engagement, {
+        actor: user,
         changeKind: 'removed',
         milestoneId: removed.id,
         milestoneTitle: removed.title,

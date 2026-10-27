@@ -262,6 +262,7 @@ describe('engagementTimeEntriesRepository.log', () => {
     await repo.log(logInput(seeded, 465));
     const crossing = await repo.log(logInput(seeded, 30));
     await repo.remove({
+      authorScope: 'own',
       engagementId: seeded.engagementId,
       entryId: crossing.entry.id,
       userId: seeded.userId,
@@ -363,6 +364,7 @@ describe('engagementTimeEntriesRepository.update', () => {
     const { entry } = await repo.log(logInput(seeded, 60));
 
     const result = await repo.update({
+      authorScope: 'own',
       engagementId: seeded.engagementId,
       entryId: entry.id,
       userId: seeded.userId,
@@ -394,6 +396,7 @@ describe('engagementTimeEntriesRepository.update', () => {
     const { entry } = await repo.log(logInput(seeded, 60)); // exactly 480
 
     const result = await repo.update({
+      authorScope: 'own',
       engagementId: seeded.engagementId,
       entryId: entry.id,
       userId: seeded.userId,
@@ -419,7 +422,7 @@ describe('engagementTimeEntriesRepository.update', () => {
       userId: seeded.userId,
       values: { deletedAt: new Date() },
     });
-    const base = { minutes: 30, note: 'Changed' };
+    const base = { minutes: 30, note: 'Changed', authorScope: 'own' as const };
 
     const attempts = [
       { engagementId: seeded.engagementId, entryId: entry.id, userId: other.userId },
@@ -436,6 +439,68 @@ describe('engagementTimeEntriesRepository.update', () => {
     expect(unchanged?.minutes).toBe(60);
   });
 
+  it("lets scope 'any' edit another author's entry, auditing the editor as actor", async () => {
+    const seeded = await seedTm();
+    const editor = await userFactory();
+    const { entry } = await repo.log(logInput(seeded, 60));
+
+    const result = await repo.update({
+      engagementId: seeded.engagementId,
+      entryId: entry.id,
+      userId: editor.id,
+      authorScope: 'any',
+      minutes: 90,
+      note: 'Corrected by the agency.',
+    });
+
+    expect(result.entry).toMatchObject({ id: entry.id, minutes: 90, userId: seeded.userId });
+    const [, edited] = await auditFor(entry.id);
+    expect(edited?.actorUserId).toBe(editor.id);
+  });
+
+  it("checks the daily limit against the entry's author for scope 'any'", async () => {
+    const seeded = await seedTm();
+    const editor = await userFactory();
+    await repo.log(logInput(seeded, 1000));
+    const { entry } = await repo.log(logInput(seeded, 400));
+    await engagementTimeEntryFactory({
+      milestone: seeded.milestone,
+      userId: editor.id,
+      values: { minutes: 1440 },
+    });
+    const update = (minutes: number) =>
+      repo.update({
+        engagementId: seeded.engagementId,
+        entryId: entry.id,
+        userId: editor.id,
+        authorScope: 'any',
+        minutes,
+        note: entry.note,
+      });
+
+    expect((await update(440)).entry.minutes).toBe(440);
+    expect(await refusalOf(update(441))).toBe('daily_limit_exceeded');
+  });
+
+  it("does not let scope 'any' reach another engagement's entry", async () => {
+    const seeded = await seedTm();
+    const other = await seedTm();
+    const { entry } = await repo.log(logInput(seeded, 60));
+
+    expect(
+      await refusalOf(
+        repo.update({
+          engagementId: other.engagementId,
+          entryId: entry.id,
+          userId: other.userId,
+          authorScope: 'any',
+          minutes: 30,
+          note: 'Changed',
+        })
+      )
+    ).toBe('entry_not_found');
+  });
+
   it('refuses an entry on a milestone that is no longer in progress', async () => {
     const seeded = await seedTm();
     const { entry } = await repo.log(logInput(seeded, 60));
@@ -447,6 +512,7 @@ describe('engagementTimeEntriesRepository.update', () => {
     expect(
       await refusalOf(
         repo.update({
+          authorScope: 'own',
           engagementId: seeded.engagementId,
           entryId: entry.id,
           userId: seeded.userId,
@@ -468,6 +534,7 @@ describe('engagementTimeEntriesRepository.remove', () => {
       .where(eq(engagementMilestones.id, seeded.milestone.id));
 
     const removed = await repo.remove({
+      authorScope: 'own',
       engagementId: seeded.engagementId,
       entryId: entry.id,
       userId: seeded.userId,
@@ -490,17 +557,62 @@ describe('engagementTimeEntriesRepository.remove', () => {
 
     expect(
       await refusalOf(
-        repo.remove({ engagementId: seeded.engagementId, entryId: entry.id, userId: other.id })
+        repo.remove({
+          engagementId: seeded.engagementId,
+          entryId: entry.id,
+          userId: other.id,
+          authorScope: 'own',
+        })
       )
     ).toBe('entry_not_found');
     await repo.remove({
+      authorScope: 'own',
       engagementId: seeded.engagementId,
       entryId: entry.id,
       userId: seeded.userId,
     });
     expect(
       await refusalOf(
-        repo.remove({ engagementId: seeded.engagementId, entryId: entry.id, userId: seeded.userId })
+        repo.remove({
+          engagementId: seeded.engagementId,
+          entryId: entry.id,
+          userId: seeded.userId,
+          authorScope: 'own',
+        })
+      )
+    ).toBe('entry_not_found');
+  });
+
+  it("lets scope 'any' remove another author's entry, auditing the remover as actor", async () => {
+    const seeded = await seedTm();
+    const remover = await userFactory();
+    const { entry } = await repo.log(logInput(seeded, 45));
+
+    const removed = await repo.remove({
+      engagementId: seeded.engagementId,
+      entryId: entry.id,
+      userId: remover.id,
+      authorScope: 'any',
+    });
+
+    expect(removed.deletedAt).toBeInstanceOf(Date);
+    const [, event] = await auditFor(entry.id);
+    expect(event?.actorUserId).toBe(remover.id);
+  });
+
+  it("does not let scope 'any' reach another engagement's entry", async () => {
+    const seeded = await seedTm();
+    const other = await seedTm();
+    const { entry } = await repo.log(logInput(seeded, 45));
+
+    expect(
+      await refusalOf(
+        repo.remove({
+          engagementId: other.engagementId,
+          entryId: entry.id,
+          userId: other.userId,
+          authorScope: 'any',
+        })
       )
     ).toBe('entry_not_found');
   });
@@ -515,7 +627,12 @@ describe('engagementTimeEntriesRepository.remove', () => {
     });
 
     await expect(
-      repo.remove({ engagementId: seeded.engagementId, entryId: entry.id, userId: seeded.userId })
+      repo.remove({
+        engagementId: seeded.engagementId,
+        entryId: entry.id,
+        userId: seeded.userId,
+        authorScope: 'own',
+      })
     ).rejects.toBeInstanceOf(EngagementNotActiveError);
   });
 });
@@ -759,6 +876,7 @@ describe('engagementTimeEntriesRepository — daily limit per author', () => {
     const { entry } = await repo.log(logInput(seeded, 400));
     const update = (minutes: number) =>
       repo.update({
+        authorScope: 'own',
         engagementId: seeded.engagementId,
         entryId: entry.id,
         userId: seeded.userId,

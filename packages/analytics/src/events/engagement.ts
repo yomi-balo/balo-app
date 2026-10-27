@@ -126,6 +126,9 @@ interface ChangeOrderLinesProps extends ChangeOrderEventBase {
   initiated_by: ChangeOrderInitiator;
 }
 
+/** Which expert-side capacity acted: the delivering expert, or an agency owner/admin on their behalf. */
+export type ChangeOrderActingAs = 'delivering_expert' | 'agency_admin';
+
 /** A change-order event that closes the order, so it records the time taken to decide. */
 interface ChangeOrderDecidedProps extends ChangeOrderLinesProps {
   /** Whole days since `sent_at`, int >=0. */
@@ -253,13 +256,22 @@ export interface EngagementServerEventMap {
   [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_REQUESTED]: ChangeOrderEventBase & {
     initiated_by: 'client';
   };
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT]: ChangeOrderLinesProps;
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED]: ChangeOrderDecidedProps;
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED]: ChangeOrderDecidedProps & {
-    /** True when the expert answered a request without proposing a change order. */
-    answered_without_change_order: boolean;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT]: ChangeOrderLinesProps & {
+    acting_as: ChangeOrderActingAs;
   };
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED]: ChangeOrderDecidedProps &
+    (
+      | {
+          /** The expert answered a request without proposing a change order. */
+          answered_without_change_order: true;
+          acting_as: ChangeOrderActingAs;
+        }
+      | { answered_without_change_order: false }
+    );
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps & {
+    acting_as: ChangeOrderActingAs;
+  };
   [ENGAGEMENT_SERVER_EVENTS.TIME_LOGGED]: {
     engagement_id: string;
     milestone_id: string;

@@ -89,6 +89,7 @@ export async function addMilestoneAction(input: AddMilestoneInput): Promise<Mile
       });
 
       await publishScopeChange(engagement, {
+        actor: user,
         changeKind: 'added',
         milestoneId: created.id,
         milestoneTitle: created.title,

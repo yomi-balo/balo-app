@@ -20,6 +20,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -81,7 +86,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     latestChangeRequest: null,
     expertProfile: {
-      user: { firstName: 'Priya', lastName: 'Sharma' },
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       agency: null,
       headline: null,
       type: 'freelancer',
@@ -103,6 +108,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
@@ -135,6 +141,31 @@ describe('revertMilestoneAction', () => {
       error: 'You are not signed in.',
     });
     expect(mockRevert).not.toHaveBeenCalled();
+  });
+
+  it('names an agency admin who reopens the milestone', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      engagement({
+        expertProfile: {
+          user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
+          agency: { name: 'CloudPeak' },
+          headline: null,
+          type: 'agency',
+        },
+      } as never)
+    );
+    await revertMilestoneAction(INPUT);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.milestone_reverted',
+      expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    );
   });
 
   it('returns STALE_TRANSITION when the milestone is not completed', async () => {

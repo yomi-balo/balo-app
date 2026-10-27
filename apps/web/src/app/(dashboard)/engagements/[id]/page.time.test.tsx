@@ -103,6 +103,7 @@ function engagement(
     },
     company: { id: 'company-1', name: 'Northwind' },
     projectRequest: { id: 'req-1', title: 'CPQ' },
+    completionRequestedBy: null,
     changeRequestRounds: [],
     latestChangeRequest: null,
     changeRequestRoundCount: 0,
@@ -273,6 +274,36 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
     const time = props.time as { byMilestoneId: Record<string, { canLog: boolean }> };
     expect(time.byMilestoneId['ms-1']?.canLog).toBe(true);
   });
+
+  it.each([
+    ['an agency owner/admin', 'agency-admin-1', null, true],
+    ['the delivering expert', 'user-expert', 'expert-1', false],
+  ])(
+    "offers edit and delete on another author's entry to %s only when not delivering",
+    async (_name, id, expertProfileId, expected) => {
+      mockGetCurrentUser.mockResolvedValue({ ...expert, id, expertProfileId });
+      mockFindWithMilestones.mockResolvedValue(engagement({ milestones: [BUILD] }));
+      mockListEntries.mockResolvedValue([
+        {
+          id: 'te-1',
+          engagementMilestoneId: 'ms-1',
+          userId: 'user-someone',
+          authorFirstName: 'Sam',
+          workedOn: '2026-10-14',
+          minutes: 60,
+          note: null,
+          createdAt: new Date('2026-10-14T10:00:00Z'),
+        },
+      ]);
+      const props = await renderPage();
+      const time = props.time as {
+        byMilestoneId: Record<string, { entries: { canEdit: boolean; canDelete: boolean }[] }>;
+      };
+      expect(time.byMilestoneId['ms-1']?.entries[0]).toEqual(
+        expect.objectContaining({ canEdit: expected, canDelete: expected })
+      );
+    }
+  );
 
   it('withholds logging without the capability, and never asks once the project is not active', async () => {
     const milestones = [BUILD];

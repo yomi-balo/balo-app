@@ -151,6 +151,7 @@ describe('updateTimeEntryAction', () => {
       engagementId: ENGAGEMENT_ID,
       entryId: ENTRY_ID,
       userId: CHARLES.id,
+      authorScope: 'own',
       minutes: 120,
       note: 'Reworked the plan',
     });
@@ -165,6 +166,21 @@ describe('updateTimeEntryAction', () => {
     expect(mockTrack).toHaveBeenCalledWith(
       'engagement_milestone_estimate_exceeded',
       expect.objectContaining({ milestone_id: MILESTONE_ID })
+    );
+  });
+
+  it('lets an agency admin edit any author entry', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    expect(await updateTimeEntryAction(INPUT)).toEqual({ success: true });
+    expect(mockWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'admin-1', authorScope: 'any' })
     );
   });
 

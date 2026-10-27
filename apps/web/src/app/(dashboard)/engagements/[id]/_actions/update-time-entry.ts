@@ -10,6 +10,7 @@ import {
   runEngagementLifecycleAction,
   type EngagementActionResult,
 } from './engagement-lifecycle-shared';
+import { timeEntryAuthorScope } from '@/lib/engagement/resolve-engagement-viewer';
 import { gateChangeOrderExpert } from './change-order-action-shared';
 import { afterTimeWrite, minutesSchema, noteSchema } from './time-entry-action-shared';
 
@@ -23,9 +24,10 @@ const updateTimeEntrySchema = z
   .strict();
 
 /**
- * The author edits the hours and note of their own time entry on an in-progress milestone.
- * Gated on `manage_engagement`; the repository refuses an entry the actor did not write with
- * the same answer as a missing one. An edit that takes the milestone past its estimate for
+ * The author, or an owner or admin of the delivering expert's agency, edits the hours and note
+ * of a time entry on an in-progress milestone. Gated on `manage_engagement`; the delivering
+ * expert reaches only their own entries, and the repository refuses any other with the same
+ * answer as a missing one. An edit that takes the milestone past its estimate for
  * the first time notifies like a new entry.
  */
 export async function updateTimeEntryAction(input: {
@@ -50,15 +52,16 @@ export async function updateTimeEntryAction(input: {
     { userId: user.id, timeEntryId: entryId },
     'Failed to update time entry',
     () => gateChangeOrderExpert(user, engagementId),
-    async (engagement) => {
+    async (engagement, authorized) => {
       const result = await engagementTimeEntriesRepository.update({
         engagementId,
         entryId,
         userId: user.id,
+        authorScope: timeEntryAuthorScope(authorized.actor.isDeliveringExpert),
         minutes,
         note,
       });
-      await afterTimeWrite({ kind: 'updated', userId: user.id, engagement, result });
+      await afterTimeWrite({ kind: 'updated', actor: user, engagement, result });
       return { success: true };
     }
   );

@@ -9,7 +9,8 @@ import {
   hoursLabel,
   percentOfEstimate,
 } from '@balo/shared/engagements';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import type { SessionUser } from '@/lib/auth/session';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -40,8 +41,10 @@ export async function notifyEstimateExceeded(input: {
   loggedMinutes: number;
   milestonesOverCount: number;
   userId: string;
+  /** The expert-side person whose write crossed the estimate; `null` when a client approval did. */
+  expertActor: { id: string; firstName: string | null; lastName: string | null } | null;
 }): Promise<void> {
-  const { engagement, milestone, loggedMinutes, milestonesOverCount, userId } = input;
+  const { engagement, milestone, loggedMinutes, milestonesOverCount, userId, expertActor } = input;
   const parties = deriveEngagementParties(engagement);
   const recipientId = await resolveClientRecipientId(engagement.company.id);
   publishNotificationEvent('engagement.milestone_estimate_exceeded', {
@@ -50,7 +53,7 @@ export async function notifyEstimateExceeded(input: {
     milestoneId: milestone.id,
     recipientId,
     expertPartyLabel: parties.expertParty,
-    actorExpertLabel: parties.expertRetroFirstMention,
+    actorExpertLabel: expertSideActorLabel(engagement, parties, expertActor),
     projectTitle: deriveEngagementTitle(engagement, parties),
     milestoneTitle: milestone.title,
     loggedHoursLabel: hoursLabel(loggedMinutes),
@@ -73,11 +76,11 @@ export async function notifyEstimateExceeded(input: {
  */
 export async function afterTimeWrite(input: {
   kind: TimeWriteKind;
-  userId: string;
+  actor: SessionUser;
   engagement: ProjectEngagementWithMilestones;
   result: Pick<TimeEntryWriteResult, 'entry'> & Partial<Omit<TimeEntryWriteResult, 'entry'>>;
 }): Promise<void> {
-  const { kind, userId, engagement, result } = input;
+  const { kind, actor, engagement, result } = input;
   const { entry, milestone, loggedAfterMinutes, estimateExceeded, milestonesOverCount } = result;
 
   if (kind === 'logged' && milestone !== undefined && loggedAfterMinutes !== undefined) {
@@ -87,7 +90,7 @@ export async function afterTimeWrite(input: {
       minutes: entry.minutes,
       crossed_estimate: estimateExceeded === true,
       milestone_pct_of_estimate: percentOfEstimate(loggedAfterMinutes, milestone.estimatedMinutes),
-      distinct_id: userId,
+      distinct_id: actor.id,
     });
   }
 
@@ -102,7 +105,8 @@ export async function afterTimeWrite(input: {
       milestone: { ...milestone, estimatedMinutes: milestone.estimatedMinutes },
       loggedMinutes: loggedAfterMinutes,
       milestonesOverCount: milestonesOverCount ?? 0,
-      userId,
+      userId: actor.id,
+      expertActor: actor,
     });
   }
 
@@ -110,7 +114,7 @@ export async function afterTimeWrite(input: {
     engagementId: engagement.id,
     timeEntryId: entry.id,
     milestoneId: entry.engagementMilestoneId,
-    userId,
+    userId: actor.id,
     minutes: entry.minutes,
     estimateExceeded: estimateExceeded === true,
   });

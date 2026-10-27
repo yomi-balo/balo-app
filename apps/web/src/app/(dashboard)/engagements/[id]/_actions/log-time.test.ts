@@ -153,6 +153,38 @@ describe('logTimeAction', () => {
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
+  it('names an agency admin in the estimate-exceeded notice', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
+        expertProfile: {
+          id: 'expert-1',
+          agencyId: 'agency-1',
+          type: 'agency',
+          headline: null,
+          timezone: 'UTC',
+          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
+          agency: { name: 'CloudPeak' },
+        },
+      } as never)
+    );
+    mockWrite.mockResolvedValue(written({ estimateExceeded: true, loggedAfterMinutes: 540 }));
+    await logTimeAction(INPUT);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.milestone_estimate_exceeded',
+      expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    );
+  });
+
   it('refuses a milestone that is not part of the engagement', async () => {
     const result = await logTimeAction({
       ...INPUT,

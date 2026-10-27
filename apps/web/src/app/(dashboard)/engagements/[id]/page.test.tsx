@@ -36,6 +36,7 @@ const {
   mockListContentEdits,
   mockLoadProjectSettlement,
   mockHasCapability,
+  mockHasDeliveryCapability,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -56,6 +57,7 @@ const {
   mockListContentEdits: vi.fn(),
   mockLoadProjectSettlement: vi.fn(),
   mockHasCapability: vi.fn(),
+  mockHasDeliveryCapability: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
@@ -79,6 +81,9 @@ vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/authz', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/authz')>()),
   hasCapability: mockHasCapability,
+}));
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: mockHasDeliveryCapability,
 }));
 vi.mock('next/navigation', () => ({
   notFound: mockNotFound,
@@ -158,6 +163,7 @@ function engagement(
     projectRequest: { id: 'req-1', title: ENGAGEMENT_TITLE },
     acceptedBy: null,
     changeRequestedBy: null,
+    completionRequestedBy: null,
     changeRequestRounds: [],
     latestChangeRequest: null,
     changeRequestRoundCount: 0,
@@ -197,6 +203,7 @@ beforeEach(() => {
   mockListChangeOrders.mockResolvedValue([]);
   mockListContentEdits.mockResolvedValue([]);
   mockHasCapability.mockResolvedValue(true);
+  mockHasDeliveryCapability.mockResolvedValue(false);
   mockLoadProjectSettlement.mockResolvedValue(
     deriveProjectSettlement({
       acceptedPriceCents: 5_800_000,
@@ -240,6 +247,30 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
       })
     );
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('admits an agency owner/admin (no lens, manage_engagement held) with the expert-side view and no staff money', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ id: 'user-agency-admin', companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockHasDeliveryCapability.mockResolvedValue(true);
+
+    await renderPage('request_detail');
+
+    expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-agency-admin' }),
+      'manage_engagement',
+      EXPERT_PROFILE_ID,
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ lens: 'expert' })
+    );
+    expect(mockLoadProjectSettlement).not.toHaveBeenCalled();
+    expect(screen.queryByText('Balo staff only')).not.toBeInTheDocument();
   });
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
@@ -371,6 +402,16 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
     const result = await meta();
     expect(result.title).toBe('Delivery workspace — Balo');
     expect(result.title).not.toContain(ENGAGEMENT_TITLE);
+  });
+
+  it('returns the REAL title for an agency owner/admin who holds manage_engagement', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockHasDeliveryCapability.mockResolvedValue(true);
+
+    expect((await meta()).title).toBe(`${ENGAGEMENT_TITLE} — Balo`);
   });
 
   it('returns the GENERIC title when the engagement is missing', async () => {

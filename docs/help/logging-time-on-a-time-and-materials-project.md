@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 6
 published: false
-updated: 2026-10-26
+updated: 2026-10-27
 related: [proposing-a-change-to-a-live-project, editing-milestones-after-acceptance]
 ---
 
@@ -29,7 +29,7 @@ each entry records who logged it.
 
 You can edit your own entries while the project is active and the milestone is in progress. You can
 delete them while the project is active, whatever the milestone's status. Use the pencil or bin on the
-entry in the milestone's time log. You can't change an entry someone else logged. Edits and
+entry in the milestone's time log. You can't change an entry someone else logged. The exception is an agency owner or admin, who can edit or delete any entry on their agency's projects. Edits and
 deletions are recorded, and the client sees the entry as it now stands.
 
 One day can't add up to more than 24 hours of your entries on a project. A milestone with logged time can't

@@ -17,7 +17,10 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { CAPABILITIES, hasCapability } from '@/lib/authz';
 import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
-import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import {
+  resolveEngagementViewer,
+  timeEntryAuthorScope,
+} from '@/lib/engagement/resolve-engagement-viewer';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
 import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
@@ -105,7 +108,7 @@ export async function generateMetadata({
     const engagement = await loadEngagement(id);
     if (!engagement) return GENERIC_METADATA;
 
-    const ctx = resolveEngagementLens(user, engagement);
+    const ctx = await resolveEngagementViewer(user, engagement);
     if (!ctx) return GENERIC_METADATA;
 
     const view = mapEngagementToWorkspaceView(engagement, ctx);
@@ -151,7 +154,7 @@ export default async function EngagementWorkspacePage({
     notFound();
   }
 
-  const ctx = resolveEngagementLens(user, engagement);
+  const ctx = await resolveEngagementViewer(user, engagement);
   if (!ctx) {
     // Authenticated but not the client owner / delivering expert / admin → same
     // not-found page (existence never leaks to a stranger).
@@ -255,6 +258,7 @@ export default async function EngagementWorkspacePage({
     period: billingPeriod,
     viewerUserId: user.id,
     canLogTime,
+    canManageAnyEntry: canLogTime && timeEntryAuthorScope(ctx.isDeliveringExpert) === 'any',
     notifiedMilestoneIds,
   });
   const canCancelEngagement = hasPlatformCapability(
@@ -272,7 +276,8 @@ export default async function EngagementWorkspacePage({
     parties,
     canDecide,
     now,
-    timeSums.byMilestone
+    timeSums.byMilestone,
+    user.id
   );
   // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
   // settlement is not even loaded for anyone else.

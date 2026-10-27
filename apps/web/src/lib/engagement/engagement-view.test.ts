@@ -91,6 +91,7 @@ function makeEngagement(
     projectRequest: { id: 'req-1', title: 'CPQ implementation to replace legacy quoting tool' },
     acceptedBy: null,
     changeRequestedBy: null,
+    completionRequestedBy: null,
     changeRequestRounds: [],
     latestChangeRequest: null,
     changeRequestRoundCount: 0,
@@ -512,6 +513,35 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
     );
   });
 
+  it('names the person who requested completion; no recorded person falls back to the expert side', () => {
+    const base = {
+      status: 'pending_acceptance' as const,
+      completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+      expertProfile: {
+        ...makeEngagement().expertProfile,
+        type: 'agency' as const,
+        agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+      },
+    };
+    const named = makeEngagement({
+      ...base,
+      completionRequestedBy: { id: 'user-charles', firstName: 'Charles', lastName: 'Obi' },
+    });
+    expect(mapEngagementToWorkspaceView(named, ctxFor('client'), NOW).reviewBanner?.title).toBe(
+      'Charles @ CloudPeak says the project is ready'
+    );
+    expect(mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).reviewBanner?.body).toContain(
+      'by Charles @ CloudPeak.'
+    );
+    expect(
+      mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).cancelDialog?.reviewNote
+    ).toMatch(/^Charles @ CloudPeak has marked the project ready/);
+    const unnamed = makeEngagement({ ...base, completionRequestedBy: null });
+    expect(mapEngagementToWorkspaceView(unnamed, ctxFor('client'), NOW).reviewBanner?.title).toBe(
+      'Priya @ CloudPeak says the project is ready'
+    );
+  });
+
   it('carries no countdown wording in any lens', () => {
     const pending = makeEngagement({
       status: 'pending_acceptance',
@@ -863,6 +893,17 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     );
     expect(view.emptyState?.title).toBe('Shape the delivery plan');
     expect(view.emptyState?.body).toMatch(/^Add your first milestone so Northwind/);
+  });
+
+  it('agency owner/admin empty state is neither "your" nor "you mark"', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [] }),
+      { ...ctxFor('expert'), isDeliveringExpert: false },
+      NOW
+    );
+    expect(view.emptyState?.body).toBe(
+      'Add the first milestone so Northwind Industrial can follow progress. When everything is delivered, Priya marks the project ready and Northwind Industrial reviews it as a whole.'
+    );
   });
 
   it('expert empty state on T&M invites proposing the first milestone', () => {

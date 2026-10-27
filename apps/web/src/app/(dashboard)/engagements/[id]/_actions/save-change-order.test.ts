@@ -375,6 +375,36 @@ describe('saveChangeOrderAction — saving a draft', () => {
 });
 
 describe('saveChangeOrderAction — sending', () => {
+  it('names an agency admin as the sender and tracks acting_as agency_admin', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        expertProfile: {
+          id: 'expert-1',
+          agencyId: 'agency-1',
+          type: 'agency',
+          headline: null,
+          timezone: 'UTC',
+          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
+          agency: { name: 'CloudPeak' },
+        },
+      } as never)
+    );
+    await saveChangeOrderAction({ ...base, send: true });
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_change_order_sent',
+      expect.objectContaining({ acting_as: 'agency_admin', distinct_id: 'admin-1' })
+    );
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ actorExpertLabel: 'Dana @ CloudPeak' });
+  });
+
   it('sends, tracks without amounts, and tells the client CLIENT figures only', async () => {
     const result = await saveChangeOrderAction({ ...base, newTotalCents: 1_100_000, send: true });
 
@@ -394,6 +424,7 @@ describe('saveChangeOrderAction — sending', () => {
       has_price_change: true,
       initiated_by: 'expert',
       distinct_id: CHARLES.id,
+      acting_as: 'delivering_expert',
     });
     expect(mockPublish).toHaveBeenCalledWith('change_order.sent', {
       correlationId: `${ORDER_ID}:sent`,

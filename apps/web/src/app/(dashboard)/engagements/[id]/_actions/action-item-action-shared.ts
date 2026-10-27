@@ -15,6 +15,7 @@ import {
   type EngagementLens,
 } from '@/lib/engagement/resolve-engagement-lens';
 import { deriveActorLabel, deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { resolveExpertSideActor } from '@/lib/engagement/resolve-engagement-viewer';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
@@ -86,9 +87,9 @@ export type ActionItemGateResult =
  *      `MANAGE_ANY_ENGAGEMENT_ACTION_ITEM` (ADR-1035 — EXPLICIT since BAL-404; it used to pass
  *      by fall-through, leaving the decision inside the lens resolver); `client` → LIVE
  *      `hasCapability(PARTICIPATE)` (defense-in-depth beyond the cached cookie; a removed
- *      member fails closed); `expert` → the `lens === 'expert'` `expertProfileId` equality IS
- *      the check (house pattern, ADR-1029/ADR-1046 axis — BAL-316, not this ticket). Anything
- *      else fails closed.
+ *      member fails closed); `expert` → the engagement-axis `manage_engagement` capability
+ *      (the delivering expert plus their agency owner/admin; a viewer with no lens at all is
+ *      admitted only as such a holder). Anything else fails closed.
  *   4. `status !== 'active'` → `NOT_ACTIVE` (writes only on live engagements).
  *   5. When `opts.actionItemId` is set: `findById` → miss / not-in-this-engagement /
  *      soft-removed → `ACTION_ITEM_GONE` (a forged id from another engagement is
@@ -116,8 +117,13 @@ export async function gateEngagementParticipant(
 
   const ctx = resolveEngagementLens(user, engagement);
   if (ctx === null) {
-    // Stranger — same 404 as a missing row (no existence leak).
-    return deny('not_a_participant', NOT_FOUND);
+    // No lens: only a `manage_engagement` holder (an agency owner/admin of the delivering
+    // expert) proceeds, as the expert side. A stranger gets the same 404 as a missing row.
+    const agencyActor = await resolveExpertSideActor(user, engagement);
+    if (agencyActor === null) {
+      return deny('not_a_participant', NOT_FOUND);
+    }
+    return finishGate(engagement, 'expert', opts?.actionItemId, deny);
   }
 
   // Per-ARM authorization beyond the lens resolution itself. THREE ARMS, EACH ON ITS OWN AXIS —
@@ -125,10 +131,9 @@ export async function gateEngagementParticipant(
   // was really being made upstream inside `resolveEngagementLens`'s platformRole set read):
   //  - Balo staff → the PLATFORM capability MANAGE_ANY_ENGAGEMENT_ACTION_ITEM (ADR-1035).
   //  - client     → defense-in-depth: re-check LIVE membership (a stale cookie fails closed).
-  //  - expert     → the `lens === 'expert'` expertProfileId equality IS the check (house
-  //                 pattern; ADR-1029/ADR-1046 axis, deliberately NOT migrated here — BAL-316).
-  // The trailing deny is the FAIL-CLOSED default: an observer who does NOT hold the token is
-  // refused. UNREACHABLE TODAY AND NOT DEAD CODE — the token sits in PLATFORM_STAFF_BUNDLE,
+  //  - expert     → the engagement-axis `manage_engagement` capability (ADR-1046).
+  // The trailing deny is the FAIL-CLOSED default: an observer who holds neither the platform
+  // token nor `manage_engagement` is refused. UNREACHABLE TODAY AND NOT DEAD CODE — the token sits in PLATFORM_STAFF_BUNDLE,
   // whose holders are exactly `resolveEngagementLens`'s ADMIN_ROLES — and it becomes reachable
   // the day the D5 bundle split lands, which is precisely when a fall-through would be a hole.
   // ⚠ BAL-560 fix round 1 (security F2) — SESSION CHECK **AND** LIVE-ROW CHECK. `checkSessionDrift`
@@ -137,7 +142,6 @@ export async function gateEngagementParticipant(
   // in the cookie. Same reason and same shape as the impersonation entry point
   // (`lib/auth/actions/impersonation.ts`). The synchronous check stays FIRST and short-circuits,
   // so a client- or expert-lens actor falls through to their own arm without spending a query.
-  // The arm ORDER and every branch below are unchanged.
   if (
     !hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM) ||
     !(await actorHoldsPlatformCapability(
@@ -152,18 +156,30 @@ export async function gateEngagementParticipant(
       if (!allowed) {
         return deny('no_capability', NOT_A_PARTICIPANT);
       }
-    } else if (ctx.lens !== 'expert') {
-      return deny('no_platform_capability', NOT_A_PARTICIPANT);
+    } else if ((await resolveExpertSideActor(user, engagement)) === null) {
+      // Everyone who is neither a client nor a platform-capability holder must hold the
+      // engagement-axis capability; an observer without it fails closed here.
+      return deny('no_capability', NOT_A_PARTICIPANT);
     }
   }
 
+  return finishGate(engagement, ctx.lens, opts?.actionItemId, deny);
+}
+
+/** The status check and the IDOR item check shared by every arm of the gate. */
+async function finishGate(
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens,
+  actionItemId: string | undefined,
+  deny: (reason: string, error: string) => { ok: false; error: string }
+): Promise<ActionItemGateResult> {
   if (engagement.status !== 'active') {
     return deny('not_active', NOT_ACTIVE);
   }
 
   // IDOR: an action-item-scoped action must target an item that belongs to THIS engagement.
-  if (opts?.actionItemId !== undefined) {
-    const actionItem = await actionItemsRepository.findById(opts.actionItemId);
+  if (actionItemId !== undefined) {
+    const actionItem = await actionItemsRepository.findById(actionItemId);
     if (
       actionItem === undefined ||
       actionItem.engagementId !== engagement.id ||
@@ -171,10 +187,10 @@ export async function gateEngagementParticipant(
     ) {
       return deny('action_item_not_in_engagement', ACTION_ITEM_GONE);
     }
-    return { ok: true, engagement, lens: ctx.lens, actionItem };
+    return { ok: true, engagement, lens, actionItem };
   }
 
-  return { ok: true, engagement, lens: ctx.lens };
+  return { ok: true, engagement, lens };
 }
 
 /**

@@ -117,9 +117,10 @@ function entryView(
   entry: TimeEntryListRow,
   viewerUserId: string,
   canLogTime: boolean,
+  canManageAnyEntry: boolean,
   inProgress: boolean
 ): TimeEntryView {
-  const authored = canLogTime && entry.userId === viewerUserId;
+  const authored = canLogTime && (entry.userId === viewerUserId || canManageAnyEntry);
   return {
     id: entry.id,
     workedOnLabel: formatShortUtc(new Date(entry.workedOn)),
@@ -138,6 +139,7 @@ function milestoneTimeView(
   input: {
     viewerUserId: string;
     canLogTime: boolean;
+    canManageAnyEntry: boolean;
     clientCompanyName: string;
     overNoticeSent: boolean;
   }
@@ -158,7 +160,9 @@ function milestoneTimeView(
         ? `${hoursFigure(loggedMinutes)} hrs logged`
         : `${hoursFigure(loggedMinutes)} of ${hoursFigure(estimate)} hrs logged`,
     remainingLabel: remainingLabelFor(tone, loggedMinutes, estimate),
-    entries: entries.map((e) => entryView(e, input.viewerUserId, input.canLogTime, inProgress)),
+    entries: entries.map((e) =>
+      entryView(e, input.viewerUserId, input.canLogTime, input.canManageAnyEntry, inProgress)
+    ),
     logToggleLabel: `Time log (${entries.length})`,
     authorsLabel: authorsLabelFor(entries, input.viewerUserId),
     canLog,
@@ -256,10 +260,13 @@ export function mapTimeToView(input: {
   period: BillingPeriod | null;
   viewerUserId: string;
   canLogTime: boolean;
+  /** The viewer may edit and remove any author's entry (an agency owner/admin), not just their own. */
+  canManageAnyEntry: boolean;
   /** Milestones whose over-estimate notice was already sent at their current estimate. */
   notifiedMilestoneIds: readonly string[];
 }): WorkspaceTimeView | null {
-  const { engagement, ctx, entries, sums, period, viewerUserId, canLogTime } = input;
+  const { engagement, ctx, entries, sums, period, viewerUserId, canLogTime, canManageAnyEntry } =
+    input;
   if (engagement.pricingMethod !== 'tm') return null;
 
   const parties = deriveEngagementParties(engagement);
@@ -270,6 +277,7 @@ export function mapTimeToView(input: {
     const view = milestoneTimeView(milestone, own, sums.byMilestone[milestone.id] ?? 0, {
       viewerUserId,
       canLogTime,
+      canManageAnyEntry,
       clientCompanyName: parties.clientCompanyName,
       overNoticeSent: input.notifiedMilestoneIds.includes(milestone.id),
     });

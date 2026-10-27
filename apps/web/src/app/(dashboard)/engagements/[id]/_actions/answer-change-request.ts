@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { engagementChangeOrdersRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -60,7 +60,7 @@ export async function answerChangeRequestAction(input: {
     { userId: user.id, changeOrderId: orderId },
     'Failed to answer change request',
     () => gateChangeOrderExpert(user, engagementId),
-    async (engagement) => {
+    async (engagement, authorized) => {
       const order = await engagementChangeOrdersRepository.decline({
         engagementId,
         orderId,
@@ -73,6 +73,7 @@ export async function answerChangeRequestAction(input: {
         ...changeOrderLinesProps(order, engagement.pricingMethod, user.id),
         days_to_decision: daysToDecision(order, new Date()),
         answered_without_change_order: true,
+        acting_as: authorized.actor.actingAs,
       });
 
       const parties = deriveEngagementParties(engagement);
@@ -80,7 +81,7 @@ export async function answerChangeRequestAction(input: {
       publishNotificationEvent('change_order.answered', {
         ...payloadBase('answered', order, engagement, parties),
         recipientId,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         answer,
         ...(await requesterPayload(order.requestedByUserId, recipientId, engagement.company.id)),
       }).catch(() => {
