@@ -7,7 +7,7 @@ category:
 order: 4
 published: false
 updated: 2026-10-26
-related: [requesting-a-project]
+related: [requesting-a-project, rating-your-expert]
 ---
 
 When your expert has finished every milestone, they mark the project ready for your review. This

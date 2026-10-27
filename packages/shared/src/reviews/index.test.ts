@@ -2,6 +2,15 @@ import { describe, it, expect } from 'vitest';
 import {
   IN_APP_REVIEW_SURFACES,
   LOW_RATING_THRESHOLD,
+  REVIEWER_ROLE_FORBIDDEN,
+  REVIEWER_ROLE_MAX,
+  REVIEW_BODY_VISIBILITIES,
+  UNNAMED_REVIEWER_LABEL,
+  formatReviewAttribution,
+  isCompanyNameAllowedOnReviews,
+  publicReviewNote,
+  resolveCaptureDefaults,
+  surnameInitial,
   RATING_LABELS,
   RATING_MAX,
   RATING_MIN,
@@ -430,4 +439,205 @@ describe('parseRatingAverage (BAL-422 — the numeric-is-a-string boundary)', ()
     // stored column is rounded, and only once. Truncating here would hide a drift.
     expect(parseRatingAverage('4.33333333333333333333')).toBeCloseTo(4.3333333333, 9);
   });
+});
+
+describe('capture constants (BAL-628)', () => {
+  it('pins the role cap and the visibility values', () => {
+    expect(REVIEWER_ROLE_MAX).toBe(60);
+    expect([...REVIEW_BODY_VISIBILITIES]).toEqual(['public', 'private']);
+    expect(UNNAMED_REVIEWER_LABEL).toBe('Verified client');
+  });
+
+  it.each([
+    '@',
+    'CTO @Acme',
+    'CTO \uFF20Acme',
+    'CTO \uFE6BAcme',
+    '\u202E',
+    '\n',
+    '\u0000',
+    '\u2028',
+    '\u2029',
+  ])('forbids %j in a reviewer role', (v) => {
+    expect(REVIEWER_ROLE_FORBIDDEN.test(v)).toBe(true);
+  });
+
+  it.each(['Head of R&D', 'Café Owner', 'VP, Ops (APAC)'])('allows %j in a reviewer role', (v) => {
+    expect(REVIEWER_ROLE_FORBIDDEN.test(v)).toBe(false);
+  });
+});
+
+describe('surnameInitial', () => {
+  it.each([
+    ['Kowalski', 'K'],
+    ['  kowalski ', 'K'],
+    ['élan', 'É'],
+    ['\u{1D4D0}bc', '\u{1D4D0}'],
+    ['', null],
+    ['   ', null],
+    [null, null],
+  ] as const)('%j → %j', (input, expected) => {
+    expect(surnameInitial(input)).toBe(expected);
+  });
+});
+
+describe('isCompanyNameAllowedOnReviews', () => {
+  it.each([
+    [false, null, true],
+    [true, null, false],
+    [false, new Date('2026-01-01T00:00:00Z'), false],
+    [true, new Date('2026-01-01T00:00:00Z'), false],
+  ] as const)('isPersonal=%s hiddenAt=%s → %s', (isPersonal, reviewNameHiddenAt, expected) => {
+    expect(isCompanyNameAllowedOnReviews({ isPersonal, reviewNameHiddenAt })).toBe(expected);
+  });
+});
+
+describe('formatReviewAttribution (BAL-628 AC9 matrix)', () => {
+  const base = {
+    firstName: 'Sam',
+    lastInitial: 'K',
+    role: 'RevOps Lead',
+    companyName: 'Northwind',
+    industryName: 'Logistics',
+    showCompany: true,
+    companyNameAllowed: true,
+  };
+
+  it.each([
+    // company shown
+    ['company shown, role, industry', {}, 'Sam K.', 'RevOps Lead @Northwind', 'SK'],
+    ['company shown, no role', { role: null }, 'Sam K.', 'Northwind', 'SK'],
+    ['company shown, blank role', { role: '   ' }, 'Sam K.', 'Northwind', 'SK'],
+    [
+      'company shown, no industry',
+      { industryName: null },
+      'Sam K.',
+      'RevOps Lead @Northwind',
+      'SK',
+    ],
+    // unticked
+    ['unticked, role + industry', { showCompany: false }, 'Sam K.', 'RevOps Lead, Logistics', 'SK'],
+    [
+      'unticked, role only',
+      { showCompany: false, industryName: null },
+      'Sam K.',
+      'RevOps Lead',
+      'SK',
+    ],
+    ['unticked, industry only', { showCompany: false, role: null }, 'Sam K.', 'Logistics', 'SK'],
+    [
+      'unticked, neither',
+      { showCompany: false, role: null, industryName: null },
+      'Sam K.',
+      null,
+      'SK',
+    ],
+    // not allowed (a ticked box can never override it)
+    [
+      'not allowed, role + industry',
+      { companyNameAllowed: false },
+      'Sam K.',
+      'RevOps Lead, Logistics',
+      'SK',
+    ],
+    [
+      'not allowed, no role',
+      { companyNameAllowed: false, role: null },
+      'Sam K.',
+      'Logistics',
+      'SK',
+    ],
+    // company name empty
+    ['empty company name', { companyName: '' }, 'Sam K.', 'RevOps Lead, Logistics', 'SK'],
+    ['null company name', { companyName: null, role: null }, 'Sam K.', 'Logistics', 'SK'],
+    [
+      'blank company name',
+      { companyName: '  ', role: null, industryName: null },
+      'Sam K.',
+      null,
+      'SK',
+    ],
+    // initial missing
+    ['no initial', { lastInitial: null }, 'Sam', 'RevOps Lead @Northwind', 'S'],
+    ['blank initial', { lastInitial: ' ' }, 'Sam', 'RevOps Lead @Northwind', 'S'],
+    // first name missing: the initial alone is ignored
+    ['no first name', { firstName: null }, 'Verified client', 'RevOps Lead @Northwind', null],
+    ['blank first name', { firstName: '  ' }, 'Verified client', 'RevOps Lead @Northwind', null],
+    [
+      'no first name, no role, unticked, no industry',
+      { firstName: null, role: null, showCompany: false, industryName: null },
+      'Verified client',
+      null,
+      null,
+    ],
+    [
+      'lowercase first name',
+      { firstName: 'sam', lastInitial: 'K' },
+      'sam K.',
+      'RevOps Lead @Northwind',
+      'SK',
+    ],
+    // trimming
+    [
+      'untrimmed inputs',
+      { firstName: ' Sam ', lastInitial: ' K ', role: ' RevOps Lead ', companyName: ' Northwind ' },
+      'Sam K.',
+      'RevOps Lead @Northwind',
+      'SK',
+    ],
+  ] as const)('%s', (_label, overrides, name, descriptor, initials) => {
+    expect(formatReviewAttribution({ ...base, ...overrides })).toEqual({
+      name,
+      descriptor,
+      initials,
+    });
+  });
+});
+
+describe('publicReviewNote', () => {
+  it.each([
+    [{ body: 'Great', bodyVisibility: 'public' }, 'Great'],
+    [{ body: 'Great', bodyVisibility: 'private' }, null],
+    [{ body: null, bodyVisibility: 'public' }, null],
+    [{ body: '   ', bodyVisibility: 'public' }, null],
+  ] as const)('%j → %j', (review, expected) => {
+    expect(publicReviewNote(review)).toBe(expected);
+  });
+});
+
+describe('resolveCaptureDefaults (BAL-628 AC5)', () => {
+  it('uses the existing review verbatim, even when other seeds differ', () => {
+    expect(
+      resolveCaptureDefaults({
+        existing: { reviewerRole: 'CTO', showCompany: false, bodyVisibility: 'private' },
+        jobTitle: 'Other',
+        lastShowCompany: true,
+      })
+    ).toEqual({ role: 'CTO', showCompany: false, bodyVisibility: 'private' });
+  });
+
+  it('maps an existing null role to an empty string', () => {
+    expect(
+      resolveCaptureDefaults({
+        existing: { reviewerRole: null, showCompany: true, bodyVisibility: 'public' },
+        jobTitle: 'Other',
+        lastShowCompany: null,
+      }).role
+    ).toBe('');
+  });
+
+  it.each([
+    [null, null, { role: '', showCompany: true, bodyVisibility: 'public' }],
+    ['Ops', null, { role: 'Ops', showCompany: true, bodyVisibility: 'public' }],
+    [null, true, { role: '', showCompany: true, bodyVisibility: 'public' }],
+    [null, false, { role: '', showCompany: false, bodyVisibility: 'public' }],
+    ['Ops', false, { role: 'Ops', showCompany: false, bodyVisibility: 'public' }],
+  ] as const)(
+    'first review: jobTitle=%j lastShowCompany=%j',
+    (jobTitle, lastShowCompany, expected) => {
+      expect(resolveCaptureDefaults({ existing: null, jobTitle, lastShowCompany })).toEqual(
+        expected
+      );
+    }
+  );
 });

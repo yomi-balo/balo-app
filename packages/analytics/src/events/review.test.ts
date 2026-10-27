@@ -36,19 +36,23 @@ describe('REVIEW_SERVER_EVENTS', () => {
   });
 });
 
-describe('REVIEW_EVENTS (BAL-587 — the client namespace in this file)', () => {
-  it('exposes exactly one client event', () => {
+describe('REVIEW_EVENTS (BAL-587 / BAL-628 — the client namespace in this file)', () => {
+  it('exposes exactly two client events', () => {
     expect(Object.keys(REVIEW_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'PREVIEW_OPENED',
       'PROMPT_VIEWED',
     ]);
   });
 
-  it('maps the constant to its exact snake_case event name', () => {
+  it('maps each constant to its exact snake_case event name', () => {
     expect(REVIEW_EVENTS.PROMPT_VIEWED).toBe('review_prompt_viewed');
+    expect(REVIEW_EVENTS.PREVIEW_OPENED).toBe('review_preview_opened');
   });
 
-  it('prefixes the event with the feature noun, never the BAL-338 collision name', () => {
-    expect(REVIEW_EVENTS.PROMPT_VIEWED.startsWith('review_')).toBe(true);
-    expect(REVIEW_EVENTS.PROMPT_VIEWED).not.toContain('engagement_review');
+  it('prefixes every event with the feature noun, never the BAL-338 collision name', () => {
+    for (const name of Object.values(REVIEW_EVENTS)) {
+      expect(name.startsWith('review_')).toBe(true);
+      expect(name).not.toContain('engagement_review');
+    }
   });
 });

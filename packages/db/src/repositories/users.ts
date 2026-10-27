@@ -14,6 +14,7 @@ import {
   type StaffAccessSaveRefusal,
   type StaffAccessSaveRequest,
 } from '@balo/shared/authz';
+import { surnameInitial } from '@balo/shared/reviews';
 import { db } from '../client';
 import {
   users,
@@ -725,6 +726,20 @@ export const usersRepository = {
   },
 
   /**
+   * BAL-628 — save the role a reviewer typed back to their profile, so their next review
+   * prefills it. The caller passes a trimmed, non-empty role; an empty one never reaches
+   * here (it must never CLEAR a saved title). Guards on `deleted_at IS NULL` so a request
+   * path never touches a soft-deleted user's row; a missing or deleted user is a silent
+   * no-op.
+   */
+  setJobTitle: async (userId: string, jobTitle: string): Promise<void> => {
+    await db
+      .update(users)
+      .set({ jobTitle, updatedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+  },
+
+  /**
    * BAL-360: adopt a NEW workosId onto an existing LIVE user row (identity re-link),
    * writing an immutable audit row in the SAME transaction (ADR-1030). Guards on
    * deleted_at IS NULL — the caller resolved a live email match. Throws if the row
@@ -885,6 +900,37 @@ export const usersRepository = {
       .where(and(eq(users.id, id), isNull(users.deletedAt)))
       .limit(1);
     return row;
+  },
+
+  /**
+   * BAL-628 — the REVIEWER-IDENTITY projection: first name, surname INITIAL and saved job
+   * title, for the review capture line and the `/review/{token}` landing form.
+   *
+   * ⚠ THE FULL SURNAME NEVER LEAVES THIS FUNCTION. It is read only to derive the initial
+   * (`surnameInitial`, `@balo/shared/reviews`), because the landing form is unauthenticated
+   * and a reviewer is named publicly by initial only. No email, no id — the same projected
+   * posture as {@link usersRepository.findDisplayById}.
+   *
+   * Excludes soft-deleted users.
+   */
+  findReviewerIdentityById: async (
+    id: string
+  ): Promise<
+    { firstName: string | null; lastInitial: string | null; jobTitle: string | null } | undefined
+  > => {
+    const [row] = await db
+      .select({ firstName: users.firstName, lastName: users.lastName, jobTitle: users.jobTitle })
+      .from(users)
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .limit(1);
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      firstName: row.firstName,
+      lastInitial: surnameInitial(row.lastName),
+      jobTitle: row.jobTitle,
+    };
   },
 
   /**

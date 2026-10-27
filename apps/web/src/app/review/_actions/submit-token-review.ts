@@ -5,7 +5,16 @@ import 'server-only';
 import { headers } from 'next/headers';
 import { z } from 'zod';
 import { reviewInviteTokensRepository } from '@balo/db';
-import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/reviews';
+import {
+  REVIEW_BODY_MAX,
+  REVIEW_BODY_VISIBILITIES,
+  REVIEWER_ROLE_FORBIDDEN,
+  REVIEWER_ROLE_MAX,
+  RATING_MAX,
+  RATING_MIN,
+  isRating,
+  type ReviewBodyVisibility,
+} from '@balo/shared/reviews';
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import { clientIp, hashesMatch, sha256Hex } from '@/lib/magic-link';
 import { accountRefusalFor } from '@/lib/auth/account-liveness';
@@ -60,6 +69,14 @@ const submitTokenReviewSchema = z
     token: z.string().min(20).max(200),
     rating: z.number().int().min(RATING_MIN).max(RATING_MAX),
     body: z.string().trim().max(REVIEW_BODY_MAX).optional(),
+    reviewerRole: z
+      .string()
+      .trim()
+      .max(REVIEWER_ROLE_MAX)
+      .refine((v) => !REVIEWER_ROLE_FORBIDDEN.test(v))
+      .optional(),
+    showCompany: z.boolean(),
+    bodyVisibility: z.enum(REVIEW_BODY_VISIBILITIES),
   })
   .strict();
 
@@ -67,6 +84,9 @@ export interface SubmitTokenReviewInput {
   token: string;
   rating: number;
   body?: string;
+  reviewerRole?: string;
+  showCompany: boolean;
+  bodyVisibility: ReviewBodyVisibility;
 }
 
 export type SubmitTokenReviewResult =
@@ -90,7 +110,7 @@ export async function submitTokenReviewAction(
   if (!parsed.success) {
     return { success: false, error: REVIEW_SUBMIT_FAILED };
   }
-  const { token, rating, body } = parsed.data;
+  const { token, rating, body, reviewerRole, showCompany, bodyVisibility } = parsed.data;
   // Narrows the Zod-proven range to the `Rating` literal union WITHOUT an assertion.
   if (!isRating(rating)) {
     return { success: false, error: REVIEW_SUBMIT_FAILED };
@@ -143,6 +163,9 @@ export async function submitTokenReviewAction(
     body: body === undefined || body.length === 0 ? null : body,
     surface: 'email',
     authMethod: 'magic_link',
+    bodyVisibility,
+    showCompany,
+    reviewerRole: reviewerRole === undefined || reviewerRole.length === 0 ? null : reviewerRole,
   });
 
   if (!result.ok) {

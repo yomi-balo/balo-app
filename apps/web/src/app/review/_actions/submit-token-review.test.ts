@@ -25,11 +25,20 @@ vi.mock('@/lib/authz', () => ({
   CAPABILITIES: { PARTICIPATE: 'participate' },
 }));
 
-const { mockFindToken, mockFindEngagement, mockUpsert, mockFindExpertUser } = vi.hoisted(() => ({
+const {
+  mockFindToken,
+  mockFindEngagement,
+  mockUpsert,
+  mockFindExpertUser,
+  mockFindCompany,
+  mockSetJobTitle,
+} = vi.hoisted(() => ({
   mockFindToken: vi.fn(),
   mockFindEngagement: vi.fn(),
   mockUpsert: vi.fn(),
   mockFindExpertUser: vi.fn(),
+  mockFindCompany: vi.fn(),
+  mockSetJobTitle: vi.fn(),
 }));
 
 // BAL-568 (fix round 1, F6) — this action now gates the TOKEN'S SUBJECT on account liveness. The
@@ -41,7 +50,11 @@ vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   reviewsRepository: { upsert: (...a: unknown[]) => mockUpsert(...a) },
   expertsRepository: { findUserIdByProfileId: (...a: unknown[]) => mockFindExpertUser(...a) },
-  usersRepository: { findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a) },
+  usersRepository: {
+    findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a),
+    setJobTitle: (...a: unknown[]) => mockSetJobTitle(...a),
+  },
+  companiesRepository: { findReviewAttributionById: (...a: unknown[]) => mockFindCompany(...a) },
 }));
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
@@ -64,7 +77,17 @@ vi.mock('@/lib/analytics/server', async () => {
 
 import { log } from '@/lib/logging';
 import { REVIEW_SUBMIT_FAILED } from '@/lib/reviews/messages';
-import { submitTokenReviewAction } from './submit-token-review';
+import { submitTokenReviewAction, type SubmitTokenReviewInput } from './submit-token-review';
+
+/** The capture fields every call must carry; a case overrides what it is about. */
+const CAPTURE = { showCompany: false, bodyVisibility: 'private' } as const;
+
+const ALLOWED_COMPANY = {
+  name: 'Northwind Logistics',
+  isPersonal: false,
+  reviewNameHiddenAt: null,
+  industryName: null,
+};
 
 /** The resolved token row. `tokenHash` is a parameter so a mismatch case can force one. */
 function tokenRow(tokenHash: string = TOKEN_HASH): Record<string, string> {
@@ -90,6 +113,8 @@ function primeHappyPath(overrides: { engagementType?: string; created?: boolean 
   mockFindExpertUser.mockResolvedValue({ user: { id: EXPERT_USER_ID } });
   mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: overrides.created ?? true });
   mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
+  mockFindCompany.mockResolvedValue(ALLOWED_COMPANY);
+  mockSetJobTitle.mockResolvedValue(undefined);
 }
 
 /**
@@ -109,7 +134,7 @@ describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
     primeHappyPath();
     mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     // ⚠ THE SAME NON-ENUMERATING LITERAL as every other failure on this surface — an anonymous
     // prober must not learn from the response whether a link's owner is suspended.
@@ -132,7 +157,7 @@ describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
       deletedAt: new Date('2026-01-01T00:00:00.000Z'),
     });
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -142,7 +167,7 @@ describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
     primeHappyPath();
     mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -156,7 +181,7 @@ describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
     primeHappyPath();
     mockFindToken.mockResolvedValue(undefined);
 
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(mockFindForSessionSync).not.toHaveBeenCalled();
   });
@@ -164,7 +189,7 @@ describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
   it('a LIVE reviewer still writes, and the gate reads the TOKEN SUBJECT exactly once', async () => {
     primeHappyPath();
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: true, created: true });
     expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
@@ -179,6 +204,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
 
     const result = await submitTokenReviewAction({
+      ...CAPTURE,
       token: RAW_TOKEN,
       rating: 4,
       body: '  Genuinely helpful  ',
@@ -193,13 +219,16 @@ describe('submitTokenReviewAction', () => {
       body: 'Genuinely helpful',
       surface: 'email',
       authMethod: 'magic_link',
+      bodyVisibility: 'private',
+      showCompany: false,
+      reviewerRole: null,
     });
     expect(mockFindExpertUser).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
   });
 
   it('resolves the token by HASH — the raw token never reaches the repository', async () => {
     primeHappyPath();
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(mockFindToken).toHaveBeenCalledWith(TOKEN_HASH);
     expect(mockFindToken).not.toHaveBeenCalledWith(RAW_TOKEN);
@@ -209,11 +238,12 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
 
     const result = await submitTokenReviewAction({
+      ...CAPTURE,
       token: RAW_TOKEN,
       rating: 5,
       // A hostile extra key: `.strict()` must reject the whole payload outright.
       expertProfileId: 'e0000000-0000-4000-8000-00000000dead',
-    } as unknown as { token: string; rating: number });
+    } as unknown as SubmitTokenReviewInput);
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -221,7 +251,7 @@ describe('submitTokenReviewAction', () => {
 
   it('evaluates PARTICIPATE against the TOKEN SUBJECT and the engagement company', async () => {
     primeHappyPath();
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 3 });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 3 });
 
     expect(mockHasCapability).toHaveBeenCalledWith({ id: REVIEWER_ID }, 'participate', {
       companyId: COMPANY_ID,
@@ -232,7 +262,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockHasCapability.mockResolvedValue(false);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -246,7 +276,12 @@ describe('submitTokenReviewAction', () => {
     mockHasCapability.mockResolvedValue(true);
     mockFindExpertUser.mockResolvedValue({ user: { id: REVIEWER_ID } });
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5, body: 'Superb' });
+    const result = await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 5,
+      body: 'Superb',
+    });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockHasCapability).toHaveBeenCalledWith({ id: REVIEWER_ID }, 'participate', {
@@ -275,7 +310,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockFindExpertUser.mockResolvedValue(undefined);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -298,11 +333,11 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockFindToken.mockResolvedValue(undefined);
 
-    const missing = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const missing = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     mockHasCapability.mockResolvedValue(false);
     mockFindToken.mockResolvedValue(tokenRow());
-    const denied = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const denied = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(missing).toEqual(denied);
     expect(missing).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
@@ -312,7 +347,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockFindToken.mockResolvedValue(tokenRow('f'.repeat(64)));
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -320,7 +355,7 @@ describe('submitTokenReviewAction', () => {
 
   it('applies BOTH rate-limit keys — one IP-scoped, one token-scoped', async () => {
     primeHappyPath();
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(mockCheckLimit).toHaveBeenCalledWith('review-submit-ip:1.2.3.4', {
       max: 10,
@@ -336,7 +371,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockCheckLimit.mockReturnValueOnce(false);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockFindToken).not.toHaveBeenCalled();
@@ -347,7 +382,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockCheckLimit.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockFindToken).not.toHaveBeenCalled();
@@ -356,7 +391,7 @@ describe('submitTokenReviewAction', () => {
   it.each([0, 6, 2.5])('rejects rating %s without touching the database', async (rating) => {
     primeHappyPath();
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockFindToken).not.toHaveBeenCalled();
@@ -364,14 +399,19 @@ describe('submitTokenReviewAction', () => {
 
   it('stores a whitespace-only body as NULL (the DB CHECK rejects blanks)', async () => {
     primeHappyPath();
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5, body: '   ' });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5, body: '   ' });
 
     expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ body: null }));
   });
 
   it('tracks review_submitted on the insert branch, with has_body and no body text', async () => {
     primeHappyPath({ created: true });
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 4, body: 'Clear and calm' });
+    await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 4,
+      body: 'Clear and calm',
+    });
 
     expect(mockTrack).toHaveBeenCalledWith('review_submitted', {
       rating: 4,
@@ -379,6 +419,9 @@ describe('submitTokenReviewAction', () => {
       auth_method: 'magic_link',
       surface: 'email',
       engagement_kind: 'project',
+      body_visibility: 'private',
+      show_company: false,
+      has_role: false,
       distinct_id: REVIEWER_ID,
     });
     const [, properties] = mockTrack.mock.calls[0] ?? [];
@@ -388,7 +431,7 @@ describe('submitTokenReviewAction', () => {
 
   it('tracks review_updated on the update branch', async () => {
     primeHappyPath({ created: false });
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 2 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 2 });
 
     expect(result).toEqual({ success: true, created: false });
     expect(mockTrack).toHaveBeenCalledWith(
@@ -399,7 +442,7 @@ describe('submitTokenReviewAction', () => {
 
   it('carries the CASE engagement kind through to analytics', async () => {
     primeHappyPath({ engagementType: 'case' });
-    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(mockTrack).toHaveBeenCalledWith(
       'review_submitted',
@@ -410,7 +453,7 @@ describe('submitTokenReviewAction', () => {
   it('refuses a declared-but-unbuilt engagement type without writing', async () => {
     primeHappyPath({ engagementType: 'retainer' });
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -420,7 +463,7 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockFindEngagement.mockResolvedValue(undefined);
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockHasCapability).not.toHaveBeenCalled();
@@ -431,10 +474,198 @@ describe('submitTokenReviewAction', () => {
     primeHappyPath();
     mockUpsert.mockRejectedValue(new Error('connection terminated'));
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+    const result = await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe('submitTokenReviewAction — BAL-628 attribution capture', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('passes the visibility, company choice and role to upsert (email surface)', async () => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({
+      token: RAW_TOKEN,
+      rating: 5,
+      body: 'Great',
+      bodyVisibility: 'public',
+      showCompany: true,
+      reviewerRole: '  RevOps Lead ',
+    });
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: 'email',
+        bodyVisibility: 'public',
+        showCompany: true,
+        reviewerRole: 'RevOps Lead',
+      })
+    );
+  });
+
+  it.each([
+    ['a personal company', { ...ALLOWED_COMPANY, isPersonal: true }],
+    ['a company whose name an admin hid', { ...ALLOWED_COMPANY, reviewNameHiddenAt: new Date() }],
+    ['a company that cannot be read', undefined],
+  ])('forces showCompany off for %s, whatever the client sent', async (_label, company) => {
+    primeHappyPath();
+    mockFindCompany.mockResolvedValue(company);
+
+    const result = await submitTokenReviewAction({
+      token: RAW_TOKEN,
+      rating: 5,
+      bodyVisibility: 'public',
+      showCompany: true,
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }));
+    expect(mockTrack).toHaveBeenCalledWith(
+      'review_submitted',
+      expect.objectContaining({ show_company: false })
+    );
+    expect(log.info).toHaveBeenCalledWith('Review company attribution forced off', {
+      engagementId: ENGAGEMENT_ID,
+      userId: REVIEWER_ID,
+    });
+  });
+
+  it('keeps showCompany on for an allowed company, without logging a force-off', async () => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({
+      token: RAW_TOKEN,
+      rating: 5,
+      bodyVisibility: 'public',
+      showCompany: true,
+    });
+
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ showCompany: true }));
+    expect(log.info).not.toHaveBeenCalledWith(
+      'Review company attribution forced off',
+      expect.anything()
+    );
+  });
+
+  it('saves the role to the job title only AFTER the review is written', async () => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5, reviewerRole: 'CTO' });
+
+    expect(mockSetJobTitle).toHaveBeenCalledWith(REVIEWER_ID, 'CTO');
+    const upsertOrder = mockUpsert.mock.invocationCallOrder[0] ?? Infinity;
+    const jobTitleOrder = mockSetJobTitle.mock.invocationCallOrder[0] ?? -Infinity;
+    expect(jobTitleOrder).toBeGreaterThan(upsertOrder);
+  });
+
+  it.each([undefined, '', '   '])('never saves a job title for the role %j', async (role) => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 5,
+      reviewerRole: role,
+    });
+
+    expect(mockSetJobTitle).not.toHaveBeenCalled();
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ reviewerRole: null }));
+  });
+
+  it('does not save a job title when the review write fails', async () => {
+    primeHappyPath();
+    mockUpsert.mockRejectedValue(new Error('deadlock detected'));
+
+    await submitTokenReviewAction({ ...CAPTURE, token: RAW_TOKEN, rating: 5, reviewerRole: 'CTO' });
+
+    expect(mockSetJobTitle).not.toHaveBeenCalled();
+  });
+
+  it('still succeeds, and warns, when the job title save fails', async () => {
+    primeHappyPath();
+    mockSetJobTitle.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 5,
+      reviewerRole: 'CTO',
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Reviewer job title save failed',
+      expect.objectContaining({
+        userId: REVIEWER_ID,
+        engagementId: ENGAGEMENT_ID,
+        error: 'connection terminated',
+      })
+    );
+  });
+
+  it('tracks the three capture properties without the role or note text', async () => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({
+      token: RAW_TOKEN,
+      rating: 4,
+      body: 'Private words',
+      bodyVisibility: 'public',
+      showCompany: true,
+      reviewerRole: 'Secret Role',
+    });
+
+    expect(mockTrack).toHaveBeenCalledWith(
+      'review_submitted',
+      expect.objectContaining({ body_visibility: 'public', show_company: true, has_role: true })
+    );
+    const logged = JSON.stringify(vi.mocked(log.info).mock.calls);
+    expect(JSON.stringify(mockTrack.mock.calls)).not.toContain('Secret Role');
+    expect(logged).not.toContain('Secret Role');
+    expect(logged).not.toContain('Northwind');
+    expect(log.info).toHaveBeenCalledWith(
+      'Review submitted',
+      expect.objectContaining({ bodyVisibility: 'public', showCompany: true, hasRole: true })
+    );
+  });
+
+  it.each([
+    ['a role over 60 characters', { reviewerRole: 'x'.repeat(61) }],
+    ['a role containing "@"', { reviewerRole: 'CTO @Salesforce' }],
+    ['a role containing a bidi override', { reviewerRole: 'CTO‮' }],
+    ['a role containing a newline', { reviewerRole: 'CTO\nat Acme' }],
+    ['an unknown visibility', { bodyVisibility: 'everyone' }],
+    ['a missing showCompany', { showCompany: undefined }],
+  ])('rejects %s before touching the database', async (_label, override) => {
+    primeHappyPath();
+
+    const result = await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 5,
+      ...override,
+    } as unknown as SubmitTokenReviewInput);
+
+    expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    expect(mockFindToken).not.toHaveBeenCalled();
+  });
+
+  it('accepts an ordinary reviewer role', async () => {
+    primeHappyPath();
+
+    await submitTokenReviewAction({
+      ...CAPTURE,
+      token: RAW_TOKEN,
+      rating: 5,
+      reviewerRole: 'Head of R&D',
+    });
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewerRole: 'Head of R&D' })
+    );
   });
 });

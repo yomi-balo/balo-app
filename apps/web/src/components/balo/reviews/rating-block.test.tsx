@@ -5,8 +5,10 @@ import userEvent from '@testing-library/user-event';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { render, screen, waitFor } from '@/test/utils';
 import { track } from '@/lib/analytics';
-import type { InAppReviewSurface } from '@balo/shared/reviews';
+import { formatReviewAttribution, type InAppReviewSurface } from '@balo/shared/reviews';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
+import { buildAttributionLine } from './attribution-line';
 
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000005';
 
@@ -40,20 +42,27 @@ vi.mock('@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review', 
 
 import { RatingBlock } from './rating-block';
 
+const NOTE_PLACEHOLDER = 'What would you tell another team thinking of working with Amara?';
+
 const NONE: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'none' },
   existingBody: null,
+  capture: buildReviewCaptureSeeds(),
 };
 const RATED_OK: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'rated_ok', rating: 5 },
   existingBody: 'Sorted it in one go.',
+  capture: buildReviewCaptureSeeds(),
 };
 const RATED_LOW: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'rated_low', rating: 3 },
   existingBody: 'Nearly there.',
+  capture: buildReviewCaptureSeeds({
+    defaults: { role: 'RevOps Lead', showCompany: false, bodyVisibility: 'private' },
+  }),
 };
 
 function renderBlock(
@@ -92,7 +101,7 @@ describe('RatingBlock — BAL-390 state 1: no rating yet', () => {
     expect(screen.queryByRole('button', { name: 'Save review' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: /^5 out of 5/ }));
     expect(screen.getByRole('button', { name: 'Save review' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Add a line? (Optional)')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(NOTE_PLACEHOLDER)).toBeInTheDocument();
   });
 
   it('uses the SHIPPED star labels rather than inventing its own', () => {
@@ -287,7 +296,7 @@ describe('RatingBlock — the write', () => {
     const user = userEvent.setup();
     renderBlock(NONE);
     await user.click(screen.getByRole('radio', { name: '4 out of 5 — Really helpful' }));
-    await user.type(screen.getByPlaceholderText('Add a line? (Optional)'), 'Really useful.');
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Really useful.');
     await user.click(screen.getByRole('button', { name: 'Save review' }));
 
     await waitFor(() =>
@@ -295,6 +304,9 @@ describe('RatingBlock — the write', () => {
         engagementId: ENGAGEMENT_ID,
         rating: 4,
         body: 'Really useful.',
+        reviewerRole: undefined,
+        showCompany: true,
+        bodyVisibility: 'public',
         surface: 'end_of_call',
       })
     );
@@ -332,7 +344,7 @@ describe('RatingBlock — the write', () => {
     const user = userEvent.setup();
     renderBlock(RATED_LOW);
     await user.click(screen.getByRole('button', { name: 'Update my rating' }));
-    expect(screen.getByPlaceholderText('Add a line? (Optional)')).toHaveValue('Nearly there.');
+    expect(screen.getByPlaceholderText(NOTE_PLACEHOLDER)).toHaveValue('Nearly there.');
     await user.click(screen.getByRole('button', { name: 'Update review' }));
     await waitFor(() =>
       expect(mockSubmit).toHaveBeenCalledWith(
@@ -384,14 +396,14 @@ describe('RatingBlock — the write', () => {
     const user = userEvent.setup();
     const { onRated } = renderBlock(NONE);
     await user.click(screen.getByRole('radio', { name: '4 out of 5 — Really helpful' }));
-    await user.type(screen.getByPlaceholderText('Add a line? (Optional)'), 'Kept words.');
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Kept words.');
     await user.click(screen.getByRole('button', { name: 'Save review' }));
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith('That engagement could not be found.')
     );
     expect(onRated).not.toHaveBeenCalled();
-    expect(screen.getByPlaceholderText('Add a line? (Optional)')).toHaveValue('Kept words.');
+    expect(screen.getByPlaceholderText(NOTE_PLACEHOLDER)).toHaveValue('Kept words.');
     expect(screen.getByRole('radio', { name: '4 out of 5 — Really helpful' })).toHaveAttribute(
       'aria-checked',
       'true'
@@ -550,8 +562,8 @@ describe('RatingBlock — revising is not a one-way door (m1)', () => {
     renderBlock(RATED_LOW);
     await user.click(screen.getByRole('button', { name: 'Update my rating' }));
     await user.click(screen.getByRole('radio', { name: "1 out of 5 — Didn't help" }));
-    await user.clear(screen.getByPlaceholderText('Add a line? (Optional)'));
-    await user.type(screen.getByPlaceholderText('Add a line? (Optional)'), 'Changed my mind.');
+    await user.clear(screen.getByPlaceholderText(NOTE_PLACEHOLDER));
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Changed my mind.');
 
     await user.click(screen.getByRole('button', { name: 'Keep it as it is' }));
 
@@ -563,7 +575,7 @@ describe('RatingBlock — revising is not a one-way door (m1)', () => {
 
     // …and re-opening it shows the seeds, not the abandoned draft.
     await user.click(screen.getByRole('button', { name: 'Update my rating' }));
-    expect(screen.getByPlaceholderText('Add a line? (Optional)')).toHaveValue('Nearly there.');
+    expect(screen.getByPlaceholderText(NOTE_PLACEHOLDER)).toHaveValue('Nearly there.');
     expect(screen.getByRole('radio', { name: '3 out of 5 — Did the job' })).toHaveAttribute(
       'aria-checked',
       'true'
@@ -589,7 +601,7 @@ describe('RatingBlock — a failed write leaves a RECORD, not just a toast (m2)'
     const user = userEvent.setup();
     renderBlock(NONE);
     await user.click(screen.getByRole('radio', { name: '4 out of 5 — Really helpful' }));
-    await user.type(screen.getByPlaceholderText('Add a line? (Optional)'), 'Kept words.');
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Kept words.');
     await user.click(screen.getByRole('button', { name: 'Save review' }));
 
     const submit = await screen.findByRole('button', { name: 'Save review' });
@@ -650,9 +662,8 @@ describe('RatingBlock — accessibility', () => {
     const user = userEvent.setup();
     const { container } = renderBlock(NONE);
     await user.click(screen.getByRole('radio', { name: '3 out of 5 — Did the job' }));
-    expect(
-      screen.getByRole('textbox', { name: /Add a line about this consultation/ })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /Add a note \(optional\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -675,5 +686,256 @@ describe('RatingBlock — accessibility', () => {
     await waitFor(() => expect(screen.getByText(/Temporary problem\./)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Keep it as it is' })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+/**
+ * BAL-628 — the reviewer-attribution controls. The live line must be EXACTLY what
+ * `buildAttributionLine(formatReviewAttribution(...))` produces for the same inputs, so the
+ * words the reviewer reads are the words the profile will show.
+ */
+describe('RatingBlock — BAL-628 reviewer attribution', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const SAM = {
+    firstName: 'Sam',
+    lastInitial: 'K',
+    companyName: 'Northwind Logistics',
+    industryName: null,
+  } as const;
+
+  function expectedLine(input: {
+    role: string | null;
+    showCompany: boolean;
+    hasNote?: boolean;
+    bodyVisibility?: 'public' | 'private';
+    companyNameAllowed?: boolean;
+  }): string {
+    return buildAttributionLine({
+      expertName: 'Amara',
+      attribution: formatReviewAttribution({
+        ...SAM,
+        role: input.role,
+        showCompany: input.showCompany,
+        companyNameAllowed: input.companyNameAllowed ?? true,
+      }),
+      hasNote: input.hasNote ?? false,
+      bodyVisibility: input.bodyVisibility ?? 'public',
+    }).text;
+  }
+
+  async function pickStar(user: ReturnType<typeof userEvent.setup>, label: string): Promise<void> {
+    await user.click(screen.getByRole('radio', { name: label }));
+  }
+
+  const OUTSTANDING = '5 out of 5 — Outstanding';
+  const HELPFUL = '4 out of 5 — Really helpful';
+  const COMPANY_BOX = { name: 'Show Northwind Logistics on the review' };
+  const SEND_PRIVATELY = { name: 'Send the note to Balo privately instead' };
+  const SHOW_PUBLICLY = { name: 'Show the note on Amara’s profile instead' };
+
+  it('shows no attribution controls until a star is chosen', () => {
+    renderBlock(NONE);
+    expect(screen.queryByRole('textbox', { name: /Your role/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+  });
+
+  it('renders the line exactly as the shared formatter builds it, and tracks typing and ticking', async () => {
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, OUTSTANDING);
+
+    expect(screen.getByText(expectedLine({ role: null, showCompany: true }))).toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), 'RevOps Lead');
+    expect(
+      screen.getByText(expectedLine({ role: 'RevOps Lead', showCompany: true }))
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', COMPANY_BOX));
+    expect(
+      screen.getByText(expectedLine({ role: 'RevOps Lead', showCompany: false }))
+    ).toBeInTheDocument();
+  });
+
+  it('offers the private-note switch only once there is a note, and the line follows it', async () => {
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, OUTSTANDING);
+    expect(screen.queryByRole('button', SEND_PRIVATELY)).not.toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Great work.');
+    expect(
+      screen.getByText(expectedLine({ role: null, showCompany: true, hasNote: true }))
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', SEND_PRIVATELY));
+    expect(
+      screen.getByText(
+        expectedLine({ role: null, showCompany: true, hasNote: true, bodyVisibility: 'private' })
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', SHOW_PUBLICLY)).toBeInTheDocument();
+  });
+
+  it('sends the three attribution fields, trimming the role', async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: true });
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, HELPFUL);
+    await user.type(screen.getByPlaceholderText(NOTE_PLACEHOLDER), 'Great work.');
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), '  Head of Sales  ');
+    await user.click(screen.getByRole('button', SEND_PRIVATELY));
+    await user.click(screen.getByRole('checkbox', COMPANY_BOX));
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reviewerRole: 'Head of Sales',
+          showCompany: false,
+          bodyVisibility: 'private',
+        })
+      )
+    );
+  });
+
+  it('treats a whitespace-only role as no role', async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: true });
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, HELPFUL);
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), '   ');
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ reviewerRole: undefined }))
+    );
+  });
+
+  it('caps the role at 60 characters', async () => {
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, HELPFUL);
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveAttribute('maxlength', '60');
+  });
+
+  it('renders no checkbox for a company that may not be named, and sends showCompany false', async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: true });
+    const user = userEvent.setup();
+    renderBlock({
+      ...NONE,
+      capture: buildReviewCaptureSeeds({ identity: { companyNameAllowed: false } }),
+    });
+    await pickStar(user, OUTSTANDING);
+
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(expectedLine({ role: null, showCompany: true, companyNameAllowed: false }))
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }))
+    );
+  });
+
+  it('prefills a first review from the seeds: saved role, company ticked, note public', async () => {
+    const user = userEvent.setup();
+    renderBlock({
+      ...NONE,
+      capture: buildReviewCaptureSeeds({ defaults: { role: 'RevOps Lead' } }),
+    });
+    await pickStar(user, OUTSTANDING);
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveValue('RevOps Lead');
+    expect(
+      screen.getByText('From your last review. Update it if it’s changed.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', COMPANY_BOX)).toBeChecked();
+  });
+
+  it('hides the saved-title helper once the seeded role is cleared', async () => {
+    const user = userEvent.setup();
+    renderBlock({
+      ...NONE,
+      capture: buildReviewCaptureSeeds({ defaults: { role: 'RevOps Lead' } }),
+    });
+    await pickStar(user, OUTSTANDING);
+    await user.clear(screen.getByRole('textbox', { name: /Your role/ }));
+    expect(screen.queryByText(/From your last review/)).not.toBeInTheDocument();
+    expect(screen.getByText('We’ll remember it for your next review.')).toBeInTheDocument();
+  });
+
+  it('rejects an @ in the role inline and blocks Save until it is fixed', async () => {
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, OUTSTANDING);
+    const field = screen.getByRole('textbox', { name: /Your role/ });
+    await user.type(field, 'CTO @Salesforce');
+
+    expect(screen.getByText('Roles can’t include @ or special characters')).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    const save = screen.getByRole('button', { name: 'Save review' });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await user.clear(field);
+    await user.type(field, 'CTO');
+    expect(save).toBeEnabled();
+  });
+
+  it('says it will remember the role when none was saved', async () => {
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, OUTSTANDING);
+    expect(screen.getByText('We’ll remember it for your next review.')).toBeInTheDocument();
+  });
+
+  it('sends all three fields through a REVISION, seeded from the existing review', async () => {
+    mockSubmit.mockResolvedValue({ success: true, created: false });
+    const user = userEvent.setup();
+    renderBlock(RATED_LOW);
+    await user.click(screen.getByRole('button', { name: 'Update my rating' }));
+
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveValue('RevOps Lead');
+    expect(screen.getByRole('checkbox', COMPANY_BOX)).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Update review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reviewerRole: 'RevOps Lead',
+          showCompany: false,
+          bodyVisibility: 'private',
+        })
+      )
+    );
+  });
+
+  it('"Keep it as it is" returns all three fields to the seeds', async () => {
+    const user = userEvent.setup();
+    renderBlock(RATED_LOW);
+    await user.click(screen.getByRole('button', { name: 'Update my rating' }));
+    await user.clear(screen.getByRole('textbox', { name: /Your role/ }));
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), 'Someone else');
+    await user.click(screen.getByRole('checkbox', COMPANY_BOX));
+    await user.click(screen.getByRole('button', SHOW_PUBLICLY));
+
+    await user.click(screen.getByRole('button', { name: 'Keep it as it is' }));
+    await user.click(await screen.findByRole('button', { name: 'Update my rating' }));
+
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveValue('RevOps Lead');
+    expect(screen.getByRole('checkbox', COMPANY_BOX)).not.toBeChecked();
+    expect(screen.getByRole('button', SHOW_PUBLICLY)).toBeInTheDocument();
+  });
+
+  it('disables the attribution controls while the write is in flight', async () => {
+    mockSubmit.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    renderBlock(NONE);
+    await pickStar(user, OUTSTANDING);
+    await user.click(screen.getByRole('button', { name: 'Save review' }));
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toBeDisabled();
+    expect(screen.getByRole('checkbox', COMPANY_BOX)).toBeDisabled();
   });
 });

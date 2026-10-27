@@ -101,6 +101,7 @@ vi.mock('@/lib/engagement/change-order-settlement', () => ({
 
 import { deriveProjectSettlement } from '@balo/shared/engagements';
 import { makeOrder } from '@/test/change-order-fixtures';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import EngagementWorkspacePage, { generateMetadata } from './page';
 
 const ENGAGEMENT_ID = 'eng-1';
@@ -403,6 +404,7 @@ describe('EngagementWorkspacePage (RSC) — readRatingCard wiring', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     });
 
     await renderPage();

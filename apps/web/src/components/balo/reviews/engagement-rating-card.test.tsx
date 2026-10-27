@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import { track, REVIEW_EVENTS } from '@/lib/analytics';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { EngagementRatingCard } from './engagement-rating-card';
@@ -29,16 +30,19 @@ const NONE: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'none' },
   existingBody: null,
+  capture: buildReviewCaptureSeeds(),
 };
 const RATED_OK: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'rated_ok', rating: 5 },
   existingBody: null,
+  capture: buildReviewCaptureSeeds(),
 };
 const RATED_LOW: EndOfCallRatingView = {
   engagementId: ENGAGEMENT_ID,
   state: { kind: 'rated_low', rating: 3 },
   existingBody: null,
+  capture: buildReviewCaptureSeeds(),
 };
 
 describe('EngagementRatingCard', () => {

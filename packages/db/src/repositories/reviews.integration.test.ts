@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, expertProfiles, reviews } from '../schema';
-import type { AuditEvent } from '../schema';
+import { auditEvents, expertProfiles, industries, reviews } from '../schema';
+import type { AuditEvent, NewCompany } from '../schema';
 import {
   caseEngagementFactory,
+  companyFactory,
   companyMemberFactory,
   engagementFactory,
   expertDraftFactory,
@@ -38,8 +40,33 @@ function upsertInput(
     body: null,
     surface: 'end_of_call',
     authMethod: 'session',
+    bodyVisibility: 'public',
+    showCompany: true,
+    reviewerRole: null,
     ...overrides,
   };
+}
+
+/**
+ * A live project engagement whose client company is a NON-personal org, so its name is
+ * allowed on reviews unless `overrides` hide it. (`engagementFactory`'s own default company
+ * is PERSONAL, which `findLatestShowCompanyChoice` deliberately skips.)
+ */
+async function engagementOnCompany(
+  overrides: Partial<NewCompany> = {}
+): Promise<EngagementFactoryResult> {
+  const company = await companyFactory(overrides);
+  return engagementFactory({ companyId: company.id });
+}
+
+/** An `industries` row (there is no industry factory; `experts.integration.test.ts` precedent). */
+async function seedIndustry(name: string, isActive = true): Promise<string> {
+  const slug = `${name.toLowerCase().replaceAll(/\W+/g, '-')}-${randomUUID()}`;
+  const [industry] = await db.insert(industries).values({ name, slug, isActive }).returning();
+  if (industry === undefined) {
+    throw new Error('industry insert failed');
+  }
+  return industry.id;
 }
 
 async function auditRowsFor(entityId: string): Promise<AuditEvent[]> {
@@ -282,6 +309,216 @@ describe('reviewsRepository.upsert — the DB constraints', () => {
   });
 });
 
+describe('reviews attribution columns (BAL-628, migration 0121)', () => {
+  it('fails CLOSED for a row written without them — private note, company hidden, no role', async () => {
+    // `reviewFactory` inserts directly and names none of the three columns, exactly like a
+    // pre-0121 row or a writer that forgot them.
+    const { review } = await reviewFactory({ values: { body: 'Kept between us' } });
+
+    const [row] = await db
+      .select({
+        bodyVisibility: reviews.bodyVisibility,
+        showCompany: reviews.showCompany,
+        reviewerRole: reviews.reviewerRole,
+      })
+      .from(reviews)
+      .where(eq(reviews.id, review.id));
+
+    expect(row).toEqual({ bodyVisibility: 'private', showCompany: false, reviewerRole: null });
+  });
+
+  it.each([
+    ['whitespace-only', '   '],
+    ['61 characters', 'x'.repeat(61)],
+  ])('rejects a %s role with 23514 on review_reviewer_role_length', async (_label, role) => {
+    const { engagement, reviewerUserId } = await seedEngagementAndReviewer();
+    await expect(
+      reviewsRepository.upsert(upsertInput(engagement, reviewerUserId, { reviewerRole: role }))
+    ).rejects.toMatchObject({ code: '23514', constraint_name: 'review_reviewer_role_length' });
+  });
+
+  it.each([
+    ['an "@"', 'CTO @Salesforce'],
+    ['a newline', 'CTO\nat Acme'],
+  ])(
+    'rejects a role containing %s with 23514 on review_reviewer_role_charset',
+    async (_l, role) => {
+      const { engagement, reviewerUserId } = await seedEngagementAndReviewer();
+      await expect(
+        reviewsRepository.upsert(upsertInput(engagement, reviewerUserId, { reviewerRole: role }))
+      ).rejects.toMatchObject({ code: '23514', constraint_name: 'review_reviewer_role_charset' });
+    }
+  );
+
+  it('accepts a 60-character role and a NULL role', async () => {
+    const { engagement, reviewerUserId } = await seedEngagementAndReviewer();
+    const sixty = 'x'.repeat(60);
+
+    const withRole = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, { reviewerRole: sixty })
+    );
+    expect(withRole.review.reviewerRole).toBe(sixty);
+
+    const cleared = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, { reviewerRole: null })
+    );
+    expect(cleared.review.reviewerRole).toBeNull();
+  });
+
+  it('writes all three on the INSERT branch and REPLACES all three on the UPDATE branch', async () => {
+    const { engagement, reviewerUserId } = await seedEngagementAndReviewer();
+
+    const first = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, {
+        body: 'Sorted it in one call',
+        bodyVisibility: 'public',
+        showCompany: true,
+        reviewerRole: 'RevOps Lead',
+      })
+    );
+    expect(first.created).toBe(true);
+
+    const second = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, {
+        body: 'Sorted it in one call',
+        bodyVisibility: 'private',
+        showCompany: false,
+        reviewerRole: null,
+      })
+    );
+    expect(second.created).toBe(false);
+    expect(second.review.id).toBe(first.review.id);
+
+    // Read back from the table, not the RETURNING row, so a `set` that omitted a column
+    // (written on insert, left stale on update) cannot pass.
+    const rows = await db
+      .select({
+        bodyVisibility: reviews.bodyVisibility,
+        showCompany: reviews.showCompany,
+        reviewerRole: reviews.reviewerRole,
+      })
+      .from(reviews)
+      .where(and(eq(reviews.engagementId, engagement.engagement.id), isNull(reviews.deletedAt)));
+    expect(rows).toEqual([{ bodyVisibility: 'private', showCompany: false, reviewerRole: null }]);
+  });
+
+  it('records bodyVisibility, showCompany and hasRole in the audit metadata — never the role text', async () => {
+    const { engagement, reviewerUserId } = await seedEngagementAndReviewer();
+
+    const first = await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, {
+        bodyVisibility: 'public',
+        showCompany: true,
+        reviewerRole: 'RevOps Lead',
+      })
+    );
+    await reviewsRepository.upsert(
+      upsertInput(engagement, reviewerUserId, {
+        bodyVisibility: 'private',
+        showCompany: false,
+        reviewerRole: null,
+      })
+    );
+
+    const audits = await auditRowsFor(first.review.id);
+    const submitted = audits.find((row) => row.action === 'review.submitted');
+    const updated = audits.find((row) => row.action === 'review.updated');
+    expect(submitted?.metadata).toMatchObject({
+      bodyVisibility: 'public',
+      showCompany: true,
+      hasRole: true,
+    });
+    expect(updated?.metadata).toMatchObject({
+      bodyVisibility: 'private',
+      showCompany: false,
+      hasRole: false,
+    });
+    expect(JSON.stringify(audits.map((row) => row.metadata))).not.toContain('RevOps');
+  });
+});
+
+describe('reviewsRepository.findLatestShowCompanyChoice (BAL-628)', () => {
+  const OLDER = new Date('2026-09-01T10:00:00.000Z');
+  const NEWER = new Date('2026-09-02T10:00:00.000Z');
+
+  it('returns undefined for a reviewer with no reviews', async () => {
+    const reviewer = await userFactory();
+    await expect(
+      reviewsRepository.findLatestShowCompanyChoice(reviewer.id)
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [true, false],
+    [false, true],
+  ])(
+    'takes the LATEST updated_at across engagements (older %s, newer %s)',
+    async (older, newer) => {
+      const reviewer = await userFactory();
+      await reviewFactory({
+        engagement: await engagementOnCompany(),
+        reviewerUserId: reviewer.id,
+        values: { showCompany: older, updatedAt: OLDER },
+      });
+      await reviewFactory({
+        engagement: await engagementOnCompany(),
+        reviewerUserId: reviewer.id,
+        values: { showCompany: newer, updatedAt: NEWER },
+      });
+
+      await expect(reviewsRepository.findLatestShowCompanyChoice(reviewer.id)).resolves.toBe(newer);
+    }
+  );
+
+  it.each([
+    ['a personal company', { isPersonal: true }],
+    ['a company hidden from reviews', { reviewNameHiddenAt: new Date('2026-08-01T00:00:00Z') }],
+  ])('skips a NEWER review on %s — a forced false is not a choice', async (_label, company) => {
+    const reviewer = await userFactory();
+    await reviewFactory({
+      engagement: await engagementOnCompany(),
+      reviewerUserId: reviewer.id,
+      values: { showCompany: false, updatedAt: OLDER },
+    });
+    await reviewFactory({
+      engagement: await engagementOnCompany(company),
+      reviewerUserId: reviewer.id,
+      values: { showCompany: true, updatedAt: NEWER },
+    });
+
+    await expect(reviewsRepository.findLatestShowCompanyChoice(reviewer.id)).resolves.toBe(false);
+  });
+
+  it('skips a NEWER soft-deleted review', async () => {
+    const reviewer = await userFactory();
+    await reviewFactory({
+      engagement: await engagementOnCompany(),
+      reviewerUserId: reviewer.id,
+      values: { showCompany: false, updatedAt: OLDER },
+    });
+    await reviewFactory({
+      engagement: await engagementOnCompany(),
+      reviewerUserId: reviewer.id,
+      values: { showCompany: true, updatedAt: NEWER, deletedAt: NEWER },
+    });
+
+    await expect(reviewsRepository.findLatestShowCompanyChoice(reviewer.id)).resolves.toBe(false);
+  });
+
+  it('reads only THIS reviewer’s reviews', async () => {
+    const engagement = await engagementOnCompany();
+    const mine = await reviewFactory({
+      engagement,
+      values: { showCompany: false, updatedAt: OLDER },
+    });
+    await reviewFactory({ engagement, values: { showCompany: true, updatedAt: NEWER } });
+
+    await expect(reviewsRepository.findLatestShowCompanyChoice(mine.reviewerUserId)).resolves.toBe(
+      false
+    );
+  });
+});
+
 describe('reviewsRepository.findLive', () => {
   it('finds the reviewer’s live review', async () => {
     const { review, engagementId, reviewerUserId, expertProfileId } = await reviewFactory();
@@ -495,6 +732,9 @@ describe('reviewsRepository.recomputeRatingAggregate — ONE ENGAGEMENT, ONE VOT
       body: null,
       surface: 'end_of_call',
       authMethod: 'session',
+      bodyVisibility: 'public',
+      showCompany: true,
+      reviewerRole: null,
     });
 
     await expect(storedAggregate(expert.id)).resolves.toEqual({
@@ -745,11 +985,16 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
   // `expertProfileId` would ride into an unauthenticated RSC payload with no reader.
   const EXPECTED_KEYS = [
     'clientCompanyName',
+    'clientCompanyNameAllowed',
+    'clientIndustryName',
     'concludedOnIso',
     'engagementKind',
     'expertGivenName',
     'expertPartyLabel',
     'reviewerFirstName',
+    'reviewerJobTitle',
+    'reviewerLastInitial',
+    'reviewerLastShowCompany',
     'title',
   ];
 
@@ -783,8 +1028,17 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
     // catches a re-add under a different name.
     expect(context).not.toHaveProperty('engagementId');
     expect(context).not.toHaveProperty('expertProfileId');
+    expect(context).not.toHaveProperty('companyId');
     expect(serialised).not.toContain(engagement.engagement.id);
     expect(serialised).not.toContain(engagement.expertProfileId);
+    expect(serialised).not.toContain(engagement.companyId);
+    expect(serialised).not.toContain(reviewerUserId);
+    expect(Object.keys(context).filter((key) => /id$/i.test(key))).toEqual([]);
+
+    // The reviewer arrives as an INITIAL, never a surname (BAL-628).
+    expect(context).not.toHaveProperty('lastName');
+    expect(context).not.toHaveProperty('reviewerLastName');
+    expect(context.reviewerLastInitial).toMatch(/^[A-Z]$/);
   });
 
   it('resolves a CASE engagement, taking the title and the closed_at anchor from the child', async () => {
@@ -808,11 +1062,12 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
     expect(Object.keys(context ?? {}).sort()).toEqual(EXPECTED_KEYS);
   });
 
-  it('carries the reviewer’s FIRST NAME only — never their email', async () => {
+  it('carries the reviewer’s first name, surname INITIAL and job title — never the surname or email', async () => {
     const engagement = await engagementFactory();
     const reviewer = await userFactory({
       firstName: 'Dana',
-      lastName: 'Okafor',
+      lastName: 'okafor',
+      jobTitle: 'RevOps Lead',
       email: `dana-${Date.now()}@northwind.example`,
     });
     await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
@@ -823,8 +1078,83 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
     );
 
     expect(context?.reviewerFirstName).toBe('Dana');
-    expect(JSON.stringify(context)).not.toContain('Okafor');
+    expect(context?.reviewerLastInitial).toBe('O');
+    expect(context?.reviewerJobTitle).toBe('RevOps Lead');
+    expect(JSON.stringify(context)).not.toContain('okafor');
     expect(JSON.stringify(context)).not.toContain('northwind.example');
+  });
+
+  it('returns a NULL first name and initial when the reviewer has neither — no placeholder', async () => {
+    const engagement = await engagementFactory();
+    const reviewer = await userFactory({ firstName: null, lastName: null });
+
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewer.id
+    );
+
+    expect(context?.reviewerFirstName).toBeNull();
+    expect(context?.reviewerLastInitial).toBeNull();
+    expect(context?.reviewerJobTitle).toBeNull();
+  });
+
+  it.each([
+    ['a non-personal company', { isPersonal: false }, true],
+    ['a personal company', { isPersonal: true }, false],
+    [
+      'a company hidden from reviews',
+      { reviewNameHiddenAt: new Date('2026-08-01T00:00:00Z') },
+      false,
+    ],
+  ])('reports clientCompanyNameAllowed for %s', async (_label, company, allowed) => {
+    const engagement = await engagementOnCompany({ name: 'Northwind Logistics', ...company });
+    const reviewer = await userFactory();
+
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewer.id
+    );
+
+    expect(context?.clientCompanyName).toBe('Northwind Logistics');
+    expect(context?.clientCompanyNameAllowed).toBe(allowed);
+  });
+
+  it('carries the company’s ACTIVE industry, and drops an inactive one to null', async () => {
+    const reviewer = await userFactory();
+    const active = await engagementOnCompany({ industryId: await seedIndustry('Logistics') });
+    const retired = await engagementOnCompany({ industryId: await seedIndustry('Retail', false) });
+    const none = await engagementOnCompany();
+
+    const [withIndustry, withRetired, withNone] = await Promise.all([
+      reviewsRepository.findLandingContext(active.engagement.id, reviewer.id),
+      reviewsRepository.findLandingContext(retired.engagement.id, reviewer.id),
+      reviewsRepository.findLandingContext(none.engagement.id, reviewer.id),
+    ]);
+
+    expect(withIndustry?.clientIndustryName).toBe('Logistics');
+    expect(withRetired?.clientIndustryName).toBeNull();
+    expect(withRetired).toBeDefined();
+    expect(withNone?.clientIndustryName).toBeNull();
+  });
+
+  it('carries the reviewer’s last company-visibility choice, or null when there is none', async () => {
+    const engagement = await engagementOnCompany();
+    const reviewer = await userFactory();
+
+    const before = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewer.id
+    );
+    expect(before?.reviewerLastShowCompany).toBeNull();
+
+    await reviewFactory({
+      engagement: await engagementOnCompany(),
+      reviewerUserId: reviewer.id,
+      values: { showCompany: false },
+    });
+
+    const after = await reviewsRepository.findLandingContext(engagement.engagement.id, reviewer.id);
+    expect(after?.reviewerLastShowCompany).toBe(false);
   });
 
   it('falls back to a neutral title when a project has no origination row (the retainer seam)', async () => {
