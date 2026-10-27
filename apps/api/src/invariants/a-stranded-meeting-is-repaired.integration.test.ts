@@ -124,10 +124,13 @@ const BOOKING_LEAD_MINUTES = 60;
 const BOOKED_WINDOW_MINUTES = 30;
 /** Comfortably more than the longest metered span any test here can draw. */
 const FUNDED_BALANCE_MINOR = 500_000;
-const EXPERT_HOURLY_MINOR = 33_600;
+const EXPERT_RATE_MINOR_PER_MINUTE = 560;
 /** At the default fee this is 700/min client, 560/min expert. */
 const { clientRateMinorPerMinute: CLIENT_RATE, expertRateMinorPerMinute: EXPERT_RATE } =
-  deriveSessionEstimate({ expertHourlyMinor: EXPERT_HOURLY_MINOR, estimatedMinutes: 1 });
+  deriveSessionEstimate({
+    expertRateMinorPerMinute: EXPERT_RATE_MINOR_PER_MINUTE,
+    estimatedMinutes: 1,
+  });
 const TIMERS = resolveMeetingTimers();
 
 /** The documented `minter` injection point — no Daily account, no network. */
@@ -227,7 +230,7 @@ interface BookedMeeting {
 async function seedVenueReadyMeeting(start: Date, scheduledEnd: Date): Promise<BookedMeeting> {
   const parties = await seedBookingParties();
   await expertsRepository.updateProfile(parties.expertProfileId, {
-    rateCents: EXPERT_HOURLY_MINOR,
+    rateCents: EXPERT_RATE_MINOR_PER_MINUTE,
   });
   const expert = await expertsRepository.findUserIdByProfileId(parties.expertProfileId);
   if (expert === undefined) {

@@ -166,8 +166,8 @@ describe('creditHoldsRepository.settle / release — guarded transitions', () =>
 
 // ── BAL-474 (ADR-1040 Amendment 7 §H, D8.5) — the booking figure ─────────────────────────────
 
-/** Client 250 / minute at the default fee (expert A$120/h). */
-const EXPERT_HOURLY_250 = 12_000;
+/** Client 250 / minute at the default fee (expert A$2.00/min). */
+const EXPERT_RATE_250 = 200;
 const MINUTE_MS = 60_000;
 
 /** A wallet at `balanceMinor` with ONE session opened on it (hold = estimate × 250). */
@@ -180,7 +180,7 @@ async function walletWithSession(
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY_250 })
+    .set({ rateCents: EXPERT_RATE_250 })
     .where(eq(expertProfiles.id, expert.id));
   const opened = await creditSessionsRepository.open({
     walletId: wallet.id,

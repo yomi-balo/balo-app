@@ -20,7 +20,7 @@ import { TOP_UP_LIMITS_MINOR } from './top-up-limits';
 
 const MINUTE_MS = 60_000;
 /** Client 700 / minute at the default fee. */
-const RATE_700 = 33_600;
+const RATE_700 = 560;
 const WALLET = 'wallet-1';
 
 function window(startOffsetMinutes: number, minutes: number): { start: Date; end: Date } {

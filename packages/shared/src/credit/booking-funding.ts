@@ -124,7 +124,7 @@ export function estimateCaseBookingMinor(
   scheduledEnd: Date
 ): number {
   return deriveSessionEstimate({
-    expertHourlyMinor: rateCents,
+    expertRateMinorPerMinute: rateCents,
     estimatedMinutes: estimatedMinutesForWindow(scheduledStart, scheduledEnd),
   }).estimateMinor;
 }
