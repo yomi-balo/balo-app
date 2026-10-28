@@ -9,22 +9,24 @@ describe('engagement-time-entry-changed templates (BAL-626)', () => {
     actorExpertLabel: 'Priya @ CloudPeak',
     projectTitle: 'CPQ implementation',
     workedOnLabel: '14 Oct',
-    hoursLabel: '2.5 hrs',
+    hoursLabel: '3 hrs',
     engagementId: 'eng-1',
   };
 
   it('edited: email subject and body, in-app title and body', async () => {
     const data = { ...base, change: 'edited' };
     const email = getEmailTemplate('engagement-time-entry-changed', data);
-    expect(email.subject).toBe('Priya @ CloudPeak edited your time entry on CPQ implementation');
+    expect(email.subject).toBe('Priya @ CloudPeak changed your time entry on CPQ implementation');
     const html = await render(email.component);
-    expect(html).toContain('Priya @ CloudPeak edited your 2.5 hrs entry for 14 Oct');
+    expect(html).toContain(
+      'Priya @ CloudPeak changed your entry for 14 Oct to 3 hrs on CPQ implementation.'
+    );
     expect(html).toContain('/engagements/eng-1');
 
     const inApp = getInAppTemplate('engagement-time-entry-changed', data);
-    expect(inApp.title).toBe('Time entry edited');
+    expect(inApp.title).toBe('Time entry changed');
     expect(inApp.body).toBe(
-      'Priya @ CloudPeak edited your 2.5 hrs entry for 14 Oct on CPQ implementation.'
+      'Priya @ CloudPeak changed your entry for 14 Oct to 3 hrs on CPQ implementation.'
     );
     expect(inApp.actionUrl).toBe('/engagements/eng-1');
   });
@@ -32,14 +34,14 @@ describe('engagement-time-entry-changed templates (BAL-626)', () => {
   it('removed: email subject and body, in-app title and body', async () => {
     const data = { ...base, change: 'removed' };
     const email = getEmailTemplate('engagement-time-entry-changed', data);
-    expect(email.subject).toBe('Priya @ CloudPeak removed a time entry on CPQ implementation');
+    expect(email.subject).toBe('Priya @ CloudPeak removed your time entry on CPQ implementation');
     const html = await render(email.component);
-    expect(html).toContain('Priya @ CloudPeak removed your 2.5 hrs entry for 14 Oct');
+    expect(html).toContain('Priya @ CloudPeak removed your 3-hour entry for 14 Oct');
 
     const inApp = getInAppTemplate('engagement-time-entry-changed', data);
     expect(inApp.title).toBe('Time entry removed');
     expect(inApp.body).toBe(
-      'Priya @ CloudPeak removed your 2.5 hrs entry for 14 Oct on CPQ implementation.'
+      'Priya @ CloudPeak removed your 3-hour entry for 14 Oct on CPQ implementation.'
     );
   });
 });

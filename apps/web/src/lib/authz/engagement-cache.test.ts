@@ -51,11 +51,12 @@ beforeEach(async () => {
 });
 
 describe('host-context lookups are request-deduped', () => {
-  it('shares one build between both resolvers for the same actor and profile', async () => {
+  it('shares one build between both resolvers and every token for the same actor and profile', async () => {
     const actor = { id: ADMIN_ID };
     await hasExpertDeliveryCapability(actor, 'manage_engagement', PROFILE_ID, LOG_CONTEXT);
     await administersDeliveringAgency(actor, PROFILE_ID);
     await hasExpertDeliveryCapability(actor, 'host_meetings', PROFILE_ID, LOG_CONTEXT);
+    await hasExpertDeliveryCapability(actor, 'log_time', PROFILE_ID, LOG_CONTEXT);
 
     expect(mockFindProfile).toHaveBeenCalledTimes(1);
     expect(mockGetMemberRole).toHaveBeenCalledTimes(1);

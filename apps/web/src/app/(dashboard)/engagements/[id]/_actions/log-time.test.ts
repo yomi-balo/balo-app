@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ENGAGEMENT_CAPABILITIES, HOST_ROLES } from '@balo/shared/authz';
+import { capabilityOverTokenMap } from '@/test/engagement-capability-fake';
 import {
   CHARLES,
   FIXTURE_ENGAGEMENT_ID as ENGAGEMENT_ID,
@@ -123,7 +125,12 @@ beforeEach(() => {
     })
   );
   mockResolveLens.mockReturnValue({ lens: 'expert', archetype: 'participant' });
-  mockHasExpertCapability.mockResolvedValue(true);
+  // Charles delivers; any other caller holds the agency owner/admin bundle.
+  mockHasExpertCapability.mockImplementation(
+    capabilityOverTokenMap((id) =>
+      id === CHARLES.id ? HOST_ROLES.DELIVERING_EXPERT : HOST_ROLES.AGENCY_ADMIN
+    )
+  );
   mockWrite.mockResolvedValue(written());
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
   mockFindUser.mockResolvedValue({ id: CHARLES.id, timezone: 'Australia/Melbourne' });
@@ -196,6 +203,30 @@ describe('logTimeAction', () => {
       'Time entry denied',
       expect.objectContaining({ reason: 'not_delivering_expert', userId: 'admin-1' })
     );
+    expect(mockHasExpertCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'admin-1' }),
+      ENGAGEMENT_CAPABILITIES.LOG_TIME,
+      expect.any(String),
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+  });
+
+  it('refuses an agency `expert` colleague who is not delivering as a missing row', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'colleague-1',
+      firstName: 'Sam',
+      lastName: 'Wu',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-3',
+    });
+    mockResolveLens.mockReturnValue(null);
+    mockHasExpertCapability.mockImplementation(capabilityOverTokenMap(() => null));
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: 'This engagement could not be found.',
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
   });
 
   it('refuses a milestone that is not part of the engagement', async () => {

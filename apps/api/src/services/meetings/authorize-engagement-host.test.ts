@@ -95,6 +95,15 @@ const SIBLING_EXPERT = {
 
 const ALL_TOKENS: readonly EngagementCapability[] = Object.values(ENGAGEMENT_CAPABILITIES);
 
+/**
+ * The tokens the WHOLE holder set shares. `log_time` is the delivering expert's alone, so a
+ * positive over every holder (agency owner/admin included) ranges over these two.
+ */
+const SHARED_TOKENS: readonly EngagementCapability[] = [
+  ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
+  ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+];
+
 /** The four labels that anchor on `engagements.id` — one shared branch in the resolver. */
 const ENGAGEMENT_GRAIN_TYPES = [
   'case',
@@ -544,7 +553,7 @@ describe('hasEngagementCapability — project_discovery, the relationship-status
     for (const [, actor, role] of HOLDER_SET) {
       vi.clearAllMocks();
       armDefaultRepos(role);
-      for (const token of ALL_TOKENS) {
+      for (const token of SHARED_TOKENS) {
         await expect(hasEngagementCapability(actor, token, DISCOVERY_SUBJECT)).resolves.toBe(true);
       }
     }
@@ -999,6 +1008,12 @@ describe('both tokens route through the SAME resolver (AC #13)', () => {
 
       expect(manageResult).toBe(hostResult);
       expect(repoCallSequence()).toEqual(hostSequence);
+
+      // `log_time`'s holder set is narrower, so only the path is pinned here, not the answer.
+      vi.clearAllMocks();
+      armDefaultRepos(role);
+      await hasEngagementCapability(actor, ENGAGEMENT_CAPABILITIES.LOG_TIME, subject);
+      expect(repoCallSequence()).toEqual(hostSequence);
     }
   );
 });
@@ -1089,7 +1104,7 @@ describe('resolveHostContext brands the context with the actor it was resolved F
     mockGetMemberRole.mockResolvedValue('owner');
     const ownersContext = await resolveHostContext(CASE_SUBJECT, 'user_agency_owner');
 
-    for (const token of ALL_TOKENS) {
+    for (const token of SHARED_TOKENS) {
       expect(hostContextGrants(ownersContext, { id: 'user_agency_owner' }, token)).toBe(true);
       expect(hostContextGrants(ownersContext, { id: 'user_attacker' }, token)).toBe(false);
       // Including the delivering expert, who would otherwise pass the identity branch.

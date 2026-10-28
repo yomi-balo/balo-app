@@ -1008,7 +1008,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         engagementId: (data.engagementId as string) ?? '',
         baseUrl: BASE_URL,
       }),
-      subject: `${sanitizeSubjectTitle(actor)} ${removed ? 'removed a time entry' : 'edited your time entry'} on ${sanitizeSubjectTitle(projectTitle)}`,
+      subject: `${sanitizeSubjectTitle(actor)} ${removed ? 'removed' : 'changed'} your time entry on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 

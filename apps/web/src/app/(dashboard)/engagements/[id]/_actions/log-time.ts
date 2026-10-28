@@ -32,8 +32,8 @@ const logTimeSchema = z
 /**
  * The delivering expert logs time against an in-progress milestone of an active
  * time-and-materials project. Gated on the engagement capability `manage_engagement` and then
- * on being the delivering expert: an agency owner or admin can edit and remove entries but not
- * log them, and is refused with `ONLY_EXPERT`. The entry is dated today in the author's own time zone
+ * on `log_time`, which only the delivering expert holds: an agency owner or admin can edit and
+ * remove entries but not log them, and is refused with `ONLY_EXPERT`. The entry is dated today in the author's own time zone
  * (`users.timezone`, UTC when unset). The repository records the first
  * crossing of the milestone's estimate in the same transaction, and the client and admins
  * are told once.

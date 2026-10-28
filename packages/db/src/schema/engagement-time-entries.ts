@@ -21,7 +21,7 @@ import { timestamps, softDelete } from './helpers';
  * same ruling as the actor FKs on `engagement_change_orders`: reads filter by engagement or
  * milestone and hydrate the author over the `users` PK, and users are never hard-deleted, so
  * the RESTRICT FK's delete-time scan never runs. `updated_by_user_id` follows the same
- * ruling (nullable, SET NULL, unindexed): it only labels an entry edited by someone else.
+ * ruling (nullable, RESTRICT, unindexed): it only labels an entry edited by someone else.
  *
  * NO RLS — A KNOWING DEVIATION, RECORDED. No schema file in this package calls
  * `.enableRLS()` or `pgPolicy()`: Balo authenticates with WorkOS + iron-session, so a
@@ -50,10 +50,10 @@ export const engagementTimeEntries = pgTable(
 
     /**
      * Who last changed or removed the entry; null = never edited. Not the author when an
-     * agency owner/admin edited it. SET NULL on user delete, and unindexed like `user_id`.
+     * agency owner/admin edited it. RESTRICT and unindexed, like `user_id`.
      */
     updatedByUserId: uuid('updated_by_user_id').references(() => users.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
 
     /** The author's local calendar day the work was done (`users.timezone`), as 'YYYY-MM-DD'. */

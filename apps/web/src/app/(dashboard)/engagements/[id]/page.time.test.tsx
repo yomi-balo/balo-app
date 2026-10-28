@@ -64,7 +64,9 @@ vi.mock('@/components/balo/engagement/engagement-workspace', () => ({
   EngagementWorkspace: () => null,
 }));
 
+import { HOST_ROLES } from '@balo/shared/authz';
 import { makeLine, makeMilestone, makeOrder } from '@/test/change-order-fixtures';
+import { capabilityOverTokenMap } from '@/test/engagement-capability-fake';
 import EngagementWorkspacePage from './page';
 
 const BUILD = makeMilestone({
@@ -141,7 +143,12 @@ beforeEach(() => {
   mockGetCurrentUser.mockResolvedValue(expert);
   mockListEntries.mockResolvedValue([]);
   mockSums.mockResolvedValue({ totalMinutes: 0, periodMinutes: 0, byMilestone: {} });
-  mockHasDeliveryCapability.mockResolvedValue(true);
+  // `user-expert` delivers; any other caller holds the agency owner/admin bundle.
+  mockHasDeliveryCapability.mockImplementation(
+    capabilityOverTokenMap((id) =>
+      id === 'user-expert' ? HOST_ROLES.DELIVERING_EXPERT : HOST_ROLES.AGENCY_ADMIN
+    )
+  );
   mockAdministers.mockResolvedValue(false);
   mockHasPlatformCapability.mockReturnValue(false);
   mockListChangeOrders.mockResolvedValue([]);

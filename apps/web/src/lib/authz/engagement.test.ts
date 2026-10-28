@@ -43,7 +43,7 @@ import {
 import { log } from '@/lib/logging';
 
 const SUBJECT = { contextType: 'case', contextId: ENGAGEMENT_ID } as const;
-const { MANAGE_ENGAGEMENT, HOST_MEETINGS } = ENGAGEMENT_CAPABILITIES;
+const { MANAGE_ENGAGEMENT, HOST_MEETINGS, LOG_TIME } = ENGAGEMENT_CAPABILITIES;
 
 /** An agency-backed profile, so the agency-role arm is reached. */
 function seedAgencyBacked(agencyRole: string | undefined): void {
@@ -193,10 +193,11 @@ describe('hasEngagementCapability — a repository REJECTION propagates, never a
  * traverse the identical repository sequence." A resolver that grew a per-token shortcut would
  * be the start of a second holder rule.
  */
-describe('hasEngagementCapability — one path for both tokens', () => {
+describe('hasEngagementCapability — one path for every token', () => {
   it.each([
     ['manage_engagement', MANAGE_ENGAGEMENT],
     ['host_meetings', HOST_MEETINGS],
+    ['log_time', LOG_TIME],
   ])('issues the identical read sequence for %s', async (_label, capability) => {
     seedAgencyBacked('owner');
     await hasEngagementCapability({ id: COLLEAGUE_ID }, capability, SUBJECT);
@@ -205,12 +206,45 @@ describe('hasEngagementCapability — one path for both tokens', () => {
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
   });
 
-  it('grants BOTH tokens to the agency owner — the holder set is one set', async () => {
+  it('grants host_meetings and manage_engagement to the agency owner — one holder set for both', async () => {
     seedAgencyBacked('owner');
     expect(await hasEngagementCapability({ id: COLLEAGUE_ID }, MANAGE_ENGAGEMENT, SUBJECT)).toBe(
       true
     );
     expect(await hasEngagementCapability({ id: COLLEAGUE_ID }, HOST_MEETINGS, SUBJECT)).toBe(true);
+  });
+});
+
+/**
+ * BAL-626 — `log_time` is the one token whose holder set is narrower: the delivering expert
+ * only, whatever their agency role. The map in `@balo/shared/authz` decides it; nothing here
+ * compares identities.
+ */
+describe('hasExpertDeliveryCapability — log_time is the delivering expert’s alone', () => {
+  const LOG_CONTEXT = { contextType: 'project', contextId: ENGAGEMENT_ID };
+
+  it.each([
+    ['the delivering expert with agency role `expert`', true, EXPERT_USER_ID, 'expert'],
+    ['the delivering expert who OWNS the agency', true, EXPERT_USER_ID, 'owner'],
+    ['an agency OWNER who is not delivering', false, COLLEAGUE_ID, 'owner'],
+    ['an agency ADMIN who is not delivering', false, COLLEAGUE_ID, 'admin'],
+    ['an agency `expert` colleague', false, COLLEAGUE_ID, 'expert'],
+    ['a total stranger', false, COLLEAGUE_ID, undefined],
+  ])('%s → %s', async (_label, expected, actorId, agencyRole) => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
+    mockGetMemberRole.mockResolvedValue(agencyRole);
+
+    expect(
+      await hasExpertDeliveryCapability({ id: actorId }, LOG_TIME, PROFILE_ID, LOG_CONTEXT)
+    ).toBe(expected);
+  });
+
+  it('grants an INDEPENDENT delivering expert', async () => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
+
+    expect(
+      await hasExpertDeliveryCapability({ id: EXPERT_USER_ID }, LOG_TIME, PROFILE_ID, LOG_CONTEXT)
+    ).toBe(true);
   });
 });
 

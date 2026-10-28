@@ -6,13 +6,14 @@
  * Balo-staff mutations by `platformRole` (ADR-1035); THIS seam gates by **delivery
  * identity** on one already-resolved meeting context.
  *
- * Two tokens — `host_meetings` (live/in-meeting: Daily owner token, admit/deny, end
- * call) and `manage_engagement` (administrative: reschedule propose/withdraw,
- * expert-side cancel, request case resolution) — over ONE holder set and, crucially,
- * ONE resolver. `hasEngagementCapability` never branches on the token: it resolves the
- * host context, then hands both the context and the token to the pure core. A
+ * Three tokens — `host_meetings` (live/in-meeting: Daily owner token, admit/deny, end
+ * call), `manage_engagement` (administrative: reschedule propose/withdraw, expert-side
+ * cancel, request case resolution) and `log_time` (delivering expert only; no caller in
+ * this app) — over ONE resolver. Where holder sets differ they differ in the pure core's
+ * `ENGAGEMENT_ROLE_CAPABILITIES`. `hasEngagementCapability` never branches on the token: it
+ * resolves the host context, then hands both the context and the token to the pure core. A
  * per-token resolver is the thing ADR-1046 forbids, and `authorize-engagement-host.test.ts`
- * pins it by asserting both tokens produce identical repository call sequences.
+ * pins it by asserting every token produces identical repository call sequences.
  *
  * Structure mirrors `services/credit-session/authorize-session-*.ts` (service-local
  * async guard) — deliberately, per the ticket's scope fence.

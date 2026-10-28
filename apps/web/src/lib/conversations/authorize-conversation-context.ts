@@ -46,9 +46,9 @@ import { log } from '@/lib/logging';
  * ──────────────────────────────────────────────────────────────────────────────
  * The obvious-looking move is `hasEngagementCapability(actor, MANAGE_ENGAGEMENT, subject)`.
  * IT IS THE WRONG AXIS, and not for packaging reasons (that seam being `apps/api`-only today
- * is a consequence, not the argument). That axis has exactly two tokens — `host_meetings`
- * (live/in-meeting) and `manage_engagement` (administrative acts: reschedule
- * propose/withdraw, expert-side cancel, request case resolution) — and CLAUDE.md states
+ * is a consequence, not the argument). That axis has only act tokens — `host_meetings`
+ * (live/in-meeting), `manage_engagement` (administrative acts: reschedule
+ * propose/withdraw, expert-side cancel, request case resolution) and `log_time` — and CLAUDE.md states
  * plainly that a `true` from that seam "authorizes the ACT, never the READ". READING A THREAD
  * IS NOT AN ACT. Gating a read on an act token would be a category error wherever the module
  * lived, and it would ALSO deny the wrong people: that holder set excludes agency role

@@ -7,10 +7,12 @@
  *   - ENGAGEMENT (this file)     — gates by DELIVERY IDENTITY on ONE already-resolved
  *                                  meeting context (ADR-1046 §1).
  *
- * Two tokens, ONE shared holder set, ONE shared resolver per app:
+ * Three tokens, ONE shared resolver per app:
  *   `host_meetings`     — live / in-meeting (Daily owner token, admit/deny, end call)
  *   `manage_engagement` — administrative (reschedule propose/withdraw, expert-side
  *                         cancel, request case resolution)
+ *   `log_time`          — log time on a time-and-materials project. The DELIVERING
+ *                         EXPERT only; the other two share one holder set.
  *
  * ⚠ NO `EngagementCapability` token is a member of the membership `Capability` union.
  * That disjointness is enforced by the COMPILER, not by a lint rule — see the
@@ -40,7 +42,7 @@
 import { CAPABILITIES, roleHasCapability } from './index';
 
 /**
- * The two tokens. NOT members of the membership `Capability` union (ADR-1046 §1).
+ * The three tokens. NOT members of the membership `Capability` union (ADR-1046 §1).
  */
 export const ENGAGEMENT_CAPABILITIES = {
   /** Live, in-meeting: Daily owner token, admit/deny, end call. */
@@ -51,6 +53,12 @@ export const ENGAGEMENT_CAPABILITIES = {
    * client-only on the MEMBERSHIP axis (`PARTICIPATE`); the expert may only request.
    */
   MANAGE_ENGAGEMENT: 'manage_engagement',
+  /**
+   * Log time against a milestone of a time-and-materials project (BAL-626). Held by the
+   * delivering expert ONLY: an agency owner/admin manages the engagement and may edit or
+   * remove entries, but the hours are the deliverer's to record.
+   */
+  LOG_TIME: 'log_time',
 } as const;
 
 export type EngagementCapability =
@@ -180,7 +188,7 @@ export function relationshipDeniesHosting(relationship: RelationshipHostingStatu
 }
 
 /**
- * Both tokens over the same holder set — the ADR-1046 2026-07-31 amendment, pinned
+ * The two tokens over the same holder set — the ADR-1046 2026-07-31 amendment, pinned
  * as data rather than prose.
  */
 const HOST_BUNDLE: readonly EngagementCapability[] = [
@@ -189,15 +197,17 @@ const HOST_BUNDLE: readonly EngagementCapability[] = [
 ];
 
 /**
- * Which host roles hold which token. BOTH tokens map to the SAME holder set today
- * (ADR-1046 amendment 2026-07-31).
+ * Which host roles hold which token. `host_meetings` and `manage_engagement` map to the
+ * SAME holder set (ADR-1046 amendment 2026-07-31); `log_time` is the delivering expert's
+ * alone (BAL-626).
  *
- * ⚠ IF THE HOLDER SETS EVER DIVERGE, THEY DIVERGE **HERE**, IN THIS MAP — never by
- * introducing a second resolver. One resolver per app is an ADR-1046 invariant, and
- * `engagement.test.ts` pins the current identity so a divergence must be conscious.
+ * ⚠ THE HOLDER SETS DIVERGE **HERE**, IN THIS MAP — never by introducing a second
+ * resolver or an identity comparison at a call site. One resolver per app is an ADR-1046
+ * invariant, and `engagement.test.ts` pins each role's bundle so a divergence must be
+ * conscious.
  */
 export const ENGAGEMENT_ROLE_CAPABILITIES: Record<HostRole, readonly EngagementCapability[]> = {
-  [HOST_ROLES.DELIVERING_EXPERT]: HOST_BUNDLE,
+  [HOST_ROLES.DELIVERING_EXPERT]: [...HOST_BUNDLE, ENGAGEMENT_CAPABILITIES.LOG_TIME],
   [HOST_ROLES.AGENCY_ADMIN]: HOST_BUNDLE,
 };
 
@@ -266,7 +276,7 @@ export function resolveHostRole(
 
 /**
  * PURE. The composition every per-app resolver ends in: derive the host role, then
- * ask the token map. A non-holder is `false` for BOTH tokens.
+ * ask the token map. A non-holder is `false` for EVERY token.
  */
 export function hostContextGrants(
   hostContext: ResolvedHostContext,

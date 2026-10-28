@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import { ENGAGEMENT_CAPABILITIES, HOST_ROLES } from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
+import { capabilityOverTokenMap } from '@/test/engagement-capability-fake';
 
 vi.mock('server-only', () => ({}));
 
@@ -14,6 +15,7 @@ vi.mock('@/lib/authz/engagement', () => ({
 }));
 
 import {
+  mayLogTime,
   resolveEngagementViewer,
   resolveExpertSideActor,
   resolveWorkspaceAccess,
@@ -137,7 +139,9 @@ describe('resolveWorkspaceAccess', () => {
   const tmActive = { ...engagement, pricingMethod: 'tm', status: 'active' };
 
   it('lets an agency owner/admin manage any entry but not log time, acting as agency_admin', async () => {
-    hasExpertDeliveryCapability.mockResolvedValue(true);
+    hasExpertDeliveryCapability.mockImplementation(
+      capabilityOverTokenMap(() => HOST_ROLES.AGENCY_ADMIN)
+    );
     administersDeliveringAgency.mockResolvedValue(true);
 
     const access = await resolveWorkspaceAccess(makeUser(), tmActive);
@@ -153,7 +157,10 @@ describe('resolveWorkspaceAccess', () => {
       timeEntryScope: 'any',
       actingAs: 'agency_admin',
     });
-    expect(hasExpertDeliveryCapability).toHaveBeenCalledTimes(1);
+    expect(hasExpertDeliveryCapability.mock.calls.map(([, capability]) => capability)).toEqual([
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      ENGAGEMENT_CAPABILITIES.LOG_TIME,
+    ]);
   });
 
   it('keeps a non-delivering actor the host context does not show as an administrator to their own entries', async () => {
@@ -165,7 +172,9 @@ describe('resolveWorkspaceAccess', () => {
   });
 
   it('lets the delivering expert log time and keeps a role-expert deliverer to their own entries', async () => {
-    hasExpertDeliveryCapability.mockResolvedValue(true);
+    hasExpertDeliveryCapability.mockImplementation(
+      capabilityOverTokenMap(() => HOST_ROLES.DELIVERING_EXPERT)
+    );
 
     const access = await resolveWorkspaceAccess(
       makeUser({ expertProfileId: EXPERT_PROFILE }),
@@ -181,7 +190,9 @@ describe('resolveWorkspaceAccess', () => {
   });
 
   it('gives a delivering expert who administers the agency any entry', async () => {
-    hasExpertDeliveryCapability.mockResolvedValue(true);
+    hasExpertDeliveryCapability.mockImplementation(
+      capabilityOverTokenMap(() => HOST_ROLES.DELIVERING_EXPERT)
+    );
     administersDeliveringAgency.mockResolvedValue(true);
 
     const access = await resolveWorkspaceAccess(
@@ -229,6 +240,31 @@ describe('resolveWorkspaceAccess', () => {
 
     expect(await resolveWorkspaceAccess(makeUser(), tmActive)).toBeNull();
     expect(hasExpertDeliveryCapability).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('mayLogTime', () => {
+  it('asks the log_time capability for the delivering expert profile and the project context', async () => {
+    hasExpertDeliveryCapability.mockResolvedValue(true);
+    const user = makeUser();
+
+    expect(await mayLogTime(user, engagement)).toBe(true);
+    expect(hasExpertDeliveryCapability).toHaveBeenCalledWith(
+      user,
+      ENGAGEMENT_CAPABILITIES.LOG_TIME,
+      EXPERT_PROFILE,
+      { contextType: 'project', contextId: 'eng-1' }
+    );
+  });
+
+  it.each([
+    ['the delivering expert', true, HOST_ROLES.DELIVERING_EXPERT],
+    ['an agency owner/admin', false, HOST_ROLES.AGENCY_ADMIN],
+    ['a non-holder', false, null],
+  ] as const)('%s -> %s', async (_name, expected, hostRole) => {
+    hasExpertDeliveryCapability.mockImplementation(capabilityOverTokenMap(() => hostRole));
+
+    expect(await mayLogTime(makeUser(), engagement)).toBe(expected);
   });
 });
 

@@ -6,7 +6,10 @@ import type { SessionUser } from '@/lib/auth/session';
 import { administersDeliveringAgency, hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { resolveEngagementLens, type EngagementViewerContext } from './resolve-engagement-lens';
 
-/** Which expert-side capacity an actor holds on an engagement. */
+/**
+ * Which expert-side capacity an actor holds on an engagement. Attribution and analytics
+ * only: no authorization decision reads these fields.
+ */
 export interface ExpertSideActor {
   /** The actor's own expert profile is the engagement's delivering expert. */
   isDeliveringExpert: boolean;
@@ -67,7 +70,7 @@ export async function resolveEngagementViewer(
 /** What the delivery workspace lets one viewer see and do. */
 export interface WorkspaceAccess {
   ctx: EngagementViewerContext;
-  /** The viewer may log time: an active time and materials project and the delivering expert. */
+  /** The viewer may log time: an active time and materials project and the `log_time` capability. */
   canLogTime: boolean;
   /** Whose time entries the viewer may edit or remove; `null` = none (not an expert-side holder, or not a live T&M project). */
   timeEntryScope: TimeEntryAuthorScope | null;
@@ -80,8 +83,8 @@ export interface WorkspaceAccess {
  * actor resolution (the capability read). Whose entries the viewer may change is a separate
  * resolution through the same resolvers the actions use; host-context lookups are
  * request-deduped, so asking twice costs no extra reads. The capability is asked only when it decides something: the viewer has
- * no relationship of their own, or the project is an active time and materials one. Only the
- * delivering expert logs time; whose entries the viewer may change reads
+ * no relationship of their own, or the project is an active time and materials one. Logging
+ * reads {@link mayLogTime} and whose entries the viewer may change reads
  * {@link timeEntryAuthorScope}, as the time-entry actions do. `null` = same 404 as a missing row.
  */
 export async function resolveWorkspaceAccess(
@@ -106,12 +109,11 @@ export async function resolveWorkspaceAccess(
   if (!logsTime || actor === null) {
     return { ctx, canLogTime: false, timeEntryScope: null, actingAs };
   }
-  return {
-    ctx,
-    canLogTime: actor.isDeliveringExpert,
-    timeEntryScope: await timeEntryAuthorScope(user, engagement),
-    actingAs,
-  };
+  const [canLogTime, timeEntryScope] = await Promise.all([
+    mayLogTime(user, engagement),
+    timeEntryAuthorScope(user, engagement),
+  ]);
+  return { ctx, canLogTime, timeEntryScope, actingAs };
 }
 
 /** `agency_admin` for the agency-holder fallback, `delivering_expert` for the deliverer, else `null`. */
@@ -126,6 +128,23 @@ function viewerActingAs(
     return 'delivering_expert';
   }
   return null;
+}
+
+/**
+ * Whether `user` may log time on this engagement: the `log_time` engagement capability, which
+ * only the delivering expert holds (an agency owner/admin manages entries but does not log
+ * them). Shared by the page (affordance) and `logTimeAction` (enforcement).
+ */
+export async function mayLogTime(
+  user: SessionUser,
+  engagement: { id: string; expertProfileId: string }
+): Promise<boolean> {
+  return hasExpertDeliveryCapability(
+    user,
+    ENGAGEMENT_CAPABILITIES.LOG_TIME,
+    engagement.expertProfileId,
+    { contextType: 'project', contextId: engagement.id }
+  );
 }
 
 /**

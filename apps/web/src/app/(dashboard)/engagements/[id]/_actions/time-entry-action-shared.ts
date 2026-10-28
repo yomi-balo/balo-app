@@ -14,7 +14,7 @@ import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
-import type { ExpertSideActor } from '@/lib/engagement/resolve-engagement-viewer';
+import { mayLogTime, type ExpertSideActor } from '@/lib/engagement/resolve-engagement-viewer';
 import {
   ONLY_EXPERT,
   TIME_ENTRY_DENIED,
@@ -47,9 +47,9 @@ export async function gateTimeEntryExpert(
 }
 
 /**
- * The gate for LOGGING time: {@link gateTimeEntryExpert}, then only the delivering expert
- * passes. An agency owner or admin reaches the page, so a refusal names the reason rather
- * than answering as a missing row.
+ * The gate for LOGGING time: {@link gateTimeEntryExpert}, then the `log_time` capability
+ * ({@link mayLogTime}), which only the delivering expert holds. An agency owner or admin
+ * reaches the page, so a refusal names the reason rather than answering as a missing row.
  */
 export async function gateTimeLogger(
   user: SessionUser,
@@ -59,7 +59,7 @@ export async function gateTimeLogger(
   if (!gate.ok) {
     return gate;
   }
-  if (!gate.actor.isDeliveringExpert) {
+  if (!(await mayLogTime(user, gate.engagement))) {
     log.warn(TIME_ENTRY_DENIED, {
       engagementId,
       userId: user.id,
