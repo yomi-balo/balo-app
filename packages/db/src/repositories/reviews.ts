@@ -784,10 +784,10 @@ export const reviewsRepository = {
    * that fragment's (`reviews.deleted_at IS NULL`, nothing else), so the list length equals
    * `rating_count`.
    *
-   * ⚠ A SOFT-DELETED (or missing) REVIEWER PUBLISHES NO IDENTITY. Their rating still counts
-   * and a public note still shows — both are the party's statement about the expert — but
-   * the rater reads as "Verified client" with no role, no company and no industry, and the
-   * entry's company header blanks with it.
+   * ⚠ A SOFT-DELETED (or missing) REVIEWER IS NOT NAMED. Their rating still counts and a
+   * public note still shows — both are the party's statement about the expert — and their
+   * role and the company's industry still describe them. The rater reads as "Verified
+   * client" with no company, and the entry's company header blanks with it.
    */
   listPublicEntriesByExpert: async (expertProfileId: string): Promise<PublicReviewEntry[]> => {
     const perEngagement = perEngagementAverages(expertProfileId).as('per_engagement');
@@ -921,7 +921,7 @@ export const reviewsRepository = {
         reviewNameHiddenAt: first.reviewNameHiddenAt,
       });
 
-      // Whether this rater's company is shown. A departed reviewer shows none (see above).
+      // Whether this rater's company is shown. A soft-deleted reviewer shows none (see above).
       const showsCompany = (row: (typeof group)[number]): boolean =>
         row.reviewerIsLive && row.showCompany;
 
@@ -929,9 +929,9 @@ export const reviewsRepository = {
         const attribution = formatReviewAttribution({
           firstName: row.firstName,
           lastInitial: surnameInitial(row.lastName),
-          role: row.reviewerIsLive ? row.reviewerRole : null,
+          role: row.reviewerRole,
           companyName: row.companyName,
-          industryName: row.reviewerIsLive ? row.industryName : null,
+          industryName: row.industryName,
           showCompany: showsCompany(row),
           companyNameAllowed,
         });
