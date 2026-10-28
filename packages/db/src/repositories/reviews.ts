@@ -361,7 +361,7 @@ export const reviewsRepository = {
    * upsert — including the very first, on an empty table — raises 42P10 ("there is no
    * unique or exclusion constraint matching the ON CONFLICT specification"). Typecheck
    * stays green. Drizzle 0.38 spells it `targetWhere`; the bare `where` key is
-   * @deprecated on this builder. House precedent: `repositories/conversations.ts`.
+   * deprecated on this builder. House precedent: `repositories/conversations.ts`.
    *
    * NO `FOR UPDATE`, NO read-then-write. The partial unique index IS the concurrency
    * control: two simultaneous submits serialise on it, one inserts and the other takes

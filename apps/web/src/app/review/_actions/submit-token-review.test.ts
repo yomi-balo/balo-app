@@ -636,7 +636,7 @@ describe('submitTokenReviewAction — BAL-628 attribution capture', () => {
   it.each([
     ['a role over 60 characters', { reviewerRole: 'x'.repeat(61) }],
     ['a role containing "@"', { reviewerRole: 'CTO @Salesforce' }],
-    ['a role containing a bidi override', { reviewerRole: 'CTO‮' }],
+    ['a role containing a bidi override', { reviewerRole: 'CTO\u202E' }],
     ['a role containing a newline', { reviewerRole: 'CTO\nat Acme' }],
     ['an unknown visibility', { bodyVisibility: 'everyone' }],
     ['a missing showCompany', { showCompany: undefined }],

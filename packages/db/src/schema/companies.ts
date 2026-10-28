@@ -94,19 +94,15 @@ export const companies = pgTable(
 
     ...timestamps,
   },
-  (table) => ({
+  (table) => [
     // FK index (drizzle-schema skill: "indexes on all foreign key columns"). Also the read
     // behind the ON DELETE SET NULL sweep when an attributed user is hard-deleted.
-    billingEmailSetByIdx: index('companies_billing_email_set_by_user_id_idx').on(
-      table.billingEmailSetByUserId
-    ),
+    index('companies_billing_email_set_by_user_id_idx').on(table.billingEmailSetByUserId),
     // BAL-628 FK indexes. The industry one also serves the `restrict` check on an
     // industry delete; the hidden-by one serves the ON DELETE SET NULL sweep.
-    industryIdx: index('companies_industry_id_idx').on(table.industryId),
-    reviewNameHiddenByIdx: index('companies_review_name_hidden_by_user_id_idx').on(
-      table.reviewNameHiddenByUserId
-    ),
-  })
+    index('companies_industry_id_idx').on(table.industryId),
+    index('companies_review_name_hidden_by_user_id_idx').on(table.reviewNameHiddenByUserId),
+  ]
 );
 
 export const companyMembers = pgTable(
@@ -149,15 +145,15 @@ export const companyMembers = pgTable(
       onDelete: 'restrict',
     }),
   },
-  (table) => ({
+  (table) => [
     // PARTIAL on `deleted_at IS NULL` (BAL-345): "≤1 LIVE membership per
     // (company, user)". A soft-removed membership frees the slot so a later
     // re-join can INSERT ... ON CONFLICT DO NOTHING against this exact predicate.
     // Load-bearing — a non-partial unique would break re-create after soft-delete.
-    companyUserIdx: uniqueIndex('company_user_idx')
+    uniqueIndex('company_user_idx')
       .on(table.companyId, table.userId)
       .where(sql`${table.deletedAt} IS NULL`),
-  })
+  ]
 );
 
 // Relations

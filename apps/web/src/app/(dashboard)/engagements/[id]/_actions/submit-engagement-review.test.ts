@@ -391,7 +391,7 @@ describe('submitEngagementReviewAction', () => {
     expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }));
   });
 
-  it.each(['CTO @Salesforce', 'CTO‮', 'CTO\nat Acme'])(
+  it.each(['CTO @Salesforce', 'CTO\u202E', 'CTO\nat Acme'])(
     'rejects the reviewer role %j without writing',
     async (role) => {
       primeHappyPath();

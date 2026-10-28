@@ -149,6 +149,30 @@ type Branch = 'saved' | 'rated' | 'capture';
 /** Where focus should land as the next branch mounts. `null` = leave focus alone. */
 type FocusTarget = 'capture' | 'saved' | 'display' | null;
 
+/** The capture question: the ask on a first rating, the revise prompt on an existing one. */
+function captureQuestion(input: {
+  existingRating: number | null;
+  captureHeading: string | undefined;
+  noun: string;
+  counterpartyName: string;
+}): string {
+  if (input.existingRating !== null) {
+    return 'How was this one with ' + input.counterpartyName + '?';
+  }
+  return (
+    input.captureHeading ?? 'How was your ' + input.noun + ' with ' + input.counterpartyName + '?'
+  );
+}
+
+/**
+ * The saved job title the role field was seeded from, or `null`. Only a FIRST review seeds
+ * from `users.job_title`; a revision seeds from its own stored role, which is not "from your
+ * last review".
+ */
+function seededProfileRole(existingRating: number | null, seedRole: string): string | null {
+  return existingRating === null && seedRole.trim().length > 0 ? seedRole : null;
+}
+
 export function RatingBlock({
   rating,
   counterpartyName,
@@ -297,10 +321,7 @@ export function RatingBlock({
     branch = 'rated';
   }
 
-  const heading =
-    existingRating === null
-      ? (captureHeading ?? 'How was your ' + noun + ' with ' + counterpartyName + '?')
-      : 'How was this one with ' + counterpartyName + '?';
+  const heading = captureQuestion({ existingRating, captureHeading, noun, counterpartyName });
 
   /**
    * ⚠ THE ONLY DIFFERENCE BETWEEN THE TWO READ-ONLY STATES, IN ONE PLACE. `rated_ok` displays
@@ -406,9 +427,7 @@ export function RatingBlock({
                 onRoleChange={setRole}
                 showCompany={showCompany}
                 onShowCompanyChange={setShowCompany}
-                profileRole={
-                  existingRating === null && defaults.role.trim().length > 0 ? defaults.role : null
-                }
+                profileRole={seededProfileRole(existingRating, defaults.role)}
                 surface={surface}
                 disabled={busy}
               />

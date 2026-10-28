@@ -1,4 +1,4 @@
-import type { EndOfCallRecapState, RecapContextType, RecapLens } from '@balo/analytics/events';
+import type { EndOfCallRecapState, RecapContextType } from '@balo/analytics/events';
 import type { EndOfCallReviewState, ReviewCaptureSeeds } from '@balo/shared/reviews';
 import type { CaseClosureNames } from '@balo/shared/credit';
 
@@ -172,4 +172,5 @@ export type ClientEndOfCallView = Extract<EndOfCallView, { lens: 'client' }>;
 /** The EXPERT-lens arm. It has no rating and no resolve field to reference. */
 export type ExpertEndOfCallView = Extract<EndOfCallView, { lens: 'expert' }>;
 
-export type { EndOfCallRecapState, RecapContextType, RecapLens };
+export type { EndOfCallRecapState, RecapContextType };
+export type { RecapLens } from '@balo/analytics/events';
