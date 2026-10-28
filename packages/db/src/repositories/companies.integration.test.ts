@@ -2,13 +2,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, companyMembers, users, auditEvents, partyDomains } from '../schema';
+import { companies, companyMembers, users, auditEvents, industries, partyDomains } from '../schema';
 import {
   userFactory,
   companyFactory,
   companyMemberFactory,
   agencyFactory,
 } from '../test/factories';
+import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { companiesRepository } from './companies';
 import { auditEventsRepository } from './audit-events';
 import { partyDomainsRepository } from './party-domains';
@@ -1194,5 +1195,163 @@ describe('migration 0084 — the billing-email columns and the two drops (BAL-52
     expect(row.billingEmailSource).toBe('set');
     expect(row.billingEmailSetByUserId).toBeNull();
     expect(row.billingEmailSetAt).toBeInstanceOf(Date);
+  });
+});
+
+// ── BAL-628: review attribution ──────────────────────────────────────
+
+/** An `industries` row (there is no industry factory; `experts.integration.test.ts` precedent). */
+async function seedIndustry(name: string, isActive = true): Promise<string> {
+  const slug = `${name.toLowerCase().replaceAll(/\W+/g, '-')}-${randomUUID()}`;
+  const [industry] = await db.insert(industries).values({ name, slug, isActive }).returning();
+  if (industry === undefined) throw new Error('industry insert failed');
+  return industry.id;
+}
+
+describe('companiesRepository.findReviewAttributionById — the PROJECTED review read (BAL-628)', () => {
+  it('projects exactly name, isPersonal, reviewNameHiddenAt and industryName', async () => {
+    const company = await companyFactory({
+      name: 'Northwind Logistics',
+      industryId: await seedIndustry('Logistics'),
+      billingEmail: 'accounts@northwind.test',
+    });
+
+    const row = await companiesRepository.findReviewAttributionById(company.id);
+
+    if (row === undefined) throw new Error('expected a review-attribution row');
+    // The key SET is the invariant: the landing form that reads this is unauthenticated, so a
+    // widening (ids, billing columns) must fail here.
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual([
+      'industryName',
+      'isPersonal',
+      'name',
+      'reviewNameHiddenAt',
+    ]);
+    expect(row).toEqual({
+      name: 'Northwind Logistics',
+      isPersonal: false,
+      reviewNameHiddenAt: null,
+      industryName: 'Logistics',
+    });
+    expect(JSON.stringify(row)).not.toContain('northwind.test');
+  });
+
+  it('returns the hidden-at stamp and the personal flag as stored', async () => {
+    const hiddenAt = new Date('2026-08-01T00:00:00.000Z');
+    const hidden = await companyFactory({ reviewNameHiddenAt: hiddenAt });
+    const personal = await companyFactory({ isPersonal: true });
+
+    const hiddenRow = await companiesRepository.findReviewAttributionById(hidden.id);
+    const personalRow = await companiesRepository.findReviewAttributionById(personal.id);
+
+    expect(hiddenRow?.reviewNameHiddenAt?.toISOString()).toBe(hiddenAt.toISOString());
+    expect(personalRow?.isPersonal).toBe(true);
+  });
+
+  it('drops an INACTIVE industry to null without dropping the company', async () => {
+    const company = await companyFactory({ industryId: await seedIndustry('Retail', false) });
+
+    const row = await companiesRepository.findReviewAttributionById(company.id);
+
+    expect(row).toBeDefined();
+    expect(row?.industryName).toBeNull();
+  });
+
+  it('returns a null industry when none is set', async () => {
+    const company = await companyFactory();
+    const row = await companiesRepository.findReviewAttributionById(company.id);
+    expect(row?.industryName).toBeNull();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(
+      companiesRepository.findReviewAttributionById(randomUUID())
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('migration 0121 — the review-attribution columns on companies (BAL-628)', () => {
+  it('adds industry_id and the hidden-name pair, all nullable with no default', async () => {
+    const rows = await db.execute(sql`
+      SELECT column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'companies'
+        AND column_name IN ('industry_id', 'review_name_hidden_at', 'review_name_hidden_by_user_id')
+      ORDER BY column_name
+    `);
+
+    expect(rows.map((r) => ({ ...r }))).toEqual([
+      { column_name: 'industry_id', data_type: 'uuid', is_nullable: 'YES', column_default: null },
+      {
+        column_name: 'review_name_hidden_at',
+        data_type: 'timestamp with time zone',
+        is_nullable: 'YES',
+        column_default: null,
+      },
+      {
+        column_name: 'review_name_hidden_by_user_id',
+        data_type: 'uuid',
+        is_nullable: 'YES',
+        column_default: null,
+      },
+    ]);
+
+    const company = await companyFactory();
+    const [row] = await db
+      .select({
+        industryId: companies.industryId,
+        reviewNameHiddenAt: companies.reviewNameHiddenAt,
+        reviewNameHiddenByUserId: companies.reviewNameHiddenByUserId,
+      })
+      .from(companies)
+      .where(eq(companies.id, company.id));
+    expect(row).toEqual({
+      industryId: null,
+      reviewNameHiddenAt: null,
+      reviewNameHiddenByUserId: null,
+    });
+  });
+
+  it('indexes both FK columns', async () => {
+    const rows = await db.execute(sql`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'companies'
+        AND indexname IN ('companies_industry_id_idx', 'companies_review_name_hidden_by_user_id_idx')
+      ORDER BY indexname
+    `);
+
+    expect(rows.map((r) => String(r.indexname))).toEqual([
+      'companies_industry_id_idx',
+      'companies_review_name_hidden_by_user_id_idx',
+    ]);
+  });
+
+  it('nulls the hiding actor when that user is hard-deleted, keeping the stamp (ON DELETE SET NULL)', async () => {
+    const user = await userFactory();
+    const hiddenAt = new Date('2026-08-01T00:00:00.000Z');
+    const company = await companyFactory({
+      reviewNameHiddenAt: hiddenAt,
+      reviewNameHiddenByUserId: user.id,
+    });
+
+    await db.delete(users).where(eq(users.id, user.id));
+
+    const [stored] = await db
+      .select({ at: companies.reviewNameHiddenAt, by: companies.reviewNameHiddenByUserId })
+      .from(companies)
+      .where(eq(companies.id, company.id));
+    expect(stored?.at?.toISOString()).toBe(hiddenAt.toISOString());
+    expect(stored?.by).toBeNull();
+  });
+
+  it('REFUSES to delete an industry a company still references (ON DELETE RESTRICT)', async () => {
+    const industryId = await seedIndustry('Logistics');
+    await companyFactory({ industryId });
+
+    await expectConstraintViolation(
+      '23503',
+      (tx) => tx.delete(industries).where(eq(industries.id, industryId)),
+      'companies_industry_id_industries_id_fk'
+    );
   });
 });

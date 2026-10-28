@@ -238,6 +238,7 @@ export const loadEndOfCall = cache(
             // rule BAL-390 built to have exactly one.
             state: reviewRead.state,
             existingBody: reviewRead.review?.body ?? null,
+            capture: reviewRead.capture,
           };
 
     const [requesterRow] = requesterRows;

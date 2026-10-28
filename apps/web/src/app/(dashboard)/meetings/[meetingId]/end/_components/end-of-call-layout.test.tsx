@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import { track, END_OF_CALL_EVENTS } from '@/lib/analytics';
 import type {
   ClientEndOfCallView,
@@ -323,7 +324,12 @@ describe('EndOfCallLayout — the post-call slot', () => {
       <ClientEndOfCall
         view={{
           ...CLIENT_VIEW,
-          rating: { engagementId: 'e1', state: { kind: 'none' }, existingBody: null },
+          rating: {
+            engagementId: 'e1',
+            state: { kind: 'none' },
+            existingBody: null,
+            capture: buildReviewCaptureSeeds(),
+          },
         }}
       />
     );
@@ -380,7 +386,12 @@ describe('EndOfCallLayout — the case-closed arm (voided no-show)', () => {
     ...CLIENT_VIEW,
     caseClosure: CLOSURE,
     // ⚠ The loader nulls these; the composition must not offer them even if a view carried them.
-    rating: { engagementId: 'e1', state: { kind: 'none' }, existingBody: null },
+    rating: {
+      engagementId: 'e1',
+      state: { kind: 'none' },
+      existingBody: null,
+      capture: buildReviewCaptureSeeds(),
+    },
     resolve: {
       engagementId: 'e1',
       requesterLabel: null,

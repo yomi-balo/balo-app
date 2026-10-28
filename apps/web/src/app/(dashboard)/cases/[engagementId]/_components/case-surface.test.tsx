@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import userEvent from '@testing-library/user-event';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type {
@@ -540,6 +541,7 @@ describe('CaseSurface — the in-app rating card', () => {
     engagementId: ENGAGEMENT_ID,
     state: { kind: 'none' },
     existingBody: null,
+    capture: buildReviewCaptureSeeds(),
   };
 
   it('shows the rating card on a CLOSED client view with a rating, and no "Mark resolved"', () => {

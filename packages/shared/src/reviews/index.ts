@@ -31,6 +31,69 @@ export const LOW_RATING_THRESHOLD = 4;
 /** Body length cap, enforced by the caller's Zod at the write boundary — never here. */
 export const REVIEW_BODY_MAX = 2000;
 
+/** Reviewer role/job-title cap. Mirrored by the DB CHECK `review_reviewer_role_length`. */
+export const REVIEWER_ROLE_MAX = 60;
+
+/**
+ * `@` and its look-alikes (fullwidth `＠`, small `﹫`). A role such as "CTO @Acme" would read
+ * exactly like the `{Role} @{Company}` descriptor and so bypass the company force-off.
+ */
+const ROLE_AT_SIGN = /[@＠﹫]/u;
+
+/**
+ * Hidden characters that could rearrange or break the rendered line: `\p{C}` (control,
+ * format — incl. bidi overrides — private-use and unassigned) and the line/paragraph
+ * separators. `\p{Join_Control}` — the zero-width non-joiner and joiner (U+200C/U+200D) — is
+ * EXEMPT: Persian and Indic text and emoji sequences need them, and neither can reorder text
+ * or imitate `@`.
+ */
+const ROLE_HIDDEN_CHARACTER = /(?!\p{Join_Control})[\p{C}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Characters a reviewer role may not contain — the union of the two rules above. Enforced by
+ * both write-boundary Zod schemas and the role field; the DB CHECK
+ * `review_reviewer_role_charset` mirrors the ASCII `@` and control-character part.
+ */
+export const REVIEWER_ROLE_FORBIDDEN = new RegExp(
+  `${ROLE_AT_SIGN.source}|${ROLE_HIDDEN_CHARACTER.source}`,
+  'u'
+);
+
+export type ReviewerRoleProblem = 'at_sign' | 'hidden_character';
+
+/** Why a role can't be saved, or `null` when its characters are fine. Length is Zod's job. */
+export function reviewerRoleProblem(role: string): ReviewerRoleProblem | null {
+  if (ROLE_AT_SIGN.test(role)) return 'at_sign';
+  if (ROLE_HIDDEN_CHARACTER.test(role)) return 'hidden_character';
+  return null;
+}
+
+/**
+ * Whether a stored job title may seed the role field. `users.job_title` carries no CHECK (a
+ * profile editor or an import may write it), so a value the role field would reject — blank,
+ * over `REVIEWER_ROLE_MAX`, or with a forbidden character — is dropped from the prefill rather
+ * than opening the form with Save disabled.
+ */
+export function isPrefillableReviewerRole(jobTitle: string): boolean {
+  const trimmed = jobTitle.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= REVIEWER_ROLE_MAX &&
+    reviewerRoleProblem(trimmed) === null
+  );
+}
+
+/**
+ * Who may read a review's free-text note. Mirrors the `review_body_visibility` pgEnum
+ * without importing `@balo/db`. `private` notes go to Balo only.
+ */
+export const REVIEW_BODY_VISIBILITIES = ['public', 'private'] as const;
+
+export type ReviewBodyVisibility = (typeof REVIEW_BODY_VISIBILITIES)[number];
+
+/** ⚠ DRAFT COPY — pending MJ sign-off. The display name when the reviewer's first name is unknown. */
+export const UNNAMED_REVIEWER_LABEL = 'Verified client';
+
 /** D8 — a review invite token stays usable for 30 days, and is reusable until expiry. */
 export const REVIEW_TOKEN_TTL_DAYS = 30;
 
@@ -317,6 +380,157 @@ export function parseRatingAverage(value: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// ── Reviewer attribution & capture (BAL-628) ──────────────────────────────────
+
+function cleaned(value: string | null): string | null {
+  const trimmed = value?.trim() ?? '';
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * The reviewer's surname initial, uppercased. Takes the first code point (not the first
+ * UTF-16 unit) so a surrogate pair is never split. A blank or null surname yields `null`.
+ */
+export function surnameInitial(lastName: string | null): string | null {
+  const trimmed = cleaned(lastName);
+  if (trimmed === null) {
+    return null;
+  }
+  const [first] = Array.from(trimmed);
+  return first === undefined ? null : first.toUpperCase();
+}
+
+/**
+ * Whether a company's name may appear on a review. A personal "company" is the reviewer
+ * themself, and an admin can hide a company's name from reviews.
+ *
+ * `reviewsRepository.findLatestShowCompanyChoice` restates this predicate in SQL
+ * (`is_personal = false AND review_name_hidden_at IS NULL`); change both together.
+ */
+export function isCompanyNameAllowedOnReviews(company: {
+  isPersonal: boolean;
+  reviewNameHiddenAt: Date | null;
+}): boolean {
+  return !company.isPersonal && company.reviewNameHiddenAt === null;
+}
+
+export interface ReviewAttributionInput {
+  firstName: string | null;
+  lastInitial: string | null;
+  role: string | null;
+  companyName: string | null;
+  industryName: string | null;
+  showCompany: boolean;
+  companyNameAllowed: boolean;
+}
+
+export interface ReviewAttribution {
+  /** "{First} {L}.", the first name alone, or {@link UNNAMED_REVIEWER_LABEL}. */
+  name: string;
+  /** "{Role} @{Company}", the company, "{Role}, {Industry}", or `null`. */
+  descriptor: string | null;
+  /** Avatar initials, or `null` when there is no first name (the avatar shows an icon). */
+  initials: string | null;
+}
+
+/**
+ * THE one attribution formatter — the live capture line, the Preview and the public
+ * display all render its output. Every string is trimmed and `''` counts as missing.
+ *
+ * The company is shown only when the reviewer ticked it, the company is allowed on reviews
+ * AND it has a name; otherwise the descriptor falls back to role and industry.
+ */
+export function formatReviewAttribution(input: ReviewAttributionInput): ReviewAttribution {
+  const firstName = cleaned(input.firstName);
+  const lastInitial = firstName === null ? null : cleaned(input.lastInitial);
+  const role = cleaned(input.role);
+  const companyName = cleaned(input.companyName);
+  const industryName = cleaned(input.industryName);
+
+  let name = UNNAMED_REVIEWER_LABEL;
+  let initials: string | null = null;
+  if (firstName !== null) {
+    const [firstLetter] = Array.from(firstName);
+    name = lastInitial === null ? firstName : `${firstName} ${lastInitial}.`;
+    initials = `${(firstLetter ?? '').toUpperCase()}${lastInitial ?? ''}`;
+  }
+
+  const companyShown = input.showCompany && input.companyNameAllowed && companyName !== null;
+  let descriptor: string | null;
+  if (companyShown) {
+    descriptor = role === null ? companyName : `${role} @${companyName}`;
+  } else {
+    descriptor = [role, industryName].filter(Boolean).join(', ') || null;
+  }
+
+  return { name, descriptor, initials };
+}
+
+/** The note a PUBLIC surface may show: the body, only when it is non-blank and marked public. */
+export function publicReviewNote(review: {
+  body: string | null;
+  bodyVisibility: ReviewBodyVisibility;
+}): string | null {
+  if (review.bodyVisibility !== 'public' || cleaned(review.body) === null) {
+    return null;
+  }
+  return review.body;
+}
+
+/** The reviewer-and-company facts the capture UI needs to render the live attribution line. */
+export interface ReviewCaptureIdentity {
+  engagementKind: 'project' | 'case';
+  reviewerFirstName: string | null;
+  reviewerLastInitial: string | null;
+  companyName: string | null;
+  companyNameAllowed: boolean;
+  industryName: string | null;
+}
+
+/** The initial values of the three capture controls. */
+export interface ReviewCaptureDefaults {
+  role: string;
+  showCompany: boolean;
+  bodyVisibility: ReviewBodyVisibility;
+}
+
+export interface ReviewCaptureSeeds {
+  identity: ReviewCaptureIdentity;
+  defaults: ReviewCaptureDefaults;
+}
+
+/**
+ * Initial capture values. An existing review wins outright, so a revision never re-defaults
+ * a choice the reviewer made. A first review takes the saved job title (when
+ * `isPrefillableReviewerRole`), the reviewer's most
+ * recent company-visibility choice (ticked when they have none), and a public note.
+ */
+export function resolveCaptureDefaults(input: {
+  existing: {
+    reviewerRole: string | null;
+    showCompany: boolean;
+    bodyVisibility: ReviewBodyVisibility;
+  } | null;
+  jobTitle: string | null;
+  lastShowCompany: boolean | null;
+}): ReviewCaptureDefaults {
+  if (input.existing !== null) {
+    return {
+      role: input.existing.reviewerRole ?? '',
+      showCompany: input.existing.showCompany,
+      bodyVisibility: input.existing.bodyVisibility,
+    };
+  }
+  return {
+    role:
+      input.jobTitle !== null && isPrefillableReviewerRole(input.jobTitle)
+        ? input.jobTitle.trim()
+        : '',
+    showCompany: input.lastShowCompany ?? true,
+    bodyVisibility: 'public',
+  };
+}
+
 // ── Client-bound projections ──────────────────────────────────────────────────
 
 /**
@@ -335,7 +549,9 @@ export function parseRatingAverage(value: string | null): number | null {
  * action re-derives every id from it server-side. An id in this DTO is therefore a value
  * shipped into an unauthenticated browser's RSC payload as pure ballast. Every field
  * below is rendered by `review-form.tsx`; if a new one would not be, it does not belong
- * here.
+ * here. The reviewer fields below are rendered too: they feed the live attribution line,
+ * and the surname is reduced to its initial inside `@balo/db`, so the full `last_name`
+ * never reaches this DTO.
  */
 export interface ReviewLandingContext {
   engagementKind: 'project' | 'case';
@@ -344,8 +560,18 @@ export interface ReviewLandingContext {
   expertPartyLabel: string;
   /** The delivering person's given name, for warm second-person copy ("Amara"). */
   expertGivenName: string;
-  /** For the forwarded-token disclosure — FIRST NAME ONLY, never the email address. */
-  reviewerFirstName: string;
+  /** For the forwarded-token disclosure — FIRST NAME ONLY, never the email address. `null` when unknown. */
+  reviewerFirstName: string | null;
+  /** One uppercase character, or `null`. */
+  reviewerLastInitial: string | null;
+  /** The reviewer's saved role, which prefills the role field. */
+  reviewerJobTitle: string | null;
+  /** The reviewer's most recent company-visibility choice, or `null` when they have none. */
+  reviewerLastShowCompany: boolean | null;
+  /** `false` for a personal company or one an admin hid from reviews. */
+  clientCompanyNameAllowed: boolean;
+  /** The company's active industry, or `null`. */
+  clientIndustryName: string | null;
   title: string;
   /** `accepted_at` (project) | `closed_at` (case). NULL when not yet concluded. */
   concludedOnIso: string | null;

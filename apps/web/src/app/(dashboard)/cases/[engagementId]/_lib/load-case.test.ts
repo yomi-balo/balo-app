@@ -156,6 +156,7 @@ vi.mock('@/lib/reviews/read-rating-card', () => ({
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import { loadCase } from './load-case';
 import { log } from '@/lib/logging';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────
@@ -2438,6 +2439,7 @@ describe('loadCase — the in-app rating card', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' as const },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     };
     mockReadRatingCard.mockResolvedValue(RATING_VIEW);
 
