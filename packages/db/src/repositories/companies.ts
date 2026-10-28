@@ -1,7 +1,7 @@
 import { eq, and, asc, inArray, isNull } from 'drizzle-orm';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { db } from '../client';
-import { companies, companyMembers, type Company, type User } from '../schema';
+import { companies, companyMembers, industries, type Company, type User } from '../schema';
 import { auditEventsRepository } from './audit-events';
 import { partyDomainsRepository } from './party-domains';
 import { partyMembershipsRepository } from './party-memberships';
@@ -60,6 +60,19 @@ export interface CompanyBillingIdentity {
   billingEmailSetByUserId: string | null;
   /** → the provenance line's date, and `days_since_set` on `billing_email_updated`. */
   billingEmailSetAt: Date | null;
+}
+
+/**
+ * BAL-628 — what a review needs to know about the client company: whether its name may be
+ * shown (`isCompanyNameAllowedOnReviews` reads `isPersonal` + `reviewNameHiddenAt`) and the
+ * fallback industry. See {@link companiesRepository.findReviewAttributionById}.
+ */
+export interface CompanyReviewAttribution {
+  name: string;
+  isPersonal: boolean;
+  reviewNameHiddenAt: Date | null;
+  /** The company's industry name, or `null` when unset or the industry is inactive. */
+  industryName: string | null;
 }
 
 /** BAL-522 — input for the first-purchase seed of `companies.billing_email`. */
@@ -211,6 +224,38 @@ export const companiesRepository = {
         billingEmailSetAt: companies.billingEmailSetAt,
       })
       .from(companies)
+      .where(eq(companies.id, id))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-628 — the REVIEW-ATTRIBUTION projection of ONE company: its name, the two facts that
+   * decide whether that name may appear on a review, and its industry. Read by the review
+   * write path (to force `show_company` off server-side) and by both capture surfaces.
+   *
+   * A fourth projection on this table rather than a widening of an existing one, for the
+   * reason {@link companiesRepository.findBillingIdentityById} gives.
+   *
+   * ⚠ THE INDUSTRY JOIN CARRIES `is_active` IN THE `ON`, not the `WHERE`: a retired industry
+   * must drop out of the attribution (fail closed, never infer), not drop the company row.
+   *
+   * NOTE: no `deleted_at` guard on `companies` — the table has NO such column (same note as
+   * `findBillingIdentityById`). `industries` has none either.
+   */
+  findReviewAttributionById: async (id: string): Promise<CompanyReviewAttribution | undefined> => {
+    const [row] = await db
+      .select({
+        name: companies.name,
+        isPersonal: companies.isPersonal,
+        reviewNameHiddenAt: companies.reviewNameHiddenAt,
+        industryName: industries.name,
+      })
+      .from(companies)
+      .leftJoin(
+        industries,
+        and(eq(industries.id, companies.industryId), eq(industries.isActive, true))
+      )
       .where(eq(companies.id, id))
       .limit(1);
     return row;

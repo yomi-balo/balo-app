@@ -1,7 +1,19 @@
 import 'server-only';
 
-import { engagementsRepository, expertsRepository, reviewsRepository } from '@balo/db';
-import type { Rating, ReviewAuthMethod, ReviewSurface } from '@balo/shared/reviews';
+import {
+  companiesRepository,
+  engagementsRepository,
+  expertsRepository,
+  reviewsRepository,
+  usersRepository,
+} from '@balo/db';
+import {
+  isCompanyNameAllowedOnReviews,
+  type Rating,
+  type ReviewAuthMethod,
+  type ReviewBodyVisibility,
+  type ReviewSurface,
+} from '@balo/shared/reviews';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { trackServerAndFlush, REVIEW_SERVER_EVENTS } from '@/lib/analytics/server';
 import { log } from '@/lib/logging';
@@ -30,7 +42,17 @@ import { log } from '@/lib/logging';
  *   · `expertProfileId` — ALWAYS server-derived from the engagement, right here.
  *
  * ⚠ NEITHER THE BODY NOR THE TOKEN IS EVER LOGGED OR TRACKED. The analytics payload
- * carries `has_body`, never the text.
+ * carries `has_body`, never the text. The same holds for the reviewer's role (`has_role`)
+ * and the company name: neither text is ever logged or tracked.
+ *
+ * ⚠ `showCompany` IS A REQUEST, NOT A FACT. The caller's value is forced to `false` here
+ * for a personal company or one whose name an admin hid, whatever the client sent. The
+ * client's checkbox is a convenience; this is the enforcement.
+ *
+ * ⚠ THE JOB-TITLE SAVE IS BEST-EFFORT AND RUNS AFTER THE REVIEW COMMITS. The reviewer's
+ * role is saved back to `users.job_title` outside the review transaction, so a failure
+ * there never fails the review and the `reviews → expert_profiles` lock order is
+ * untouched. A null role never clears a stored job title.
  */
 
 /**
@@ -49,6 +71,12 @@ export interface ApplyReviewInput {
   body: string | null;
   surface: ReviewSurface;
   authMethod: ReviewAuthMethod;
+  /** Whether the note may be shown publicly. */
+  bodyVisibility: ReviewBodyVisibility;
+  /** The reviewer's REQUEST to show the company name; enforced server-side. */
+  showCompany: boolean;
+  /** Trimmed free text, or `null` when blank. Never logged. */
+  reviewerRole: string | null;
 }
 
 export type ApplyReviewResult =
@@ -124,8 +152,22 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
     return { ok: false, error: 'forbidden' };
   }
 
+  let written: { created: boolean; ratingCount: number };
+  let showCompany: boolean;
   try {
-    const { created, ratingCount } = await reviewsRepository.upsert({
+    // Fail closed: a company that cannot be read, or whose name is not allowed on reviews,
+    // never has its name shown, whatever the client asked for.
+    const company = await companiesRepository.findReviewAttributionById(engagement.companyId);
+    showCompany =
+      input.showCompany && company !== undefined && isCompanyNameAllowedOnReviews(company);
+    if (input.showCompany && !showCompany) {
+      log.info('Review company attribution forced off', {
+        engagementId: input.engagementId,
+        userId: input.reviewerUserId,
+      });
+    }
+
+    written = await reviewsRepository.upsert({
       engagementId: input.engagementId,
       reviewerUserId: input.reviewerUserId,
       // SERVER-DERIVED, always. Never accepted from the caller, never from a form field.
@@ -134,33 +176,10 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
       body: input.body,
       surface: input.surface,
       authMethod: input.authMethod,
+      bodyVisibility: input.bodyVisibility,
+      showCompany,
+      reviewerRole: input.reviewerRole,
     });
-
-    trackServerAndFlush(created ? REVIEW_SERVER_EVENTS.SUBMITTED : REVIEW_SERVER_EVENTS.UPDATED, {
-      rating: input.rating,
-      has_body: input.body !== null,
-      auth_method: input.authMethod,
-      surface: input.surface,
-      engagement_kind: engagementKind,
-      distinct_id: input.reviewerUserId,
-    });
-
-    // ⚠ `ratingCount` IS DRIFT TELEMETRY (BAL-422), not decoration. It is the value the
-    // in-transaction recompute actually COMMITTED to `expert_profiles.rating_count`, so an
-    // operator can compare the stored aggregate against the review rows from the log alone.
-    // It counts ENGAGEMENTS REVIEWED, never review rows — the same quantity every surface
-    // renders in parentheses. NOT tracked to PostHog: it is an operational number, and the
-    // review analytics events are deliberately keyed on the submission, not on the expert.
-    log.info('Review submitted', {
-      engagementId: input.engagementId,
-      userId: input.reviewerUserId,
-      authMethod: input.authMethod,
-      surface: input.surface,
-      created,
-      ratingCount,
-    });
-
-    return { ok: true, created };
   } catch (error) {
     log.error('Review write failed', {
       engagementId: input.engagementId,
@@ -171,5 +190,66 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { ok: false, error: 'failed' };
+  }
+
+  const { created, ratingCount } = written;
+
+  trackServerAndFlush(created ? REVIEW_SERVER_EVENTS.SUBMITTED : REVIEW_SERVER_EVENTS.UPDATED, {
+    rating: input.rating,
+    has_body: input.body !== null,
+    auth_method: input.authMethod,
+    surface: input.surface,
+    engagement_kind: engagementKind,
+    body_visibility: input.bodyVisibility,
+    show_company: showCompany,
+    has_role: input.reviewerRole !== null,
+    distinct_id: input.reviewerUserId,
+  });
+
+  // ⚠ `ratingCount` IS DRIFT TELEMETRY (BAL-422), not decoration. It is the value the
+  // in-transaction recompute actually COMMITTED to `expert_profiles.rating_count`, so an
+  // operator can compare the stored aggregate against the review rows from the log alone.
+  // It counts ENGAGEMENTS REVIEWED, never review rows — the same quantity every surface
+  // renders in parentheses. NOT tracked to PostHog: it is an operational number, and the
+  // review analytics events are deliberately keyed on the submission, not on the expert.
+  log.info('Review submitted', {
+    engagementId: input.engagementId,
+    userId: input.reviewerUserId,
+    authMethod: input.authMethod,
+    surface: input.surface,
+    created,
+    ratingCount,
+    bodyVisibility: input.bodyVisibility,
+    showCompany,
+    hasRole: input.reviewerRole !== null,
+  });
+
+  await saveReviewerJobTitle(input);
+
+  return { ok: true, created };
+}
+
+/**
+ * Best-effort write-back of the reviewer's role to `users.job_title`, so their next review
+ * prefills it. It has its own `try`/`catch`: a failure is logged and swallowed because the
+ * review has already committed and is reported as a success.
+ *
+ * The magic-link (email) path saves the job title too. That is accepted: whoever holds the
+ * link can already write the review under the reviewer's name, and the job title is only a
+ * prefill for their next review.
+ */
+async function saveReviewerJobTitle(input: ApplyReviewInput): Promise<void> {
+  if (input.reviewerRole === null) {
+    return;
+  }
+  try {
+    await usersRepository.setJobTitle(input.reviewerUserId, input.reviewerRole);
+  } catch (error) {
+    log.warn('Reviewer job title save failed', {
+      userId: input.reviewerUserId,
+      engagementId: input.engagementId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
   }
 }

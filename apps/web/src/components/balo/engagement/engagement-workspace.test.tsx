@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { render, screen } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 import {
   mapEngagementToWorkspaceView,
@@ -647,6 +648,7 @@ describe('EngagementWorkspace — the in-app rating card', () => {
     engagementId: 'eng-1',
     state: { kind: 'none' },
     existingBody: null,
+    capture: buildReviewCaptureSeeds(),
   };
 
   it('renders the rating card heading after the completed banner when rating is non-null', () => {

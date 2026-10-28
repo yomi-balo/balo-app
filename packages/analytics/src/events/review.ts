@@ -35,6 +35,7 @@ import type {
   EndOfCallReviewState,
   InAppReviewSurface,
   ReviewAuthMethod,
+  ReviewBodyVisibility,
   ReviewSurface,
 } from '@balo/shared/reviews';
 
@@ -65,6 +66,12 @@ export interface ReviewWriteProperties {
   /** WHERE it was captured — orthogonal to `auth_method`. */
   surface: ReviewSurface;
   engagement_kind: ReviewEngagementKind;
+  /** Whether the note may be shown publicly. NEVER the note itself. */
+  body_visibility: ReviewBodyVisibility;
+  /** The value actually WRITTEN, after the server forced it off for a hidden company. */
+  show_company: boolean;
+  /** Whether a role was given. NEVER the role text. */
+  has_role: boolean;
   /** The reviewer's user id. */
   distinct_id: string;
 }
@@ -86,6 +93,8 @@ export interface ReviewServerEventMap {
 export const REVIEW_EVENTS = {
   /** `EngagementRatingCard` rendered with loaded data — fired once per mount (BAL-587). */
   PROMPT_VIEWED: 'review_prompt_viewed',
+  /** The reviewer opened the "how it appears on the profile" Preview (BAL-628). */
+  PREVIEW_OPENED: 'review_preview_opened',
 } as const;
 
 /**
@@ -100,5 +109,12 @@ export interface ReviewEventMap {
     surface: ReviewPromptSurface;
     state: EndOfCallReviewState['kind'];
     engagement_kind: ReviewEngagementKind;
+  };
+  [REVIEW_EVENTS.PREVIEW_OPENED]: {
+    surface: ReviewSurface;
+    has_body: boolean;
+    /** The effective value: the checkbox ticked AND the company name allowed. */
+    show_company: boolean;
+    body_visibility: ReviewBodyVisibility;
   };
 }

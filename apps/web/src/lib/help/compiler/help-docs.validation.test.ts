@@ -24,6 +24,7 @@ const EXPECTED_FILES = [
   'project-requests-for-experts.md',
   'proposing-a-change-to-a-live-project.md',
   'rate-and-payouts.md',
+  'rating-your-expert.md',
   'redeeming-a-promo-code.md',
   'requesting-a-project.md',
   'reviewing-a-finished-project.md',

@@ -82,6 +82,7 @@ vi.mock('@/lib/reviews/read-rating-card', () => ({
 }));
 
 import { log } from '@/lib/logging';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import { loadRecap } from './load-recap';
 
 const MEETING = {
@@ -496,6 +497,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.lens === 'client' && view.resolve.resolved?.reviewLinkSent).toBe(true);
@@ -617,6 +619,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     };
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,

@@ -707,6 +707,94 @@ describe('usersRepository.findDisplayById — the PROJECTED counterparty read (B
   });
 });
 
+describe('usersRepository.findReviewerIdentityById — the PROJECTED reviewer read (BAL-628)', () => {
+  it('returns exactly first name, surname INITIAL and job title — never the surname or email', async () => {
+    const user = await userFactory({
+      firstName: 'Dana',
+      lastName: 'okafor',
+      jobTitle: 'RevOps Lead',
+      phone: '+61412345678',
+    });
+
+    const row = await usersRepository.findReviewerIdentityById(user.id);
+
+    if (row === undefined) throw new Error('expected a reviewer identity');
+    // The key SET is the invariant: this feeds an UNAUTHENTICATED landing page, so a widened
+    // projection must fail here rather than ship the surname or an address to a browser.
+    expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual([
+      'firstName',
+      'jobTitle',
+      'lastInitial',
+    ]);
+    expect(row).toEqual({ firstName: 'Dana', lastInitial: 'O', jobTitle: 'RevOps Lead' });
+    const serialised = JSON.stringify(row);
+    expect(serialised).not.toContain('okafor');
+    expect(serialised).not.toContain(user.email);
+    expect(serialised).not.toContain(user.id);
+  });
+
+  it('returns null for each field the user has not set', async () => {
+    const user = await userFactory({ firstName: null, lastName: '   ' });
+
+    await expect(usersRepository.findReviewerIdentityById(user.id)).resolves.toEqual({
+      firstName: null,
+      lastInitial: null,
+      jobTitle: null,
+    });
+  });
+
+  it('excludes a soft-deleted user', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    await expect(usersRepository.findReviewerIdentityById(user.id)).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(usersRepository.findReviewerIdentityById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
+describe('usersRepository.setJobTitle (BAL-628)', () => {
+  async function jobTitleOf(userId: string): Promise<string | null | undefined> {
+    const [row] = await db
+      .select({ jobTitle: users.jobTitle })
+      .from(users)
+      .where(eq(users.id, userId));
+    return row?.jobTitle;
+  }
+
+  it('starts NULL on a new user (migration 0121 adds the column with no default)', async () => {
+    const user = await userFactory();
+    await expect(jobTitleOf(user.id)).resolves.toBeNull();
+  });
+
+  it('writes the title, replaces it on a later save, and leaves other users alone', async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+
+    await usersRepository.setJobTitle(user.id, 'RevOps Lead');
+    await expect(jobTitleOf(user.id)).resolves.toBe('RevOps Lead');
+
+    await usersRepository.setJobTitle(user.id, 'Head of Sales Ops');
+    await expect(jobTitleOf(user.id)).resolves.toBe('Head of Sales Ops');
+    await expect(jobTitleOf(other.id)).resolves.toBeNull();
+  });
+
+  it('skips a soft-deleted user — the row is never touched', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    await usersRepository.setJobTitle(user.id, 'RevOps Lead');
+
+    await expect(jobTitleOf(user.id)).resolves.toBeNull();
+  });
+
+  it('is a silent no-op for an unknown id', async () => {
+    await expect(usersRepository.setJobTitle(randomUUID(), 'RevOps Lead')).resolves.toBeUndefined();
+  });
+});
+
 describe('usersRepository.findEmailById — the PROJECTED actor-address read (BAL-522)', () => {
   it('returns exactly id + email, and NOT workosId / phone / firstName', async () => {
     const user = await userFactory({ phone: '+61412345678' });

@@ -8,10 +8,17 @@ import { toast } from 'sonner';
 import {
   RATING_LABELS,
   REVIEW_BODY_MAX,
+  resolveCaptureDefaults,
   type Rating,
+  type ReviewBodyVisibility,
+  type ReviewCaptureIdentity,
   type ReviewLandingContext,
 } from '@balo/shared/reviews';
 import { RatingInput } from '@/components/balo/rating-input';
+import {
+  ReviewAttributionFields,
+  isReviewerRoleAllowed,
+} from '@/components/balo/reviews/review-attribution-fields';
 import { Textarea } from '@/components/ui/textarea';
 import { formatUtcLongDate } from '@/lib/format/local-date';
 import { cn } from '@/lib/utils';
@@ -27,6 +34,13 @@ import { submitTokenReviewAction } from '@/app/review/_actions/submit-token-revi
  * ⚠ NOTHING IS WRITTEN UNTIL SUBMIT. Arriving with `?r=4` only PREFILLS — the copy says
  * so, because a star tap that felt inert would be worse than one that wrote.
  *
+ * ⚠ BAL-628 — THE REVIEWER IS NAMED PUBLICLY (first name and surname initial), so once a star
+ * is chosen the form carries the same attribution controls as `RatingBlock` (the note's
+ * visibility, an optional role, the "show our company" checkbox, and a live line with a
+ * Preview), mounted from `ReviewAttributionFields`. They seed from the landing context through
+ * `resolveCaptureDefaults`, and what is SENT is `companyNameAllowed && showCompany`; the server
+ * forces it off regardless.
+ *
  * ALL COPY IS DRAFT, pending MJ sign-off, and gender-neutral throughout.
  *
  * Toast rule, deliberately deviating from CLAUDE.md's "toast every mutation": the FIRST
@@ -39,6 +53,9 @@ interface ExistingReview {
   rating: Rating;
   body: string | null;
   ratedOnIso: string;
+  bodyVisibility: ReviewBodyVisibility;
+  showCompany: boolean;
+  reviewerRole: string | null;
 }
 
 /**
@@ -69,6 +86,17 @@ export interface ReviewFormProps {
 
 type Phase = 'idle' | 'error' | 'success';
 
+function captureIdentityOf(context: ReviewLandingContext): ReviewCaptureIdentity {
+  return {
+    engagementKind: context.engagementKind,
+    reviewerFirstName: context.reviewerFirstName,
+    reviewerLastInitial: context.reviewerLastInitial,
+    companyName: context.clientCompanyName,
+    companyNameAllowed: context.clientCompanyNameAllowed,
+    industryName: context.clientIndustryName,
+  };
+}
+
 const KIND_LABEL: Readonly<Record<ReviewLandingContext['engagementKind'], string>> = {
   project: 'Project',
   case: 'Case',
@@ -82,6 +110,24 @@ export function ReviewForm({
 }: Readonly<ReviewFormProps>): React.JSX.Element {
   const [rating, setRating] = useState<Rating | null>(prefill ?? existing?.rating ?? null);
   const [body, setBody] = useState<string>(existing?.body ?? '');
+  const identity = captureIdentityOf(context);
+  const defaults = resolveCaptureDefaults({
+    existing:
+      existing === null
+        ? null
+        : {
+            reviewerRole: existing.reviewerRole,
+            showCompany: existing.showCompany,
+            bodyVisibility: existing.bodyVisibility,
+          },
+    jobTitle: context.reviewerJobTitle,
+    lastShowCompany: context.reviewerLastShowCompany,
+  });
+  const [bodyVisibility, setBodyVisibility] = useState<ReviewBodyVisibility>(
+    defaults.bodyVisibility
+  );
+  const [role, setRole] = useState<string>(defaults.role);
+  const [showCompany, setShowCompany] = useState<boolean>(defaults.showCompany);
   const [touched, setTouched] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -98,10 +144,11 @@ export function ReviewForm({
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>): void => {
       event.preventDefault();
-      if (rating === null || isPending) {
+      if (rating === null || isPending || !isReviewerRoleAllowed(role)) {
         return;
       }
       const trimmed = body.trim();
+      const trimmedRole = role.trim();
       // A resubmit is the ONLY path that toasts — see the component docblock.
       const isResubmit = hasSent;
 
@@ -110,6 +157,9 @@ export function ReviewForm({
           token,
           rating,
           ...(trimmed.length === 0 ? {} : { body: trimmed }),
+          ...(trimmedRole.length === 0 ? {} : { reviewerRole: trimmedRole }),
+          showCompany: identity.companyNameAllowed && showCompany,
+          bodyVisibility,
         });
 
         if (result.success) {
@@ -131,7 +181,17 @@ export function ReviewForm({
         }
       });
     },
-    [body, hasSent, isPending, rating, token]
+    [
+      body,
+      bodyVisibility,
+      hasSent,
+      identity.companyNameAllowed,
+      isPending,
+      rating,
+      role,
+      showCompany,
+      token,
+    ]
   );
 
   const handleChangeMyReview = useCallback((): void => {
@@ -204,7 +264,7 @@ export function ReviewForm({
             htmlFor="review-body"
             className="text-foreground text-[13px] leading-none font-medium"
           >
-            Anything you&apos;d add? <span className="text-muted-foreground">(optional)</span>
+            Add a note <span className="text-muted-foreground">(optional)</span>
           </label>
           <Textarea
             id="review-body"
@@ -213,12 +273,29 @@ export function ReviewForm({
             maxLength={REVIEW_BODY_MAX}
             disabled={isPending}
             rows={4}
-            placeholder="What went well, or what would have helped?"
+            placeholder={`What would you tell another team thinking of working with ${context.expertGivenName}?`}
             className="mt-2"
           />
           <p className="text-muted-foreground mt-1.5 text-right text-[11.5px] tabular-nums">
             {body.length}/{REVIEW_BODY_MAX}
           </p>
+          <ReviewAttributionFields
+            identity={identity}
+            expertName={context.expertGivenName}
+            note={body}
+            draftRating={rating}
+            bodyVisibility={bodyVisibility}
+            onBodyVisibilityChange={setBodyVisibility}
+            role={role}
+            onRoleChange={setRole}
+            showCompany={showCompany}
+            onShowCompanyChange={setShowCompany}
+            profileRole={
+              existing === null && defaults.role.trim().length > 0 ? defaults.role : null
+            }
+            surface="email"
+            disabled={isPending}
+          />
         </div>
       )}
 
@@ -236,7 +313,7 @@ export function ReviewForm({
 
       <button
         type="submit"
-        disabled={rating === null || isPending}
+        disabled={rating === null || isPending || !isReviewerRoleAllowed(role)}
         className="from-primary focus-visible:ring-ring mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 px-4 text-[14px] font-semibold text-white shadow-sm transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
       >
         {isPending && (
@@ -302,39 +379,31 @@ function ContextCard({ context }: Readonly<{ context: ReviewLandingContext }>): 
 }
 
 /**
- * The two disclosures, both required and both DRAFT.
+ * The forwarded-token disclosure, DRAFT. The token binds ONE person, so a forwarded email
+ * lands a review under the original recipient's name. FIRST NAME ONLY: rendering an email
+ * address to whoever holds a forwarded link would be a gratuitous PII mistake, and
+ * `ReviewLandingContext` exposes no address to make it with. With no first name on file the
+ * copy refers to "the person it was sent to".
  *
- * 1. VISIBILITY (D6) — it must be literally true of the code: `listPublicByExpert`
- *    projects the rating, the body and the CLIENT COMPANY name, and structurally cannot
- *    project `reviewer_user_id`.
- *
- *    ⚠⚠ IT NAMES THE PERSON, NOT `expertPartyLabel`. `listPublicByExpert` is keyed on
- *    `expert_profile_id`, and the only public profile route in the app is
- *    `(marketing)/experts/[username]` — the INDIVIDUAL expert's page (BAL-422's mount
- *    point). There is no agency profile route anywhere. Saying "CloudPeak Consulting's
- *    Balo profile" to someone deciding how frank to be about an agency, when the review
- *    lands on Amara's own page, is precisely the mistake a visibility disclosure cannot
- *    make. Use `expertGivenName` here even though the context card above says the party.
- * 2. FORWARDED TOKEN — the token binds ONE person, so a forwarded email lands a review
- *    under the original recipient's name. FIRST NAME ONLY: rendering an email address to
- *    whoever holds a forwarded link would be a gratuitous PII mistake, and
- *    `ReviewLandingContext` exposes no address to make it with.
+ * ⚠ THERE IS NO VISIBILITY PARAGRAPH HERE ANY MORE. What goes public, and how the reviewer is
+ * named, is stated by the live line under the form (`ReviewAttributionFields`), which updates
+ * as they type and tick — a static paragraph beside it would be a second, stale statement of
+ * the same thing.
  */
 function Disclosure({ context }: Readonly<{ context: ReviewLandingContext }>): React.JSX.Element {
+  const firstName = context.reviewerFirstName;
   return (
     <div className="border-border text-muted-foreground mt-6 space-y-2 border-t pt-4 text-[11.5px] leading-relaxed">
       <p>
-        Your review is published on {context.expertGivenName}&apos;s Balo expert profile — your
-        rating, what you wrote, and your company name,{' '}
-        <span className="text-foreground font-medium">{context.clientCompanyName}</span>. Your own
-        name is not shown.
-      </p>
-      <p>
-        This link was sent to{' '}
-        <span className="text-foreground font-medium">{context.reviewerFirstName}</span>. Whatever
-        you send here is recorded as {context.clientCompanyName}&apos;s review of{' '}
-        {context.expertGivenName}, and is submitted under {context.reviewerFirstName}&apos;s name.
-        If this was forwarded to you, ask them to send it themselves.
+        {firstName !== null && (
+          <>
+            This link was sent to <span className="text-foreground font-medium">{firstName}</span>
+            .{' '}
+          </>
+        )}
+        Whatever you send here is submitted under{' '}
+        {firstName === null ? 'the name of the person it was sent to' : `${firstName}’s name`}. If
+        this was forwarded to you, ask them to send it themselves.
       </p>
     </div>
   );

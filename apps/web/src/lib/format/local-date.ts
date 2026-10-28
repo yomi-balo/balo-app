@@ -67,6 +67,16 @@ export function formatUtcLongDate(value: Date | string): string {
   return `${date.getUTCDate()} ${LONG_MONTHS[date.getUTCMonth()] ?? ''} ${date.getUTCFullYear()}`;
 }
 
+/**
+ * "Oct 2026" in UTC — the month-and-year label on a review entry. Hand-rolled (not `Intl`)
+ * and read in UTC for the same reasons as {@link formatUtcLongDate}. Accepts a `Date` or an
+ * ISO string.
+ */
+export function formatUtcMonthYear(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return `${SHORT_MONTHS[date.getUTCMonth()] ?? ''} ${date.getUTCFullYear()}`;
+}
+
 const WEEKDAYS = [
   'Sunday',
   'Monday',
