@@ -10,6 +10,8 @@ import {
   isCompanyNameAllowedOnReviews,
   publicReviewNote,
   resolveCaptureDefaults,
+  reviewerRoleProblem,
+  isPrefillableReviewerRole,
   surnameInitial,
   RATING_LABELS,
   RATING_MAX,
@@ -632,6 +634,11 @@ describe('resolveCaptureDefaults (BAL-628 AC5)', () => {
     [null, true, { role: '', showCompany: true, bodyVisibility: 'public' }],
     [null, false, { role: '', showCompany: false, bodyVisibility: 'public' }],
     ['Ops', false, { role: 'Ops', showCompany: false, bodyVisibility: 'public' }],
+    ['  Ops  ', null, { role: 'Ops', showCompany: true, bodyVisibility: 'public' }],
+    // A stored job title the role field would reject is dropped, never seeded.
+    ['Head of Sales @ Acme', null, { role: '', showCompany: true, bodyVisibility: 'public' }],
+    ['x'.repeat(61), null, { role: '', showCompany: true, bodyVisibility: 'public' }],
+    ['   ', null, { role: '', showCompany: true, bodyVisibility: 'public' }],
   ] as const)(
     'first review: jobTitle=%j lastShowCompany=%j',
     (jobTitle, lastShowCompany, expected) => {
@@ -640,4 +647,31 @@ describe('resolveCaptureDefaults (BAL-628 AC5)', () => {
       );
     }
   );
+});
+
+describe('reviewerRoleProblem / isPrefillableReviewerRole', () => {
+  it.each([
+    ['CTO @Acme', 'at_sign'],
+    ['CTO \uFF20Acme', 'at_sign'],
+    ['CTO\u202E', 'hidden_character'],
+    ['CTO\n', 'hidden_character'],
+    ['Sales & Ops', null],
+    ['VP/Eng', null],
+    // ZWJ (emoji sequences) and ZWNJ (Persian / Indic text) are exempt.
+    ['Founder \u{1F469}\u200D\u{1F4BB}', null],
+    ['\u0645\u062F\u06CC\u0631\u200C\u0639\u0627\u0645\u0644', null],
+  ] as const)('reviewerRoleProblem(%j) → %s', (role, expected) => {
+    expect(reviewerRoleProblem(role)).toBe(expected);
+    expect(REVIEWER_ROLE_FORBIDDEN.test(role)).toBe(expected !== null);
+  });
+
+  it.each([
+    ['RevOps Lead', true],
+    ['x'.repeat(60), true],
+    ['x'.repeat(61), false],
+    ['', false],
+    ['CTO @Acme', false],
+  ] as const)('isPrefillableReviewerRole(%j) → %s', (jobTitle, expected) => {
+    expect(isPrefillableReviewerRole(jobTitle)).toBe(expected);
+  });
 });

@@ -69,7 +69,7 @@ function Harness({
   );
 }
 
-const ROLE_ERROR = 'Roles can’t include @ or special characters';
+const ROLE_ERROR = 'Leave out the @, and tick the box below to show your company.';
 
 const PREVIEW_HEADER = 'How it appears on Amara’s profile';
 
@@ -358,12 +358,36 @@ describe('ReviewAttributionFields — the controls', () => {
     expect(field).toHaveAttribute('aria-invalid', 'false');
   });
 
+  it('without a company box, the @ message does not point at one', async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        identity={buildReviewCaptureSeeds({ identity: { companyNameAllowed: false } }).identity}
+      />
+    );
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), 'CTO @Salesforce');
+    expect(screen.getByText('Leave out the @ and write just your role.')).toBeInTheDocument();
+    expect(screen.queryByText(ROLE_ERROR)).not.toBeInTheDocument();
+  });
+
+  it('names a hidden formatting character rather than "special characters"', () => {
+    render(<Harness role={'CTO\u202E'} />);
+    expect(
+      screen.getByText('Your role has a hidden formatting character. Try retyping it.')
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ['@', true],
+    ['\uFF20', true],
     ['\u202E', true],
     ['\u0000', true],
     ['Café Owner', false],
     ['  Head of R&D  ', false],
+    ['Sales & Ops', false],
+    ['VP/Eng', false],
+    ['Founder \u{1F469}\u200D\u{1F4BB}', false],
+    ['\u0645\u062F\u06CC\u0631\u200C\u0639\u0627\u0645\u0644', false],
   ] satisfies readonly [string, boolean][])(
     'isReviewerRoleAllowed(%j) forbidden=%s',
     (role, bad) => {

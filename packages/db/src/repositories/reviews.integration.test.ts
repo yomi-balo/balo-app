@@ -1215,7 +1215,7 @@ describe('reviewsRepository.listPublicByExpert — D6', () => {
     const engagement = await engagementFactory({ expertProfileId: expert.id });
     const { reviewerUserId } = await reviewFactory({
       engagement,
-      values: { rating: 5, body: 'Unblocked us in one call' },
+      values: { rating: 5, body: 'Unblocked us in one call', bodyVisibility: 'public' },
     });
 
     const published = await reviewsRepository.listPublicByExpert(expert.id);
@@ -1232,6 +1232,21 @@ describe('reviewsRepository.listPublicByExpert — D6', () => {
     expect(row.rating).toBe(5);
     expect(row.body).toBe('Unblocked us in one call');
     expect(row.clientCompanyName.length).toBeGreaterThan(0);
+  });
+
+  it('never projects a PRIVATE note — the rating publishes, the body is null', async () => {
+    const expert = await expertDraftFactory();
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    await reviewFactory({
+      engagement,
+      values: { rating: 4, body: 'For Balo only', bodyVisibility: 'private' },
+    });
+
+    const published = await reviewsRepository.listPublicByExpert(expert.id);
+    expect(published).toHaveLength(1);
+    expect(published[0]?.rating).toBe(4);
+    expect(published[0]?.body).toBeNull();
+    expect(JSON.stringify(published)).not.toContain('For Balo only');
   });
 
   it('excludes soft-deleted reviews', async () => {

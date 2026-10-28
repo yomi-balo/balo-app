@@ -3,10 +3,11 @@
 import { useCallback, useId, useState } from 'react';
 import { Eye, Lock, X } from 'lucide-react';
 import {
-  REVIEWER_ROLE_FORBIDDEN,
   REVIEWER_ROLE_MAX,
   formatReviewAttribution,
   publicReviewNote,
+  reviewerRoleProblem,
+  type ReviewerRoleProblem,
   type ReviewBodyVisibility,
   type ReviewCaptureIdentity,
   type ReviewSurface,
@@ -23,10 +24,21 @@ import { ReviewEntry } from './review-entry';
 
 /** `true` when the role, as it will be sent (trimmed), may be saved. Parents gate Save on it. */
 export function isReviewerRoleAllowed(role: string): boolean {
-  return !REVIEWER_ROLE_FORBIDDEN.test(role.trim());
+  return reviewerRoleProblem(role.trim()) === null;
 }
 
-const ROLE_FORBIDDEN_MESSAGE = 'Roles can’t include @ or special characters';
+/**
+ * What to do about a rejected role. An `@` is almost always an attempt to name the company, so
+ * the message points at the checkbox when there is one to tick.
+ */
+function roleProblemMessage(problem: ReviewerRoleProblem, companyOffered: boolean): string {
+  if (problem === 'hidden_character') {
+    return 'Your role has a hidden formatting character. Try retyping it.';
+  }
+  return companyOffered
+    ? 'Leave out the @, and tick the box below to show your company.'
+    : 'Leave out the @ and write just your role.';
+}
 
 /**
  * BAL-628 — the reviewer-attribution controls, shared by `RatingBlock` (four in-app surfaces)
@@ -44,7 +56,7 @@ const ROLE_FORBIDDEN_MESSAGE = 'Roles can’t include @ or special characters';
  * handed to it (`publicReviewNote`), so it cannot appear there. It closes on Escape, an outside
  * click (which includes pressing Save, since Save sits outside the popover) and its own X.
  *
- * ⚠ THE ROLE FIELD REJECTS `@` AND CONTROL CHARACTERS (`REVIEWER_ROLE_FORBIDDEN`) INLINE, because
+ * ⚠ THE ROLE FIELD REJECTS `@` AND HIDDEN CHARACTERS (`reviewerRoleProblem`) INLINE, because
  * the descriptor is `{Role} @{Company}` and a typed `@` would fake a company. The parent must
  * also disable Save while `!isReviewerRoleAllowed(role)`; the server rejects it regardless.
  *
@@ -96,7 +108,8 @@ export function ReviewAttributionFields({
   const hasNote = trimmedNote.length > 0;
   const companyOffered = identity.companyNameAllowed && identity.companyName !== null;
   const effectiveShowCompany = companyOffered && showCompany;
-  const roleInvalid = !isReviewerRoleAllowed(role);
+  const roleProblem = reviewerRoleProblem(role.trim());
+  const roleInvalid = roleProblem !== null;
   const showProfileHelper = profileRole !== null && role !== '' && role === profileRole;
 
   const attribution = formatReviewAttribution({
@@ -177,9 +190,9 @@ export function ReviewAttributionFields({
             ? 'From your last review. Update it if it’s changed.'
             : 'We’ll remember it for your next review.'}
         </p>
-        {roleInvalid && (
+        {roleProblem !== null && (
           <p id={roleErrorId} className="text-destructive mt-1 text-xs">
-            {ROLE_FORBIDDEN_MESSAGE}
+            {roleProblemMessage(roleProblem, companyOffered)}
           </p>
         )}
       </div>

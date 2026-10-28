@@ -756,13 +756,19 @@ export const reviewsRepository = {
    * mounts the AGGREGATE (`expert_profiles.rating_average` / `rating_count`) — review
    * BODIES are explicitly out of its scope, so this still has no caller and no ticket
    * owns mounting it.
+   *
+   * ⚠⚠ A PRIVATE NOTE NEVER LEAVES THE DATABASE. `body` is projected only when
+   * `body_visibility = 'public'` (the SQL twin of `publicReviewNote`); a private note reads
+   * as `null` here, so no caller can publish it by forgetting a filter.
    */
   listPublicByExpert: async (expertProfileId: string): Promise<PublicReview[]> => {
     const rows = await db
       .select({
         id: reviews.id,
         rating: reviews.rating,
-        body: reviews.body,
+        body: sql<
+          string | null
+        >`CASE WHEN ${reviews.bodyVisibility} = 'public' THEN ${reviews.body} END`,
         clientCompanyName: companies.name,
         createdAt: reviews.createdAt,
       })

@@ -35,15 +35,52 @@ export const REVIEW_BODY_MAX = 2000;
 export const REVIEWER_ROLE_MAX = 60;
 
 /**
- * Characters a reviewer role may not contain. `@` and its look-alikes (fullwidth `＠`,
- * small `﹫`) would let a role such as "CTO @Acme" read exactly like the
- * `{Role} @{Company}` descriptor and so bypass the company force-off; `\p{C}` (control,
- * format — incl. bidi overrides — and unassigned) and the line/paragraph separators
- * would let it rearrange or break the rendered line. Enforced by both write-boundary Zod
- * schemas and the role field; the DB CHECK `review_reviewer_role_charset` mirrors the
- * ASCII `@` and control-character part.
+ * `@` and its look-alikes (fullwidth `＠`, small `﹫`). A role such as "CTO @Acme" would read
+ * exactly like the `{Role} @{Company}` descriptor and so bypass the company force-off.
  */
-export const REVIEWER_ROLE_FORBIDDEN = /[@＠﹫\p{C}\p{Zl}\p{Zp}]/u;
+const ROLE_AT_SIGN = /[@＠﹫]/u;
+
+/**
+ * Hidden characters that could rearrange or break the rendered line: `\p{C}` (control,
+ * format — incl. bidi overrides — private-use and unassigned) and the line/paragraph
+ * separators. The zero-width non-joiner and joiner (U+200C/U+200D) are EXEMPT: Persian and
+ * Indic text and emoji sequences need them, and neither can reorder text or imitate `@`.
+ */
+const ROLE_HIDDEN_CHARACTER = /(?![‌‍])[\p{C}\p{Zl}\p{Zp}]/u;
+
+/**
+ * Characters a reviewer role may not contain — the union of the two rules above. Enforced by
+ * both write-boundary Zod schemas and the role field; the DB CHECK
+ * `review_reviewer_role_charset` mirrors the ASCII `@` and control-character part.
+ */
+export const REVIEWER_ROLE_FORBIDDEN = new RegExp(
+  `${ROLE_AT_SIGN.source}|${ROLE_HIDDEN_CHARACTER.source}`,
+  'u'
+);
+
+export type ReviewerRoleProblem = 'at_sign' | 'hidden_character';
+
+/** Why a role can't be saved, or `null` when its characters are fine. Length is Zod's job. */
+export function reviewerRoleProblem(role: string): ReviewerRoleProblem | null {
+  if (ROLE_AT_SIGN.test(role)) return 'at_sign';
+  if (ROLE_HIDDEN_CHARACTER.test(role)) return 'hidden_character';
+  return null;
+}
+
+/**
+ * Whether a stored job title may seed the role field. `users.job_title` carries no CHECK (a
+ * profile editor or an import may write it), so a value the role field would reject — blank,
+ * over `REVIEWER_ROLE_MAX`, or with a forbidden character — is dropped from the prefill rather
+ * than opening the form with Save disabled.
+ */
+export function isPrefillableReviewerRole(jobTitle: string): boolean {
+  const trimmed = jobTitle.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= REVIEWER_ROLE_MAX &&
+    reviewerRoleProblem(trimmed) === null
+  );
+}
 
 /**
  * Who may read a review's free-text note. Mirrors the `review_body_visibility` pgEnum
@@ -463,7 +500,8 @@ export interface ReviewCaptureSeeds {
 
 /**
  * Initial capture values. An existing review wins outright, so a revision never re-defaults
- * a choice the reviewer made. A first review takes the saved job title, the reviewer's most
+ * a choice the reviewer made. A first review takes the saved job title (when
+ * `isPrefillableReviewerRole`), the reviewer's most
  * recent company-visibility choice (ticked when they have none), and a public note.
  */
 export function resolveCaptureDefaults(input: {
@@ -483,7 +521,10 @@ export function resolveCaptureDefaults(input: {
     };
   }
   return {
-    role: input.jobTitle ?? '',
+    role:
+      input.jobTitle !== null && isPrefillableReviewerRole(input.jobTitle)
+        ? input.jobTitle.trim()
+        : '',
     showCompany: input.lastShowCompany ?? true,
     bodyVisibility: 'public',
   };

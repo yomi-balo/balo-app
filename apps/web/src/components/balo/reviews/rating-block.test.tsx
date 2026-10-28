@@ -872,7 +872,9 @@ describe('RatingBlock — BAL-628 reviewer attribution', () => {
     const field = screen.getByRole('textbox', { name: /Your role/ });
     await user.type(field, 'CTO @Salesforce');
 
-    expect(screen.getByText('Roles can’t include @ or special characters')).toBeInTheDocument();
+    expect(
+      screen.getByText('Leave out the @, and tick the box below to show your company.')
+    ).toBeInTheDocument();
     expect(field).toHaveAttribute('aria-invalid', 'true');
     const save = screen.getByRole('button', { name: 'Save review' });
     expect(save).toBeDisabled();
