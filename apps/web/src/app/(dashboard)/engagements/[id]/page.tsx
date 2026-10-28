@@ -203,7 +203,8 @@ export default async function EngagementWorkspacePage({
     notFound();
   }
 
-  // The viewer, and whether they may log time, from one expert-side capability resolution.
+  // The viewer, and whether they may log time, from the expert-side capability (host-context
+  // lookups are request-deduped, so repeated asks cost no extra reads).
   // Logging time is a delivery act on the engagement axis, so it is resolved by capability
   // rather than read off the lens, and only for an active time and materials project.
   const access = await resolveWorkspaceAccess(user, engagement);

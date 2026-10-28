@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { cache } from 'react';
 import { engagementsRepository, expertsRepository, partyMembershipsRepository } from '@balo/db';
 import {
   buildHostContextForExpertProfile,
@@ -35,6 +36,11 @@ import { log } from '@/lib/logging';
  * NO FK and NO RLS, so resolving the context's owning party and checking membership is still
  * the CALLER'S obligation. On the case surface that obligation is discharged by
  * `resolveCaseAccess` BEFORE this is ever called — never after, and never instead.
+ * ONE exception (ADR-1046 §7, "Delivery pages are outside the visibility rule in v1",
+ * BAL-626): `resolveEngagementViewer` admits a null-lens viewer to `/engagements/[id]` and its
+ * change-order page on `MANAGE_ENGAGEMENT`, because the page has already loaded the
+ * `engagements` row and so resolved the owning party itself. No other surface may do this
+ * without an ADR amendment.
  *
  * ⚠ AND IT SAYS NOTHING ABOUT ENGAGEMENT LIFECYCLE. `findById` filters `deleted_at` only;
  * `engagements.status` is never consulted. The delivering expert of a COMPLETED case still
@@ -133,6 +139,16 @@ const hostContextReads: HostContextReads = {
 };
 
 /**
+ * Request-deduped host-context assembly (two repository reads). One render asks the
+ * expert-side question from several places (metadata, viewer resolution, time logging), so
+ * they share one build. Keyed on the two primitive strings; `actorId` stays an explicit
+ * argument and is never captured, so a result is only ever reused for the same actor.
+ */
+const buildHostContext = cache((expertProfileId: string, actorId: string) =>
+  buildHostContextForExpertProfile(expertProfileId, actorId, hostContextReads)
+);
+
+/**
  * BAL-283 — the SAME rule, asked of an ALREADY-RESOLVED delivering `expert_profiles.id`.
  *
  * ⚠⚠ THIS IS NOT A SECOND RESOLVER, AND IT MUST NOT BECOME ONE. It is the exact tail
@@ -165,11 +181,7 @@ export async function hasExpertDeliveryCapability(
   expertProfileId: string,
   logContext: { contextType: string; contextId: string }
 ): Promise<boolean> {
-  const resolution = await buildHostContextForExpertProfile(
-    expertProfileId,
-    actor.id,
-    hostContextReads
-  );
+  const resolution = await buildHostContext(expertProfileId, actor.id);
 
   if (!resolution.ok) {
     log.warn('Engagement host context denied — the delivering expert profile is missing', {
@@ -194,11 +206,7 @@ export async function administersDeliveringAgency(
   actor: { id: string },
   expertProfileId: string
 ): Promise<boolean> {
-  const resolution = await buildHostContextForExpertProfile(
-    expertProfileId,
-    actor.id,
-    hostContextReads
-  );
+  const resolution = await buildHostContext(expertProfileId, actor.id);
 
   if (!resolution.ok) {
     log.warn('Agency administration check denied — the delivering expert profile is missing', {

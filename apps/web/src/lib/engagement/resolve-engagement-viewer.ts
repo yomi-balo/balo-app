@@ -77,9 +77,9 @@ export interface WorkspaceAccess {
 
 /**
  * {@link resolveEngagementViewer} plus the time-logging affordances, from ONE expert-side
- * actor resolution (the capability read). Whose entries the viewer may change is a second,
- * separate host-context read: the actions share both resolvers, so folding them into one
- * build would widen the authz seam. The capability is asked only when it decides something: the viewer has
+ * actor resolution (the capability read). Whose entries the viewer may change is a separate
+ * resolution through the same resolvers the actions use; host-context lookups are
+ * request-deduped, so asking twice costs no extra reads. The capability is asked only when it decides something: the viewer has
  * no relationship of their own, or the project is an active time and materials one. Only the
  * delivering expert logs time; whose entries the viewer may change reads
  * {@link timeEntryAuthorScope}, as the time-entry actions do. `null` = same 404 as a missing row.
