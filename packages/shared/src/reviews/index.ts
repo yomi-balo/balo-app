@@ -44,8 +44,8 @@ const ROLE_AT_SIGN = /[@＠﹫]/u;
  * Hidden characters that could rearrange or break the rendered line: `\p{C}` (control,
  * format — incl. bidi overrides — private-use and unassigned) and the line/paragraph
  * separators. `\p{Join_Control}` — the zero-width non-joiner and joiner (U+200C/U+200D) — is
- * EXEMPT: Persian and
- * Indic text and emoji sequences need them, and neither can reorder text or imitate `@`.
+ * EXEMPT: Persian and Indic text and emoji sequences need them, and neither can reorder text
+ * or imitate `@`.
  */
 const ROLE_HIDDEN_CHARACTER = /(?!\p{Join_Control})[\p{C}\p{Zl}\p{Zp}]/u;
 
