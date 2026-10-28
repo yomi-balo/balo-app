@@ -50,7 +50,7 @@ export async function withdrawCompletionRequestAction(input: {
     { userId: user.id },
     'Failed to withdraw completion request',
     () => gateExpertEngagement(user, engagementId, 'pending_acceptance'),
-    async (engagement) => {
+    async (engagement, { actor }) => {
       // Capture BEFORE the call — D0's withdraw clears `completionRequestedAt` to null.
       const requestedAt = engagement.completionRequestedAt;
       await projectEngagementsRepository.withdrawCompletionRequest({
@@ -66,6 +66,7 @@ export async function withdrawCompletionRequestAction(input: {
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN, {
         engagement_id: engagementId,
         hours_in_review: hoursInReview,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 

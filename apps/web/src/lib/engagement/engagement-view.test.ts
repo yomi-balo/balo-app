@@ -31,6 +31,7 @@ function makeMilestone(over: Partial<Milestone> = {}): Milestone {
     startedByUserId: null,
     startedAt: null,
     completedByUserId: null,
+    completedBy: null,
     completedAt: null,
     completionNote: null,
     createdByUserId: null,
@@ -431,6 +432,55 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     expect(node?.descriptionHtml).toBe('<p>Workshops and architecture.</p>');
     // Plain-text of the description for the expert edit-form prefill.
     expect(node?.descriptionText).toBe('Workshops and architecture.');
+  });
+
+  describe('milestone completion attribution', () => {
+    const AGENCY_PROFILE = {
+      ...makeEngagement().expertProfile,
+      agencyId: 'ag-1',
+      type: 'agency' as const,
+      agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+    };
+    const completedBy = (
+      by: Milestone['completedBy'],
+      lens: EngagementLens = 'client'
+    ): string | null | undefined =>
+      mapEngagementToWorkspaceView(
+        makeEngagement({
+          expertProfile: AGENCY_PROFILE,
+          milestones: [
+            makeMilestone({
+              status: 'completed',
+              completedAt: new Date('2026-06-30T00:00:00.000Z'),
+              completedBy: by,
+            }),
+          ],
+        }),
+        ctxFor(lens),
+        NOW
+      ).milestones[0]?.completedLabel;
+
+    it('names the agency owner/admin who completed it, not the delivering expert', () => {
+      const dana = { id: 'user-dana', firstName: 'Dana', lastName: 'Okafor' };
+      expect(completedBy(dana)).toBe('Completed 30 Jun by Dana @ CloudPeak');
+      expect(completedBy(dana, 'admin')).toBe('Completed 30 Jun by Dana @ CloudPeak');
+    });
+
+    it('keeps the short form when the delivering expert completed it', () => {
+      expect(completedBy({ id: 'user-priya', firstName: 'Priya', lastName: 'Sharma' })).toBe(
+        'Completed 30 Jun by Priya'
+      );
+    });
+
+    it('keeps the short form when no completer was recorded', () => {
+      expect(completedBy(null)).toBe('Completed 30 Jun by Priya');
+    });
+
+    it('falls back to the agency for an unnamed completer', () => {
+      expect(completedBy({ id: 'user-x', firstName: null, lastName: ' ' })).toBe(
+        'Completed 30 Jun by CloudPeak'
+      );
+    });
   });
 
   it('derives descriptionText as plain text (and null when the description is blank)', () => {
@@ -1462,6 +1512,29 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     });
     expect(inReview('expert', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
     expect(inReview('admin', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
+  });
+
+  it('names the agency, not the delivering expert, for an agency engagement', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        status: 'pending_acceptance',
+        completionRequestedAt: NOW,
+        milestones: [reworded],
+        expertProfile: {
+          ...makeEngagement().expertProfile,
+          agencyId: 'ag-1',
+          type: 'agency',
+          agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+        },
+      }),
+      ctxFor('client'),
+      NOW,
+      [],
+      [directEdit]
+    );
+    expect(view.reviewBanner?.changedSinceProposal?.intro).toBe(
+      'CloudPeak revised the wording of 1 milestone after the proposal was accepted. Each is marked below.'
+    );
   });
 
   it('has no review list when nothing was reworded', () => {

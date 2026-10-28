@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 4
 published: false
-updated: 2026-10-27
+updated: 2026-10-29
 related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---
 
@@ -63,7 +63,8 @@ difference on a fixed-price project is settled on the final invoice.
 
 If you own or administer the agency that delivers the project, you can do all of this on its
 behalf: propose, answer and withdraw changes, move milestones along and mark the project ready.
-The notices and the change history the client sees name the person who acted.
+The notices the client receives name the person who acted. The summary of what changed since the
+proposal names your agency.
 
 ## Marking the project ready
 

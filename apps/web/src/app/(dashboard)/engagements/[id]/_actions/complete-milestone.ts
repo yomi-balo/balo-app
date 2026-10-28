@@ -56,7 +56,7 @@ export async function completeMilestoneAction(input: {
     parsed.data,
     'in_progress',
     'Failed to complete milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       const outcome = await runMilestoneTransition(() =>
         engagementMilestonesRepository.complete({
           milestoneId: milestone.id,
@@ -81,6 +81,7 @@ export async function completeMilestoneAction(input: {
         milestone_id: updated.id,
         cycle_time_days: cycleTimeDays,
         has_completion_note: note !== undefined,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 

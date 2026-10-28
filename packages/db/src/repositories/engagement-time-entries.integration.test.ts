@@ -131,6 +131,14 @@ describe('engagement_time_entries constraints', () => {
 });
 
 describe('engagementTimeEntriesRepository.log', () => {
+  it('leaves updatedByUserId null: a logged entry has never been edited', async () => {
+    const seeded = await seedTm();
+
+    const { entry } = await repo.log(logInput(seeded, 60));
+
+    expect(entry.updatedByUserId).toBeNull();
+  });
+
   it('inserts the entry and returns the milestone total', async () => {
     const seeded = await seedTm();
 
@@ -458,6 +466,40 @@ describe('engagementTimeEntriesRepository.update', () => {
     expect(edited?.actorUserId).toBe(editor.id);
   });
 
+  it('stamps the acting user as updatedByUserId when someone else edits', async () => {
+    const seeded = await seedTm();
+    const editor = await userFactory();
+    const { entry } = await repo.log(logInput(seeded, 60));
+
+    const result = await repo.update({
+      engagementId: seeded.engagementId,
+      entryId: entry.id,
+      userId: editor.id,
+      authorScope: 'any',
+      minutes: 90,
+      note: 'Corrected by the agency.',
+    });
+
+    expect(result.entry.updatedByUserId).toBe(editor.id);
+    expect(result.entry.userId).toBe(seeded.userId);
+  });
+
+  it('stamps the author as updatedByUserId on a self-edit', async () => {
+    const seeded = await seedTm();
+    const { entry } = await repo.log(logInput(seeded, 60));
+
+    const result = await repo.update({
+      engagementId: seeded.engagementId,
+      entryId: entry.id,
+      userId: seeded.userId,
+      authorScope: 'own',
+      minutes: 75,
+      note: 'Built and tested the routing flow.',
+    });
+
+    expect(result.entry.updatedByUserId).toBe(seeded.userId);
+  });
+
   it("checks the daily limit against the entry's author for scope 'any'", async () => {
     const seeded = await seedTm();
     const editor = await userFactory();
@@ -525,6 +567,21 @@ describe('engagementTimeEntriesRepository.update', () => {
 });
 
 describe('engagementTimeEntriesRepository.remove', () => {
+  it('stamps the remover as updatedByUserId', async () => {
+    const seeded = await seedTm();
+    const remover = await userFactory();
+    const { entry } = await repo.log(logInput(seeded, 45));
+
+    const removed = await repo.remove({
+      engagementId: seeded.engagementId,
+      entryId: entry.id,
+      userId: remover.id,
+      authorScope: 'any',
+    });
+
+    expect(removed.updatedByUserId).toBe(remover.id);
+  });
+
   it('soft-deletes the entry on a milestone in any status and audits it', async () => {
     const seeded = await seedTm();
     const { entry } = await repo.log(logInput(seeded, 45));
@@ -665,6 +722,56 @@ describe('engagementTimeEntriesRepository.listByEngagement', () => {
       authorFirstName: 'Priya',
       workedOn: '2026-10-20',
       minutes: 60,
+    });
+  });
+});
+
+describe('engagementTimeEntriesRepository.listByEngagement — editor', () => {
+  it('returns the editor name only, with exactly the added keys, and nulls for a never-edited entry', async () => {
+    const seeded = await seedTm();
+    const editor = await userFactory({ firstName: 'Dana', lastName: 'Whitfield' });
+    const edited = await repo.log(logInput(seeded, 60));
+    await repo.update({
+      engagementId: seeded.engagementId,
+      entryId: edited.entry.id,
+      userId: editor.id,
+      authorScope: 'any',
+      minutes: 90,
+      note: 'Corrected by the agency.',
+    });
+    const untouched = await engagementTimeEntryFactory({
+      milestone: seeded.milestone,
+      userId: seeded.userId,
+      values: { workedOn: '2026-01-01' },
+    });
+
+    const rows = await repo.listByEngagement(seeded.engagementId);
+
+    const editedRow = rows.find((r) => r.id === edited.entry.id);
+    expect(editedRow).toMatchObject({
+      updatedByUserId: editor.id,
+      editorFirstName: 'Dana',
+      editorLastName: 'Whitfield',
+    });
+    expect(Object.keys(editedRow ?? {}).sort()).toEqual(
+      [
+        'id',
+        'engagementMilestoneId',
+        'userId',
+        'authorFirstName',
+        'updatedByUserId',
+        'editorFirstName',
+        'editorLastName',
+        'workedOn',
+        'minutes',
+        'note',
+        'createdAt',
+      ].sort()
+    );
+    expect(rows.find((r) => r.id === untouched.entry.id)).toMatchObject({
+      updatedByUserId: null,
+      editorFirstName: null,
+      editorLastName: null,
     });
   });
 });

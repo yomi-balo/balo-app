@@ -25,7 +25,12 @@ export function TimeLogList({
             <span className="text-muted-foreground w-14 shrink-0 text-xs">
               {entry.workedOnLabel}
             </span>
-            <span className="text-foreground min-w-0 flex-1 break-words">{entry.note}</span>
+            <span className="min-w-0 flex-1">
+              <span className="text-foreground break-words">{entry.note}</span>
+              {entry.editedByLabel !== null && (
+                <span className="text-muted-foreground block text-xs">{entry.editedByLabel}</span>
+              )}
+            </span>
             <span className="text-foreground shrink-0 font-medium">{entry.hoursLabel}</span>
             {renderEntryControls !== undefined && (
               <span className="inline-flex shrink-0 items-center gap-0.5 self-center">

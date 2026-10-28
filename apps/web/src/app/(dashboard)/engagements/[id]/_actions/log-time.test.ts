@@ -83,6 +83,7 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+import { log } from '@/lib/logging';
 import { logTimeAction } from './log-time';
 
 const INPUT = {
@@ -151,9 +152,32 @@ describe('logTimeAction', () => {
       error: 'Only the delivering expert can do that.',
     });
     expect(mockWrite).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'no_capability' })
+    );
   });
 
-  it('names an agency admin in the estimate-exceeded notice', async () => {
+  it('refuses a project that is not active, logged as a time-entry denial', async () => {
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        status: 'pending_acceptance',
+        milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
+      })
+    );
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: "This project isn't active.",
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'wrong_status' })
+    );
+  });
+
+  it('refuses an agency admin who is not the delivering expert, without writing', async () => {
     mockRequireUser.mockResolvedValue({
       id: 'admin-1',
       firstName: 'Dana',
@@ -162,26 +186,15 @@ describe('logTimeAction', () => {
       companyId: 'other-company',
       expertProfileId: 'expert-2',
     });
-    mockFindEngagement.mockResolvedValue(
-      makeProject({
-        pricingMethod: 'tm',
-        milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
-        expertProfile: {
-          id: 'expert-1',
-          agencyId: 'agency-1',
-          type: 'agency',
-          headline: null,
-          timezone: 'UTC',
-          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
-          agency: { name: 'CloudPeak' },
-        },
-      } as never)
-    );
-    mockWrite.mockResolvedValue(written({ estimateExceeded: true, loggedAfterMinutes: 540 }));
-    await logTimeAction(INPUT);
-    expect(mockPublish).toHaveBeenCalledWith(
-      'engagement.milestone_estimate_exceeded',
-      expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: 'Only the delivering expert can do that.',
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'not_delivering_expert', userId: 'admin-1' })
     );
   });
 
@@ -229,6 +242,7 @@ describe('logTimeAction', () => {
       milestone_id: MILESTONE_ID,
       minutes: 90,
       crossed_estimate: false,
+      acting_as: 'delivering_expert',
       milestone_pct_of_estimate: 94,
       distinct_id: CHARLES.id,
     });
@@ -270,6 +284,7 @@ describe('logTimeAction', () => {
       engagement_id: ENGAGEMENT_ID,
       milestone_id: MILESTONE_ID,
       milestones_over_count: 2,
+      acting_as: 'delivering_expert',
       distinct_id: CHARLES.id,
     });
   });

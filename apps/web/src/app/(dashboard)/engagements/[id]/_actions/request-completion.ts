@@ -76,7 +76,7 @@ export async function requestCompletionAction(input: {
     { userId: user.id },
     'Failed to request completion',
     () => gateExpertEngagement(user, engagementId, 'active'),
-    async (engagement) => {
+    async (engagement, { actor }) => {
       const updated = await projectEngagementsRepository.requestCompletion({
         engagementId,
         userId: user.id,
@@ -99,6 +99,7 @@ export async function requestCompletionAction(input: {
         review_cycle: reviewCycle,
         is_resubmission: isResubmission,
         prior_change_rounds: priorChangeRounds,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 

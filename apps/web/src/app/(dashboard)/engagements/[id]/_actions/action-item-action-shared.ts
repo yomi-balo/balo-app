@@ -15,7 +15,10 @@ import {
   type EngagementLens,
 } from '@/lib/engagement/resolve-engagement-lens';
 import { deriveActorLabel, deriveEngagementParties } from '@/lib/engagement/engagement-parties';
-import { resolveExpertSideActor } from '@/lib/engagement/resolve-engagement-viewer';
+import {
+  resolveExpertSideActor,
+  type ExpertSideActor,
+} from '@/lib/engagement/resolve-engagement-viewer';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
@@ -62,6 +65,8 @@ export interface AuthorizedActionItem {
   user: SessionUser;
   engagement: ProjectEngagementWithMilestones;
   lens: EngagementLens;
+  /** The expert-side capacity the gate resolved; `null` on the client and platform arms. */
+  actingAs: ExpertSideActor['actingAs'] | null;
   /** Present iff `opts.actionItemId` was supplied AND validated (IDOR). */
   actionItem?: ActionItem;
 }
@@ -72,6 +77,7 @@ export type ActionItemGateResult =
       ok: true;
       engagement: ProjectEngagementWithMilestones;
       lens: EngagementLens;
+      actingAs: ExpertSideActor['actingAs'] | null;
       actionItem?: ActionItem;
     }
   | { ok: false; error: string };
@@ -123,7 +129,7 @@ export async function gateEngagementParticipant(
     if (agencyActor === null) {
       return deny('not_a_participant', NOT_FOUND);
     }
-    return finishGate(engagement, 'expert', opts?.actionItemId, deny);
+    return finishGate(engagement, 'expert', agencyActor.actingAs, opts?.actionItemId, deny);
   }
 
   // Per-ARM authorization beyond the lens resolution itself. THREE ARMS, EACH ON ITS OWN AXIS —
@@ -142,6 +148,7 @@ export async function gateEngagementParticipant(
   // in the cookie. Same reason and same shape as the impersonation entry point
   // (`lib/auth/actions/impersonation.ts`). The synchronous check stays FIRST and short-circuits,
   // so a client- or expert-lens actor falls through to their own arm without spending a query.
+  let actingAs: ExpertSideActor['actingAs'] | null = null;
   if (
     !hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM) ||
     !(await actorHoldsPlatformCapability(
@@ -156,20 +163,25 @@ export async function gateEngagementParticipant(
       if (!allowed) {
         return deny('no_capability', NOT_A_PARTICIPANT);
       }
-    } else if ((await resolveExpertSideActor(user, engagement)) === null) {
+    } else {
       // Everyone who is neither a client nor a platform-capability holder must hold the
       // engagement-axis capability; an observer without it fails closed here.
-      return deny('no_capability', NOT_A_PARTICIPANT);
+      const expertActor = await resolveExpertSideActor(user, engagement);
+      if (expertActor === null) {
+        return deny('no_capability', NOT_A_PARTICIPANT);
+      }
+      actingAs = expertActor.actingAs;
     }
   }
 
-  return finishGate(engagement, ctx.lens, opts?.actionItemId, deny);
+  return finishGate(engagement, ctx.lens, actingAs, opts?.actionItemId, deny);
 }
 
 /** The status check and the IDOR item check shared by every arm of the gate. */
 async function finishGate(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
+  actingAs: ExpertSideActor['actingAs'] | null,
   actionItemId: string | undefined,
   deny: (reason: string, error: string) => { ok: false; error: string }
 ): Promise<ActionItemGateResult> {
@@ -180,17 +192,13 @@ async function finishGate(
   // IDOR: an action-item-scoped action must target an item that belongs to THIS engagement.
   if (actionItemId !== undefined) {
     const actionItem = await actionItemsRepository.findById(actionItemId);
-    if (
-      actionItem === undefined ||
-      actionItem.engagementId !== engagement.id ||
-      actionItem.deletedAt !== null
-    ) {
+    if (actionItem?.engagementId !== engagement.id || actionItem.deletedAt !== null) {
       return deny('action_item_not_in_engagement', ACTION_ITEM_GONE);
     }
-    return { ok: true, engagement, lens, actionItem };
+    return { ok: true, engagement, lens, actingAs, actionItem };
   }
 
-  return { ok: true, engagement, lens };
+  return { ok: true, engagement, lens, actingAs };
 }
 
 /**
@@ -224,6 +232,7 @@ export async function runActionItemAction(
       user,
       engagement: gate.engagement,
       lens: gate.lens,
+      actingAs: gate.actingAs,
       actionItem: gate.actionItem,
     });
     // A typed-race failure surfaced by `perform` → no revalidate (nothing changed).

@@ -1,0 +1,45 @@
+import { describe, it, expect } from 'vitest';
+import { render } from '@react-email/render';
+import { getEmailTemplate } from './index.js';
+import { getInAppTemplate } from './in-app-templates.js';
+
+describe('engagement-time-entry-changed templates (BAL-626)', () => {
+  const base = {
+    recipientName: 'Sam',
+    actorExpertLabel: 'Priya @ CloudPeak',
+    projectTitle: 'CPQ implementation',
+    workedOnLabel: '14 Oct',
+    hoursLabel: '2.5 hrs',
+    engagementId: 'eng-1',
+  };
+
+  it('edited: email subject and body, in-app title and body', async () => {
+    const data = { ...base, change: 'edited' };
+    const email = getEmailTemplate('engagement-time-entry-changed', data);
+    expect(email.subject).toBe('Priya @ CloudPeak edited your time entry on CPQ implementation');
+    const html = await render(email.component);
+    expect(html).toContain('Priya @ CloudPeak edited your 2.5 hrs entry for 14 Oct');
+    expect(html).toContain('/engagements/eng-1');
+
+    const inApp = getInAppTemplate('engagement-time-entry-changed', data);
+    expect(inApp.title).toBe('Time entry edited');
+    expect(inApp.body).toBe(
+      'Priya @ CloudPeak edited your 2.5 hrs entry for 14 Oct on CPQ implementation.'
+    );
+    expect(inApp.actionUrl).toBe('/engagements/eng-1');
+  });
+
+  it('removed: email subject and body, in-app title and body', async () => {
+    const data = { ...base, change: 'removed' };
+    const email = getEmailTemplate('engagement-time-entry-changed', data);
+    expect(email.subject).toBe('Priya @ CloudPeak removed a time entry on CPQ implementation');
+    const html = await render(email.component);
+    expect(html).toContain('Priya @ CloudPeak removed your 2.5 hrs entry for 14 Oct');
+
+    const inApp = getInAppTemplate('engagement-time-entry-changed', data);
+    expect(inApp.title).toBe('Time entry removed');
+    expect(inApp.body).toBe(
+      'Priya @ CloudPeak removed your 2.5 hrs entry for 14 Oct on CPQ implementation.'
+    );
+  });
+});

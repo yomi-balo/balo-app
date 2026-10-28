@@ -84,6 +84,7 @@ export function makeMilestone(over: Partial<MilestoneNode> = {}): MilestoneNode 
     startedByUserId: null,
     startedAt: null,
     completedByUserId: null,
+    completedBy: null,
     completedAt: null,
     completionNote: null,
     createdByUserId: null,

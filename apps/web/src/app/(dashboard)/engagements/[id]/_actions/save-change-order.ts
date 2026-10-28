@@ -11,9 +11,13 @@ import {
 } from '@balo/db';
 import { changeOrderMinutesDelta, clientPriceChangeCents } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
-import { effectiveExpertPriceCents } from '@/lib/engagement/change-order-view';
+import {
+  effectiveExpertPriceCents,
+  formatHours,
+  signedHours,
+  signedMoney,
+} from '@/lib/engagement/change-order-view';
 import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
-import { formatHours, signedHours, signedMoney } from '@/lib/engagement/change-order-view';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';

@@ -267,7 +267,7 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
     expect(mockNotFound).not.toHaveBeenCalled();
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
       'engagement_workspace_viewed',
-      expect.objectContaining({ lens: 'expert' })
+      expect.objectContaining({ lens: 'expert', acting_as: 'agency_admin' })
     );
     expect(mockLoadProjectSettlement).not.toHaveBeenCalled();
     expect(screen.queryByText('Balo staff only')).not.toBeInTheDocument();
@@ -341,6 +341,30 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
       engagement_status: 'active',
       distinct_id: 'user-x',
     });
+  });
+
+  it('records acting_as delivering_expert for the delivering expert', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ id: 'user-expert', companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ lens: 'expert', acting_as: 'delivering_expert' })
+    );
+  });
+
+  it('omits acting_as for a platform admin observer', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ platformRole: 'admin', companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    const [, props] = mockTrackServerAndFlush.mock.calls[0] ?? [];
+    expect(props).not.toHaveProperty('acting_as');
   });
 
   it('whitelists the entry: ?from=inbox passes through', async () => {
@@ -511,6 +535,8 @@ describe('EngagementWorkspacePage (RSC) — change orders and the staff money vi
       acceptanceCriteria: null,
       valueCents: null,
       status: 'pending',
+      completedAt: null,
+      completedBy: null,
       contentEditedAt,
     });
     mockFindWithMilestones.mockResolvedValue(

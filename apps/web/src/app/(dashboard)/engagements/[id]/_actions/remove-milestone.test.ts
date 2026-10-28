@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { EngagementMilestone, ProjectEngagementWithMilestones } from '@balo/db';
-import { engagementMilestoneFixture } from '@/test/fixtures/engagement-milestone';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
+import {
+  engagementMilestoneFixture,
+  type WorkspaceMilestoneFixture,
+} from '@/test/fixtures/engagement-milestone';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const MILESTONE_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -109,7 +112,7 @@ const EXPERT_CTX = {
   isDeliveringExpert: true,
 };
 
-function milestone(overrides: Partial<EngagementMilestone> = {}): EngagementMilestone {
+function milestone(overrides: Partial<WorkspaceMilestoneFixture> = {}): WorkspaceMilestoneFixture {
   return engagementMilestoneFixture({
     id: MILESTONE_ID,
     title: 'Discovery',
@@ -186,6 +189,7 @@ describe('removeMilestoneAction', () => {
       milestone_id: MILESTONE_ID,
       was_completed: false,
       had_source_provenance: false,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.scope_changed', {

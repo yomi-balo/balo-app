@@ -183,6 +183,7 @@ describe('completeMilestoneAction', () => {
       milestone_id: MILESTONE_ID,
       cycle_time_days: 10,
       has_completion_note: true,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.milestone_completed', {
@@ -239,6 +240,10 @@ describe('completeMilestoneAction', () => {
     expect(mockPublish).toHaveBeenCalledWith(
       'engagement.milestone_completed',
       expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_milestone_completed',
+      expect.objectContaining({ acting_as: 'agency_admin', distinct_id: 'admin-1' })
     );
   });
 

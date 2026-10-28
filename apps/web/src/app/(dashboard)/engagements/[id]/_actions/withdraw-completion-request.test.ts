@@ -89,7 +89,11 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockHasExpertCapability.mockResolvedValue(true);
-  mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+  mockRequireUser.mockResolvedValue({
+    id: 'user-1',
+    platformRole: 'user',
+    expertProfileId: 'expert-1',
+  });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({
     lens: 'expert',
@@ -150,6 +154,10 @@ describe('withdrawCompletionRequestAction', () => {
       'engagement.completion_withdrawn',
       expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
     );
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_completion_withdrawn',
+      expect.objectContaining({ acting_as: 'agency_admin', distinct_id: 'admin-1' })
+    );
   });
 
   it('withdraws, tracks hours_in_review from the pre-withdraw stamp, publishes, revalidates', async () => {
@@ -162,6 +170,7 @@ describe('withdrawCompletionRequestAction', () => {
       expect.objectContaining({
         engagement_id: ENGAGEMENT_ID,
         hours_in_review: 3,
+        acting_as: 'delivering_expert',
         distinct_id: 'user-1',
       })
     );

@@ -213,6 +213,7 @@ describe('addMilestoneAction', () => {
     expect(mockTrack).toHaveBeenCalledWith('engagement_milestone_added', {
       engagement_id: ENGAGEMENT_ID,
       milestones_total: 2,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.scope_changed', {

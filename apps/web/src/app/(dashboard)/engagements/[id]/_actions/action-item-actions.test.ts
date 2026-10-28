@@ -167,6 +167,7 @@ beforeEach(() => {
     firstName: 'Dana',
     lastName: 'Okafor',
     platformRole: 'user',
+    expertProfileId: EXPERT_PROFILE_ID,
   });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({
@@ -273,6 +274,10 @@ describe('createActionItemAction — gate + validation', () => {
     expect(mockHasCapability).not.toHaveBeenCalled();
     const [, payload] = mockPublish.mock.calls[0]!;
     expect(payload.actorLabel).toBe('Charles @ CloudPeak');
+    expect(mockTrack).toHaveBeenCalledWith(
+      'action_item_created',
+      expect.objectContaining({ acting_as: 'agency_admin' })
+    );
   });
 
   it('returns NOT_FOUND when the engagement is missing', async () => {
@@ -357,6 +362,14 @@ describe('createActionItemAction — gate + validation', () => {
 });
 
 describe('createActionItemAction — create + analytics + notify', () => {
+  it('leaves acting_as off the event when the client side creates', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'client' });
+    await createActionItemAction({ engagementId: ENGAGEMENT_ID, body: 'Send the migration plan' });
+    const [, props] = mockTrack.mock.calls[0]!;
+    expect(mockTrack).toHaveBeenCalledWith('action_item_created', expect.any(Object));
+    expect(props).not.toHaveProperty('acting_as');
+  });
+
   it('creates WITHOUT an assignee: manual source, unassigned, count 1, no publish', async () => {
     const result = await createActionItemAction({
       engagementId: ENGAGEMENT_ID,
@@ -375,6 +388,7 @@ describe('createActionItemAction — create + analytics + notify', () => {
       source: 'manual',
       assignee_role: 'unassigned',
       count: 1,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).not.toHaveBeenCalled();
@@ -488,6 +502,7 @@ describe('assignActionItemAction', () => {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
       assignee_role: 'client',
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith(
@@ -533,6 +548,7 @@ describe('setActionItemStatusAction', () => {
       action_item_id: ACTION_ITEM_ID,
       completed_by_role: 'expert',
       was_ai_extracted: true,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -546,6 +562,7 @@ describe('setActionItemStatusAction', () => {
       engagement_type: 'project',
       action_item_id: ACTION_ITEM_ID,
       reopened_by_role: 'expert',
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -579,6 +596,7 @@ describe('updateActionItemAction', () => {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
       fields_changed: ['body', 'due_at'],
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -623,6 +641,7 @@ describe('removeActionItemAction', () => {
     expect(mockTrack).toHaveBeenCalledWith('action_item_removed', {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });

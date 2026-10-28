@@ -11,6 +11,7 @@ const {
   mockListEntries,
   mockSums,
   mockHasDeliveryCapability,
+  mockAdministers,
   mockHasPlatformCapability,
   mockListChangeOrders,
 } = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const {
   mockListEntries: vi.fn(),
   mockSums: vi.fn(),
   mockHasDeliveryCapability: vi.fn(),
+  mockAdministers: vi.fn(),
   mockHasPlatformCapability: vi.fn(),
   mockListChangeOrders: vi.fn(),
 }));
@@ -43,6 +45,7 @@ vi.mock('@/lib/authz', async (importOriginal) => ({
 }));
 vi.mock('@/lib/authz/engagement', () => ({
   hasExpertDeliveryCapability: mockHasDeliveryCapability,
+  administersDeliveringAgency: mockAdministers,
 }));
 vi.mock('@/lib/authz/platform', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/authz/platform')>()),
@@ -139,6 +142,7 @@ beforeEach(() => {
   mockListEntries.mockResolvedValue([]);
   mockSums.mockResolvedValue({ totalMinutes: 0, periodMinutes: 0, byMilestone: {} });
   mockHasDeliveryCapability.mockResolvedValue(true);
+  mockAdministers.mockResolvedValue(false);
   mockHasPlatformCapability.mockReturnValue(false);
   mockListChangeOrders.mockResolvedValue([]);
 });
@@ -276,11 +280,13 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
   });
 
   it.each([
-    ['an agency owner/admin', 'agency-admin-1', null, true],
-    ['the delivering expert', 'user-expert', 'expert-1', false],
+    ['an agency owner/admin', 'agency-admin-1', null, true, false, true],
+    ['a delivering expert who owns the agency', 'user-expert', 'expert-1', true, true, true],
+    ['a delivering expert with agency role expert', 'user-expert', 'expert-1', false, true, false],
   ])(
-    "offers edit and delete on another author's entry to %s only when not delivering",
-    async (_name, id, expertProfileId, expected) => {
+    "for %s: Log time %s, edit and delete on another author's entry %s",
+    async (_name, id, expertProfileId, administers, canLog, canChange) => {
+      mockAdministers.mockResolvedValue(administers);
       mockGetCurrentUser.mockResolvedValue({ ...expert, id, expertProfileId });
       mockFindWithMilestones.mockResolvedValue(engagement({ milestones: [BUILD] }));
       mockListEntries.mockResolvedValue([
@@ -289,21 +295,81 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
           engagementMilestoneId: 'ms-1',
           userId: 'user-someone',
           authorFirstName: 'Sam',
+          updatedByUserId: null,
+          editorFirstName: null,
+          editorLastName: null,
           workedOn: '2026-10-14',
           minutes: 60,
-          note: null,
+          note: '',
           createdAt: new Date('2026-10-14T10:00:00Z'),
         },
       ]);
       const props = await renderPage();
       const time = props.time as {
-        byMilestoneId: Record<string, { entries: { canEdit: boolean; canDelete: boolean }[] }>;
+        byMilestoneId: Record<
+          string,
+          { canLog: boolean; entries: { canEdit: boolean; canDelete: boolean }[] }
+        >;
       };
+      expect(time.byMilestoneId['ms-1']?.canLog).toBe(canLog);
       expect(time.byMilestoneId['ms-1']?.entries[0]).toEqual(
-        expect.objectContaining({ canEdit: expected, canDelete: expected })
+        expect.objectContaining({ canEdit: canChange, canDelete: canChange })
       );
     }
   );
+
+  it.each([
+    ['the agency admin', 'agency-admin-1', null, 'Dana @ CloudPeak'],
+    ['the delivering expert', 'user-expert', 'expert-1', 'Priya'],
+  ])('names %s as the optimistic completer: %s', async (_name, id, expertProfileId, expected) => {
+    mockGetCurrentUser.mockResolvedValue({
+      ...expert,
+      id,
+      expertProfileId,
+      firstName: 'Dana',
+      lastName: 'Lee',
+    });
+    const base = engagement({});
+    mockFindWithMilestones.mockResolvedValue(
+      engagement({
+        milestones: [BUILD],
+        expertProfile: {
+          ...base.expertProfile,
+          agencyId: 'agency-1',
+          type: 'agency',
+          agency: { id: 'agency-1', name: 'CloudPeak' },
+        },
+      } as Partial<ProjectEngagementWithMilestones>)
+    );
+    const props = await renderPage();
+    expect(props.viewerCompleterLabel).toBe(expected);
+  });
+
+  it('lets the role-expert deliverer change their own entry only', async () => {
+    mockFindWithMilestones.mockResolvedValue(engagement({ milestones: [BUILD] }));
+    const row = (id: string, userId: string) => ({
+      id,
+      engagementMilestoneId: 'ms-1',
+      userId,
+      authorFirstName: 'X',
+      updatedByUserId: null,
+      editorFirstName: null,
+      editorLastName: null,
+      workedOn: '2026-10-14',
+      minutes: 60,
+      note: '',
+      createdAt: new Date('2026-10-14T10:00:00Z'),
+    });
+    mockListEntries.mockResolvedValue([row('mine', 'user-expert'), row('theirs', 'user-someone')]);
+    const props = await renderPage();
+    const time = props.time as {
+      byMilestoneId: Record<string, { entries: { id: string; canEdit: boolean }[] }>;
+    };
+    expect(time.byMilestoneId['ms-1']?.entries.map((e) => [e.id, e.canEdit])).toEqual([
+      ['mine', true],
+      ['theirs', false],
+    ]);
+  });
 
   it('withholds logging without the capability, and never asks once the project is not active', async () => {
     const milestones = [BUILD];

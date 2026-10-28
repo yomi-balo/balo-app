@@ -45,9 +45,7 @@ function view(
     ctxFor(lens),
     deriveEngagementParties(engagement),
     canDecide,
-    NOW,
-    loggedMinutesByMilestone,
-    viewerUserId
+    { now: NOW, loggedMinutesByMilestone, viewerUserId }
   );
 }
 
@@ -558,7 +556,7 @@ describe('mapChangeOrdersToView — footnote and admin line', () => {
       ctxFor('admin'),
       deriveEngagementParties(engagement),
       true,
-      new Date(nowIso)
+      { now: new Date(nowIso) }
     ).adminStateLine;
     expect(line?.includes("It's in the pending-actions queue.")).toBe(inQueue);
   });

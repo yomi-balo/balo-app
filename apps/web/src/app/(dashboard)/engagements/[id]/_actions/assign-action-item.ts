@@ -59,7 +59,7 @@ export async function assignActionItemAction(
     engagementId,
     { actionItemId },
     'Failed to assign action item',
-    async ({ user, engagement, lens, actionItem }) => {
+    async ({ user, actingAs, engagement, lens, actionItem }) => {
       if (actionItem === undefined) {
         return { success: false, error: ACTION_ITEM_GONE };
       }
@@ -74,6 +74,7 @@ export async function assignActionItemAction(
         engagement_id: engagement.id,
         action_item_id: updated.id,
         assignee_role: assigneeParty ?? 'unassigned',
+        ...(actingAs === null ? {} : { acting_as: actingAs }),
         distinct_id: user.id,
       });
 

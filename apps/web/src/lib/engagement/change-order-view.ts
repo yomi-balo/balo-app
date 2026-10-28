@@ -578,12 +578,21 @@ function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): 
   return null;
 }
 
+/** The optional settings of {@link mapChangeOrdersToView}. */
+export interface ChangeOrderViewOptions {
+  /** The clock, injectable for deterministic tests. Defaults to now. */
+  now?: Date;
+  /** T&M: minutes of live time logged per milestone, shown on a sent order's estimate edits. */
+  loggedMinutesByMilestone?: Readonly<Record<string, number>>;
+  /** The signed-in viewer, so "You" is only ever said about the viewer's own act. */
+  viewerUserId?: string | null;
+}
+
 /**
  * Map the engagement's change orders (oldest first, as the repository lists them) into the
  * panel view for one viewer. `canDecide` is the viewer's `approve_own_proposals` capability
- * for the client company, resolved by the caller. `now` is injectable for deterministic tests.
- * `loggedMinutesByMilestone` is the T&M time logged per milestone, shown on a sent order's
- * estimate edits.
+ * for the client company, resolved by the caller. The optional settings are in
+ * {@link ChangeOrderViewOptions}.
  */
 export function mapChangeOrdersToView(
   orders: readonly ChangeOrderWithLines[],
@@ -591,10 +600,9 @@ export function mapChangeOrdersToView(
   ctx: EngagementViewerContext,
   parties: EngagementParties,
   canDecide: boolean,
-  now: Date = new Date(),
-  loggedMinutesByMilestone: Readonly<Record<string, number>> = {},
-  viewerUserId: string | null = null
+  options: ChangeOrderViewOptions = {}
 ): ChangeOrderPanelView {
+  const { now = new Date(), loggedMinutesByMilestone = {}, viewerUserId = null } = options;
   const vc: ViewContext = {
     engagement,
     lens: ctx.lens,

@@ -14,7 +14,16 @@ import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
-import { deriveEngagementTitle, resolveClientRecipientId } from './engagement-lifecycle-shared';
+import type { ExpertSideActor } from '@/lib/engagement/resolve-engagement-viewer';
+import {
+  ONLY_EXPERT,
+  TIME_ENTRY_DENIED,
+  deriveEngagementTitle,
+  formatShortUtc,
+  resolveClientRecipientId,
+} from './engagement-lifecycle-shared';
+import { gateActiveExpertSideAct } from './change-order-action-shared';
+import type { ExpertSideGateResult } from './milestone-action-shared';
 
 /** Whole minutes in quarter-hour steps, at least one step and at most a day. */
 export const minutesSchema = z
@@ -28,6 +37,38 @@ export const minutesSchema = z
 export const noteSchema = z.string().trim().min(1).max(TIME_ENTRY_NOTE_MAX);
 
 export type TimeWriteKind = 'logged' | 'updated' | 'removed';
+
+/** The EXPERT-side gate for a time write: {@link gateActiveExpertSideAct}, logged as a time-entry denial. */
+export async function gateTimeEntryExpert(
+  user: SessionUser,
+  engagementId: string
+): Promise<ExpertSideGateResult> {
+  return gateActiveExpertSideAct(user, engagementId, TIME_ENTRY_DENIED);
+}
+
+/**
+ * The gate for LOGGING time: {@link gateTimeEntryExpert}, then only the delivering expert
+ * passes. An agency owner or admin reaches the page, so a refusal names the reason rather
+ * than answering as a missing row.
+ */
+export async function gateTimeLogger(
+  user: SessionUser,
+  engagementId: string
+): Promise<ExpertSideGateResult> {
+  const gate = await gateTimeEntryExpert(user, engagementId);
+  if (!gate.ok) {
+    return gate;
+  }
+  if (!gate.actor.isDeliveringExpert) {
+    log.warn(TIME_ENTRY_DENIED, {
+      engagementId,
+      userId: user.id,
+      reason: 'not_delivering_expert',
+    });
+    return { ok: false, error: ONLY_EXPERT };
+  }
+  return gate;
+}
 
 /**
  * Tell the client (email + in-app) and admins (in-app) that a milestone went over its
@@ -43,8 +84,18 @@ export async function notifyEstimateExceeded(input: {
   userId: string;
   /** The expert-side person whose write crossed the estimate; `null` when a client approval did. */
   expertActor: { id: string; firstName: string | null; lastName: string | null } | null;
+  /** The expert-side capacity of `expertActor`; `null` when a client approval crossed it. */
+  actingAs: ExpertSideActor['actingAs'] | null;
 }): Promise<void> {
-  const { engagement, milestone, loggedMinutes, milestonesOverCount, userId, expertActor } = input;
+  const {
+    engagement,
+    milestone,
+    loggedMinutes,
+    milestonesOverCount,
+    userId,
+    expertActor,
+    actingAs,
+  } = input;
   const parties = deriveEngagementParties(engagement);
   const recipientId = await resolveClientRecipientId(engagement.company.id);
   publishNotificationEvent('engagement.milestone_estimate_exceeded', {
@@ -65,6 +116,7 @@ export async function notifyEstimateExceeded(input: {
     engagement_id: engagement.id,
     milestone_id: milestone.id,
     milestones_over_count: milestonesOverCount,
+    ...(actingAs === null ? {} : { acting_as: actingAs }),
     distinct_id: userId,
   });
 }
@@ -77,10 +129,11 @@ export async function notifyEstimateExceeded(input: {
 export async function afterTimeWrite(input: {
   kind: TimeWriteKind;
   actor: SessionUser;
+  actingAs: ExpertSideActor['actingAs'];
   engagement: ProjectEngagementWithMilestones;
   result: Pick<TimeEntryWriteResult, 'entry'> & Partial<Omit<TimeEntryWriteResult, 'entry'>>;
 }): Promise<void> {
-  const { kind, actor, engagement, result } = input;
+  const { kind, actor, actingAs, engagement, result } = input;
   const { entry, milestone, loggedAfterMinutes, estimateExceeded, milestonesOverCount } = result;
 
   if (kind === 'logged' && milestone !== undefined && loggedAfterMinutes !== undefined) {
@@ -89,6 +142,7 @@ export async function afterTimeWrite(input: {
       milestone_id: milestone.id,
       minutes: entry.minutes,
       crossed_estimate: estimateExceeded === true,
+      acting_as: actingAs,
       milestone_pct_of_estimate: percentOfEstimate(loggedAfterMinutes, milestone.estimatedMinutes),
       distinct_id: actor.id,
     });
@@ -96,8 +150,7 @@ export async function afterTimeWrite(input: {
 
   if (
     estimateExceeded === true &&
-    milestone !== undefined &&
-    milestone.estimatedMinutes !== null &&
+    typeof milestone?.estimatedMinutes === 'number' &&
     loggedAfterMinutes !== undefined
   ) {
     await notifyEstimateExceeded({
@@ -107,6 +160,25 @@ export async function afterTimeWrite(input: {
       milestonesOverCount: milestonesOverCount ?? 0,
       userId: actor.id,
       expertActor: actor,
+      actingAs,
+    });
+  }
+
+  if (kind !== 'logged' && entry.userId !== actor.id) {
+    const parties = deriveEngagementParties(engagement);
+    publishNotificationEvent('engagement.time_entry_changed', {
+      correlationId: `${entry.id}:${kind === 'removed' ? 'removed' : 'edited'}:${entry.updatedAt.getTime()}`,
+      engagementId: engagement.id,
+      timeEntryId: entry.id,
+      userId: entry.userId,
+      actorUserId: actor.id,
+      change: kind === 'removed' ? 'removed' : 'edited',
+      actorExpertLabel: expertSideActorLabel(engagement, parties, actor),
+      projectTitle: deriveEngagementTitle(engagement, parties),
+      workedOnLabel: formatShortUtc(new Date(entry.workedOn)),
+      hoursLabel: hoursLabel(entry.minutes),
+    }).catch(() => {
+      // publishNotificationEvent logs internally.
     });
   }
 

@@ -278,6 +278,32 @@ export function hostContextGrants(
   return hostRoleHasCapability(hostRole, capability);
 }
 
+/**
+ * PURE. True when `actor` holds the agency-administration capability (`MANAGE_MEMBERS`) in
+ * the DELIVERING expert profile's agency — a delivering expert who owns the agency
+ * included, which is why this does NOT short-circuit on `expertUserId === actor.id`.
+ *
+ * The same guards as `resolveHostRole`, in the same order: a context resolved for another
+ * actor answers nothing about this one; an independent expert has no agency to administer;
+ * a null `actorRole` excludes every client-side actor. The role→capability interpretation
+ * is delegated to `roleHasCapability`; no role string is compared here.
+ */
+export function actorAdministersDeliveringAgency(
+  hostContext: ResolvedHostContext,
+  actor: { id: string }
+): boolean {
+  if (hostContext === null) return false;
+  if (hostContext.resolvedForActorId !== actor.id) return false;
+
+  const { agency } = hostContext;
+  if (agency === null) return false;
+
+  const { actorRole } = agency;
+  if (actorRole === null) return false;
+
+  return roleHasCapability(actorRole, CAPABILITIES.MANAGE_MEMBERS);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // THE HOST-CONTEXT ASSEMBLY — shared by BOTH per-app resolvers (BAL-421, ADR-1046
 // amendment). Everything above this line is synchronous; everything below needs I/O, so

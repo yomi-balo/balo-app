@@ -51,7 +51,7 @@ export async function removeActionItemAction(
     engagementId,
     { actionItemId },
     'Failed to remove action item',
-    async ({ user, engagement, actionItem }) => {
+    async ({ user, actingAs, engagement, actionItem }) => {
       if (actionItem === undefined) {
         return { success: false, error: ACTION_ITEM_GONE };
       }
@@ -64,6 +64,7 @@ export async function removeActionItemAction(
       trackServerAndFlush(ACTION_ITEM_SERVER_EVENTS.REMOVED, {
         engagement_id: engagement.id,
         action_item_id: removed.id,
+        ...(actingAs === null ? {} : { acting_as: actingAs }),
         distinct_id: user.id,
       });
 

@@ -927,6 +927,28 @@ describe('notificationRules', () => {
       expect(rules!.some((r) => r.recipient === 'expert')).toBe(false);
     });
 
+    it('time_entry_changed: author-only email + in-app, never-self guard', () => {
+      const rules = notificationRules['engagement.time_entry_changed'];
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('self');
+        expect(rule.template).toBe('engagement-time-entry-changed');
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      const ctx = (actorUserId: string) => ({
+        event: 'engagement.time_entry_changed',
+        payload: { actorUserId, userId: 'author-1' },
+        data: {},
+      });
+      for (const rule of rules!) {
+        expect(rule.condition?.(ctx('admin-1'))).toBe(true);
+        expect(rule.condition?.(ctx('author-1'))).toBe(false);
+      }
+    });
+
     it('milestone_reverted: client + admins, in-app ONLY, one shared template', () => {
       const rules = notificationRules['engagement.milestone_reverted'];
       expect(rules).toBeDefined();

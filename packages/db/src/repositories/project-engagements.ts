@@ -532,6 +532,11 @@ function queryProjectEngagementWithMilestones(id: string) {
       milestones: {
         where: (m, { isNull: childIsNull }) => childIsNull(m.deletedAt),
         orderBy: (m, { asc: childAsc }) => [childAsc(m.sortOrder), childAsc(m.id)],
+        // The person who completed each milestone (the delivering expert or an agency
+        // owner/admin), projected to a name only. NULL until completed, and on legacy rows.
+        with: {
+          completedBy: { columns: { id: true, firstName: true, lastName: true } },
+        },
       },
       // SECURITY (BAL-330 review): explicit `columns:` projections so this
       // consumer-facing shape carries ONLY what a party-aware delivery view needs

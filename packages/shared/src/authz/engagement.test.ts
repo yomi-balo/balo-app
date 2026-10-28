@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 // and no second copy to drift) — see `@balo/shared/testing`'s own docblock.
 import { stripComments } from '../testing/strip-comments';
 import {
+  actorAdministersDeliveringAgency,
   buildHostContextForExpertProfile,
   ENGAGEMENT_CAPABILITIES,
   ENGAGEMENT_ROLE_CAPABILITIES,
@@ -276,6 +277,33 @@ describe('hostContextGrants', () => {
         expect(hostContextGrants(context, { id: OTHER_USER }, token)).toBe(false);
       }
     }
+  });
+});
+
+describe('actorAdministersDeliveringAgency', () => {
+  it.each([
+    [
+      'delivering expert who owns the agency',
+      agencyContext('owner', EXPERT_USER),
+      EXPERT_USER,
+      true,
+    ],
+    [
+      'delivering expert with agency role expert',
+      agencyContext('expert', EXPERT_USER),
+      EXPERT_USER,
+      false,
+    ],
+    ['non-delivering agency admin', agencyContext('admin', OTHER_USER), OTHER_USER, true],
+    ['independent expert (no agency)', independentContext(EXPERT_USER), EXPERT_USER, false],
+    ['no agency role', agencyContext(null, OTHER_USER), OTHER_USER, false],
+    ['context resolved for another actor', agencyContext('owner', EXPERT_USER), OTHER_USER, false],
+  ])('%s', (_name, context, actorId, expected) => {
+    expect(actorAdministersDeliveringAgency(context, { id: actorId })).toBe(expected);
+  });
+
+  it('is false for a null context', () => {
+    expect(actorAdministersDeliveringAgency(null, { id: EXPERT_USER })).toBe(false);
   });
 });
 

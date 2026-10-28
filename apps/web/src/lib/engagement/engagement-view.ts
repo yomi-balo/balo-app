@@ -31,6 +31,8 @@ import {
   deriveEngagementParties,
   engagementHeaderLine,
   expertSideActorLabel,
+  expertSideRetroParty,
+  milestoneCompleterLabel,
   personAtCompany,
   projectEngagementTitle,
   type EngagementParties,
@@ -518,6 +520,34 @@ function groupContentEdits(
   return grouped;
 }
 
+type WorkspaceMilestone = ProjectEngagementWithMilestones['milestones'][number];
+
+/**
+ * The milestone's value label. Gates on the RAW snapshotted value; the client sees it grossed
+ * up by the Balo fee, expert & admin see the raw payout figure.
+ */
+function milestoneValueLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens
+): string | null {
+  const rawValue = m.valueCents;
+  if (rawValue === null || rawValue <= 0) return null;
+  const displayValue = lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
+  return formatWholeCurrency(displayValue, engagement.currency);
+}
+
+/** "Completed 30 Jun 2026 by {person}", naming whoever completed it; null while not completed. */
+function milestoneCompletedLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string | null {
+  if (m.completedAt === null) return null;
+  const by = milestoneCompleterLabel(engagement, parties, m.completedBy);
+  return `Completed ${formatShortDate(m.completedAt)} by ${by}`;
+}
+
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
@@ -536,15 +566,7 @@ function deriveMilestones(
   };
   return engagement.milestones.map((m) => {
     const isCompleted = m.status === 'completed';
-    // Gate on the RAW snapshotted value; client sees it grossed up by the Balo fee,
-    // expert & admin see the raw payout figure.
-    const rawValue = m.valueCents;
-    let valueLabel: string | null = null;
-    if (rawValue !== null && rawValue > 0) {
-      const displayValue =
-        lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
-      valueLabel = formatWholeCurrency(displayValue, engagement.currency);
-    }
+    const valueLabel = milestoneValueLabel(m, engagement, lens);
     // Plain-text of the raw description for the expert edit-form prefill — kept out
     // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
     const descriptionText =
@@ -573,10 +595,7 @@ function deriveMilestones(
       connectorFilled: isCompleted,
       valueLabel,
       startedLabel: m.startedAt === null ? null : `Started ${formatShortDate(m.startedAt)}`,
-      completedLabel:
-        m.completedAt === null
-          ? null
-          : `Completed ${formatShortDate(m.completedAt)} by ${parties.expertPersonShort}`,
+      completedLabel: milestoneCompletedLabel(m, engagement, parties),
       completionNote:
         isCompleted && m.completionNote !== null && m.completionNote.trim() !== ''
           ? m.completionNote
@@ -634,7 +653,7 @@ function deriveChangedSinceProposal(
   const noun = changed.length === 1 ? 'milestone' : 'milestones';
   return {
     heading: 'Changed since proposal',
-    intro: `${parties.expertRetroFirstMention} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
+    intro: `${expertSideRetroParty(parties)} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
     items: changed.map((m) => ({
       milestoneId: m.id,
       milestoneTitle: m.title,

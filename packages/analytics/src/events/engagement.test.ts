@@ -131,3 +131,63 @@ describe('change-order acting_as typing', () => {
     expect([sent, withdrawn, clientDecline, missing]).toHaveLength(4);
   });
 });
+
+describe('expert-side acting_as typing', () => {
+  it('requires acting_as on the workspace view only for the expert lens', () => {
+    const base = {
+      engagement_id: 'e',
+      entry: 'direct' as const,
+      engagement_status: 'active',
+      distinct_id: 'u',
+    };
+    const expert: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'expert',
+      acting_as: 'agency_admin',
+    };
+    const client: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'client',
+    };
+    const clientWithActing: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'client',
+      // @ts-expect-error acting_as is not accepted with a client lens
+      acting_as: 'agency_admin',
+    };
+    // @ts-expect-error acting_as is required with the expert lens
+    const expertMissing: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'expert',
+    };
+    expect([expert, client, clientWithActing, expertMissing]).toHaveLength(4);
+  });
+
+  it('requires acting_as on expert-only events and leaves it optional on the estimate notice', () => {
+    const logged: EngagementServerEventMap['engagement_time_logged'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      minutes: 30,
+      crossed_estimate: false,
+      milestone_pct_of_estimate: null,
+      acting_as: 'delivering_expert',
+      distinct_id: 'u',
+    };
+    // @ts-expect-error acting_as is required on time logged
+    const loggedMissing: EngagementServerEventMap['engagement_time_logged'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      minutes: 30,
+      crossed_estimate: false,
+      milestone_pct_of_estimate: null,
+      distinct_id: 'u',
+    };
+    const exceeded: EngagementServerEventMap['engagement_milestone_estimate_exceeded'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      milestones_over_count: 1,
+      distinct_id: 'u',
+    };
+    expect([logged, loggedMissing, exceeded]).toHaveLength(3);
+  });
+});

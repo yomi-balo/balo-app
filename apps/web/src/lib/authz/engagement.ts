@@ -4,7 +4,9 @@ import { engagementsRepository, expertsRepository, partyMembershipsRepository } 
 import {
   buildHostContextForExpertProfile,
   hostContextGrants,
+  actorAdministersDeliveringAgency,
   type EngagementCapability,
+  type HostContextReads,
 } from '@balo/shared/authz';
 import { log } from '@/lib/logging';
 
@@ -122,6 +124,14 @@ export async function hasEngagementCapability(
   );
 }
 
+const hostContextReads: HostContextReads = {
+  findExpertProfile: (id) => expertsRepository.findProfileById(id),
+  // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
+  // defence documented on `HostContextReads`. Do not collapse it to one argument.
+  findAgencyRole: (agencyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
+};
+
 /**
  * BAL-283 — the SAME rule, asked of an ALREADY-RESOLVED delivering `expert_profiles.id`.
  *
@@ -155,13 +165,11 @@ export async function hasExpertDeliveryCapability(
   expertProfileId: string,
   logContext: { contextType: string; contextId: string }
 ): Promise<boolean> {
-  const resolution = await buildHostContextForExpertProfile(expertProfileId, actor.id, {
-    findExpertProfile: (id) => expertsRepository.findProfileById(id),
-    // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
-    // defence documented on `HostContextReads`. Do not collapse it to one argument.
-    findAgencyRole: (agencyId, actorId) =>
-      partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
-  });
+  const resolution = await buildHostContextForExpertProfile(
+    expertProfileId,
+    actor.id,
+    hostContextReads
+  );
 
   if (!resolution.ok) {
     log.warn('Engagement host context denied — the delivering expert profile is missing', {
@@ -174,4 +182,31 @@ export async function hasExpertDeliveryCapability(
   }
 
   return hostContextGrants(resolution.hostContext, actor, capability);
+}
+
+/**
+ * Does `actor` hold agency owner/admin (`MANAGE_MEMBERS`) in the agency of this delivering
+ * `expert_profiles.id`? Unlike {@link hasExpertDeliveryCapability} it does NOT short-circuit on
+ * the delivering expert: an expert who owns their agency administers it. An independent
+ * expert has no agency, so is `false`. A missing profile fails closed.
+ */
+export async function administersDeliveringAgency(
+  actor: { id: string },
+  expertProfileId: string
+): Promise<boolean> {
+  const resolution = await buildHostContextForExpertProfile(
+    expertProfileId,
+    actor.id,
+    hostContextReads
+  );
+
+  if (!resolution.ok) {
+    log.warn('Agency administration check denied — the delivering expert profile is missing', {
+      actorId: actor.id,
+      expertProfileId,
+    });
+    return false;
+  }
+
+  return actorAdministersDeliveringAgency(resolution.hostContext, actor);
 }

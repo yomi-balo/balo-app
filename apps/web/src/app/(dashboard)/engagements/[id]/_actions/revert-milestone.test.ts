@@ -199,6 +199,7 @@ describe('revertMilestoneAction', () => {
       engagement_id: ENGAGEMENT_ID,
       milestone_id: MILESTONE_ID,
       hours_since_completed: 24,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.milestone_reverted', {

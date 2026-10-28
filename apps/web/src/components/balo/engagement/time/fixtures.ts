@@ -9,6 +9,7 @@ export function entryView(overrides: Partial<TimeEntryView> = {}): TimeEntryView
     minutes: 90,
     canEdit: false,
     canDelete: false,
+    editedByLabel: null,
     ...overrides,
   };
 }

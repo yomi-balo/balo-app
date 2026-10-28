@@ -245,6 +245,7 @@ describe('startMilestoneAction', () => {
       engagement_id: ENGAGEMENT_ID,
       milestone_id: MILESTONE_ID,
       days_since_kickoff: 10,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).not.toHaveBeenCalled();

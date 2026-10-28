@@ -805,6 +805,14 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-626 (D15b): someone other than the author edited or removed a time entry. The AUTHOR
+  // alone (recipient:'self' via payload.userId; email + in-app — their billable hours). The
+  // condition is the never-self guard: a self-edit notifies nobody. Not an admin fan-out.
+  'engagement.time_entry_changed': emailAndInApp(
+    'self',
+    'engagement-time-entry-changed',
+    (ctx) => ctx.payload.actorUserId !== ctx.payload.userId
+  ),
   // BAL-332 (D2): the expert reopened a completed milestone. IN-APP ONLY to BOTH the
   // client owner and the admins — reverts are never silent, but they aren't
   // email-worthy. One template shared by both rules.

@@ -135,7 +135,7 @@ export default async function ChangeOrderComposerPage({
 
   const parties = deriveEngagementParties(engagement);
   const requestedHeading =
-    mapChangeOrdersToView(orders, engagement, ctx, parties, false, new Date(), {}, user.id).open
+    mapChangeOrdersToView(orders, engagement, ctx, parties, false, { viewerUserId: user.id }).open
       ?.requestedHeading ?? null;
   const projectTitle = projectEngagementTitle(
     engagement.projectRequest?.title ?? null,

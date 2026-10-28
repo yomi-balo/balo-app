@@ -212,6 +212,24 @@ export interface EngagementMilestoneEstimateExceededPayload {
   estimatedHoursLabel: string; // e.g. "8 hrs"
 }
 
+// BAL-626 (D15b) someone other than a time entry's author edited or removed it. Goes to the
+// entry's AUTHOR alone (recipient:'self' via `userId`; email + in-app — these are their billable
+// hours). The never-self guard lives in the rule condition (`actorUserId !== userId`), so the
+// publisher need not pre-filter. `correlationId = `${timeEntryId}:${change}:${updatedAtEpochMs}``.
+// `hoursLabel` is the hours after an edit, and the removed hours on a removal.
+export interface EngagementTimeEntryChangedPayload {
+  correlationId: string; // `${timeEntryId}:${change}:${updatedAtEpochMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  timeEntryId: string;
+  userId: string; // entry author → recipient:'self'
+  actorUserId: string;
+  change: 'edited' | 'removed';
+  actorExpertLabel: string; // retrospective Person @ Agency
+  projectTitle: string;
+  workedOnLabel: string; // e.g. "14 Oct"
+  hoursLabel: string; // e.g. "2.5 hrs"
+}
+
 // BAL-332 (D2) expert milestone reverted. The delivering EXPERT moved a completed
 // milestone back to in progress — fans out to the CLIENT company owner and the Balo
 // ADMINS (in-app both; reverts are never silent). `correlationId =

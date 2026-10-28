@@ -35,7 +35,11 @@ vi.mock('@balo/db', () => ({
   partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
 }));
 
-import { hasEngagementCapability, hasExpertDeliveryCapability } from './engagement';
+import {
+  administersDeliveringAgency,
+  hasEngagementCapability,
+  hasExpertDeliveryCapability,
+} from './engagement';
 import { log } from '@/lib/logging';
 
 const SUBJECT = { contextType: 'case', contextId: ENGAGEMENT_ID } as const;
@@ -299,5 +303,38 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
       LOG_CONTEXT
     );
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
+  });
+});
+
+describe('administersDeliveringAgency', () => {
+  it.each([
+    ['owner', true],
+    ['admin', true],
+    ['expert', false],
+    [undefined, false],
+  ])('agency role %s -> %s', async (role, expected) => {
+    seedAgencyBacked(role);
+    expect(await administersDeliveringAgency({ id: COLLEAGUE_ID }, PROFILE_ID)).toBe(expected);
+  });
+
+  it('is true for the delivering expert who owns the agency (no delivering-expert short-circuit)', async () => {
+    seedAgencyBacked('owner');
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(true);
+    expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, EXPERT_USER_ID);
+  });
+
+  it('is false for an independent expert', async () => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(false);
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('fails closed and warns when the profile is missing', async () => {
+    mockFindProfile.mockResolvedValue(undefined);
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.any(String), {
+      actorId: EXPERT_USER_ID,
+      expertProfileId: PROFILE_ID,
+    });
   });
 });

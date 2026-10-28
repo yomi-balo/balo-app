@@ -114,6 +114,7 @@ export async function approveChangeOrderAction(input: {
           milestonesOverCount: approval.milestonesOverCount,
           userId: user.id,
           expertActor: null,
+          actingAs: null,
         });
       }
 

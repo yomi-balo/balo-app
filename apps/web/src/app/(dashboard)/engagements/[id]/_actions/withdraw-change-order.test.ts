@@ -78,6 +78,7 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+import { log } from '@/lib/logging';
 import { withdrawChangeOrderAction } from './withdraw-change-order';
 
 const INPUT = { engagementId: ENGAGEMENT_ID, orderId: ORDER_ID };
@@ -132,6 +133,23 @@ describe('withdrawChangeOrderAction', () => {
       expect.any(Object)
     );
     expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'no_capability' })
+    );
+  });
+
+  it('refuses a project that is not active, logged as a change-order denial', async () => {
+    mockFindEngagement.mockResolvedValue(makeProject({ status: 'pending_acceptance' }));
+    expect(await withdrawChangeOrderAction(INPUT)).toEqual({
+      success: false,
+      error: "This project isn't active.",
+    });
+    expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'wrong_status' })
+    );
   });
 
   it('withdraws only a SENT order, tracks it, and tells the client owner in-app', async () => {

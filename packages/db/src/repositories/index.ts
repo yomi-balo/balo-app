@@ -370,6 +370,7 @@ export {
   type TimeEntryRefusal,
   type TimeEntryWriteResult,
   type TimeEntryListRow,
+  type TimeEntryAuthorScope,
   type TimeEntrySums,
   type OverEstimateAlertRow,
   type EstimateExceededMilestone,

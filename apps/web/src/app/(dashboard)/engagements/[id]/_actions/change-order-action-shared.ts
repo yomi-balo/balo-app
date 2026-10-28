@@ -13,6 +13,7 @@ import type { EngagementParties } from '@/lib/engagement/engagement-parties';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import {
+  CHANGE_ORDER_DENIED,
   NOT_ACTIVE,
   ONLY_CLIENT,
   ONLY_EXPERT,
@@ -41,10 +42,6 @@ type ClientChangeOrderCapability =
   | typeof CAPABILITIES.PARTICIPATE
   | typeof CAPABILITIES.APPROVE_OWN_PROPOSALS;
 
-function deny(engagementId: string, userId: string, reason: string): void {
-  log.warn('Engagement lifecycle denied', { engagementId, userId, reason });
-}
-
 /**
  * The CLIENT-side gate for a change-order act: the actor holds `capability` on the
  * engagement's company (membership axis, read live), and the project is `active`. A stranger
@@ -56,47 +53,57 @@ export async function gateChangeOrderClient(
   engagementId: string,
   capability: ClientChangeOrderCapability
 ): Promise<GateResult> {
-  const loaded = await loadEngagementLens(user, engagementId);
+  const loaded = await loadEngagementLens(user, engagementId, CHANGE_ORDER_DENIED);
   if (!loaded.ok) {
     return loaded;
   }
   if (loaded.engagement.status !== 'active') {
-    deny(engagementId, user.id, 'wrong_status');
+    log.warn(CHANGE_ORDER_DENIED, { engagementId, userId: user.id, reason: 'wrong_status' });
     return { ok: false, error: NOT_ACTIVE };
   }
   const allowed = await hasCapability(user, capability, {
     companyId: loaded.engagement.companyId,
   });
   if (!allowed) {
-    deny(engagementId, user.id, 'no_capability');
+    log.warn(CHANGE_ORDER_DENIED, { engagementId, userId: user.id, reason: 'no_capability' });
     return { ok: false, error: ONLY_CLIENT };
   }
   return { ok: true, engagement: loaded.engagement };
 }
 
 /**
- * The EXPERT-side gate for a change-order act: the actor holds `manage_engagement` on the
- * engagement axis (the delivering expert, or an owner or admin of their agency), and the
- * project is `active`. The engagement is loaded directly rather than through the lens
- * resolver, which would turn away an agency owner who is not the delivering expert. A
- * non-holder who is not a party at all sees the same `NOT_FOUND` as a missing row.
+ * The EXPERT-side gate for an act on an `active` project: the actor holds `manage_engagement`
+ * on the engagement axis (the delivering expert, or an owner or admin of their agency). The
+ * engagement is loaded directly rather than through the lens resolver, which would turn away
+ * an agency owner who is not the delivering expert. A non-holder who is not a party at all
+ * sees the same `NOT_FOUND` as a missing row. Every deny path logs `logMessage`, the act
+ * family's own name.
  */
-export async function gateChangeOrderExpert(
+export async function gateActiveExpertSideAct(
   user: SessionUser,
-  engagementId: string
+  engagementId: string,
+  logMessage: string
 ): Promise<ExpertSideGateResult> {
   const gate = await gateExpertSideAct(user, engagementId, {
     notHolder: ONLY_EXPERT,
-    logMessage: 'Engagement lifecycle denied',
+    logMessage,
   });
   if (!gate.ok) {
     return gate;
   }
   if (gate.engagement.status !== 'active') {
-    deny(engagementId, user.id, 'wrong_status');
+    log.warn(logMessage, { engagementId, userId: user.id, reason: 'wrong_status' });
     return { ok: false, error: NOT_ACTIVE };
   }
   return gate;
+}
+
+/** The EXPERT-side gate for a change-order act: {@link gateActiveExpertSideAct}. */
+export async function gateChangeOrderExpert(
+  user: SessionUser,
+  engagementId: string
+): Promise<ExpertSideGateResult> {
+  return gateActiveExpertSideAct(user, engagementId, CHANGE_ORDER_DENIED);
 }
 
 /**

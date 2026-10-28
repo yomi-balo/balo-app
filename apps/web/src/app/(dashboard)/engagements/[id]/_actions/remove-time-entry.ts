@@ -11,15 +11,17 @@ import {
   type EngagementActionResult,
 } from './engagement-lifecycle-shared';
 import { timeEntryAuthorScope } from '@/lib/engagement/resolve-engagement-viewer';
-import { gateChangeOrderExpert } from './change-order-action-shared';
-import { afterTimeWrite } from './time-entry-action-shared';
+import { afterTimeWrite, gateTimeEntryExpert } from './time-entry-action-shared';
 
 const removeTimeEntrySchema = z.object({ engagementId: z.uuid(), entryId: z.uuid() }).strict();
 
 /**
  * The author, or an owner or admin of the delivering expert's agency, deletes a time entry
- * while the project is active. Gated on `manage_engagement`; the delivering expert reaches only
- * their own entries, and the repository refuses any other with the same answer as a missing one.
+ * while the project is active. Gated on `manage_engagement`; the author scope comes from
+ * `timeEntryAuthorScope` (an agency owner or admin reaches any entry, a delivering expert with
+ * agency role `expert` and an independent expert only their own), and the repository refuses
+ * any other with the same answer as a missing one. Removing someone else's entry notifies its
+ * author.
  */
 export async function removeTimeEntryAction(input: {
   engagementId: string;
@@ -40,15 +42,21 @@ export async function removeTimeEntryAction(input: {
     engagementId,
     { userId: user.id, timeEntryId: entryId },
     'Failed to remove time entry',
-    () => gateChangeOrderExpert(user, engagementId),
+    () => gateTimeEntryExpert(user, engagementId),
     async (engagement, authorized) => {
       const entry = await engagementTimeEntriesRepository.remove({
         engagementId,
         entryId,
         userId: user.id,
-        authorScope: timeEntryAuthorScope(authorized.actor.isDeliveringExpert),
+        authorScope: await timeEntryAuthorScope(user, engagement),
       });
-      await afterTimeWrite({ kind: 'removed', actor: user, engagement, result: { entry } });
+      await afterTimeWrite({
+        kind: 'removed',
+        actor: user,
+        actingAs: authorized.actor.actingAs,
+        engagement,
+        result: { entry },
+      });
       return { success: true };
     }
   );

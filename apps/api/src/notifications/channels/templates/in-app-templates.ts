@@ -908,6 +908,20 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-626 time entry changed by someone else — the entry's AUTHOR.
+  'engagement-time-entry-changed': (data) => {
+    const removed = data.change === 'removed';
+    const actor = (data.actorExpertLabel as string) ?? 'Someone on your team';
+    const hours = (data.hoursLabel as string) ?? '';
+    const date = (data.workedOnLabel as string) ?? '';
+    const title = (data.projectTitle as string) ?? 'your project';
+    return engagementNotice(
+      removed ? 'Time entry removed' : 'Time entry edited',
+      `${actor} ${removed ? 'removed' : 'edited'} your ${hours} entry for ${date} on ${title}.`,
+      data
+    );
+  },
+
   // BAL-332 (D2) milestone completed — ADMIN ops signal (project-scoped).
   'engagement-milestone-completed-admin': (data) => {
     const title = (data.projectTitle as string) ?? 'A project';

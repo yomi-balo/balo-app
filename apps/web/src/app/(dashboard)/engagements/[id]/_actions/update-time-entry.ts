@@ -11,8 +11,12 @@ import {
   type EngagementActionResult,
 } from './engagement-lifecycle-shared';
 import { timeEntryAuthorScope } from '@/lib/engagement/resolve-engagement-viewer';
-import { gateChangeOrderExpert } from './change-order-action-shared';
-import { afterTimeWrite, minutesSchema, noteSchema } from './time-entry-action-shared';
+import {
+  afterTimeWrite,
+  gateTimeEntryExpert,
+  minutesSchema,
+  noteSchema,
+} from './time-entry-action-shared';
 
 const updateTimeEntrySchema = z
   .object({
@@ -25,9 +29,11 @@ const updateTimeEntrySchema = z
 
 /**
  * The author, or an owner or admin of the delivering expert's agency, edits the hours and note
- * of a time entry on an in-progress milestone. Gated on `manage_engagement`; the delivering
- * expert reaches only their own entries, and the repository refuses any other with the same
- * answer as a missing one. An edit that takes the milestone past its estimate for
+ * of a time entry on an in-progress milestone. Gated on `manage_engagement`; the author scope
+ * comes from `timeEntryAuthorScope` (an agency owner or admin reaches any entry, a delivering
+ * expert with agency role `expert` and an independent expert only their own), and the
+ * repository refuses any other with the same answer as a missing one. Editing someone else's
+ * entry notifies its author. An edit that takes the milestone past its estimate for
  * the first time notifies like a new entry.
  */
 export async function updateTimeEntryAction(input: {
@@ -51,17 +57,23 @@ export async function updateTimeEntryAction(input: {
     engagementId,
     { userId: user.id, timeEntryId: entryId },
     'Failed to update time entry',
-    () => gateChangeOrderExpert(user, engagementId),
+    () => gateTimeEntryExpert(user, engagementId),
     async (engagement, authorized) => {
       const result = await engagementTimeEntriesRepository.update({
         engagementId,
         entryId,
         userId: user.id,
-        authorScope: timeEntryAuthorScope(authorized.actor.isDeliveringExpert),
+        authorScope: await timeEntryAuthorScope(user, engagement),
         minutes,
         note,
       });
-      await afterTimeWrite({ kind: 'updated', actor: user, engagement, result });
+      await afterTimeWrite({
+        kind: 'updated',
+        actor: user,
+        actingAs: authorized.actor.actingAs,
+        engagement,
+        result,
+      });
       return { success: true };
     }
   );

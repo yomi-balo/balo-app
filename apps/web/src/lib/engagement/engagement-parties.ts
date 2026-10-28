@@ -210,6 +210,31 @@ export function expertSideActorLabel(
 }
 
 /**
+ * Short retrospective label for the person who completed a milestone. The delivering expert
+ * (or a completer the row never recorded) reads as {@link EngagementParties.expertPersonShort};
+ * any other holder (an agency owner/admin) is named as {@link expertSideActorLabel} names them.
+ */
+export function milestoneCompleterLabel(
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile'>,
+  parties: EngagementParties,
+  completer: { id: string; firstName: string | null; lastName: string | null } | null
+): string {
+  if (completer === null || completer.id === engagement.expertProfile.user.id) {
+    return parties.expertPersonShort;
+  }
+  return expertSideActorLabel(engagement, parties, completer);
+}
+
+/**
+ * Retrospective label for expert-side work with no single recorded actor. An agency engagement
+ * names the agency, since several of its people may have acted; an independent expert is the
+ * only one who can act, so they are named as {@link EngagementParties.expertRetroFirstMention}.
+ */
+export function expertSideRetroParty(parties: EngagementParties): string {
+  return parties.isAgencyExpert ? parties.expertParty : parties.expertRetroFirstMention;
+}
+
+/**
  * The retrospective person who performed an action-item write (BAL-329 attribution):
  *  - Balo staff → `'Balo'` (the platform actor label — Balo acts as a party, not a person);
  *  - expert     → {@link expertSideActorLabel} (the delivering expert's "@ agency" first-mention,

@@ -84,7 +84,7 @@ export async function updateMilestoneAction(
     data.engagementId,
     { milestoneId: data.milestoneId },
     'Failed to update milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       if (milestone === undefined) {
         // Unreachable — the `{ milestoneId }` IDOR check guarantees the node.
         return { success: false, error: MILESTONE_GONE };
@@ -162,6 +162,7 @@ export async function updateMilestoneAction(
         engagement_id: engagement.id,
         milestone_id: updated.id,
         fields_changed: fieldsChanged,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 

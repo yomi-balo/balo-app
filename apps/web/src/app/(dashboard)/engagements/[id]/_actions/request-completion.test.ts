@@ -247,6 +247,10 @@ describe('requestCompletionAction', () => {
       'engagement.completion_requested',
       expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
     );
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_completion_requested',
+      expect.objectContaining({ acting_as: 'agency_admin', distinct_id: 'admin-1' })
+    );
   });
 
   it('requests completion, tracks the metrics, publishes, and revalidates', async () => {
@@ -266,6 +270,7 @@ describe('requestCompletionAction', () => {
         review_cycle: 1,
         is_resubmission: false,
         prior_change_rounds: 0,
+        acting_as: 'delivering_expert',
         distinct_id: 'user-1',
         days_since_kickoff: expect.any(Number),
       })
