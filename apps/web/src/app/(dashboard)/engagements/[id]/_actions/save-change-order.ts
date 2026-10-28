@@ -11,12 +11,17 @@ import {
 } from '@balo/db';
 import { changeOrderMinutesDelta, clientPriceChangeCents } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
-import { effectiveExpertPriceCents } from '@/lib/engagement/change-order-view';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
-import { formatHours, signedHours, signedMoney } from '@/lib/engagement/change-order-view';
+import {
+  effectiveExpertPriceCents,
+  formatHours,
+  signedHours,
+  signedMoney,
+} from '@/lib/engagement/change-order-view';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import {
   INVALID_REQUEST,
@@ -92,7 +97,8 @@ async function persistDraft(
 async function publishSent(
   engagement: ProjectEngagementWithMilestones,
   sent: ChangeOrderRecord,
-  effectiveCents: number
+  effectiveCents: number,
+  actor: SessionUser
 ): Promise<void> {
   const parties = deriveEngagementParties(engagement);
   const { currency, baloFeeBps } = engagement;
@@ -120,7 +126,7 @@ async function publishSent(
   publishNotificationEvent('change_order.sent', {
     ...payloadBase('sent', sent, engagement, parties),
     recipientId,
-    actorExpertLabel: parties.expertRetroFirstMention,
+    actorExpertLabel: expertSideActorLabel(engagement, parties, actor),
     clientCompanyName: parties.clientCompanyName,
     summary: sent.note ?? '',
     pricingMethod: isFixed ? 'fixed' : 'tm',
@@ -165,7 +171,7 @@ export async function saveChangeOrderAction(
     { userId: user.id, send },
     'Failed to save change order',
     () => gateChangeOrderExpert(user, engagementId),
-    async (engagement) => {
+    async (engagement, authorized) => {
       const built = toLineInputs(drafts, engagement);
       if (!built.ok) {
         return { success: false, error: built.error };
@@ -201,11 +207,16 @@ export async function saveChangeOrderAction(
       }
 
       const sent = await repo.send({ engagementId, orderId: saved.id, userId: user.id });
-      trackServerAndFlush(
-        ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT,
-        changeOrderLinesProps(sent, engagement.pricingMethod, user.id)
+      trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT, {
+        ...changeOrderLinesProps(sent, engagement.pricingMethod, user.id),
+        acting_as: authorized.actor.actingAs,
+      });
+      await publishSent(
+        engagement,
+        sent,
+        effectiveExpertPriceCents(engagement.priceCents, orders),
+        user
       );
-      await publishSent(engagement, sent, effectiveExpertPriceCents(engagement.priceCents, orders));
 
       log.info('Change order sent', {
         engagementId,

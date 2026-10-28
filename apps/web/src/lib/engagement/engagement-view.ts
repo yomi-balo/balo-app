@@ -30,6 +30,9 @@ import { deriveProposalChanges, type ProposalContentChange } from './proposal-co
 import {
   deriveEngagementParties,
   engagementHeaderLine,
+  expertSideActorLabel,
+  expertSideRetroParty,
+  milestoneCompleterLabel,
   personAtCompany,
   projectEngagementTitle,
   type EngagementParties,
@@ -517,6 +520,34 @@ function groupContentEdits(
   return grouped;
 }
 
+type WorkspaceMilestone = ProjectEngagementWithMilestones['milestones'][number];
+
+/**
+ * The milestone's value label. Gates on the RAW snapshotted value; the client sees it grossed
+ * up by the Balo fee, expert & admin see the raw payout figure.
+ */
+function milestoneValueLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens
+): string | null {
+  const rawValue = m.valueCents;
+  if (rawValue === null || rawValue <= 0) return null;
+  const displayValue = lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
+  return formatWholeCurrency(displayValue, engagement.currency);
+}
+
+/** "Completed 30 Jun 2026 by {person}", naming whoever completed it; null while not completed. */
+function milestoneCompletedLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string | null {
+  if (m.completedAt === null) return null;
+  const by = milestoneCompleterLabel(engagement, parties, m.completedBy);
+  return `Completed ${formatShortDate(m.completedAt)} by ${by}`;
+}
+
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
@@ -535,15 +566,7 @@ function deriveMilestones(
   };
   return engagement.milestones.map((m) => {
     const isCompleted = m.status === 'completed';
-    // Gate on the RAW snapshotted value; client sees it grossed up by the Balo fee,
-    // expert & admin see the raw payout figure.
-    const rawValue = m.valueCents;
-    let valueLabel: string | null = null;
-    if (rawValue !== null && rawValue > 0) {
-      const displayValue =
-        lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
-      valueLabel = formatWholeCurrency(displayValue, engagement.currency);
-    }
+    const valueLabel = milestoneValueLabel(m, engagement, lens);
     // Plain-text of the raw description for the expert edit-form prefill — kept out
     // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
     const descriptionText =
@@ -572,10 +595,7 @@ function deriveMilestones(
       connectorFilled: isCompleted,
       valueLabel,
       startedLabel: m.startedAt === null ? null : `Started ${formatShortDate(m.startedAt)}`,
-      completedLabel:
-        m.completedAt === null
-          ? null
-          : `Completed ${formatShortDate(m.completedAt)} by ${parties.expertPersonShort}`,
+      completedLabel: milestoneCompletedLabel(m, engagement, parties),
       completionNote:
         isCompleted && m.completionNote !== null && m.completionNote.trim() !== ''
           ? m.completionNote
@@ -633,7 +653,7 @@ function deriveChangedSinceProposal(
   const noun = changed.length === 1 ? 'milestone' : 'milestones';
   return {
     heading: 'Changed since proposal',
-    intro: `${parties.expertRetroFirstMention} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
+    intro: `${expertSideRetroParty(parties)} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
     items: changed.map((m) => ({
       milestoneId: m.id,
       milestoneTitle: m.title,
@@ -654,6 +674,14 @@ function acceptedWhenPhrase(autoAcceptOn: string | null): string {
   return autoAcceptOn === null ? 'at the end of the review window' : `on ${autoAcceptOn}`;
 }
 
+/** Who marked the project ready, named as the acting person; no recorded person → the expert side. */
+function completionRequesterLabel(
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string {
+  return expertSideActorLabel(engagement, parties, engagement.completionRequestedBy);
+}
+
 function deriveReviewBanner(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
@@ -670,7 +698,7 @@ function deriveReviewBanner(
   if (lens === 'client') {
     const expertShort = parties.expertPersonShort;
     return {
-      title: `${parties.expertRetroFirstMention} says the project is ready`,
+      title: `${completionRequesterLabel(engagement, parties)} says the project is ready`,
       body: `Have a look through the milestones below, then accept the project or request changes. If you don't respond, it's accepted ${acceptedWhen}.`,
       autoAcceptOn,
       lastRequest: deriveLastRequest(engagement),
@@ -696,7 +724,7 @@ function deriveReviewBanner(
   }
   return {
     title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
-    body: `Requested ${requestedAtLabel} by ${parties.expertRetroFirstMention}. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
+    body: `Requested ${requestedAtLabel} by ${completionRequesterLabel(engagement, parties)}. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
     autoAcceptOn,
     clientDecision: null,
     lastRequest: null,
@@ -794,28 +822,34 @@ function deriveCancelledBanner(
 
 function deriveEmptyState(
   engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens,
+  ctx: EngagementViewerContext,
   parties: EngagementParties
 ): EmptyStateView | null {
   if (engagement.milestones.length > 0) return null;
   // Terminal engagements show only their completed/cancelled banner — a
   // forward-looking "shaping the delivery plan" invitation would be stale.
   if (engagement.status === 'completed' || engagement.status === 'cancelled') return null;
-  if (lens === 'expert') {
+  if (ctx.lens === 'expert') {
     const client = parties.clientCompanyName;
+    // The delivering expert is addressed directly; an agency owner/admin viewing the same
+    // plan is told what the agency does (prospective copy names the party).
+    const firstMilestone = ctx.isDeliveringExpert ? 'your first milestone' : 'the first milestone';
     // On T&M a milestone is added through a change the client approves, so the invitation
     // matches the "Propose the first milestone" CTA.
     const opener =
       engagement.pricingMethod === 'tm'
         ? `Propose the first milestone — ${client} approves it before work is tracked against it.`
-        : `Add your first milestone so ${client} can follow progress.`;
+        : `Add ${firstMilestone} so ${client} can follow progress.`;
+    const closer = ctx.isDeliveringExpert
+      ? `you mark the project ready and ${client} reviews it as a whole.`
+      : `${parties.expertPartyShort} marks the project ready and ${client} reviews it as a whole.`;
     return {
       icon: 'Flag',
       title: 'Shape the delivery plan',
-      body: `${opener} When everything is delivered, you mark the project ready and ${client} reviews it as a whole.`,
+      body: `${opener} When everything is delivered, ${closer}`,
     };
   }
-  if (lens === 'client') {
+  if (ctx.lens === 'client') {
     return {
       icon: 'Flag',
       title: `${parties.expertPartyShort} is shaping the delivery plan`,
@@ -896,7 +930,7 @@ function deriveCancelDialog(
   const client = parties.clientCompanyName;
   const reviewNote =
     engagement.status === 'pending_acceptance'
-      ? `${parties.expertRetroFirstMention} has marked the project ready and ${client} is reviewing it. If they don't respond, it's accepted ${acceptedWhenPhrase(autoAcceptDate(engagement))}.`
+      ? `${completionRequesterLabel(engagement, parties)} has marked the project ready and ${client} is reviewing it. If they don't respond, it's accepted ${acceptedWhenPhrase(autoAcceptDate(engagement))}.`
       : null;
   return {
     body: `Delivery stops straight away for ${client} and ${parties.expertParty}, and it can't be undone. Both are told, with your reason.`,
@@ -1035,7 +1069,7 @@ export function mapEngagementToWorkspaceView(
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
     completedBanner: deriveCompletedBanner(engagement, ctx.lens, parties),
     cancelledBanner: deriveCancelledBanner(engagement),
-    emptyState: deriveEmptyState(engagement, ctx.lens, parties),
+    emptyState: deriveEmptyState(engagement, ctx, parties),
     cancelDialog: deriveCancelDialog(engagement, parties),
     completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
     addMilestoneNeedsChangeOrder: engagement.pricingMethod === 'tm',

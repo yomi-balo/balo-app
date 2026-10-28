@@ -50,9 +50,9 @@ import type { MeetingGuestSubject } from './resolve-meeting-guest';
  * The obvious-looking move is to gate the expert arm on the engagement axis, as
  * `apps/api`'s `authorizeMeetingParticipation` does. IT IS THE WRONG AXIS FOR FILES, and not
  * for packaging reasons (that seam being `apps/api`-only today is a consequence, not the
- * argument). That axis has exactly TWO tokens — one for live/in-meeting rights (Daily owner
- * token, admit/deny, end call) and one for administrative acts (reschedule propose/withdraw,
- * expert-side cancel, request case resolution) — and CLAUDE.md states plainly that a `true`
+ * argument). That axis has only act tokens — live/in-meeting rights (Daily owner token,
+ * admit/deny, end call), administrative acts (reschedule propose/withdraw, expert-side
+ * cancel, request case resolution) and logging time — and CLAUDE.md states plainly that a `true`
  * from that seam "authorizes the ACT, never the READ".
  *
  *   · DOWNLOADING A FILE IS A READ. Fetching a deck shared in a call is materially identical

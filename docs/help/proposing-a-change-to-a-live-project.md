@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 4
 published: false
-updated: 2026-10-26
+updated: 2026-10-29
 related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---
 
@@ -58,6 +58,13 @@ their reason.
 When the client approves, the milestones and the price update right away and you're told. On a
 time and materials project the estimates update and, if you raised it, the cap. Any price
 difference on a fixed-price project is settled on the final invoice.
+
+## Working as an agency owner or admin
+
+If you own or administer the agency that delivers the project, you can do all of this on its
+behalf: propose, answer and withdraw changes, move milestones along and mark the project ready.
+The notices the client receives name the person who acted. The summary of what changed since the
+proposal names your agency.
 
 ## Marking the project ready
 

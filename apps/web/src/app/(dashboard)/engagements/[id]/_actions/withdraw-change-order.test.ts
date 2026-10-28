@@ -78,6 +78,7 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+import { log } from '@/lib/logging';
 import { withdrawChangeOrderAction } from './withdraw-change-order';
 
 const INPUT = { engagementId: ENGAGEMENT_ID, orderId: ORDER_ID };
@@ -132,6 +133,23 @@ describe('withdrawChangeOrderAction', () => {
       expect.any(Object)
     );
     expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'no_capability' })
+    );
+  });
+
+  it('refuses a project that is not active, logged as a change-order denial', async () => {
+    mockFindEngagement.mockResolvedValue(makeProject({ status: 'pending_acceptance' }));
+    expect(await withdrawChangeOrderAction(INPUT)).toEqual({
+      success: false,
+      error: "This project isn't active.",
+    });
+    expect(mockWithdraw).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'wrong_status' })
+    );
   });
 
   it('withdraws only a SENT order, tracks it, and tells the client owner in-app', async () => {
@@ -154,6 +172,7 @@ describe('withdrawChangeOrderAction', () => {
       initiated_by: 'expert',
       distinct_id: CHARLES.id,
       days_to_decision: 2,
+      acting_as: 'delivering_expert',
     });
     expect(mockPublish).toHaveBeenCalledWith('change_order.withdrawn', {
       correlationId: `${ORDER_ID}:withdrawn`,
@@ -163,6 +182,36 @@ describe('withdrawChangeOrderAction', () => {
       recipientId: 'owner-1',
       actorExpertLabel: 'Charles',
     });
+  });
+
+  it('names an agency admin as the actor and tracks acting_as agency_admin', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        expertProfile: {
+          id: 'expert-1',
+          agencyId: 'agency-1',
+          type: 'agency',
+          headline: null,
+          timezone: 'UTC',
+          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
+          agency: { name: 'CloudPeak' },
+        },
+      } as never)
+    );
+    await withdrawChangeOrderAction(INPUT);
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_change_order_withdrawn',
+      expect.objectContaining({ acting_as: 'agency_admin' })
+    );
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ actorExpertLabel: 'Dana @ CloudPeak' });
   });
 
   it('tells the requester too when the withdrawn order came from a request', async () => {

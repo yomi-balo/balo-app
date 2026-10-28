@@ -31,6 +31,7 @@ function makeMilestone(over: Partial<Milestone> = {}): Milestone {
     startedByUserId: null,
     startedAt: null,
     completedByUserId: null,
+    completedBy: null,
     completedAt: null,
     completionNote: null,
     createdByUserId: null,
@@ -91,6 +92,7 @@ function makeEngagement(
     projectRequest: { id: 'req-1', title: 'CPQ implementation to replace legacy quoting tool' },
     acceptedBy: null,
     changeRequestedBy: null,
+    completionRequestedBy: null,
     changeRequestRounds: [],
     latestChangeRequest: null,
     changeRequestRoundCount: 0,
@@ -432,6 +434,55 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     expect(node?.descriptionText).toBe('Workshops and architecture.');
   });
 
+  describe('milestone completion attribution', () => {
+    const AGENCY_PROFILE = {
+      ...makeEngagement().expertProfile,
+      agencyId: 'ag-1',
+      type: 'agency' as const,
+      agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+    };
+    const completedBy = (
+      by: Milestone['completedBy'],
+      lens: EngagementLens = 'client'
+    ): string | null | undefined =>
+      mapEngagementToWorkspaceView(
+        makeEngagement({
+          expertProfile: AGENCY_PROFILE,
+          milestones: [
+            makeMilestone({
+              status: 'completed',
+              completedAt: new Date('2026-06-30T00:00:00.000Z'),
+              completedBy: by,
+            }),
+          ],
+        }),
+        ctxFor(lens),
+        NOW
+      ).milestones[0]?.completedLabel;
+
+    it('names the agency owner/admin who completed it, not the delivering expert', () => {
+      const dana = { id: 'user-dana', firstName: 'Dana', lastName: 'Okafor' };
+      expect(completedBy(dana)).toBe('Completed 30 Jun by Dana @ CloudPeak');
+      expect(completedBy(dana, 'admin')).toBe('Completed 30 Jun by Dana @ CloudPeak');
+    });
+
+    it('keeps the short form when the delivering expert completed it', () => {
+      expect(completedBy({ id: 'user-priya', firstName: 'Priya', lastName: 'Sharma' })).toBe(
+        'Completed 30 Jun by Priya'
+      );
+    });
+
+    it('keeps the short form when no completer was recorded', () => {
+      expect(completedBy(null)).toBe('Completed 30 Jun by Priya');
+    });
+
+    it('falls back to the agency for an unnamed completer', () => {
+      expect(completedBy({ id: 'user-x', firstName: null, lastName: ' ' })).toBe(
+        'Completed 30 Jun by CloudPeak'
+      );
+    });
+  });
+
   it('derives descriptionText as plain text (and null when the description is blank)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
@@ -509,6 +560,35 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
     expect(view.reviewBanner?.autoAcceptOn).toBe('11 Jul 2026');
     expect(view.reviewBanner?.body).toBe(
       "Have a look through the milestones below, then accept the project or request changes. If you don't respond, it's accepted on 11 Jul 2026."
+    );
+  });
+
+  it('names the person who requested completion; no recorded person falls back to the expert side', () => {
+    const base = {
+      status: 'pending_acceptance' as const,
+      completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+      expertProfile: {
+        ...makeEngagement().expertProfile,
+        type: 'agency' as const,
+        agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+      },
+    };
+    const named = makeEngagement({
+      ...base,
+      completionRequestedBy: { id: 'user-charles', firstName: 'Charles', lastName: 'Obi' },
+    });
+    expect(mapEngagementToWorkspaceView(named, ctxFor('client'), NOW).reviewBanner?.title).toBe(
+      'Charles @ CloudPeak says the project is ready'
+    );
+    expect(mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).reviewBanner?.body).toContain(
+      'by Charles @ CloudPeak.'
+    );
+    expect(
+      mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).cancelDialog?.reviewNote
+    ).toMatch(/^Charles @ CloudPeak has marked the project ready/);
+    const unnamed = makeEngagement({ ...base, completionRequestedBy: null });
+    expect(mapEngagementToWorkspaceView(unnamed, ctxFor('client'), NOW).reviewBanner?.title).toBe(
+      'Priya @ CloudPeak says the project is ready'
     );
   });
 
@@ -863,6 +943,17 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     );
     expect(view.emptyState?.title).toBe('Shape the delivery plan');
     expect(view.emptyState?.body).toMatch(/^Add your first milestone so Northwind/);
+  });
+
+  it('agency owner/admin empty state is neither "your" nor "you mark"', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ milestones: [] }),
+      { ...ctxFor('expert'), isDeliveringExpert: false },
+      NOW
+    );
+    expect(view.emptyState?.body).toBe(
+      'Add the first milestone so Northwind Industrial can follow progress. When everything is delivered, Priya marks the project ready and Northwind Industrial reviews it as a whole.'
+    );
   });
 
   it('expert empty state on T&M invites proposing the first milestone', () => {
@@ -1421,6 +1512,29 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     });
     expect(inReview('expert', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
     expect(inReview('admin', [reworded]).reviewBanner?.changedSinceProposal).toBeNull();
+  });
+
+  it('names the agency, not the delivering expert, for an agency engagement', () => {
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({
+        status: 'pending_acceptance',
+        completionRequestedAt: NOW,
+        milestones: [reworded],
+        expertProfile: {
+          ...makeEngagement().expertProfile,
+          agencyId: 'ag-1',
+          type: 'agency',
+          agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+        },
+      }),
+      ctxFor('client'),
+      NOW,
+      [],
+      [directEdit]
+    );
+    expect(view.reviewBanner?.changedSinceProposal?.intro).toBe(
+      'CloudPeak revised the wording of 1 milestone after the proposal was accepted. Each is marked below.'
+    );
   });
 
   it('has no review list when nothing was reworded', () => {

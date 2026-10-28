@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -56,7 +56,7 @@ export async function completeMilestoneAction(input: {
     parsed.data,
     'in_progress',
     'Failed to complete milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       const outcome = await runMilestoneTransition(() =>
         engagementMilestonesRepository.complete({
           milestoneId: milestone.id,
@@ -81,6 +81,7 @@ export async function completeMilestoneAction(input: {
         milestone_id: updated.id,
         cycle_time_days: cycleTimeDays,
         has_completion_note: note !== undefined,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
@@ -97,7 +98,7 @@ export async function completeMilestoneAction(input: {
         milestoneId: updated.id,
         recipientId,
         expertPartyLabel: parties.expertParty,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         projectTitle: deriveEngagementTitle(engagement, parties),
         milestoneTitle: updated.title,
         completedOn: formatCompletedOn(updated.completedAt ?? new Date()),

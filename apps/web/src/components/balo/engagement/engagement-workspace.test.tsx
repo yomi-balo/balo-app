@@ -39,11 +39,17 @@ vi.mock('./expert-milestone-rail', () => ({
   ExpertMilestoneRail: ({
     proposeChange,
     addNeedsChangeOrder,
+    viewerCompleterLabel,
   }: {
+    viewerCompleterLabel: string;
     proposeChange?: { label: string; disabledReason: string | null; href: string };
     addNeedsChangeOrder: boolean;
   }) => (
-    <div data-testid="expert-milestone-rail" data-add-needs-change-order={addNeedsChangeOrder}>
+    <div
+      data-testid="expert-milestone-rail"
+      data-add-needs-change-order={addNeedsChangeOrder}
+      data-completer={viewerCompleterLabel}
+    >
       Interactive rail
       {proposeChange !== undefined && (
         <span data-testid="propose-change">
@@ -227,6 +233,7 @@ function mappedView(
       status,
       startedAt: null,
       completedAt: status === 'completed' ? THEN : null,
+      completedBy: null,
       completionNote: null,
     })),
     expertProfile: {
@@ -449,6 +456,24 @@ describe('EngagementWorkspace — state × lens matrix', () => {
     expect(screen.getByTestId('expert-milestone-rail')).toBeInTheDocument();
     // The read-only rail (which renders the milestone titles) is NOT used here.
     expect(screen.queryByText('Discovery workshop')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['the viewer label when given', 'Dana @ CloudPeak', 'Dana @ CloudPeak'],
+    ['the delivering expert when none is given', undefined, 'Priya'],
+  ])('forwards %s to the interactive rail', (_name, label, expected) => {
+    render(
+      <EngagementWorkspace
+        view={view({
+          lens: 'expert',
+          archetype: 'participant',
+          isClientOwner: false,
+          isDeliveringExpert: false,
+        })}
+        viewerCompleterLabel={label}
+      />
+    );
+    expect(screen.getByTestId('expert-milestone-rail')).toHaveAttribute('data-completer', expected);
   });
 
   it('expert lens · pending_acceptance renders the READ-ONLY rail (plan locked in review)', () => {

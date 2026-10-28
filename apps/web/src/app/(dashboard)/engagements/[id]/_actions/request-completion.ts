@@ -9,7 +9,7 @@ import {
   AUTO_ACCEPT_DAYS,
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -76,7 +76,7 @@ export async function requestCompletionAction(input: {
     { userId: user.id },
     'Failed to request completion',
     () => gateExpertEngagement(user, engagementId, 'active'),
-    async (engagement) => {
+    async (engagement, { actor }) => {
       const updated = await projectEngagementsRepository.requestCompletion({
         engagementId,
         userId: user.id,
@@ -99,6 +99,7 @@ export async function requestCompletionAction(input: {
         review_cycle: reviewCycle,
         is_resubmission: isResubmission,
         prior_change_rounds: priorChangeRounds,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
@@ -113,7 +114,7 @@ export async function requestCompletionAction(input: {
         recipientId,
         clientCompanyName: parties.clientCompanyName,
         expertPartyLabel: parties.expertParty,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         projectTitle: deriveEngagementTitle(engagement, parties),
         milestonesTotal: engagement.milestones.length,
         requestedDate: formatShortUtc(requestedAt),

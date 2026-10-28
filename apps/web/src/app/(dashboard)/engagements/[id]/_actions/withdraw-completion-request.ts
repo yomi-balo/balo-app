@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { projectEngagementsRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -50,7 +50,7 @@ export async function withdrawCompletionRequestAction(input: {
     { userId: user.id },
     'Failed to withdraw completion request',
     () => gateExpertEngagement(user, engagementId, 'pending_acceptance'),
-    async (engagement) => {
+    async (engagement, { actor }) => {
       // Capture BEFORE the call — D0's withdraw clears `completionRequestedAt` to null.
       const requestedAt = engagement.completionRequestedAt;
       await projectEngagementsRepository.withdrawCompletionRequest({
@@ -66,6 +66,7 @@ export async function withdrawCompletionRequestAction(input: {
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN, {
         engagement_id: engagementId,
         hours_in_review: hoursInReview,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
@@ -76,7 +77,7 @@ export async function withdrawCompletionRequestAction(input: {
         correlationId: `${engagementId}:completion_withdrawn:${nowMs}`,
         engagementId,
         recipientId,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         projectTitle: deriveEngagementTitle(engagement, parties),
       }).catch(() => {
         // publishNotificationEvent logs internally.

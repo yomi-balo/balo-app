@@ -40,6 +40,7 @@ import { ProjectTrackPassedAdminEmail } from './project-track-passed-admin.js';
 import { ProjectTrackPassedClientEmail } from './project-track-passed-client.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
 import { EngagementMilestoneEstimateExceededClientEmail } from './engagement-milestone-estimate-exceeded.js';
+import { EngagementTimeEntryChangedEmail } from './engagement-time-entry-changed.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
@@ -988,6 +989,26 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(milestoneTitle)} has gone over its estimate on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-626 time entry changed by someone else — the entry's AUTHOR email.
+  'engagement-time-entry-changed': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const removed = data.change === 'removed';
+    const actor = (data.actorExpertLabel as string) ?? 'Someone on your team';
+    return {
+      component: React.createElement(EngagementTimeEntryChangedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: actor,
+        change: removed ? 'removed' : 'edited',
+        projectTitle,
+        workedOnLabel: (data.workedOnLabel as string) ?? '',
+        hoursLabel: (data.hoursLabel as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actor)} ${removed ? 'removed' : 'changed'} your time entry on ${sanitizeSubjectTitle(projectTitle)}`,
     };
   },
 

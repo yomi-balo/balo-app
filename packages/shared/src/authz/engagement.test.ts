@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 // and no second copy to drift) — see `@balo/shared/testing`'s own docblock.
 import { stripComments } from '../testing/strip-comments';
 import {
+  actorAdministersDeliveringAgency,
   buildHostContextForExpertProfile,
   ENGAGEMENT_CAPABILITIES,
   ENGAGEMENT_ROLE_CAPABILITIES,
@@ -49,6 +50,12 @@ const AGENCY_ID = 'agency_1';
 const OTHER_USER = 'user_other';
 
 const ALL_TOKENS: readonly EngagementCapability[] = Object.values(ENGAGEMENT_CAPABILITIES);
+
+/** The two tokens the delivering expert and an agency owner/admin share. */
+const SHARED_TOKENS: readonly EngagementCapability[] = [
+  ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
+  ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+];
 
 /**
  * Agency-based expert whose agency membership row for `resolvedForActorId` carries
@@ -192,7 +199,7 @@ describe('resolveHostRole — cross-actor reuse is denied (BAL-413 security fix)
   it('still GRANTS when the context is used for the actor it was resolved for (non-vacuity)', () => {
     // Guards the guard: without this, the four denials above would also pass if the brand
     // check denied unconditionally.
-    for (const token of ALL_TOKENS) {
+    for (const token of SHARED_TOKENS) {
       expect(
         hostContextGrants(
           agencyContext('owner', 'user_agency_owner'),
@@ -200,6 +207,8 @@ describe('resolveHostRole — cross-actor reuse is denied (BAL-413 security fix)
           token
         )
       ).toBe(true);
+    }
+    for (const token of ALL_TOKENS) {
       expect(hostContextGrants(independentContext(EXPERT_USER), { id: EXPERT_USER }, token)).toBe(
         true
       );
@@ -222,10 +231,19 @@ describe('hostRoleHasCapability', () => {
     ).toBe(true);
   });
 
-  it('grants BOTH tokens to an agency admin (AC #3)', () => {
-    for (const token of ALL_TOKENS) {
+  it('grants host_meetings and manage_engagement to an agency admin (AC #3)', () => {
+    for (const token of SHARED_TOKENS) {
       expect(hostRoleHasCapability(HOST_ROLES.AGENCY_ADMIN, token)).toBe(true);
     }
+  });
+
+  it('grants log_time to the delivering expert and NOT to an agency admin (BAL-626)', () => {
+    expect(
+      hostRoleHasCapability(HOST_ROLES.DELIVERING_EXPERT, ENGAGEMENT_CAPABILITIES.LOG_TIME)
+    ).toBe(true);
+    expect(hostRoleHasCapability(HOST_ROLES.AGENCY_ADMIN, ENGAGEMENT_CAPABILITIES.LOG_TIME)).toBe(
+      false
+    );
   });
 
   it('grants nothing to an unrecognised host role (fail closed)', () => {
@@ -240,7 +258,7 @@ describe('hostRoleHasCapability', () => {
 // ── hostContextGrants (the composition every resolver ends in) ───────────────
 
 describe('hostContextGrants', () => {
-  it('grants BOTH tokens to the delivering expert', () => {
+  it('grants EVERY token to the delivering expert', () => {
     for (const token of ALL_TOKENS) {
       expect(hostContextGrants(independentContext(EXPERT_USER), { id: EXPERT_USER }, token)).toBe(
         true
@@ -248,9 +266,9 @@ describe('hostContextGrants', () => {
     }
   });
 
-  it('grants BOTH tokens to an agency owner and an agency admin', () => {
+  it('grants host_meetings and manage_engagement to an agency owner and an agency admin', () => {
     for (const role of ['owner', 'admin']) {
-      for (const token of ALL_TOKENS) {
+      for (const token of SHARED_TOKENS) {
         // Resolved FOR this actor — see the cross-actor block above for what happens when
         // a context resolved for somebody else is reused here.
         expect(hostContextGrants(agencyContext(role, OTHER_USER), { id: OTHER_USER }, token)).toBe(
@@ -260,7 +278,26 @@ describe('hostContextGrants', () => {
     }
   });
 
-  it('is FALSE for BOTH tokens when the host role is null (AC #5, AC #8)', () => {
+  it('grants log_time to a delivering expert who owns the agency, never to a non-delivering owner/admin', () => {
+    expect(
+      hostContextGrants(
+        agencyContext('owner', EXPERT_USER),
+        { id: EXPERT_USER },
+        ENGAGEMENT_CAPABILITIES.LOG_TIME
+      )
+    ).toBe(true);
+    for (const role of ['owner', 'admin']) {
+      expect(
+        hostContextGrants(
+          agencyContext(role, OTHER_USER),
+          { id: OTHER_USER },
+          ENGAGEMENT_CAPABILITIES.LOG_TIME
+        )
+      ).toBe(false);
+    }
+  });
+
+  it('is FALSE for EVERY token when the host role is null (AC #5, AC #8)', () => {
     // Every context here is resolved FOR `OTHER_USER`, so each denial is attributable to
     // the branch it names rather than to the cross-actor brand.
     const nonHolderContexts: readonly [string, HostContext | null][] = [
@@ -279,28 +316,58 @@ describe('hostContextGrants', () => {
   });
 });
 
+describe('actorAdministersDeliveringAgency', () => {
+  it.each([
+    [
+      'delivering expert who owns the agency',
+      agencyContext('owner', EXPERT_USER),
+      EXPERT_USER,
+      true,
+    ],
+    [
+      'delivering expert with agency role expert',
+      agencyContext('expert', EXPERT_USER),
+      EXPERT_USER,
+      false,
+    ],
+    ['non-delivering agency admin', agencyContext('admin', OTHER_USER), OTHER_USER, true],
+    ['independent expert (no agency)', independentContext(EXPERT_USER), EXPERT_USER, false],
+    ['no agency role', agencyContext(null, OTHER_USER), OTHER_USER, false],
+    ['context resolved for another actor', agencyContext('owner', EXPERT_USER), OTHER_USER, false],
+  ])('%s', (_name, context, actorId, expected) => {
+    expect(actorAdministersDeliveringAgency(context, { id: actorId })).toBe(expected);
+  });
+
+  it('is false for a null context', () => {
+    expect(actorAdministersDeliveringAgency(null, { id: EXPERT_USER })).toBe(false);
+  });
+});
+
 // ── The one-holder-set invariant (AC #13) ────────────────────────────────────
 
 describe('ENGAGEMENT_ROLE_CAPABILITIES', () => {
   it('maps each token to its snake_case wire value', () => {
     expect(ENGAGEMENT_CAPABILITIES.HOST_MEETINGS).toBe('host_meetings');
     expect(ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT).toBe('manage_engagement');
+    expect(ENGAGEMENT_CAPABILITIES.LOG_TIME).toBe('log_time');
   });
 
-  it('gives delivering_expert and agency_admin the IDENTICAL holder bundle (AC #13)', () => {
-    // Pins the ADR-1046 2026-07-31 amendment. If the holder sets ever diverge they
-    // diverge HERE, in the map — never by a second resolver — and this is the test a
-    // divergence must consciously edit.
-    expect(ENGAGEMENT_ROLE_CAPABILITIES[HOST_ROLES.DELIVERING_EXPERT]).toEqual(
-      ENGAGEMENT_ROLE_CAPABILITIES[HOST_ROLES.AGENCY_ADMIN]
+  it('pins each host role’s bundle: log_time is the ONLY divergence (AC #13, BAL-626)', () => {
+    // Pins the ADR-1046 2026-07-31 amendment and BAL-626's one divergence. Holder sets
+    // diverge HERE, in the map — never by a second resolver or a call-site identity
+    // check — and this is the test a further divergence must consciously edit.
+    expect([...ENGAGEMENT_ROLE_CAPABILITIES[HOST_ROLES.DELIVERING_EXPERT]].sort()).toEqual(
+      ['host_meetings', 'log_time', 'manage_engagement'].sort()
+    );
+    expect([...ENGAGEMENT_ROLE_CAPABILITIES[HOST_ROLES.AGENCY_ADMIN]].sort()).toEqual(
+      ['host_meetings', 'manage_engagement'].sort()
     );
   });
 
-  it('covers EVERY EngagementCapability token — a third token cannot be silently unmapped (AC #13)', () => {
+  it('covers EVERY EngagementCapability token — a new token cannot be silently unmapped (AC #13)', () => {
     expect(ALL_TOKENS.length).toBeGreaterThan(0); // non-vacuity
-    for (const hostRole of Object.values(HOST_ROLES)) {
-      expect([...ENGAGEMENT_ROLE_CAPABILITIES[hostRole]].sort()).toEqual([...ALL_TOKENS].sort());
-    }
+    const granted = new Set(Object.values(ENGAGEMENT_ROLE_CAPABILITIES).flat());
+    expect([...granted].sort()).toEqual([...ALL_TOKENS].sort());
   });
 
   it('covers EVERY HostRole — a third host role cannot be silently unmapped', () => {

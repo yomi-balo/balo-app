@@ -22,8 +22,10 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
 
 vi.mock('@/lib/authz', () => ({ hasCapability: vi.fn(), CAPABILITIES: {} }));
 const mockHasExpertCapability = vi.fn();
+const mockAdministersAgency = vi.fn();
 vi.mock('@/lib/authz/engagement', () => ({
   hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+  administersDeliveringAgency: (...a: unknown[]) => mockAdministersAgency(...a),
 }));
 
 const { mockFindEngagement, mockWrite, mockFindOwner, TimeEntryWriteRefusedError } = vi.hoisted(
@@ -91,7 +93,23 @@ const INPUT = {
   note: 'Reworked the plan',
 };
 
-const entry = { id: ENTRY_ID, engagementMilestoneId: MILESTONE_ID, minutes: 90 };
+const entry = {
+  id: ENTRY_ID,
+  engagementMilestoneId: MILESTONE_ID,
+  userId: CHARLES.id,
+  workedOn: '2026-10-14',
+  minutes: 90,
+  updatedAt: new Date('2026-10-14T03:00:00Z'),
+};
+
+const ADMIN = {
+  id: 'admin-1',
+  firstName: 'Dana',
+  lastName: 'Lee',
+  platformRole: 'user',
+  companyId: 'other-company',
+  expertProfileId: 'expert-2',
+};
 
 function written(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -122,6 +140,7 @@ beforeEach(() => {
   );
   mockResolveLens.mockReturnValue({ lens: 'expert', archetype: 'participant' });
   mockHasExpertCapability.mockResolvedValue(true);
+  mockAdministersAgency.mockResolvedValue(false);
   mockWrite.mockResolvedValue(written());
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
 });
@@ -151,6 +170,7 @@ describe('updateTimeEntryAction', () => {
       engagementId: ENGAGEMENT_ID,
       entryId: ENTRY_ID,
       userId: CHARLES.id,
+      authorScope: 'own',
       minutes: 120,
       note: 'Reworked the plan',
     });
@@ -164,7 +184,72 @@ describe('updateTimeEntryAction', () => {
     expect(mockPublish).toHaveBeenCalledTimes(1);
     expect(mockTrack).toHaveBeenCalledWith(
       'engagement_milestone_estimate_exceeded',
-      expect.objectContaining({ milestone_id: MILESTONE_ID })
+      expect.objectContaining({ milestone_id: MILESTONE_ID, acting_as: 'delivering_expert' })
+    );
+  });
+
+  it('lets an agency admin edit any author entry', async () => {
+    mockRequireUser.mockResolvedValue(ADMIN);
+    mockAdministersAgency.mockResolvedValue(true);
+    expect(await updateTimeEntryAction(INPUT)).toEqual({ success: true });
+    expect(mockWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'admin-1', authorScope: 'any' })
+    );
+  });
+
+  it('gives a delivering expert who administers the agency any-entry scope', async () => {
+    mockAdministersAgency.mockResolvedValue(true);
+    expect(await updateTimeEntryAction(INPUT)).toEqual({ success: true });
+    expect(mockWrite).toHaveBeenCalledWith(expect.objectContaining({ authorScope: 'any' }));
+  });
+
+  it("tells the author when someone else's entry is edited", async () => {
+    mockRequireUser.mockResolvedValue(ADMIN);
+    expect(await updateTimeEntryAction(INPUT)).toEqual({ success: true });
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.time_entry_changed',
+      expect.objectContaining({
+        correlationId: `${ENTRY_ID}:edited:${entry.updatedAt.getTime()}`,
+        engagementId: ENGAGEMENT_ID,
+        timeEntryId: ENTRY_ID,
+        userId: CHARLES.id,
+        actorUserId: 'admin-1',
+        change: 'edited',
+        workedOnLabel: '14 Oct',
+        hoursLabel: '1.5 hrs',
+      })
+    );
+    const [, payload] = mockPublish.mock.calls[0] ?? [];
+    expect(payload.actorExpertLabel).toContain('Dana');
+  });
+
+  it('names an agency admin in the estimate-exceeded notice and tracks acting_as', async () => {
+    mockRequireUser.mockResolvedValue(ADMIN);
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
+        expertProfile: {
+          id: 'expert-1',
+          agencyId: 'agency-1',
+          type: 'agency',
+          headline: null,
+          timezone: 'UTC',
+          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
+          agency: { name: 'CloudPeak' },
+        },
+      } as never)
+    );
+    mockWrite.mockResolvedValue(written({ estimateExceeded: true, loggedAfterMinutes: 540 }));
+    await updateTimeEntryAction(INPUT);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.milestone_estimate_exceeded',
+      expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_milestone_estimate_exceeded',
+      expect.objectContaining({ acting_as: 'agency_admin' })
     );
   });
 

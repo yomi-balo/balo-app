@@ -910,6 +910,34 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.time_entry_changed (BAL-626)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:edited:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      timeEntryId: '550e8400-e29b-41d4-a716-446655440002',
+      userId: '550e8400-e29b-41d4-a716-446655440003',
+      actorUserId: '550e8400-e29b-41d4-a716-446655440004',
+      change: 'edited',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      workedOnLabel: '14 Oct',
+      hoursLabel: '2.5 hrs',
+    };
+    const parse = (payload: unknown) =>
+      publishBodySchema.safeParse({ event: 'engagement.time_entry_changed', payload }).success;
+
+    it('accepts a valid payload for both changes', () => {
+      expect(parse(valid)).toBe(true);
+      expect(parse({ ...valid, change: 'removed' })).toBe(true);
+    });
+
+    it('rejects a bad change and a missing userId', () => {
+      expect(parse({ ...valid, change: 'deleted' })).toBe(false);
+      const { userId: _u, ...rest } = valid;
+      expect(parse(rest)).toBe(false);
+    });
+  });
+
   describe('engagement.milestone_completed (BAL-332)', () => {
     const valid = {
       correlationId: '550e8400-e29b-41d4-a716-446655440002:1719705600000',

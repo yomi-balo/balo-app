@@ -2052,6 +2052,59 @@ describe('projectEngagementsRepository.findWithMilestones — BAL-331 additive p
     expect(hydrated?.projectRequest).toBeNull();
   });
 
+  it('completionRequestedBy is null when unset', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.completionRequestedBy).toBeNull();
+  });
+
+  it('hydrates completionRequestedBy as a name-only projection (PII-safe)', async () => {
+    const requester = await userFactory({ firstName: 'Charles', lastName: 'Admin' });
+    const { engagement } = await engagementFactory({
+      projectValues: { completionRequestedByUserId: requester.id },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+
+    expect(hydrated?.completionRequestedBy).toEqual({
+      id: requester.id,
+      firstName: 'Charles',
+      lastName: 'Admin',
+    });
+  });
+
+  it("hydrates each milestone's completedBy as a name-only projection (PII-safe)", async () => {
+    const completer = await userFactory({ firstName: 'Dana', lastName: 'Owner' });
+    const { engagement } = await engagementFactory();
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: {
+        status: 'completed',
+        completedAt: new Date(),
+        completedByUserId: completer.id,
+      },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { sortOrder: 1 },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    const [completed, pending] = hydrated?.milestones ?? [];
+
+    expect(Object.keys(completed?.completedBy ?? {}).sort()).toEqual([
+      'firstName',
+      'id',
+      'lastName',
+    ]);
+    expect(completed?.completedBy).toEqual({
+      id: completer.id,
+      firstName: 'Dana',
+      lastName: 'Owner',
+    });
+    expect(pending?.completedBy).toBeNull();
+  });
+
   it('acceptedBy / changeRequestedBy are null when unset', async () => {
     const { engagement } = await engagementFactory();
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);

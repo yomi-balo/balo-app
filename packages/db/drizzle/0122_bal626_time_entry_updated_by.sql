@@ -1,0 +1,2 @@
+ALTER TABLE "engagement_time_entries" ADD COLUMN "updated_by_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "engagement_time_entries" ADD CONSTRAINT "engagement_time_entries_updated_by_user_id_users_id_fk" FOREIGN KEY ("updated_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;

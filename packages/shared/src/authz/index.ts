@@ -211,6 +211,7 @@ export {
   hostRoleHasCapability,
   resolveHostRole,
   hostContextGrants,
+  actorAdministersDeliveringAgency,
   relationshipDeniesHosting,
   // BAL-421 — the ONE host-context assembly, shared by BOTH per-app async resolvers. The
   // `apps/web` seam opening (the case surface's expert resolution request) is what made a

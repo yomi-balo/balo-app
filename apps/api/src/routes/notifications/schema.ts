@@ -371,6 +371,21 @@ const engagementMilestoneEstimateExceededPayload = z.object({
   estimatedHoursLabel: z.string().min(1).max(40),
 });
 
+// BAL-626 (D15b) a time entry edited or removed by someone other than its author. Mirrors
+// packages/shared/src/notifications/index.ts.
+const engagementTimeEntryChangedPayload = z.object({
+  correlationId: z.string().min(1).max(160),
+  engagementId: z.uuid(),
+  timeEntryId: z.uuid(),
+  userId: z.uuid(),
+  actorUserId: z.uuid(),
+  change: z.enum(['edited', 'removed']),
+  actorExpertLabel: z.string().min(1).max(200),
+  projectTitle: z.string().min(1).max(200),
+  workedOnLabel: z.string().min(1).max(40),
+  hoursLabel: z.string().min(1).max(40),
+});
+
 // BAL-332 (D2) expert milestone completed (expert → client owner + admins).
 // `correlationId` = `${milestoneId}:${completedAtEpochMs}` (idempotent per
 // completion; z.string not z.uuid so the epoch suffix validates). `recipientId` is
@@ -1103,6 +1118,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('engagement.milestone_estimate_exceeded'),
     payload: engagementMilestoneEstimateExceededPayload,
+  }),
+  z.object({
+    event: z.literal('engagement.time_entry_changed'),
+    payload: engagementTimeEntryChangedPayload,
   }),
   z.object({
     event: z.literal('engagement.milestone_reverted'),

@@ -30,6 +30,8 @@ import {
   MILESTONE_GONE,
   NOT_FOUND,
   PLAN_CHANGED,
+  gateExpertSideAct,
+  type ExpertSideGateResult,
 } from './milestone-action-shared';
 
 // Re-export the reused signed-in wrapper, notify helpers, generic copy, and the
@@ -50,6 +52,11 @@ export {
  * and `router.refresh()`es on success.
  */
 export type EngagementActionResult = { success: true } | { success: false; error: string };
+
+// ── Deny-log messages: each act family logs its own name on every deny path ────
+export const LIFECYCLE_DENIED = 'Engagement lifecycle denied';
+export const CHANGE_ORDER_DENIED = 'Change order denied';
+export const TIME_ENTRY_DENIED = 'Time entry denied';
 
 // ── Friendly, non-leaking copy (returned verbatim; the client toasts it) ─────
 export const ONLY_EXPERT = 'Only the delivering expert can do that.';
@@ -141,19 +148,20 @@ export async function readReviewCycle(engagementId: string): Promise<number> {
  * The shared load-and-resolve prefix: load the engagement → resolve the viewer lens
  * → a stranger (`ctx === null`) or a missing row both yield the same `NOT_FOUND`
  * (existence never leaks). Denials are `log.warn`ed (recoverable telemetry) — never
- * any body copy. Extracted so BOTH gates below share it (SonarCloud new-code
- * duplication gate).
+ * any body copy, under `logMessage` so each act family names itself. Extracted so BOTH
+ * gates below share it (SonarCloud new-code duplication gate).
  */
 export async function loadEngagementLens(
   user: SessionUser,
-  engagementId: string
+  engagementId: string,
+  logMessage: string = LIFECYCLE_DENIED
 ): Promise<
   | { ok: true; engagement: ProjectEngagementWithMilestones; lens: 'client' | 'expert' | 'admin' }
   | { ok: false; error: string }
 > {
   const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
   if (engagement === undefined) {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(logMessage, {
       engagementId,
       userId: user.id,
       reason: 'engagement_not_found',
@@ -163,7 +171,7 @@ export async function loadEngagementLens(
   const ctx = resolveEngagementLens(user, engagement);
   if (ctx === null) {
     // Stranger — same 404 as a missing row (no existence leak).
-    log.warn('Engagement lifecycle denied', {
+    log.warn(logMessage, {
       engagementId,
       userId: user.id,
       reason: 'not_a_party',
@@ -174,33 +182,25 @@ export async function loadEngagementLens(
 }
 
 /**
- * The EXPERT-lens gate for request-completion (`requiredStatus: 'active'`) and
- * withdraw (`requiredStatus: 'pending_acceptance'`). Gates on `lens === 'expert'`
- * (NOT `isDeliveringExpert`): an admin who incidentally delivers resolves to
- * `lens: 'admin'` (observer precedence) and is correctly blocked. Wrong status →
- * the per-status friendly race message. Implemented fresh here (not reusing
- * `gateExpertActiveEngagement` from milestone-action-shared, whose message +
- * status are milestone-specific) so the two files stay independent.
+ * The EXPERT-side gate for request-completion (`requiredStatus: 'active'`) and
+ * withdraw (`requiredStatus: 'pending_acceptance'`): the actor holds `manage_engagement`
+ * (the delivering expert, or an owner or admin of their agency). Wrong status → the
+ * per-status friendly race message.
  */
 export async function gateExpertEngagement(
   user: SessionUser,
   engagementId: string,
   requiredStatus: ExpertGateStatus
-): Promise<GateResult> {
-  const loaded = await loadEngagementLens(user, engagementId);
-  if (!loaded.ok) {
-    return loaded;
+): Promise<ExpertSideGateResult> {
+  const gate = await gateExpertSideAct(user, engagementId, {
+    notHolder: ONLY_EXPERT,
+    logMessage: LIFECYCLE_DENIED,
+  });
+  if (!gate.ok) {
+    return gate;
   }
-  if (loaded.lens !== 'expert') {
-    log.warn('Engagement lifecycle denied', {
-      engagementId,
-      userId: user.id,
-      reason: 'wrong_lens',
-    });
-    return { ok: false, error: ONLY_EXPERT };
-  }
-  if (loaded.engagement.status !== requiredStatus) {
-    log.warn('Engagement lifecycle denied', {
+  if (gate.engagement.status !== requiredStatus) {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'wrong_status',
@@ -210,7 +210,7 @@ export async function gateExpertEngagement(
       error: requiredStatus === 'active' ? NOT_ACTIVE : NOT_UNDER_REVIEW,
     };
   }
-  return { ok: true, engagement: loaded.engagement };
+  return gate;
 }
 
 /**
@@ -249,7 +249,7 @@ export async function gateAdminEngagement(
     !hasPlatformCapability(user, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT) ||
     !(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT))
   ) {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'no_platform_capability',
@@ -258,7 +258,7 @@ export async function gateAdminEngagement(
   }
   const { status } = loaded.engagement;
   if (status !== 'active' && status !== 'pending_acceptance') {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'engagement_closed',
@@ -288,7 +288,7 @@ export async function gateClientEngagement(
     return loaded;
   }
   if (loaded.lens !== 'client') {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'wrong_lens',
@@ -296,7 +296,7 @@ export async function gateClientEngagement(
     return { ok: false, error: ONLY_CLIENT };
   }
   if (loaded.engagement.status !== 'pending_acceptance') {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'wrong_status',
@@ -307,7 +307,7 @@ export async function gateClientEngagement(
     companyId: loaded.engagement.companyId,
   });
   if (!allowed) {
-    log.warn('Engagement lifecycle denied', {
+    log.warn(LIFECYCLE_DENIED, {
       engagementId,
       userId: user.id,
       reason: 'no_capability',
@@ -355,19 +355,24 @@ function mapChangeOrderError(error: unknown): string | null {
  * stack → `GENERIC_FAILURE`). Kept in ONE place so the try/catch/revalidate/map
  * body exists exactly once (SonarCloud new-code duplication gate).
  */
-export async function runEngagementLifecycleAction(
+export async function runEngagementLifecycleAction<
+  G extends { engagement: ProjectEngagementWithMilestones },
+>(
   engagementId: string,
   logContext: Record<string, unknown>,
   failLabel: string,
-  authorize: () => Promise<GateResult>,
-  perform: (engagement: ProjectEngagementWithMilestones) => Promise<EngagementActionResult>
+  authorize: () => Promise<({ ok: true } & G) | { ok: false; error: string }>,
+  perform: (
+    engagement: ProjectEngagementWithMilestones,
+    authorized: G
+  ) => Promise<EngagementActionResult>
 ): Promise<EngagementActionResult> {
   try {
     const authorized = await authorize();
     if (!authorized.ok) {
       return { success: false, error: authorized.error };
     }
-    const result = await perform(authorized.engagement);
+    const result = await perform(authorized.engagement, authorized);
     // A typed-race failure surfaced by `perform` → no revalidate (nothing changed).
     if (result.success) {
       revalidatePath(`/engagements/${engagementId}`);

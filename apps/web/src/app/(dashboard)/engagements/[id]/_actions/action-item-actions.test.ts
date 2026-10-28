@@ -35,6 +35,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertDelivery = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertDelivery(...a),
+}));
+
 const mockHasCapability = vi.fn();
 vi.mock('@/lib/authz', () => ({
   hasCapability: (...a: unknown[]) => mockHasCapability(...a),
@@ -131,7 +136,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
-      user: { firstName: 'Priya', lastName: 'Sharma' },
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       agency: null,
       headline: null,
       type: 'freelancer',
@@ -162,6 +167,7 @@ beforeEach(() => {
     firstName: 'Dana',
     lastName: 'Okafor',
     platformRole: 'user',
+    expertProfileId: EXPERT_PROFILE_ID,
   });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({
@@ -171,6 +177,7 @@ beforeEach(() => {
     isDeliveringExpert: true,
   });
   mockHasCapability.mockResolvedValue(true);
+  mockHasExpertDelivery.mockResolvedValue(true);
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
   mockFindById.mockResolvedValue(actionItem());
   mockCreateManual.mockResolvedValue(actionItem());
@@ -206,11 +213,71 @@ describe('createActionItemAction — gate + validation', () => {
 
   it('returns NOT_FOUND for a stranger (lens null) without leaking existence', async () => {
     mockResolveLens.mockReturnValue(null);
+    mockHasExpertDelivery.mockResolvedValue(false);
     expect(await createActionItemAction(INPUT)).toEqual({
       success: false,
       error: 'This engagement could not be found.',
     });
     expect(mockCreateManual).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND for a lens-null viewer who does not hold manage_engagement', async () => {
+    mockResolveLens.mockReturnValue(null);
+    mockHasExpertDelivery.mockResolvedValue(false);
+    expect(await createActionItemAction(INPUT)).toEqual({
+      success: false,
+      error: 'This engagement could not be found.',
+    });
+    expect(mockHasExpertDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'manage_engagement',
+      EXPERT_PROFILE_ID,
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(mockCreateManual).not.toHaveBeenCalled();
+  });
+
+  it('denies an expert-lens caller who no longer holds manage_engagement', async () => {
+    mockHasExpertDelivery.mockResolvedValue(false);
+    expect(await createActionItemAction(INPUT)).toEqual({
+      success: false,
+      error: 'Only people on this project can do that.',
+    });
+    expect(mockCreateManual).not.toHaveBeenCalled();
+  });
+
+  it('admits an agency owner/admin (lens null, capability held) as the expert side, named Person @ Agency', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'agency-admin-1',
+      firstName: 'Charles',
+      lastName: 'Obi',
+      platformRole: 'user',
+    });
+    mockResolveLens.mockReturnValue(null);
+    mockFindEngagement.mockResolvedValue(
+      engagement({
+        expertProfile: {
+          user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
+          agency: { name: 'CloudPeak' },
+          headline: null,
+          type: 'agency',
+        },
+      } as unknown as Partial<ProjectEngagementWithMilestones>)
+    );
+    mockCreateManual.mockResolvedValue(actionItem({ assigneeParty: 'client' }));
+    const result = await createActionItemAction({
+      engagementId: ENGAGEMENT_ID,
+      body: 'Send the migration plan',
+      assigneeParty: 'client',
+    });
+    expect(result).toEqual({ success: true, actionItemId: ACTION_ITEM_ID });
+    expect(mockHasCapability).not.toHaveBeenCalled();
+    const [, payload] = mockPublish.mock.calls[0]!;
+    expect(payload.actorLabel).toBe('Charles @ CloudPeak');
+    expect(mockTrack).toHaveBeenCalledWith(
+      'action_item_created',
+      expect.objectContaining({ acting_as: 'agency_admin' })
+    );
   });
 
   it('returns NOT_FOUND when the engagement is missing', async () => {
@@ -274,6 +341,7 @@ describe('createActionItemAction — gate + validation', () => {
       platformRole: 'admin',
     });
     mockResolveLens.mockReturnValue({ lens: 'admin' });
+    mockHasExpertDelivery.mockResolvedValue(false);
     mockActorHoldsLive.mockResolvedValueOnce(false);
 
     const result = await createActionItemAction(INPUT);
@@ -284,6 +352,7 @@ describe('createActionItemAction — gate + validation', () => {
 
   it('denies a lens-admin caller who does not hold MANAGE_ANY_ENGAGEMENT_ACTION_ITEM — the fail-closed arm', async () => {
     mockResolveLens.mockReturnValue({ lens: 'admin' });
+    mockHasExpertDelivery.mockResolvedValue(false);
     expect(await createActionItemAction(INPUT)).toEqual({
       success: false,
       error: 'Only people on this project can do that.',
@@ -293,6 +362,14 @@ describe('createActionItemAction — gate + validation', () => {
 });
 
 describe('createActionItemAction — create + analytics + notify', () => {
+  it('leaves acting_as off the event when the client side creates', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'client' });
+    await createActionItemAction({ engagementId: ENGAGEMENT_ID, body: 'Send the migration plan' });
+    const [, props] = mockTrack.mock.calls[0]!;
+    expect(mockTrack).toHaveBeenCalledWith('action_item_created', expect.any(Object));
+    expect(props).not.toHaveProperty('acting_as');
+  });
+
   it('creates WITHOUT an assignee: manual source, unassigned, count 1, no publish', async () => {
     const result = await createActionItemAction({
       engagementId: ENGAGEMENT_ID,
@@ -311,6 +388,7 @@ describe('createActionItemAction — create + analytics + notify', () => {
       source: 'manual',
       assignee_role: 'unassigned',
       count: 1,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).not.toHaveBeenCalled();
@@ -424,6 +502,7 @@ describe('assignActionItemAction', () => {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
       assignee_role: 'client',
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith(
@@ -469,6 +548,7 @@ describe('setActionItemStatusAction', () => {
       action_item_id: ACTION_ITEM_ID,
       completed_by_role: 'expert',
       was_ai_extracted: true,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -482,6 +562,7 @@ describe('setActionItemStatusAction', () => {
       engagement_type: 'project',
       action_item_id: ACTION_ITEM_ID,
       reopened_by_role: 'expert',
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -515,6 +596,7 @@ describe('updateActionItemAction', () => {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
       fields_changed: ['body', 'due_at'],
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });
@@ -559,6 +641,7 @@ describe('removeActionItemAction', () => {
     expect(mockTrack).toHaveBeenCalledWith('action_item_removed', {
       engagement_id: ENGAGEMENT_ID,
       action_item_id: ACTION_ITEM_ID,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
   });

@@ -60,6 +60,8 @@ interface EngagementWorkspaceProps {
    * resolves it). Gates the header's "More actions" menu; nothing here reads the lens.
    */
   canCancelEngagement?: boolean;
+  /** Who the optimistic "Completed today by …" line names: the viewer who just acted. Defaults to the delivering expert. */
+  viewerCompleterLabel?: string;
 }
 
 /**
@@ -84,6 +86,7 @@ export function EngagementWorkspace({
   adminMoney = null,
   time = null,
   canCancelEngagement = false,
+  viewerCompleterLabel,
 }: Readonly<EngagementWorkspaceProps>): React.JSX.Element {
   // Render the action-items panel only when it has something to show — live items OR a
   // writable (active) engagement inviting the first add. A read-only, empty panel is
@@ -107,7 +110,7 @@ export function EngagementWorkspace({
           engagementId={view.engagementId}
           milestones={view.milestones}
           emptyState={view.emptyState}
-          expertPersonShort={view.parties.expertPersonShort}
+          viewerCompleterLabel={viewerCompleterLabel ?? view.parties.expertPersonShort}
           clientCompanyName={view.parties.clientCompanyName}
           proposeChange={proposeChangeFor(changeOrders)}
           addNeedsChangeOrder={view.addMilestoneNeedsChangeOrder}

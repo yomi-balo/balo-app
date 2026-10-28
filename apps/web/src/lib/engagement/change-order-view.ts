@@ -17,7 +17,11 @@ import { formatShortUtc } from '@/lib/format/utc-date';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatHours, signedHours, signedMoney } from './change-order-format';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
-import { personAtCompany, type EngagementParties } from './engagement-parties';
+import {
+  expertSideActorLabel,
+  personAtCompany,
+  type EngagementParties,
+} from './engagement-parties';
 import type { EngagementViewerContext } from './resolve-engagement-lens';
 
 /**
@@ -158,21 +162,6 @@ export function effectiveExpertPriceCents(
   );
 }
 
-function nameOf(person: { firstName: string | null; lastName: string | null } | null): string {
-  if (person === null) return '';
-  return (person.firstName ?? '').trim() || (person.lastName ?? '').trim();
-}
-
-/** The expert-side person who acted, "Charles @ CloudPeak" for an agency, bare for independents. */
-function expertActorLabel(
-  person: { firstName: string | null; lastName: string | null } | null,
-  parties: EngagementParties
-): string {
-  const name = nameOf(person);
-  if (name === '') return parties.expertRetroFirstMention;
-  return parties.isAgencyExpert ? `${name} @ ${parties.expertParty}` : name;
-}
-
 function plainOrNull(html: string | null): string | null {
   if (html === null || html.trim() === '') return null;
   return htmlToPlainText(html) || null;
@@ -241,6 +230,16 @@ interface ViewContext {
   now: Date;
   /** T&M: minutes of live time logged per milestone. */
   loggedMinutesByMilestone: Readonly<Record<string, number>>;
+  /** The signed-in viewer, so "You" is only ever said about the viewer's own act. */
+  viewerUserId: string | null;
+}
+
+/** The expert-side person behind an order's act, named from the viewer's engagement. */
+function expertActor(
+  actor: ChangeOrderWithLines['sentBy'],
+  vc: Pick<ViewContext, 'engagement' | 'parties'>
+): string {
+  return expertSideActorLabel(vc.engagement, vc.parties, actor);
 }
 
 /** Σ approved deltas of the orders strictly before / after `index`, by the chosen measure. */
@@ -421,7 +420,10 @@ function answerTextFor(order: ChangeOrderWithLines, vc: ViewContext): string | n
   if (order.status !== 'declined' || order.sentAt !== null || order.declineReason === null) {
     return null;
   }
-  const who = vc.lens === 'expert' ? 'You' : expertActorLabel(order.decidedBy, vc.parties);
+  const who =
+    order.decidedBy !== null && order.decidedBy.id === vc.viewerUserId
+      ? 'You'
+      : expertActor(order.decidedBy, vc);
   return `${who} answered: “${order.declineReason}”`;
 }
 
@@ -444,7 +446,7 @@ function mapItem(order: ChangeOrderWithLines, index: number, vc: ViewContext): C
     status: order.status,
     pricingMethod: vc.engagement.pricingMethod,
     sentOnLabel: order.sentAt === null ? null : formatShortUtc(order.sentAt),
-    sentByLabel: order.sentAt === null ? null : expertActorLabel(order.sentBy, vc.parties),
+    sentByLabel: order.sentAt === null ? null : expertActor(order.sentBy, vc),
     pill: pillFor(order, vc.lens, vc.parties),
     summary: showsDetail ? order.note : null,
     requestNote: order.requestNote,
@@ -499,11 +501,11 @@ function clientOutcomeFor(latest: ChangeOrderWithLines, vc: ViewContext): PanelO
     };
   }
   if (latest.status === 'declined' && latest.sentAt === null) {
-    const who = expertActorLabel(latest.decidedBy, vc.parties);
+    const who = expertActor(latest.decidedBy, vc);
     return { tone: 'slate', text: `${who} answered your request: “${latest.declineReason ?? ''}”` };
   }
   if (latest.status === 'withdrawn' && latest.sentAt !== null) {
-    const who = expertActorLabel(latest.withdrawnBy, vc.parties);
+    const who = expertActor(latest.withdrawnBy, vc);
     return {
       tone: 'slate',
       text: `${who} withdrew the proposed change${withdrawnSuffix(latest)}. Nothing changed.`,
@@ -576,12 +578,21 @@ function adminStateLineFor(open: ChangeOrderWithLines | null, vc: ViewContext): 
   return null;
 }
 
+/** The optional settings of {@link mapChangeOrdersToView}. */
+export interface ChangeOrderViewOptions {
+  /** The clock, injectable for deterministic tests. Defaults to now. */
+  now?: Date;
+  /** T&M: minutes of live time logged per milestone, shown on a sent order's estimate edits. */
+  loggedMinutesByMilestone?: Readonly<Record<string, number>>;
+  /** The signed-in viewer, so "You" is only ever said about the viewer's own act. */
+  viewerUserId?: string | null;
+}
+
 /**
  * Map the engagement's change orders (oldest first, as the repository lists them) into the
  * panel view for one viewer. `canDecide` is the viewer's `approve_own_proposals` capability
- * for the client company, resolved by the caller. `now` is injectable for deterministic tests.
- * `loggedMinutesByMilestone` is the T&M time logged per milestone, shown on a sent order's
- * estimate edits.
+ * for the client company, resolved by the caller. The optional settings are in
+ * {@link ChangeOrderViewOptions}.
  */
 export function mapChangeOrdersToView(
   orders: readonly ChangeOrderWithLines[],
@@ -589,9 +600,9 @@ export function mapChangeOrdersToView(
   ctx: EngagementViewerContext,
   parties: EngagementParties,
   canDecide: boolean,
-  now: Date = new Date(),
-  loggedMinutesByMilestone: Readonly<Record<string, number>> = {}
+  options: ChangeOrderViewOptions = {}
 ): ChangeOrderPanelView {
+  const { now = new Date(), loggedMinutesByMilestone = {}, viewerUserId = null } = options;
   const vc: ViewContext = {
     engagement,
     lens: ctx.lens,
@@ -600,6 +611,7 @@ export function mapChangeOrdersToView(
     canDecide,
     now,
     loggedMinutesByMilestone,
+    viewerUserId,
   };
   const open = findOpenOrder(orders);
   const indexed = orders.map((order, index) => ({ order, index }));

@@ -64,7 +64,7 @@ export async function addMilestoneAction(input: AddMilestoneInput): Promise<Mile
     engagementId,
     {},
     'Failed to add milestone',
-    async ({ user, engagement }) => {
+    async ({ user, actor, engagement }) => {
       const outcome = await runMilestoneTransition(
         () =>
           engagementMilestonesRepository.add({
@@ -85,10 +85,12 @@ export async function addMilestoneAction(input: AddMilestoneInput): Promise<Mile
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.MILESTONE_ADDED, {
         engagement_id: engagement.id,
         milestones_total: engagement.milestones.length + 1,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
       await publishScopeChange(engagement, {
+        actor: user,
         changeKind: 'added',
         milestoneId: created.id,
         milestoneTitle: created.title,

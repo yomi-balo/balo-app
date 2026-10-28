@@ -7,20 +7,25 @@ import {
   engagementChangeOrdersRepository,
   engagementMilestonesRepository,
   engagementTimeEntriesRepository,
+  type ProjectEngagementWithMilestones,
   type TimeEntryListRow,
   type TimeEntrySums,
 } from '@balo/db';
-import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
-import { currentBillingPeriod } from '@balo/shared/engagements';
+import { currentBillingPeriod, type BillingPeriod } from '@balo/shared/engagements';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { CAPABILITIES, hasCapability } from '@/lib/authz';
-import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
-import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import {
+  resolveEngagementViewer,
+  resolveWorkspaceAccess,
+} from '@/lib/engagement/resolve-engagement-viewer';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import {
+  deriveEngagementParties,
+  milestoneCompleterLabel,
+} from '@/lib/engagement/engagement-parties';
 import { mapTimeToView } from '@/lib/engagement/time-view';
 import { mapChangeOrdersToView } from '@/lib/engagement/change-order-view';
 import { mapChangeOrderAdminView } from '@/lib/engagement/change-order-admin-view';
@@ -89,6 +94,53 @@ function resolveInitialAction(action: string | undefined): ReviewInitialAction |
   return action === 'accept' || action === 'request-changes' ? action : null;
 }
 
+/**
+ * The current billing period of a time and materials project, read in the delivering expert's
+ * time zone (the calendar their entries are dated in). A period only exists while the project
+ * is in flight; once it is completed or cancelled the totals card drops the period row.
+ */
+function workspaceBillingPeriod(
+  engagement: ProjectEngagementWithMilestones,
+  now: Date
+): BillingPeriod | null {
+  const inFlight = engagement.status === 'active' || engagement.status === 'pending_acceptance';
+  if (engagement.pricingMethod !== 'tm' || !inFlight) return null;
+  return currentBillingPeriod(
+    engagement.activatedAt,
+    engagement.cadence,
+    now,
+    engagement.expertProfile?.timezone ?? null
+  );
+}
+
+/**
+ * Time and materials only (BAL-624): the logged entries, their totals for the billing period,
+ * and the milestones the client was already told went over their current estimate (so the Log
+ * time warning doesn't promise a second notice). Fixed-price projects read nothing.
+ */
+function loadTimeReads(
+  engagement: ProjectEngagementWithMilestones,
+  billingPeriod: BillingPeriod | null
+): [Promise<TimeEntryListRow[]>, Promise<TimeEntrySums>, Promise<string[]>] {
+  if (engagement.pricingMethod !== 'tm') {
+    return [NO_TIME_ENTRIES, NO_TIME_SUMS, NO_NOTIFIED_MILESTONES];
+  }
+  return [
+    engagementTimeEntriesRepository.listByEngagement(engagement.id),
+    engagementTimeEntriesRepository.sumsForEngagement(engagement.id, billingPeriod),
+    engagementTimeEntriesRepository.listNotifiedAtCurrentEstimate(engagement.id),
+  ];
+}
+
+/** When time was last logged on the engagement, for the admin activity chip. */
+function latestTimeLoggedAt(entries: readonly TimeEntryListRow[]): Date | null {
+  let latest: Date | null = null;
+  for (const entry of entries) {
+    if (latest === null || entry.createdAt > latest) latest = entry.createdAt;
+  }
+  return latest;
+}
+
 export async function generateMetadata({
   params,
 }: Readonly<EngagementWorkspacePageProps>): Promise<Metadata> {
@@ -105,7 +157,7 @@ export async function generateMetadata({
     const engagement = await loadEngagement(id);
     if (!engagement) return GENERIC_METADATA;
 
-    const ctx = resolveEngagementLens(user, engagement);
+    const ctx = await resolveEngagementViewer(user, engagement);
     if (!ctx) return GENERIC_METADATA;
 
     const view = mapEngagementToWorkspaceView(engagement, ctx);
@@ -151,8 +203,12 @@ export default async function EngagementWorkspacePage({
     notFound();
   }
 
-  const ctx = resolveEngagementLens(user, engagement);
-  if (!ctx) {
+  // The viewer, and whether they may log time, from the expert-side capability (host-context
+  // lookups are request-deduped, so repeated asks cost no extra reads).
+  // Logging time is a delivery act on the engagement axis, so it is resolved by capability
+  // rather than read off the lens, and only for an active time and materials project.
+  const access = await resolveWorkspaceAccess(user, engagement);
+  if (!access) {
     // Authenticated but not the client owner / delivering expert / admin → same
     // not-found page (existence never leaks to a stranger).
     log.warn('Engagement access denied', {
@@ -162,6 +218,7 @@ export default async function EngagementWorkspacePage({
     });
     notFound();
   }
+  const { ctx, canLogTime, timeEntryScope, actingAs } = access;
 
   // The in-app rating card. `offersRatingCard` is the VIEW decision (completed + client
   // lens only); the read degrades to `null` on its own, so a fault here never blocks an
@@ -172,80 +229,35 @@ export default async function EngagementWorkspacePage({
     .filter((m) => m.contentEditedAt !== null)
     .map((m) => m.id);
   const now = new Date();
-  const isTm = engagement.pricingMethod === 'tm';
-  // A billing period only exists while the project is in flight; once it is completed or
-  // cancelled the totals card drops the period row. Its days are read in the delivering
-  // expert's time zone, the calendar their entries are dated in.
-  const inFlight = engagement.status === 'active' || engagement.status === 'pending_acceptance';
-  const billingPeriod =
-    isTm && inFlight
-      ? currentBillingPeriod(
-          engagement.activatedAt,
-          engagement.cadence,
-          now,
-          engagement.expertProfile?.timezone ?? null
-        )
-      : null;
-  const [
-    rating,
-    actionItems,
-    changeOrderRows,
-    contentEdits,
-    timeEntries,
-    timeSums,
-    notifiedMilestoneIds,
-    canLogTime,
-  ] = await Promise.all([
-    offersRatingCard(engagement.status, ctx.lens)
-      ? readRatingCard({
-          engagementId: engagement.id,
-          viewerUserId: user.id,
-          requireHeldConsultation: false,
-          now: new Date(),
-        })
-      : Promise.resolve(null),
-    // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
-    // engagement graph, so the workspace loader stays a single query.
-    actionItemsRepository.listByEngagement(engagement.id),
-    // The engagement's change orders (BAL-622), oldest first — they move the effective price,
-    // lock milestones and feed the change-order panel.
-    engagementChangeOrdersRepository.listForEngagement(engagement.id),
-    // What the expert reworded after the proposal, for the "Changed since proposal" chip.
-    // Empty when no milestone carries the stamp (the repo returns without querying).
-    engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
-    // Time and materials only (BAL-624): the logged hours and their totals for the current
-    // billing period.
-    isTm ? engagementTimeEntriesRepository.listByEngagement(engagement.id) : NO_TIME_ENTRIES,
-    isTm
-      ? engagementTimeEntriesRepository.sumsForEngagement(engagement.id, billingPeriod)
-      : NO_TIME_SUMS,
-    // Milestones the client was already told went over their current estimate, so the Log
-    // time warning doesn't promise a second notice.
-    isTm
-      ? engagementTimeEntriesRepository.listNotifiedAtCurrentEstimate(engagement.id)
-      : NO_NOTIFIED_MILESTONES,
-    // Logging time is a delivery act on the engagement axis, so it is resolved by capability
-    // rather than read off the lens, and only for an active time and materials project.
-    isTm && engagement.status === 'active'
-      ? hasExpertDeliveryCapability(
-          user,
-          ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-          engagement.expertProfileId,
-          { contextType: 'project', contextId: engagement.id }
-        )
-      : Promise.resolve(false),
-  ]);
-  const lastTimeLoggedAt = timeEntries.reduce<Date | null>(
-    (latest, entry) => (latest === null || entry.createdAt > latest ? entry.createdAt : latest),
-    null
-  );
+  const billingPeriod = workspaceBillingPeriod(engagement, now);
+  const [rating, actionItems, changeOrderRows, contentEdits, timeEntries, timeSums, notified] =
+    await Promise.all([
+      offersRatingCard(engagement.status, ctx.lens)
+        ? readRatingCard({
+            engagementId: engagement.id,
+            viewerUserId: user.id,
+            requireHeldConsultation: false,
+            now: new Date(),
+          })
+        : Promise.resolve(null),
+      // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
+      // engagement graph, so the workspace loader stays a single query.
+      actionItemsRepository.listByEngagement(engagement.id),
+      // The engagement's change orders (BAL-622), oldest first — they move the effective price,
+      // lock milestones and feed the change-order panel.
+      engagementChangeOrdersRepository.listForEngagement(engagement.id),
+      // What the expert reworded after the proposal, for the "Changed since proposal" chip.
+      // Empty when no milestone carries the stamp (the repo returns without querying).
+      engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
+      ...loadTimeReads(engagement, billingPeriod),
+    ]);
   const view = mapEngagementToWorkspaceView(
     engagement,
     ctx,
     now,
     changeOrderRows,
     contentEdits,
-    lastTimeLoggedAt
+    latestTimeLoggedAt(timeEntries)
   );
   const time = mapTimeToView({
     engagement,
@@ -255,7 +267,8 @@ export default async function EngagementWorkspacePage({
     period: billingPeriod,
     viewerUserId: user.id,
     canLogTime,
-    notifiedMilestoneIds,
+    timeEntryScope,
+    notifiedMilestoneIds: notified,
   });
   const canCancelEngagement = hasPlatformCapability(
     user,
@@ -265,15 +278,11 @@ export default async function EngagementWorkspacePage({
   const canDecide = await hasCapability(user, CAPABILITIES.APPROVE_OWN_PROPOSALS, {
     companyId: engagement.companyId,
   });
-  const changeOrders = mapChangeOrdersToView(
-    changeOrderRows,
-    engagement,
-    ctx,
-    parties,
-    canDecide,
+  const changeOrders = mapChangeOrdersToView(changeOrderRows, engagement, ctx, parties, canDecide, {
     now,
-    timeSums.byMilestone
-  );
+    loggedMinutesByMilestone: timeSums.byMilestone,
+    viewerUserId: user.id,
+  });
   // Both sides of every amount are for Balo staff only: the capability gates the READ, and the
   // settlement is not even loaded for anyone else.
   const adminMoney = hasPlatformCapability(user, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
@@ -290,13 +299,26 @@ export default async function EngagementWorkspacePage({
   // registered here (before any later throw) so the flush lands even on
   // serverless. Entry is derived from the whitelisted `?from` query.
   const { from, action } = await searchParams;
-  trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED, {
+  const viewed = {
     engagement_id: engagement.id,
-    lens: ctx.lens,
     entry: resolveEntry(from),
     engagement_status: engagement.status,
     distinct_id: user.id,
-  });
+  };
+  if (ctx.lens !== 'expert') {
+    trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED, { ...viewed, lens: ctx.lens });
+  } else if (actingAs === null) {
+    log.warn('Workspace view not tracked: expert lens without an acting capacity', {
+      engagementId: engagement.id,
+      userId: user.id,
+    });
+  } else {
+    trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED, {
+      ...viewed,
+      lens: ctx.lens,
+      acting_as: actingAs,
+    });
+  }
 
   return (
     <>
@@ -312,6 +334,7 @@ export default async function EngagementWorkspacePage({
         adminMoney={adminMoney}
         time={time}
         canCancelEngagement={canCancelEngagement}
+        viewerCompleterLabel={milestoneCompleterLabel(engagement, parties, user)}
       />
     </>
   );

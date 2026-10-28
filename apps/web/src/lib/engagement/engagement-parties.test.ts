@@ -4,6 +4,7 @@ import {
   deriveActorLabel,
   deriveEngagementParties,
   deriveExpertPartyLabels,
+  expertSideActorLabel,
   engagementHeaderLine,
   personAtCompany,
   projectEngagementTitle,
@@ -129,29 +130,101 @@ describe('personAtCompany', () => {
 describe('deriveActorLabel', () => {
   it('returns "Balo" for the admin lens (the platform actor label)', () => {
     const engagement = makeEngagement({ agency: null });
-    expect(deriveActorLabel(engagement, 'admin', { firstName: 'Dana', lastName: 'Lee' })).toBe(
-      'Balo'
-    );
+    expect(
+      deriveActorLabel(engagement, 'admin', { id: 'user-dana', firstName: 'Dana', lastName: 'Lee' })
+    ).toBe('Balo');
   });
 
   it('returns the expert retro first-mention for the expert lens (agency)', () => {
     const engagement = makeEngagement({ agency: makeAgency() });
-    expect(deriveActorLabel(engagement, 'expert', { firstName: 'Priya', lastName: 'Sharma' })).toBe(
-      'Priya @ CloudPeak Consulting'
-    );
+    expect(
+      deriveActorLabel(engagement, 'expert', {
+        id: 'user-priya',
+        firstName: 'Priya',
+        lastName: 'Sharma',
+      })
+    ).toBe('Priya @ CloudPeak Consulting');
+  });
+
+  it('names an agency owner/admin acting on the expert side, not the delivering expert', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(
+      deriveActorLabel(engagement, 'expert', {
+        id: 'user-charles',
+        firstName: 'Charles',
+        lastName: 'Admin',
+      })
+    ).toBe('Charles @ CloudPeak Consulting');
   });
 
   it('names the acting person "@ company" for the client lens', () => {
     const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
-    expect(deriveActorLabel(engagement, 'client', { firstName: 'Dana', lastName: 'Lee' })).toBe(
-      'Dana @ Northwind Industrial'
-    );
+    expect(
+      deriveActorLabel(engagement, 'client', {
+        id: 'user-dana',
+        firstName: 'Dana',
+        lastName: 'Lee',
+      })
+    ).toBe('Dana @ Northwind Industrial');
   });
 
   it('falls back to the company alone for the client lens when the person is unnamed', () => {
     const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
-    expect(deriveActorLabel(engagement, 'client', { firstName: null, lastName: null })).toBe(
-      'Northwind Industrial'
+    expect(
+      deriveActorLabel(engagement, 'client', { id: 'user-x', firstName: null, lastName: null })
+    ).toBe('Northwind Industrial');
+  });
+});
+
+describe('expertSideActorLabel', () => {
+  const priya = { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma' };
+  const charles = { id: 'user-charles', firstName: 'Charles', lastName: 'Admin' };
+  const labelFor = (
+    engagement: ProjectEngagementWithMilestones,
+    actor: Parameters<typeof expertSideActorLabel>[2]
+  ): string => expertSideActorLabel(engagement, deriveEngagementParties(engagement), actor);
+
+  it('reads as the retro first-mention for the delivering expert (agency)', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(labelFor(engagement, priya)).toBe(
+      deriveEngagementParties(engagement).expertRetroFirstMention
+    );
+    expect(labelFor(engagement, priya)).toBe('Priya @ CloudPeak Consulting');
+  });
+
+  it('reads as the retro first-mention for the delivering expert (independent)', () => {
+    const engagement = makeEngagement({ agency: null });
+    expect(labelFor(engagement, priya)).toBe('Priya');
+  });
+
+  it('names an agency owner/admin "Person @ agency"', () => {
+    expect(labelFor(makeEngagement({ agency: makeAgency() }), charles)).toBe(
+      'Charles @ CloudPeak Consulting'
+    );
+  });
+
+  it('falls back to the last name, then to the expert party when the actor is unnamed', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(labelFor(engagement, { id: 'u', firstName: ' ', lastName: 'Admin' })).toBe(
+      'Admin @ CloudPeak Consulting'
+    );
+    expect(labelFor(engagement, { id: 'u', firstName: null, lastName: null })).toBe(
+      'CloudPeak Consulting'
+    );
+  });
+
+  it('names a non-delivering actor without "@" when the expert is independent', () => {
+    expect(labelFor(makeEngagement({ agency: null }), charles)).toBe('Charles');
+  });
+
+  it('omits "@" when the agency name is blank', () => {
+    const engagement = makeEngagement({ agency: makeAgency({ name: ' ' }) });
+    expect(labelFor(engagement, charles)).toBe('Charles');
+  });
+
+  it('reads as the retro first-mention for an unknown (null) actor', () => {
+    expect(labelFor(makeEngagement({ agency: makeAgency() }), null)).toBe(
+      'Priya @ CloudPeak Consulting'
     );
   });
 });

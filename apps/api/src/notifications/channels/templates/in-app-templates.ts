@@ -24,6 +24,7 @@ import { CASE_INACTIVITY_DAYS, joinTitles } from '@balo/shared/engagements';
 import { readMilestoneTitles } from './engagement-review-decision-emails.js';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
+import { timeEntryChangedSentence } from './engagement-time-entry-changed.js';
 
 interface InAppOutput {
   title: string;
@@ -904,6 +905,26 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return engagementNotice(
       'Milestone over estimate',
       `${title}: '${milestone}' is over its estimate (${logged} of ${estimate}).`,
+      data
+    );
+  },
+
+  // BAL-626 time entry changed by someone else — the entry's AUTHOR.
+  'engagement-time-entry-changed': (data) => {
+    const removed = data.change === 'removed';
+    const actor = (data.actorExpertLabel as string) ?? 'Someone on your team';
+    const hours = (data.hoursLabel as string) ?? '';
+    const date = (data.workedOnLabel as string) ?? '';
+    const title = (data.projectTitle as string) ?? 'your project';
+    return engagementNotice(
+      removed ? 'Time entry removed' : 'Time entry changed',
+      timeEntryChangedSentence({
+        actor,
+        change: removed ? 'removed' : 'edited',
+        workedOnLabel: date,
+        hoursLabel: hours,
+        projectTitle: title,
+      }),
       data
     );
   },

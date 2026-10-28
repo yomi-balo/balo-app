@@ -1,7 +1,17 @@
-import type { ProjectEngagementWithMilestones, TimeEntryListRow, TimeEntrySums } from '@balo/db';
+import type {
+  ProjectEngagementWithMilestones,
+  TimeEntryAuthorScope,
+  TimeEntryListRow,
+  TimeEntrySums,
+} from '@balo/db';
 import { hoursLabel, type BillingPeriod } from '@balo/shared/engagements';
 import { formatShortUtc } from '@/lib/format/utc-date';
-import { deriveEngagementParties, type EngagementParties } from './engagement-parties';
+import {
+  deriveEngagementParties,
+  expertSideActorLabel,
+  expertSideRetroParty,
+  type EngagementParties,
+} from './engagement-parties';
 import type { EngagementViewerContext } from './resolve-engagement-lens';
 
 /**
@@ -23,6 +33,8 @@ export interface TimeEntryView {
   minutes: number;
   canEdit: boolean;
   canDelete: boolean;
+  /** "Edited by Dana @ CloudPeak" when someone other than the author last changed the entry; otherwise null. */
+  editedByLabel: string | null;
 }
 
 export interface MilestoneTimeView {
@@ -113,21 +125,38 @@ function authorsLabelFor(
   return `Logged by ${listify([...names])}`;
 }
 
+function editedByLabelFor(
+  entry: TimeEntryListRow,
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string | null {
+  if (entry.updatedByUserId === null || entry.updatedByUserId === entry.userId) return null;
+  const editor = {
+    id: entry.updatedByUserId,
+    firstName: entry.editorFirstName,
+    lastName: entry.editorLastName,
+  };
+  return `Edited by ${expertSideActorLabel(engagement, parties, editor)}`;
+}
+
 function entryView(
   entry: TimeEntryListRow,
   viewerUserId: string,
-  canLogTime: boolean,
-  inProgress: boolean
+  timeEntryScope: TimeEntryAuthorScope | null,
+  inProgress: boolean,
+  editedByLabel: string | null
 ): TimeEntryView {
-  const authored = canLogTime && entry.userId === viewerUserId;
+  const mayChange =
+    timeEntryScope === 'any' || (timeEntryScope === 'own' && entry.userId === viewerUserId);
   return {
     id: entry.id,
     workedOnLabel: formatShortUtc(new Date(entry.workedOn)),
     note: entry.note,
     hoursLabel: hoursLabel(entry.minutes),
     minutes: entry.minutes,
-    canEdit: authored && inProgress,
-    canDelete: authored,
+    canEdit: mayChange && inProgress,
+    canDelete: mayChange,
+    editedByLabel,
   };
 }
 
@@ -138,6 +167,9 @@ function milestoneTimeView(
   input: {
     viewerUserId: string;
     canLogTime: boolean;
+    timeEntryScope: TimeEntryAuthorScope | null;
+    engagement: ProjectEngagementWithMilestones;
+    parties: EngagementParties;
     clientCompanyName: string;
     overNoticeSent: boolean;
   }
@@ -158,7 +190,15 @@ function milestoneTimeView(
         ? `${hoursFigure(loggedMinutes)} hrs logged`
         : `${hoursFigure(loggedMinutes)} of ${hoursFigure(estimate)} hrs logged`,
     remainingLabel: remainingLabelFor(tone, loggedMinutes, estimate),
-    entries: entries.map((e) => entryView(e, input.viewerUserId, input.canLogTime, inProgress)),
+    entries: entries.map((e) =>
+      entryView(
+        e,
+        input.viewerUserId,
+        input.timeEntryScope,
+        inProgress,
+        editedByLabelFor(e, input.engagement, input.parties)
+      )
+    ),
     logToggleLabel: `Time log (${entries.length})`,
     authorsLabel: authorsLabelFor(entries, input.viewerUserId),
     canLog,
@@ -206,7 +246,7 @@ function totalsView(input: {
     const invoiceOn = formatShortUtc(new Date(period.nextInvoiceOn));
     const billing =
       lens === 'client'
-        ? `invoiced on ${invoiceOn} for the time ${parties.expertPersonShort} has logged`
+        ? `invoiced on ${invoiceOn} for the time ${expertSideRetroParty(parties)} has logged`
         : `billed to ${parties.clientCompanyName} on ${invoiceOn}, whatever the review status`;
     periodView = {
       hoursLabel: hoursLabel(sums.periodMinutes),
@@ -246,7 +286,8 @@ function overEstimateBanner(
 
 /**
  * The time view for the workspace, or null unless the project is time and materials.
- * `canLogTime` is the page's capability decision; the mapper never derives it from the lens.
+ * `canLogTime` and `timeEntryScope` are the page's capability decisions; the mapper never
+ * derives either from the lens.
  */
 export function mapTimeToView(input: {
   engagement: ProjectEngagementWithMilestones;
@@ -256,10 +297,13 @@ export function mapTimeToView(input: {
   period: BillingPeriod | null;
   viewerUserId: string;
   canLogTime: boolean;
+  /** Whose entries the viewer may edit or remove: `'any'` (agency owner/admin), `'own'`, or `null` (none). */
+  timeEntryScope: TimeEntryAuthorScope | null;
   /** Milestones whose over-estimate notice was already sent at their current estimate. */
   notifiedMilestoneIds: readonly string[];
 }): WorkspaceTimeView | null {
-  const { engagement, ctx, entries, sums, period, viewerUserId, canLogTime } = input;
+  const { engagement, ctx, entries, sums, period, viewerUserId, canLogTime, timeEntryScope } =
+    input;
   if (engagement.pricingMethod !== 'tm') return null;
 
   const parties = deriveEngagementParties(engagement);
@@ -270,6 +314,9 @@ export function mapTimeToView(input: {
     const view = milestoneTimeView(milestone, own, sums.byMilestone[milestone.id] ?? 0, {
       viewerUserId,
       canLogTime,
+      timeEntryScope,
+      engagement,
+      parties,
       clientCompanyName: parties.clientCompanyName,
       overNoticeSent: input.notifiedMilestoneIds.includes(milestone.id),
     });

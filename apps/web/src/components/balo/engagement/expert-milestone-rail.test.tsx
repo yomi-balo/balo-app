@@ -99,14 +99,15 @@ function renderRail(
   milestones: MilestoneNodeView[],
   emptyState: EmptyStateView | null = EMPTY_STATE,
   proposeChange?: ProposeChangeLink,
-  addNeedsChangeOrder = false
+  addNeedsChangeOrder = false,
+  viewerCompleterLabel = 'Priya'
 ) {
   return render(
     <ExpertMilestoneRail
       engagementId="eng-1"
       milestones={milestones}
       emptyState={emptyState}
-      expertPersonShort="Priya"
+      viewerCompleterLabel={viewerCompleterLabel}
       clientCompanyName="Northwind Industrial"
       proposeChange={proposeChange}
       addNeedsChangeOrder={addNeedsChangeOrder}
@@ -199,6 +200,37 @@ describe('ExpertMilestoneRail — actions', () => {
     );
     expect(toast.success).toHaveBeenCalledWith('Milestone marked complete');
     expect(refresh).toHaveBeenCalled();
+  });
+
+  it('complete: the optimistic line names the viewer who acted, not the delivering expert', async () => {
+    let resolveComplete: (v: MilestoneActionResult) => void = () => {};
+    completeMock.mockImplementation(() => new Promise((res) => (resolveComplete = res)));
+    const user = userEvent.setup();
+    renderRail(
+      [
+        node({
+          id: 'a',
+          title: 'First',
+          status: 'in_progress',
+          nodeVariant: 'in_progress',
+          statusLabel: 'In progress',
+        }),
+      ],
+      EMPTY_STATE,
+      undefined,
+      false,
+      'Dana @ CloudPeak'
+    );
+    await user.click(screen.getByRole('button', { name: /mark complete/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /mark complete/i }));
+    await waitFor(() =>
+      expect(screen.getByText('Completed today by Dana @ CloudPeak')).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/by Priya/)).not.toBeInTheDocument();
+    await act(async () => {
+      resolveComplete({ success: true, milestoneId: 'a', status: 'completed' });
+    });
   });
 
   it('revert: opens the confirm modal, confirms, toasts, and refreshes', async () => {
@@ -706,7 +738,7 @@ describe('ExpertMilestoneRail — time and materials', () => {
         engagementId="eng-1"
         milestones={[inProgress]}
         emptyState={null}
-        expertPersonShort="Priya"
+        viewerCompleterLabel="Priya"
         clientCompanyName="Northwind Industrial"
         addNeedsChangeOrder
         time={time}

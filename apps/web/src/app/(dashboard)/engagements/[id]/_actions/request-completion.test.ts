@@ -16,6 +16,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -91,6 +96,7 @@ const INPUT = { engagementId: ENGAGEMENT_ID };
 function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
+    expertProfileId: 'expert-1',
     status: 'active',
     sourceProposalId: 'p0000000-0000-4000-8000-000000000009',
     activatedAt: new Date('2026-06-24T00:00:00Z'),
@@ -99,7 +105,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
       id: 'expert-1',
-      user: { firstName: 'Priya', lastName: 'Sharma' },
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       agency: null,
       headline: null,
       type: 'freelancer',
@@ -111,7 +117,12 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+  mockHasExpertCapability.mockResolvedValue(true);
+  mockRequireUser.mockResolvedValue({
+    id: 'user-1',
+    platformRole: 'user',
+    expertProfileId: 'expert-1',
+  });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({
     lens: 'expert',
@@ -154,6 +165,7 @@ describe('requestCompletionAction', () => {
   });
 
   it('returns NOT_FOUND for a stranger (null lens — no existence leak)', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue(null);
     expect(await requestCompletionAction(INPUT)).toEqual({
       success: false,
@@ -162,6 +174,7 @@ describe('requestCompletionAction', () => {
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ lens: 'admin', archetype: 'observer' });
     expect(await requestCompletionAction(INPUT)).toEqual({
       success: false,
@@ -204,6 +217,42 @@ describe('requestCompletionAction', () => {
     expect(mockTrack).not.toHaveBeenCalled();
   });
 
+  it('names an agency admin who requests completion', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      engagement({
+        expertProfile: {
+          id: 'expert-1',
+          user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
+          agency: { name: 'CloudPeak' },
+          headline: null,
+          type: 'agency',
+        },
+      } as never)
+    );
+    expect(await requestCompletionAction(INPUT)).toEqual({ success: true });
+    expect(mockHasExpertCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'admin-1' }),
+      'manage_engagement',
+      'expert-1',
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(mockPublish).toHaveBeenCalledWith(
+      'engagement.completion_requested',
+      expect.objectContaining({ actorExpertLabel: 'Dana @ CloudPeak' })
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_completion_requested',
+      expect.objectContaining({ acting_as: 'agency_admin', distinct_id: 'admin-1' })
+    );
+  });
+
   it('requests completion, tracks the metrics, publishes, and revalidates', async () => {
     const result = await requestCompletionAction(INPUT);
     expect(result).toEqual({ success: true });
@@ -221,6 +270,7 @@ describe('requestCompletionAction', () => {
         review_cycle: 1,
         is_resubmission: false,
         prior_change_rounds: 0,
+        acting_as: 'delivering_expert',
         distinct_id: 'user-1',
         days_since_kickoff: expect.any(Number),
       })

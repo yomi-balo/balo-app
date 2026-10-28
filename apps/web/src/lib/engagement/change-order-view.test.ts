@@ -36,7 +36,8 @@ function view(
   lens: EngagementLens,
   engagement = makeProject(),
   canDecide = true,
-  loggedMinutesByMilestone: Record<string, number> = {}
+  loggedMinutesByMilestone: Record<string, number> = {},
+  viewerUserId: string | null = null
 ): ReturnType<typeof mapChangeOrdersToView> {
   return mapChangeOrdersToView(
     orders,
@@ -44,8 +45,7 @@ function view(
     ctxFor(lens),
     deriveEngagementParties(engagement),
     canDecide,
-    NOW,
-    loggedMinutesByMilestone
+    { now: NOW, loggedMinutesByMilestone, viewerUserId }
   );
 }
 
@@ -451,10 +451,17 @@ describe('mapChangeOrdersToView — outcomes, history and answers', () => {
       tone: 'slate',
       text: 'Charles answered your request: “It is already in scope.”',
     });
+    const own = view([answered], 'expert', makeProject(), true, {}, CHARLES.id);
+    expect(own.history[0]?.answerText).toBe('You answered: “It is already in scope.”');
+    expect(own.outcome).toBeNull();
+  });
+
+  it('names the person, not "You", when the expert-side viewer is not who answered', () => {
+    const other = view([answered], 'expert', makeProject(), true, {}, 'user-someone-else');
+    expect(other.history[0]?.answerText).toBe('Charles answered: “It is already in scope.”');
     expect(view([answered], 'expert').history[0]?.answerText).toBe(
-      'You answered: “It is already in scope.”'
+      'Charles answered: “It is already in scope.”'
     );
-    expect(view([answered], 'expert').outcome).toBeNull();
   });
 
   it('approved: warm outcome for both parties, naming the party then the person', () => {
@@ -549,7 +556,7 @@ describe('mapChangeOrdersToView — footnote and admin line', () => {
       ctxFor('admin'),
       deriveEngagementParties(engagement),
       true,
-      new Date(nowIso)
+      { now: new Date(nowIso) }
     ).adminStateLine;
     expect(line?.includes("It's in the pending-actions queue.")).toBe(inQueue);
   });

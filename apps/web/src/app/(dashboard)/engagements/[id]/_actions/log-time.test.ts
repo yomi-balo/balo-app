@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ENGAGEMENT_CAPABILITIES, HOST_ROLES } from '@balo/shared/authz';
+import { capabilityOverTokenMap } from '@/test/engagement-capability-fake';
 import {
   CHARLES,
   FIXTURE_ENGAGEMENT_ID as ENGAGEMENT_ID,
@@ -83,6 +85,7 @@ vi.mock('@/lib/notifications/publish', () => ({
   },
 }));
 
+import { log } from '@/lib/logging';
 import { logTimeAction } from './log-time';
 
 const INPUT = {
@@ -122,7 +125,12 @@ beforeEach(() => {
     })
   );
   mockResolveLens.mockReturnValue({ lens: 'expert', archetype: 'participant' });
-  mockHasExpertCapability.mockResolvedValue(true);
+  // Charles delivers; any other caller holds the agency owner/admin bundle.
+  mockHasExpertCapability.mockImplementation(
+    capabilityOverTokenMap((id) =>
+      id === CHARLES.id ? HOST_ROLES.DELIVERING_EXPERT : HOST_ROLES.AGENCY_ADMIN
+    )
+  );
   mockWrite.mockResolvedValue(written());
   mockFindOwner.mockResolvedValue({ id: 'owner-1' });
   mockFindUser.mockResolvedValue({ id: CHARLES.id, timezone: 'Australia/Melbourne' });
@@ -149,6 +157,74 @@ describe('logTimeAction', () => {
     expect(await logTimeAction(INPUT)).toEqual({
       success: false,
       error: 'Only the delivering expert can do that.',
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'no_capability' })
+    );
+  });
+
+  it('refuses a project that is not active, logged as a time-entry denial', async () => {
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        pricingMethod: 'tm',
+        status: 'pending_acceptance',
+        milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
+      })
+    );
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: "This project isn't active.",
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'wrong_status' })
+    );
+  });
+
+  it('refuses an agency admin who is not the delivering expert, without writing', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: 'Only the delivering expert can do that.',
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Time entry denied',
+      expect.objectContaining({ reason: 'not_delivering_expert', userId: 'admin-1' })
+    );
+    expect(mockHasExpertCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'admin-1' }),
+      ENGAGEMENT_CAPABILITIES.LOG_TIME,
+      expect.any(String),
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+  });
+
+  it('refuses an agency `expert` colleague who is not delivering as a missing row', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'colleague-1',
+      firstName: 'Sam',
+      lastName: 'Wu',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-3',
+    });
+    mockResolveLens.mockReturnValue(null);
+    mockHasExpertCapability.mockImplementation(capabilityOverTokenMap(() => null));
+    expect(await logTimeAction(INPUT)).toEqual({
+      success: false,
+      error: 'This engagement could not be found.',
     });
     expect(mockWrite).not.toHaveBeenCalled();
   });
@@ -197,6 +273,7 @@ describe('logTimeAction', () => {
       milestone_id: MILESTONE_ID,
       minutes: 90,
       crossed_estimate: false,
+      acting_as: 'delivering_expert',
       milestone_pct_of_estimate: 94,
       distinct_id: CHARLES.id,
     });
@@ -238,6 +315,7 @@ describe('logTimeAction', () => {
       engagement_id: ENGAGEMENT_ID,
       milestone_id: MILESTONE_ID,
       milestones_over_count: 2,
+      acting_as: 'delivering_expert',
       distinct_id: CHARLES.id,
     });
   });

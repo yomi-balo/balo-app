@@ -23,6 +23,21 @@ describe('TimeLogList', () => {
     expect(screen.getByText('Logged by Priya')).toBeInTheDocument();
   });
 
+  it('shows who edited an entry only when the entry carries the label', () => {
+    render(
+      <TimeLogList
+        time={milestoneTimeView({
+          entries: [
+            entryView({ id: 'te-1', editedByLabel: 'Edited by Dana @ CloudPeak' }),
+            entryView({ id: 'te-2', note: 'Wrote it up' }),
+          ],
+        })}
+      />
+    );
+    expect(screen.getAllByText(/^Edited by/)).toHaveLength(1);
+    expect(screen.getByText('Edited by Dana @ CloudPeak')).toBeInTheDocument();
+  });
+
   it('omits the authors line when there is none', () => {
     render(<TimeLogList time={milestoneTimeView({ authorsLabel: null })} />);
     expect(screen.queryByText(/Logged by/)).not.toBeInTheDocument();

@@ -187,9 +187,58 @@ export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties)
 }
 
 /**
+ * Retrospective label for a person acting on the expert side of an engagement. The delivering
+ * expert (or an unknown actor) reads exactly as {@link EngagementParties.expertRetroFirstMention};
+ * any other holder (an agency owner/admin) is named, "@ agency" on first mention. An unnamed
+ * actor falls back to the expert party so the label never renders a dangling `@`.
+ */
+export function expertSideActorLabel(
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile'>,
+  parties: EngagementParties,
+  actor: { id: string; firstName: string | null; lastName: string | null } | null
+): string {
+  if (actor === null || actor.id === engagement.expertProfile.user.id) {
+    return parties.expertRetroFirstMention;
+  }
+  const name = (actor.firstName ?? '').trim() || (actor.lastName ?? '').trim();
+  if (name === '') {
+    return parties.expertParty;
+  }
+  const showsAgencyName =
+    parties.isAgencyExpert && (engagement.expertProfile.agency?.name.trim() ?? '') !== '';
+  return showsAgencyName ? `${name} @ ${parties.expertParty}` : name;
+}
+
+/**
+ * Short retrospective label for the person who completed a milestone. The delivering expert
+ * (or a completer the row never recorded) reads as {@link EngagementParties.expertPersonShort};
+ * any other holder (an agency owner/admin) is named as {@link expertSideActorLabel} names them.
+ */
+export function milestoneCompleterLabel(
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile'>,
+  parties: EngagementParties,
+  completer: { id: string; firstName: string | null; lastName: string | null } | null
+): string {
+  if (completer === null || completer.id === engagement.expertProfile.user.id) {
+    return parties.expertPersonShort;
+  }
+  return expertSideActorLabel(engagement, parties, completer);
+}
+
+/**
+ * Retrospective label for expert-side work with no single recorded actor. An agency engagement
+ * names the agency, since several of its people may have acted; an independent expert is the
+ * only one who can act, so they are named as {@link EngagementParties.expertRetroFirstMention}.
+ */
+export function expertSideRetroParty(parties: EngagementParties): string {
+  return parties.isAgencyExpert ? parties.expertParty : parties.expertRetroFirstMention;
+}
+
+/**
  * The retrospective person who performed an action-item write (BAL-329 attribution):
  *  - Balo staff → `'Balo'` (the platform actor label — Balo acts as a party, not a person);
- *  - expert     → the expert's "@ agency" first-mention;
+ *  - expert     → {@link expertSideActorLabel} (the delivering expert's "@ agency" first-mention,
+ *                 or the acting agency owner/admin named "@ agency");
  *  - client     → the acting person "@ company".
  *
  * ⚠ MOVED HERE FROM `_actions/action-item-action-shared.ts` BY BAL-404, AND THAT MOVE IS THE
@@ -206,13 +255,13 @@ export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties)
 export function deriveActorLabel(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
-  person: { firstName: string | null; lastName: string | null }
+  person: { id: string; firstName: string | null; lastName: string | null }
 ): string {
   if (lens === 'admin') {
     return 'Balo';
   }
   if (lens === 'expert') {
-    return deriveEngagementParties(engagement).expertRetroFirstMention;
+    return expertSideActorLabel(engagement, deriveEngagementParties(engagement), person);
   }
   return personAtCompany(person, engagement.company.name);
 }

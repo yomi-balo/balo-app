@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { ENGAGEMENT_EVENTS, ENGAGEMENT_SERVER_EVENTS } from './engagement';
+import {
+  ENGAGEMENT_EVENTS,
+  ENGAGEMENT_SERVER_EVENTS,
+  type EngagementServerEventMap,
+} from './engagement';
 
 describe('ENGAGEMENT_SERVER_EVENTS', () => {
   it('exposes workspace-viewed + the BAL-332 transition + BAL-333 scope-edit + BAL-334 lifecycle + BAL-338 review server events', () => {
@@ -90,5 +94,100 @@ describe('ENGAGEMENT_EVENTS', () => {
   it('maps the cancel-dialog constants to their exact event names', () => {
     expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED).toBe('engagement_cancel_dialog_opened');
     expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT).toBe('engagement_cancel_dialog_kept');
+  });
+});
+
+describe('change-order acting_as typing', () => {
+  it('requires acting_as on expert-side sends, withdrawals and no-change-order answers', () => {
+    const base = {
+      engagement_id: 'e',
+      change_order_id: 'c',
+      pricing_method: 'fixed',
+      distinct_id: 'u',
+      lines_added: 0,
+      lines_edited: 0,
+      lines_removed: 0,
+      has_price_change: false,
+      initiated_by: 'expert' as const,
+    };
+    const decided = { ...base, days_to_decision: 0 };
+    const sent: EngagementServerEventMap['engagement_change_order_sent'] = {
+      ...base,
+      acting_as: 'agency_admin',
+    };
+    const withdrawn: EngagementServerEventMap['engagement_change_order_withdrawn'] = {
+      ...decided,
+      acting_as: 'delivering_expert',
+    };
+    const clientDecline: EngagementServerEventMap['engagement_change_order_declined'] = {
+      ...decided,
+      answered_without_change_order: false,
+    };
+    // @ts-expect-error acting_as is required when the expert answers without a change order
+    const missing: EngagementServerEventMap['engagement_change_order_declined'] = {
+      ...decided,
+      answered_without_change_order: true,
+    };
+    expect([sent, withdrawn, clientDecline, missing]).toHaveLength(4);
+  });
+});
+
+describe('expert-side acting_as typing', () => {
+  it('requires acting_as on the workspace view only for the expert lens', () => {
+    const base = {
+      engagement_id: 'e',
+      entry: 'direct' as const,
+      engagement_status: 'active',
+      distinct_id: 'u',
+    };
+    const expert: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'expert',
+      acting_as: 'agency_admin',
+    };
+    const client: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'client',
+    };
+    const clientWithActing: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'client',
+      // @ts-expect-error acting_as is not accepted with a client lens
+      acting_as: 'agency_admin',
+    };
+    // @ts-expect-error acting_as is required with the expert lens
+    const expertMissing: EngagementServerEventMap['engagement_workspace_viewed'] = {
+      ...base,
+      lens: 'expert',
+    };
+    expect([expert, client, clientWithActing, expertMissing]).toHaveLength(4);
+  });
+
+  it('requires acting_as on expert-only events and leaves it optional on the estimate notice', () => {
+    const logged: EngagementServerEventMap['engagement_time_logged'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      minutes: 30,
+      crossed_estimate: false,
+      milestone_pct_of_estimate: null,
+      acting_as: 'delivering_expert',
+      distinct_id: 'u',
+    };
+    // @ts-expect-error acting_as is required on time logged
+    const loggedMissing: EngagementServerEventMap['engagement_time_logged'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      minutes: 30,
+      crossed_estimate: false,
+      milestone_pct_of_estimate: null,
+      distinct_id: 'u',
+    };
+    const exceeded: EngagementServerEventMap['engagement_milestone_estimate_exceeded'] = {
+      engagement_id: 'e',
+      milestone_id: 'm',
+      milestones_over_count: 1,
+      distinct_id: 'u',
+    };
+    expect([logged, loggedMissing, exceeded]).toHaveLength(3);
   });
 });

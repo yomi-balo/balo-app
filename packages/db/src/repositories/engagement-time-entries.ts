@@ -1,3 +1,4 @@
+import { alias } from 'drizzle-orm/pg-core';
 import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, ne, sql, sum } from 'drizzle-orm';
 import { estimateCrossed, TIME_ENTRY_MAX_MINUTES, type IsoDate } from '@balo/shared/engagements';
 import { db } from '../client';
@@ -34,8 +35,10 @@ import type { DbExecutor } from './_shared/db-executor';
  * WRITE PRECONDITIONS. The project is `active` (so `pending_acceptance` is refused by the lock)
  * and priced `tm`. `log` and `update` need the milestone `in_progress` and keep the author's
  * live minutes on the work date, across the engagement, within a day (`TIME_ENTRY_MAX_MINUTES`);
- * `remove` works on a milestone in any status. `update` and `remove` act only on the caller's
- * own live entry.
+ * `remove` works on a milestone in any status. `update` and `remove` act on one live entry on
+ * the engagement, and their `authorScope` decides whose: `'own'` reaches only an entry the
+ * actor wrote, `'any'` reaches any author's. Any other entry is `entry_not_found`. Both stamp
+ * `updated_by_user_id` with the actor; `log` leaves it null.
  *
  * ESTIMATE CROSSING. A write that moves a milestone's live logged total from within its
  * estimate to beyond it records `engagement_milestone.estimate_exceeded` in the same
@@ -80,6 +83,10 @@ export interface TimeEntryListRow {
   engagementMilestoneId: string;
   userId: string;
   authorFirstName: string | null;
+  /** Who last edited or removed the entry; null = never edited. */
+  updatedByUserId: string | null;
+  editorFirstName: string | null;
+  editorLastName: string | null;
   workedOn: IsoDate;
   minutes: number;
   note: string;
@@ -228,14 +235,21 @@ async function discoverMilestone(milestoneId: string, engagementId: string): Pro
 }
 
 /**
- * Unlocked lock-order discovery of the milestone a live entry sits on. A missing or removed
- * entry, one on another engagement or by another author, or one whose milestone was removed
- * all refuse with the same `entry_not_found`, so authorship does not leak.
+ * Whose entries a write may reach: `'own'` only the actor's, `'any'` any author's on the
+ * engagement. The repository is role-free; the caller decides the scope.
  */
-async function discoverOwnEntryMilestoneId(input: {
+export type TimeEntryAuthorScope = 'own' | 'any';
+
+/**
+ * Unlocked lock-order discovery of the milestone a live entry sits on. A missing or removed
+ * entry, one on another engagement, one by another author (scope `'own'`), or one whose
+ * milestone was removed all refuse with the same `entry_not_found`, so authorship does not leak.
+ */
+async function discoverEntryMilestoneId(input: {
   engagementId: string;
   entryId: string;
   userId: string;
+  authorScope: TimeEntryAuthorScope;
 }): Promise<string> {
   const [row] = await db
     .select({ milestoneId: engagementTimeEntries.engagementMilestoneId })
@@ -251,7 +265,7 @@ async function discoverOwnEntryMilestoneId(input: {
       and(
         eq(engagementTimeEntries.id, input.entryId),
         eq(engagementTimeEntries.engagementId, input.engagementId),
-        eq(engagementTimeEntries.userId, input.userId),
+        input.authorScope === 'own' ? eq(engagementTimeEntries.userId, input.userId) : undefined,
         liveEntry
       )
     );
@@ -259,10 +273,16 @@ async function discoverOwnEntryMilestoneId(input: {
   return row.milestoneId;
 }
 
-/** Re-read the caller's entry FOR UPDATE under the engagement and milestone locks. */
-async function lockOwnEntryTx(
+/** Re-read the entry FOR UPDATE under the engagement and milestone locks. */
+async function lockEntryTx(
   tx: DbTx,
-  input: { engagementId: string; entryId: string; userId: string; milestoneId: string }
+  input: {
+    engagementId: string;
+    entryId: string;
+    userId: string;
+    milestoneId: string;
+    authorScope: TimeEntryAuthorScope;
+  }
 ): Promise<EngagementTimeEntry> {
   const [entry] = await tx
     .select()
@@ -272,7 +292,7 @@ async function lockOwnEntryTx(
         eq(engagementTimeEntries.id, input.entryId),
         eq(engagementTimeEntries.engagementId, input.engagementId),
         eq(engagementTimeEntries.engagementMilestoneId, input.milestoneId),
-        eq(engagementTimeEntries.userId, input.userId),
+        input.authorScope === 'own' ? eq(engagementTimeEntries.userId, input.userId) : undefined,
         liveEntry
       )
     )
@@ -503,26 +523,28 @@ export const engagementTimeEntriesRepository = {
   },
 
   /**
-   * Change the minutes and note of the caller's own entry on an in-progress milestone, and
-   * re-check the estimate crossing. Throws `EngagementNotActiveError` or
-   * `TimeEntryWriteRefusedError`.
+   * Change the minutes and note of an entry on an in-progress milestone, and re-check the
+   * estimate crossing. `userId` is the actor (audit, and stamped as `updatedByUserId`);
+   * `authorScope` decides whether the entry must be theirs. The daily limit is checked against the entry's author. Throws
+   * `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
    */
   async update(input: {
     engagementId: string;
     entryId: string;
     userId: string;
+    authorScope: TimeEntryAuthorScope;
     minutes: number;
     note: string;
   }): Promise<TimeEntryWriteResult> {
-    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    const milestoneId = await discoverEntryMilestoneId(input);
     return db.transaction(async (tx) => {
       const { milestone } = await lockEngagementAndMilestone(tx, milestoneId);
-      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      const current = await lockEntryTx(tx, { ...input, milestoneId });
       await assertTimeAndMaterialsTx(tx, input.engagementId);
       assertInProgress(milestone);
       await assertWithinDailyLimitTx(tx, {
         engagementId: input.engagementId,
-        userId: input.userId,
+        userId: current.userId,
         workedOn: current.workedOn,
         minutes: input.minutes,
         excludeEntryId: current.id,
@@ -531,7 +553,12 @@ export const engagementTimeEntriesRepository = {
       const beforeMinutes = await milestoneLoggedMinutesTx(tx, milestone.id);
       const [entry] = await tx
         .update(engagementTimeEntries)
-        .set({ minutes: input.minutes, note: input.note, updatedAt: new Date() })
+        .set({
+          minutes: input.minutes,
+          note: input.note,
+          updatedByUserId: input.userId,
+          updatedAt: new Date(),
+        })
         .where(eq(engagementTimeEntries.id, current.id))
         .returning();
       if (entry === undefined) throw new Error('Time entry update returned no row');
@@ -561,24 +588,26 @@ export const engagementTimeEntriesRepository = {
   },
 
   /**
-   * Soft-delete the caller's own entry, on a milestone in any status. No crossing check.
-   * Throws `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
+   * Soft-delete an entry, on a milestone in any status. No crossing check. `userId` is the
+   * actor (audit, and stamped as `updatedByUserId`); `authorScope` decides whether the entry
+   * must be theirs. Throws `EngagementNotActiveError` or `TimeEntryWriteRefusedError`.
    */
   async remove(input: {
     engagementId: string;
     entryId: string;
     userId: string;
+    authorScope: TimeEntryAuthorScope;
   }): Promise<EngagementTimeEntry> {
-    const milestoneId = await discoverOwnEntryMilestoneId(input);
+    const milestoneId = await discoverEntryMilestoneId(input);
     return db.transaction(async (tx) => {
       await lockEngagementAndMilestone(tx, milestoneId);
-      const current = await lockOwnEntryTx(tx, { ...input, milestoneId });
+      const current = await lockEntryTx(tx, { ...input, milestoneId });
       await assertTimeAndMaterialsTx(tx, input.engagementId);
 
       const now = new Date();
       const [entry] = await tx
         .update(engagementTimeEntries)
-        .set({ deletedAt: now, updatedAt: now })
+        .set({ deletedAt: now, updatedAt: now, updatedByUserId: input.userId })
         .where(eq(engagementTimeEntries.id, current.id))
         .returning();
       if (entry === undefined) throw new Error('Time entry delete returned no row');
@@ -597,12 +626,16 @@ export const engagementTimeEntriesRepository = {
 
   /** The engagement's live entries, newest work date first (ties: newest logged first). */
   async listByEngagement(engagementId: string): Promise<TimeEntryListRow[]> {
+    const editor = alias(users, 'editor');
     return db
       .select({
         id: engagementTimeEntries.id,
         engagementMilestoneId: engagementTimeEntries.engagementMilestoneId,
         userId: engagementTimeEntries.userId,
         authorFirstName: users.firstName,
+        updatedByUserId: engagementTimeEntries.updatedByUserId,
+        editorFirstName: editor.firstName,
+        editorLastName: editor.lastName,
         workedOn: engagementTimeEntries.workedOn,
         minutes: engagementTimeEntries.minutes,
         note: engagementTimeEntries.note,
@@ -610,6 +643,7 @@ export const engagementTimeEntriesRepository = {
       })
       .from(engagementTimeEntries)
       .leftJoin(users, eq(users.id, engagementTimeEntries.userId))
+      .leftJoin(editor, eq(editor.id, engagementTimeEntries.updatedByUserId))
       .where(and(eq(engagementTimeEntries.engagementId, engagementId), liveEntry))
       .orderBy(
         desc(engagementTimeEntries.workedOn),

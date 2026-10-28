@@ -72,8 +72,8 @@ interface ExpertMilestoneRailProps {
   milestones: MilestoneNodeView[];
   /** The expert-lens invitation copy, shown when the plan is empty. Null suppresses it. */
   emptyState: EmptyStateView | null;
-  /** Optimistic "Completed today by {name}" attribution. */
-  expertPersonShort: string;
+  /** Optimistic "Completed today by {name}" attribution: the viewer who just acted. */
+  viewerCompleterLabel: string;
   /** Modal copy + the notify footnote. */
   clientCompanyName: string;
   /** The change-order composer entry; omitted when the viewer cannot propose changes. */
@@ -206,7 +206,7 @@ export function ExpertMilestoneRail({
   engagementId,
   milestones,
   emptyState,
-  expertPersonShort,
+  viewerCompleterLabel,
   clientCompanyName,
   proposeChange,
   addNeedsChangeOrder,
@@ -265,7 +265,7 @@ export function ExpertMilestoneRail({
             nodeVariant: 'completed',
             statusLabel: 'Completed',
             connectorFilled: true,
-            completedLabel: `Completed today by ${expertPersonShort}`,
+            completedLabel: `Completed today by ${viewerCompleterLabel}`,
             completionNote: action.note.trim() || null,
           };
         }
@@ -290,7 +290,7 @@ export function ExpertMilestoneRail({
         };
       });
     },
-    [expertPersonShort]
+    [viewerCompleterLabel]
   );
 
   const [optimistic, applyOptimistic] = useOptimistic(milestones, reducer);

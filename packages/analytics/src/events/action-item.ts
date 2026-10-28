@@ -12,6 +12,8 @@
  * or a stable system id on the ai_extracted path) — never a party name/email or the
  * item body.
  */
+import type { ExpertSideActingAs } from './engagement';
+
 export const ACTION_ITEM_SERVER_EVENTS = {
   CREATED: 'action_item_created',
   ASSIGNED: 'action_item_assigned',
@@ -37,6 +39,8 @@ export interface ActionItemServerEventMap {
     assignee_role: ActionItemAssigneeRole;
     /** 1 for a manual add; N for an ai_extracted batch (fired by the BAL-387 producer). */
     count: number;
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     /** User UUID; a stable system id (e.g. 'system:action-item-pipeline') on the ai path. */
     distinct_id: string;
   };
@@ -44,6 +48,8 @@ export interface ActionItemServerEventMap {
     engagement_id: string;
     action_item_id: string;
     assignee_role: ActionItemAssigneeRole;
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     distinct_id: string;
   };
   [ACTION_ITEM_SERVER_EVENTS.COMPLETED]: {
@@ -52,6 +58,8 @@ export interface ActionItemServerEventMap {
     action_item_id: string;
     completed_by_role: ActionItemActorRole;
     was_ai_extracted: boolean;
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     distinct_id: string;
   };
   [ACTION_ITEM_SERVER_EVENTS.REOPENED]: {
@@ -59,6 +67,8 @@ export interface ActionItemServerEventMap {
     engagement_type: ActionItemEngagementType;
     action_item_id: string;
     reopened_by_role: ActionItemActorRole;
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     distinct_id: string;
   };
   [ACTION_ITEM_SERVER_EVENTS.EDITED]: {
@@ -66,11 +76,15 @@ export interface ActionItemServerEventMap {
     action_item_id: string;
     /** The changed field names this edit, e.g. ['body','due_at']. */
     fields_changed: string[];
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     distinct_id: string;
   };
   [ACTION_ITEM_SERVER_EVENTS.REMOVED]: {
     engagement_id: string;
     action_item_id: string;
+    /** Set when the actor acted on the expert side; absent for client, staff and case-surface actors. */
+    acting_as?: ExpertSideActingAs;
     distinct_id: string;
   };
 }

@@ -113,6 +113,8 @@ export async function approveChangeOrderAction(input: {
           loggedMinutes: milestone.loggedMinutes,
           milestonesOverCount: approval.milestonesOverCount,
           userId: user.id,
+          expertActor: null,
+          actingAs: null,
         });
       }
 

@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 6
 published: false
-updated: 2026-10-26
+updated: 2026-10-29
 related: [proposing-a-change-to-a-live-project, editing-milestones-after-acceptance]
 ---
 
@@ -22,15 +22,19 @@ enough: say what the hours went on.
 
 You can log time only while the project is active and the milestone is in progress. A milestone
 that hasn't started or is already complete has no Log time option, so start it first or revert it
-if you need to add more hours. Anyone on your side who can manage the project can log time, and
-each entry records who logged it.
+if you need to add more hours. Only the expert delivering the project logs time, and each entry
+records who logged it. Agency owners and admins can see and manage the entries but don't log hours
+on someone else's behalf.
 
 ## Editing or deleting an entry
 
 You can edit your own entries while the project is active and the milestone is in progress. You can
 delete them while the project is active, whatever the milestone's status. Use the pencil or bin on the
-entry in the milestone's time log. You can't change an entry someone else logged. Edits and
-deletions are recorded, and the client sees the entry as it now stands.
+entry in the milestone's time log. You can't change an entry someone else logged. The exception is an
+agency owner or admin, including a delivering expert who owns the agency, who can edit or delete any
+entry on their agency's projects. When someone changes an entry they didn't log, the entry shows who
+edited it and the person who logged it is told. Edits and deletions are recorded, and the client sees
+the entry as it now stands.
 
 One day can't add up to more than 24 hours of your entries on a project. A milestone with logged time can't
 be removed from the project, so complete it instead.

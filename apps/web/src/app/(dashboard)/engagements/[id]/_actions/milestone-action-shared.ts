@@ -18,8 +18,13 @@ import { scopeChangeMessage } from '@/lib/engagement/scope-change-redirect';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import {
   deriveEngagementParties,
+  expertSideActorLabel,
   type EngagementParties,
 } from '@/lib/engagement/engagement-parties';
+import {
+  resolveExpertSideActor,
+  type ExpertSideActor,
+} from '@/lib/engagement/resolve-engagement-viewer';
 import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { plainMessageToHtml } from '@/lib/sanitize/plain-message-html';
@@ -71,32 +76,33 @@ export const EDIT_COSMETIC_DEBOUNCE_MS = 10 * 60_000;
 
 /** The audited authorize result — the loaded engagement + the target milestone. */
 export type AuthorizeResult =
-  | { ok: true; engagement: ProjectEngagementWithMilestones; milestone: EngagementMilestoneNode }
+  | {
+      ok: true;
+      engagement: ProjectEngagementWithMilestones;
+      milestone: EngagementMilestoneNode;
+      actor: ExpertSideActor;
+    }
   | { ok: false; error: string };
 
-/** The shared expert-lens gate result — the loaded engagement or a friendly error. */
-type GateResult =
-  | { ok: true; engagement: ProjectEngagementWithMilestones }
+/** The expert-side gate result — the loaded engagement and the actor's capacity, or a friendly error. */
+export type ExpertSideGateResult =
+  | { ok: true; engagement: ProjectEngagementWithMilestones; actor: ExpertSideActor }
   | { ok: false; error: string };
 
 /**
- * The shared 3-step prefix of every expert delivery-plan action: load engagement →
- * expert-lens gate → engagement-active guard. Extracted so it exists in ONE audited
- * place (SonarCloud new-code duplication gate) — both {@link authorizeExpertMilestone}
- * (which adds an IDOR + status pre-check) and {@link authorizeExpertEngagement} (which
- * adds an OPTIONAL IDOR check, no status) build on it.
- *
- * Gates on `lens === 'expert'` (NOT `isDeliveringExpert`): an admin who incidentally
- * delivers resolves to `lens: 'admin'` (observer precedence) and is correctly blocked.
- * A stranger (`ctx === null`) sees the same `NOT_FOUND` as a missing row (existence
- * never leaks). Denials are `log.warn`ed (recoverable telemetry) — never any body copy.
+ * The load-and-classify gate every pure expert-side act starts from: load the engagement →
+ * resolve the actor's `manage_engagement` capacity. A missing row and a stranger share one
+ * `NOT_FOUND` (existence never leaks); a party who is not a holder (a client member, Balo staff)
+ * gets `denial.notHolder`. Status checks stay with the caller. Denials are `log.warn`ed
+ * (recoverable telemetry) — never any body copy.
  */
-async function gateExpertActiveEngagement(
+export async function gateExpertSideAct(
   user: SessionUser,
-  engagementId: string
-): Promise<GateResult> {
+  engagementId: string,
+  denial: { notHolder: string; logMessage: string }
+): Promise<ExpertSideGateResult> {
   const deny = (reason: string, error: string): { ok: false; error: string } => {
-    log.warn('Engagement action denied', { engagementId, userId: user.id, reason });
+    log.warn(denial.logMessage, { engagementId, userId: user.id, reason });
     return { ok: false, error };
   };
 
@@ -104,19 +110,46 @@ async function gateExpertActiveEngagement(
   if (engagement === undefined) {
     return deny('engagement_not_found', NOT_FOUND);
   }
+  const actor = await resolveExpertSideActor(user, engagement);
+  if (actor === null) {
+    if (resolveEngagementLens(user, engagement) === null) {
+      return deny('not_a_party', NOT_FOUND);
+    }
+    return deny('no_capability', denial.notHolder);
+  }
+  return { ok: true, engagement, actor };
+}
 
-  const ctx = resolveEngagementLens(user, engagement);
-  if (ctx === null) {
-    // Stranger — same 404 as a missing row (no existence leak).
-    return deny('not_a_party', NOT_FOUND);
+/**
+ * The shared 3-step prefix of every expert delivery-plan action: load engagement →
+ * expert-side gate → engagement-active guard. Extracted so it exists in ONE audited
+ * place (SonarCloud new-code duplication gate) — both {@link authorizeExpertMilestone}
+ * (which adds an IDOR + status pre-check) and {@link authorizeExpertEngagement} (which
+ * adds an OPTIONAL IDOR check, no status) build on it.
+ *
+ * Gates on the `manage_engagement` capability (the delivering expert or an owner/admin of
+ * their agency), not the viewer lens.
+ */
+async function gateExpertActiveEngagement(
+  user: SessionUser,
+  engagementId: string
+): Promise<ExpertSideGateResult> {
+  const gate = await gateExpertSideAct(user, engagementId, {
+    notHolder: ONLY_EXPERT,
+    logMessage: 'Engagement action denied',
+  });
+  if (!gate.ok) {
+    return gate;
   }
-  if (ctx.lens !== 'expert') {
-    return deny('wrong_lens', ONLY_EXPERT);
+  if (gate.engagement.status !== 'active') {
+    log.warn('Engagement action denied', {
+      engagementId,
+      userId: user.id,
+      reason: 'engagement_locked',
+    });
+    return { ok: false, error: ENGAGEMENT_LOCKED };
   }
-  if (engagement.status !== 'active') {
-    return deny('engagement_locked', ENGAGEMENT_LOCKED);
-  }
-  return { ok: true, engagement };
+  return gate;
 }
 
 /**
@@ -152,12 +185,13 @@ export async function authorizeExpertMilestone(
     return deny('stale_status', STALE_TRANSITION);
   }
 
-  return { ok: true, engagement: gate.engagement, milestone };
+  return { ok: true, engagement: gate.engagement, milestone, actor: gate.actor };
 }
 
 /** The authorized context for a status-optional engagement-scoped action. */
 export interface AuthorizedEngagement {
   user: SessionUser;
+  actor: ExpertSideActor;
   engagement: ProjectEngagementWithMilestones;
   /** Present iff `opts.milestoneId` was supplied AND validated (IDOR). */
   milestone?: EngagementMilestoneNode;
@@ -176,7 +210,12 @@ export async function authorizeExpertEngagement(
   engagementId: string,
   opts?: { milestoneId?: string }
 ): Promise<
-  | { ok: true; engagement: ProjectEngagementWithMilestones; milestone?: EngagementMilestoneNode }
+  | {
+      ok: true;
+      engagement: ProjectEngagementWithMilestones;
+      actor: ExpertSideActor;
+      milestone?: EngagementMilestoneNode;
+    }
   | { ok: false; error: string }
 > {
   const gate = await gateExpertActiveEngagement(user, engagementId);
@@ -195,10 +234,10 @@ export async function authorizeExpertEngagement(
       });
       return { ok: false, error: MILESTONE_GONE };
     }
-    return { ok: true, engagement: gate.engagement, milestone };
+    return { ok: true, engagement: gate.engagement, actor: gate.actor, milestone };
   }
 
-  return { ok: true, engagement: gate.engagement };
+  return { ok: true, engagement: gate.engagement, actor: gate.actor };
 }
 
 /**
@@ -293,6 +332,7 @@ export async function runMilestoneTransition<T>(
 /** The authorized context handed to a per-action `perform` callback. */
 export interface AuthorizedMilestone {
   user: SessionUser;
+  actor: ExpertSideActor;
   engagement: ProjectEngagementWithMilestones;
   milestone: EngagementMilestoneNode;
 }
@@ -358,7 +398,15 @@ export async function runExpertMilestoneAction(
     async () => {
       const res = await authorizeExpertMilestone(user, engagementId, milestoneId, expectedStatus);
       return res.ok
-        ? { ok: true, context: { user, engagement: res.engagement, milestone: res.milestone } }
+        ? {
+            ok: true,
+            context: {
+              user,
+              actor: res.actor,
+              engagement: res.engagement,
+              milestone: res.milestone,
+            },
+          }
         : { ok: false, error: res.error };
     },
     perform
@@ -390,7 +438,15 @@ export async function runExpertEngagementAction(
     async () => {
       const res = await authorizeExpertEngagement(user, engagementId, opts);
       return res.ok
-        ? { ok: true, context: { user, engagement: res.engagement, milestone: res.milestone } }
+        ? {
+            ok: true,
+            context: {
+              user,
+              actor: res.actor,
+              engagement: res.engagement,
+              milestone: res.milestone,
+            },
+          }
         : { ok: false, error: res.error };
     },
     perform
@@ -427,6 +483,7 @@ export function buildChangeSummary(kind: MilestoneChangeKind, title: string): st
 export async function publishScopeChange(
   engagement: ProjectEngagementWithMilestones,
   input: {
+    actor: SessionUser;
     changeKind: MilestoneChangeKind;
     milestoneId: string;
     milestoneTitle: string;
@@ -442,7 +499,7 @@ export async function publishScopeChange(
     engagementId: engagement.id,
     milestoneId: input.milestoneId,
     recipientId,
-    actorExpertLabel: parties.expertRetroFirstMention,
+    actorExpertLabel: expertSideActorLabel(engagement, parties, input.actor),
     projectTitle: deriveEngagementTitle(engagement, parties),
     changeKind: input.changeKind,
     changeSummary: buildChangeSummary(input.changeKind, input.milestoneTitle),

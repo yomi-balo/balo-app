@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { engagementMilestonesRepository } from '@balo/db';
 import { hasOutstandingChangeRequest } from '@/lib/engagement/change-request-view';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -49,7 +49,7 @@ export async function revertMilestoneAction(input: {
     parsed.data,
     'completed',
     'Failed to revert milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       // Read the completion timestamp BEFORE the revert nulls it (the metric gotcha).
       const completedAtBefore = milestone.completedAt;
 
@@ -69,6 +69,7 @@ export async function revertMilestoneAction(input: {
         engagement_id: engagement.id,
         milestone_id: updated.id,
         hours_since_completed: hoursSinceCompleted,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
@@ -82,7 +83,7 @@ export async function revertMilestoneAction(input: {
           engagementId: engagement.id,
           milestoneId: updated.id,
           recipientId,
-          actorExpertLabel: parties.expertRetroFirstMention,
+          actorExpertLabel: expertSideActorLabel(engagement, parties, user),
           milestoneTitle: updated.title,
         }).catch(() => {
           // publishNotificationEvent logs internally.

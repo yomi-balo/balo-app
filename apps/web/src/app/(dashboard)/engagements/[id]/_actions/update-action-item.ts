@@ -66,7 +66,7 @@ export async function updateActionItemAction(
     engagementId,
     { actionItemId },
     'Failed to update action item',
-    async ({ user, engagement, actionItem }) => {
+    async ({ user, actingAs, engagement, actionItem }) => {
       if (actionItem === undefined) {
         return { success: false, error: ACTION_ITEM_GONE };
       }
@@ -93,6 +93,7 @@ export async function updateActionItemAction(
         engagement_id: engagement.id,
         action_item_id: updated.id,
         fields_changed: fieldsChanged,
+        ...(actingAs === null ? {} : { acting_as: actingAs }),
         distinct_id: user.id,
       });
 

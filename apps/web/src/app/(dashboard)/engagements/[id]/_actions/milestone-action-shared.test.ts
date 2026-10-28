@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { EngagementMilestone, ProjectEngagementWithMilestones } from '@balo/db';
-import { engagementMilestoneFixture } from '@/test/fixtures/engagement-milestone';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
+import {
+  engagementMilestoneFixture,
+  type WorkspaceMilestoneFixture,
+} from '@/test/fixtures/engagement-milestone';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const MILESTONE_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -17,6 +20,11 @@ vi.mock('@/lib/auth/session', () => ({
 const mockResolveLens = vi.fn();
 vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...args: unknown[]) => mockResolveLens(...args),
+}));
+
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
 }));
 
 const {
@@ -100,7 +108,7 @@ const USER = {
   platformRole: 'user',
 } as unknown as Parameters<typeof authorizeExpertMilestone>[0];
 
-function milestone(overrides: Partial<EngagementMilestone> = {}): EngagementMilestone {
+function milestone(overrides: Partial<WorkspaceMilestoneFixture> = {}): WorkspaceMilestoneFixture {
   return engagementMilestoneFixture({
     id: MILESTONE_ID,
     title: 'Discovery',
@@ -113,11 +121,12 @@ function milestone(overrides: Partial<EngagementMilestone> = {}): EngagementMile
 function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
   return {
     id: ENGAGEMENT_ID,
+    expertProfileId: 'ep-1',
     status: 'active',
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
-      user: { firstName: 'Priya', lastName: 'Sharma' },
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       agency: null,
       headline: null,
       type: 'freelancer',
@@ -150,6 +159,7 @@ function parties(overrides: Partial<EngagementParties> = {}): EngagementParties 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue(EXPERT_CTX);
 });
@@ -162,12 +172,14 @@ describe('authorizeExpertMilestone', () => {
   });
 
   it('returns NOT_FOUND for a stranger (lens resolves to null)', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue(null);
     const res = await authorizeExpertMilestone(USER, ENGAGEMENT_ID, MILESTONE_ID, 'pending');
     expect(res).toEqual({ ok: false, error: 'This engagement could not be found.' });
   });
 
   it('returns ONLY_EXPERT for a non-expert lens (incl. an admin who delivers)', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin', isDeliveringExpert: true });
     const res = await authorizeExpertMilestone(USER, ENGAGEMENT_ID, MILESTONE_ID, 'pending');
     expect(res).toEqual({
@@ -212,6 +224,63 @@ describe('authorizeExpertMilestone', () => {
       expect(res.milestone.id).toBe(MILESTONE_ID);
       expect(res.engagement.id).toBe(ENGAGEMENT_ID);
     }
+  });
+});
+
+describe('expert-side gate (manage_engagement capability)', () => {
+  const ADMIN_HOLDER = { ...USER, id: 'admin-1', expertProfileId: 'ep-other' };
+
+  it('asks the capability with the engagement profile and project context', async () => {
+    await authorizeExpertMilestone(USER, ENGAGEMENT_ID, MILESTONE_ID, 'pending');
+    expect(mockHasExpertCapability).toHaveBeenCalledWith(USER, 'manage_engagement', 'ep-1', {
+      contextType: 'project',
+      contextId: ENGAGEMENT_ID,
+    });
+  });
+
+  it('admits an agency owner/admin who is not a lens party, as agency_admin', async () => {
+    mockResolveLens.mockReturnValue(null);
+    const res = await authorizeExpertMilestone(
+      ADMIN_HOLDER as never,
+      ENGAGEMENT_ID,
+      MILESTONE_ID,
+      'pending'
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.actor).toEqual({ isDeliveringExpert: false, actingAs: 'agency_admin' });
+  });
+
+  it('admits a platform admin who holds the capability (observer lens no longer blocks)', async () => {
+    mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
+    const res = await authorizeExpertEngagement(USER, ENGAGEMENT_ID);
+    expect(res.ok).toBe(true);
+  });
+
+  it('refuses a lens-party admin without the capability with ONLY_EXPERT', async () => {
+    mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
+    mockHasExpertCapability.mockResolvedValue(false);
+    const res = await authorizeExpertEngagement(USER, ENGAGEMENT_ID);
+    expect(res).toEqual({ ok: false, error: 'Only the delivering expert can update milestones.' });
+  });
+
+  it('labels a scope-change notice with the acting agency admin', async () => {
+    const agencyEngagement = engagement({
+      expertProfile: {
+        user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
+        agency: { name: 'CloudPeak' },
+        headline: null,
+        type: 'agency',
+      },
+    } as never);
+    await publishScopeChange(agencyEngagement as never, {
+      actor: { ...ADMIN_HOLDER, firstName: 'Dana', lastName: 'Lee' } as never,
+      changeKind: 'added',
+      milestoneId: MILESTONE_ID,
+      milestoneTitle: 'Discovery',
+      correlationId: `${MILESTONE_ID}:added`,
+    });
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.actorExpertLabel).toBe('Dana @ CloudPeak');
   });
 });
 
@@ -390,6 +459,7 @@ describe('runExpertMilestoneAction', () => {
 
 describe('authorizeExpertEngagement', () => {
   it('returns NOT_FOUND for a stranger (lens resolves to null)', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue(null);
     expect(await authorizeExpertEngagement(USER, ENGAGEMENT_ID)).toEqual({
       ok: false,
@@ -398,6 +468,7 @@ describe('authorizeExpertEngagement', () => {
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
     expect(await authorizeExpertEngagement(USER, ENGAGEMENT_ID)).toEqual({
       ok: false,
@@ -507,6 +578,7 @@ describe('publishScopeChange', () => {
   it('publishes engagement.scope_changed with the derived payload', async () => {
     mockFindOwner.mockResolvedValue({ id: 'owner-1' });
     await publishScopeChange(engagement() as never, {
+      actor: USER,
       changeKind: 'added',
       milestoneId: MILESTONE_ID,
       milestoneTitle: 'Discovery',
@@ -526,6 +598,7 @@ describe('publishScopeChange', () => {
 
   it('adds changeDetail to the payload only when given', async () => {
     await publishScopeChange(engagement() as never, {
+      actor: USER,
       changeKind: 'edited',
       milestoneId: MILESTONE_ID,
       milestoneTitle: 'Discovery',
@@ -539,6 +612,7 @@ describe('publishScopeChange', () => {
   it('omits recipientId when the owner lookup fails', async () => {
     mockFindOwner.mockRejectedValue(new Error('no owner'));
     await publishScopeChange(engagement() as never, {
+      actor: USER,
       changeKind: 'removed',
       milestoneId: MILESTONE_ID,
       milestoneTitle: 'Discovery',

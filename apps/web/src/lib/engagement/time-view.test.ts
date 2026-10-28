@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { ProjectEngagementWithMilestones, TimeEntryListRow, TimeEntrySums } from '@balo/db';
+import type {
+  ProjectEngagementWithMilestones,
+  TimeEntryAuthorScope,
+  TimeEntryListRow,
+  TimeEntrySums,
+} from '@balo/db';
 import { makeMilestone, makeProject } from '@/test/change-order-fixtures';
 import { mapTimeToView, type WorkspaceTimeView } from './time-view';
 import type { EngagementViewerContext } from './resolve-engagement-lens';
@@ -19,6 +24,9 @@ function entry(over: Partial<TimeEntryListRow> = {}): TimeEntryListRow {
     engagementMilestoneId: MS,
     userId: VIEWER,
     authorFirstName: 'Charles',
+    updatedByUserId: null,
+    editorFirstName: null,
+    editorLastName: null,
     workedOn: '2026-10-14',
     minutes: 90,
     note: 'Mapped the flows',
@@ -59,6 +67,7 @@ function view(
     entries?: TimeEntryListRow[];
     sums?: TimeEntrySums;
     canLogTime?: boolean;
+    timeEntryScope?: TimeEntryAuthorScope | null;
     period?: typeof period | null;
     notifiedMilestoneIds?: string[];
   } = {}
@@ -71,6 +80,7 @@ function view(
     period: over.period === undefined ? period : over.period,
     viewerUserId: VIEWER,
     canLogTime: over.canLogTime ?? true,
+    timeEntryScope: over.timeEntryScope === undefined ? 'own' : over.timeEntryScope,
     notifiedMilestoneIds: over.notifiedMilestoneIds ?? [],
   });
   if (result === null) throw new Error('expected a time view');
@@ -95,6 +105,7 @@ describe('mapTimeToView', () => {
         period,
         viewerUserId: VIEWER,
         canLogTime: true,
+        timeEntryScope: null,
         notifiedMilestoneIds: [],
       })
     ).toBeNull();
@@ -183,8 +194,64 @@ describe('mapTimeToView', () => {
       expect(e).toMatchObject({ canEdit: false, canDelete: false });
     });
 
+    it.each([
+      [null, 'own entry', VIEWER, false],
+      [null, "someone else's entry", 'user-other', false],
+      ['own', 'own entry', VIEWER, true],
+      ['own', "someone else's entry", 'user-other', false],
+      ['any', 'own entry', VIEWER, true],
+      ['any', "someone else's entry", 'user-other', true],
+    ] as const)('scope %s on %s: may change is %s', (scope, _name, author, expected) => {
+      const [e] = milestone(
+        view(project(), { entries: [entry({ userId: author })], timeEntryScope: scope })
+      ).entries;
+      expect(e).toMatchObject({ canEdit: expected, canDelete: expected });
+    });
+
+    it('a viewer who cannot log time still changes entries their scope reaches', () => {
+      const v = milestone(
+        view(project(), {
+          entries: [entry({ userId: 'user-other' })],
+          canLogTime: false,
+          timeEntryScope: 'any',
+        })
+      );
+      expect(v.canLog).toBe(false);
+      expect(v.entries[0]).toMatchObject({ canEdit: true, canDelete: true });
+    });
+
+    it.each([
+      ['another editor', 'user-dana', 'Dana', 'Edited by Dana @ CloudPeak'],
+      ['the author', VIEWER, 'Charles', null],
+      ['no one', null, null, null],
+    ])('editedByLabel for %s', (_name, editorId, editorName, expected) => {
+      const base = project();
+      const engagement = {
+        ...base,
+        expertProfile: {
+          ...base.expertProfile,
+          type: 'agency',
+          agency: { id: 'agency-1', name: 'CloudPeak' },
+        },
+      } as unknown as ProjectEngagementWithMilestones;
+      const [e] = milestone(
+        view(engagement, {
+          entries: [
+            entry({
+              updatedByUserId: editorId,
+              editorFirstName: editorName,
+              editorLastName: null,
+            }),
+          ],
+        })
+      ).entries;
+      expect(e?.editedByLabel).toBe(expected);
+    });
+
     it('offers nothing to a viewer who cannot log time', () => {
-      const v = milestone(view(project(), { canLogTime: false, lens: 'client' }));
+      const v = milestone(
+        view(project(), { canLogTime: false, lens: 'client', timeEntryScope: null })
+      );
       expect(v.canLog).toBe(false);
       expect(v.entries[0]).toMatchObject({ canEdit: false, canDelete: false });
     });
@@ -331,6 +398,24 @@ describe('mapTimeToView', () => {
     it('describes the billing period for the client, naming the expert', () => {
       expect(view(project(), { lens: 'client', canLogTime: false }).totals.period?.detail).toBe(
         '1 Oct – 31 Oct · invoiced on 1 Nov for the time Charles has logged'
+      );
+    });
+
+    it('names the agency, not the delivering expert, when several of its people may have acted', () => {
+      const base = makeProject().expertProfile;
+      const agencyProject = project(
+        {},
+        {
+          expertProfile: {
+            ...base,
+            agencyId: 'ag-1',
+            type: 'agency',
+            agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+          },
+        }
+      );
+      expect(view(agencyProject, { lens: 'client', canLogTime: false }).totals.period?.detail).toBe(
+        '1 Oct – 31 Oct · invoiced on 1 Nov for the time CloudPeak has logged'
       );
     });
 

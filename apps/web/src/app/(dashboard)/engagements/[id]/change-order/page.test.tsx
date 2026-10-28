@@ -173,12 +173,31 @@ describe('change-order composer page · access', () => {
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
   });
 
-  it('404s a stranger without consulting the capability', async () => {
+  it('404s a stranger who holds no delivery capability', async () => {
     mockGetCurrentUser.mockResolvedValue(
       expertUser({ companyId: 'company-other', expertProfileId: undefined })
     );
+    mockHasDeliveryCapability.mockResolvedValue(false);
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
-    expect(mockHasDeliveryCapability).not.toHaveBeenCalled();
+    expect(mockListChangeOrders).not.toHaveBeenCalled();
+  });
+
+  it('opens the composer for an agency owner/admin (no lens, manage_engagement held)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      expertUser({
+        id: 'user-agency-admin',
+        companyId: 'company-other',
+        expertProfileId: undefined,
+      })
+    );
+    await renderPage();
+    expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-agency-admin' }),
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      EXPERT_PROFILE_ID,
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(screen.getByTestId('composer')).toBeInTheDocument();
   });
 
   it('404s the client company: the composer is expert-only', async () => {

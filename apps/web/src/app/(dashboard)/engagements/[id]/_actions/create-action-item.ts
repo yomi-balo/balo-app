@@ -60,7 +60,7 @@ export async function createActionItemAction(
     engagementId,
     {},
     'Failed to create action item',
-    async ({ user, engagement, lens }) => {
+    async ({ user, actingAs, engagement, lens }) => {
       const created = await actionItemsRepository.createManual({
         engagementId,
         userId: user.id,
@@ -74,6 +74,7 @@ export async function createActionItemAction(
         source: 'manual',
         assignee_role: assigneeParty ?? 'unassigned',
         count: 1,
+        ...(actingAs === null ? {} : { acting_as: actingAs }),
         distinct_id: user.id,
       });
 

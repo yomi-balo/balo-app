@@ -87,7 +87,7 @@ describe('the engagement axis is disjoint from the membership axis (BAL-413 / AC
 
   it('has a non-empty token set on both axes (non-vacuity guard for the checks below)', () => {
     expect(membershipTokens.length).toBeGreaterThan(0);
-    expect(engagementTokens).toEqual(['host_meetings', 'manage_engagement']);
+    expect(engagementTokens).toEqual(['host_meetings', 'manage_engagement', 'log_time']);
   });
 
   it('never lets an engagement token appear in CAPABILITIES', () => {
