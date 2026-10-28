@@ -205,9 +205,9 @@ export const expertProfiles = pgTable(
      * per-engagement averages, weighted to match.
      *
      * A rating is a statement by the PARTY, not by each person who happened to be on the
-     * call — the same ruling BAL-390 already made for review BODIES
-     * (`listPublicByExpert` projects `companies.name` and can never project the
-     * reviewer). This makes the NUMBER agree with it.
+     * call, so one engagement counts once. The public list
+     * (`reviewsRepository.listPublicEntriesByExpert`) shows one entry per engagement, so
+     * the list and this count agree.
      *
      * ⚠ NEVER derive this from `select count(*) from reviews where expert_profile_id = …`.
      * That is the flat per-row count this decision REJECTED, and it overstates the

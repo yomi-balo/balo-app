@@ -1,6 +1,6 @@
 import type { PublicExpertProfile } from '@balo/db';
 import { publicDisplayRatePerMinute } from '@balo/shared/pricing';
-import { parseRatingAverage } from '@balo/shared/reviews';
+import { parseRatingAverage, type PublicReviewEntry } from '@balo/shared/reviews';
 import { deriveInitials } from '@/lib/search/expert-card-mapper';
 import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import type {
@@ -9,6 +9,7 @@ import type {
   CompetencyView,
   ExpertProfileView,
   LanguageView,
+  ProfileReviewEntryView,
   WorkHistoryView,
 } from '@/components/expert/profile/types';
 import { proficiencyToLevel, proficiencyToPct } from './proficiency';
@@ -115,6 +116,31 @@ function mapWorkHistory(workHistory: PublicExpertProfile['workHistory']): WorkHi
 }
 
 /**
+ * Public review entries → view-model. This is a public serializer boundary: only what
+ * `ReviewEntry` renders crosses it, so `ratedAtIso` is dropped and the rater fields are
+ * renamed to the component's (`reviewId` → `id`, `body` → `note`, name/descriptor/initials →
+ * `attribution`).
+ */
+export function mapReviewEntriesToView(
+  entries: readonly PublicReviewEntry[]
+): ProfileReviewEntryView[] {
+  return entries.map((entry) => ({
+    key: entry.key,
+    engagementKind: entry.kind,
+    rating: entry.engagementRating,
+    dateLabel: formatMonthYear(new Date(entry.concludedOnIso)),
+    topics: entry.products,
+    raters: entry.raters.map((rater) => ({
+      id: rater.reviewId,
+      rating: rater.rating,
+      note: rater.body,
+      attribution: { name: rater.name, descriptor: rater.descriptor, initials: rater.initials },
+    })),
+    sharedCompanyName: entry.companyHeader,
+  }));
+}
+
+/**
  * Pure mapper: DB graph → fully serializable view-model. No env access, no
  * Date objects leak across the client boundary, never fabricates rating /
  * reviews / response-time data.
@@ -139,8 +165,14 @@ function mapWorkHistory(workHistory: PublicExpertProfile['workHistory']): WorkHi
  * cases). `rate` is computed at `DEFAULT_BALO_FEE_BPS` and is a "FROM" figure; copy must read
  * "From A$…/min", never an exact promise. No margin, fee-bps or expert-earnings field may join
  * this view-model — pinned by `profile-view.test.ts`'s AC-5 boundary describe.
+ *
+ * `reviewEntries` is the server-fetched public review list; `null` means the load failed (or the
+ * caller renders no reviews) and the view carries `reviews: null`.
  */
-export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileView {
+export function mapProfileToView(
+  profile: PublicExpertProfile,
+  reviewEntries: readonly PublicReviewEntry[] | null = null
+): ExpertProfileView {
   const { user } = profile;
   const name =
     [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'Salesforce Expert';
@@ -194,5 +226,6 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     languagesLabel: languages.map((l) => l.name).join(', '),
     agency: mapAgency(profile),
     workHistory: mapWorkHistory(profile.workHistory),
+    reviews: reviewEntries === null ? null : mapReviewEntriesToView(reviewEntries),
   };
 }

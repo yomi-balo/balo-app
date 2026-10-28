@@ -36,6 +36,7 @@ const EXPECTED_FILES = [
   'writing-and-sending-a-proposal.md',
   'your-cases.md',
   'your-live-status.md',
+  'your-reviews.md',
 ];
 
 /** Publishing is a reviewed decision: flipping a guide means adding it here too. */

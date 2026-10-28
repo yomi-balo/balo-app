@@ -37,6 +37,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     languagesLabel: '',
     agency: null,
     workHistory: [],
+    reviews: [],
     ...overrides,
   };
 }
