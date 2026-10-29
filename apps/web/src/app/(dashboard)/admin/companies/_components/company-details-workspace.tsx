@@ -97,10 +97,15 @@ export function CompanyDetailsWorkspace({
     [company.id, settle]
   );
 
-  const reportUnexpected = useCallback((error: unknown): void => {
-    Sentry.captureException(error);
-    toast.error(UNEXPECTED_ERROR);
-  }, []);
+  const reportUnexpected = useCallback(
+    (error: unknown): void => {
+      Sentry.captureException(error);
+      toast.error(UNEXPECTED_ERROR);
+      // The write may have committed before the throw, so show what is actually saved.
+      router.refresh();
+    },
+    [router]
+  );
 
   const handleIndustryChange = useCallback(
     (value: string): void => {

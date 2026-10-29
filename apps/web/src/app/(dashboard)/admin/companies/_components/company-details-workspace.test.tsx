@@ -160,9 +160,10 @@ describe('CompanyDetailsWorkspace', () => {
     );
   });
 
-  it('toasts a generic error when the action throws, and re-enables the control', async () => {
+  it('toasts a generic error when the action throws, refreshes, and re-enables the control', async () => {
     mockSetHidden.mockRejectedValue(new Error('network'));
     render(<CompanyDetailsWorkspace company={COMPANY} industries={INDUSTRIES} canManage />);
+    mockRefresh.mockClear();
 
     fireEvent.click(screen.getByRole('switch', { name: /show this company/i }));
 
@@ -171,6 +172,8 @@ describe('CompanyDetailsWorkspace', () => {
         'Something went wrong. Check the details before trying again.'
       )
     );
+    // The write may or may not have committed; refreshing shows staff what is actually saved.
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(screen.getByRole('switch', { name: /show this company/i })).toBeEnabled()
     );
