@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 6
 published: false
-updated: 2026-10-26
+updated: 2026-10-29
 related: [approving-a-change-to-your-project, reviewing-a-finished-project]
 ---
 
@@ -20,7 +20,9 @@ for that milestone. A milestone with no estimate shows only the hours logged.
 
 Open a milestone's time log to see each entry: the date it was worked, the hours
 and a note saying what the time went on. Entries are listed with the most recent first, and each
-milestone has one "Logged by …" line naming who logged the time.
+milestone has one "Logged by …" line naming who logged the time. If an owner or admin of your
+expert's agency changes an entry they didn't log, that entry also shows an "Edited by …" line
+naming them.
 
 ## The totals card
 
