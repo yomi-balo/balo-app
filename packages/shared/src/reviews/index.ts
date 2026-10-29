@@ -28,6 +28,12 @@ export const RATING_MAX = 5;
  */
 export const LOW_RATING_THRESHOLD = 4;
 
+/**
+ * Reviewed engagements at which the public profile shows the large average and the rating
+ * distribution; below it the summary is a compact line. A typed const per D2.
+ */
+export const REVIEW_SUMMARY_FLOOR = 5;
+
 /** Body length cap, enforced by the caller's Zod at the write boundary — never here. */
 export const REVIEW_BODY_MAX = 2000;
 
@@ -578,16 +584,43 @@ export interface ReviewLandingContext {
 }
 
 /**
- * D6 — the PUBLIC projection of a review. Attributed to the client COMPANY, never the
- * person: `reviews.reviewer_user_id` keeps the individual for attribution and audit,
- * but a published review is a PARTY statement. `reviewsRepository.listPublicByExpert`
- * builds this with an explicit allow-list and an invariant test asserts the reviewer id
- * can never appear in it.
+ * One reviewing person on a {@link PublicReviewEntry}. `name`, `descriptor` and `initials`
+ * come from {@link formatReviewAttribution}; `body` is {@link publicReviewNote}'s output.
  */
-export interface PublicReview {
-  id: string;
+export interface PublicReviewRater {
+  reviewId: string;
   rating: number;
   body: string | null;
-  clientCompanyName: string;
-  createdAtIso: string;
+  name: string;
+  descriptor: string | null;
+  initials: string | null;
+  ratedAtIso: string;
+}
+
+/**
+ * D6 — the PUBLIC projection of an expert's reviews: one entry per reviewed engagement.
+ *
+ * A public review names the reviewing person ("{First} {L}.", or
+ * {@link UNNAMED_REVIEWER_LABEL}) with an optional role. The client company appears only
+ * when the reviewer chose it AND {@link isCompanyNameAllowedOnReviews} holds at read time. A
+ * note appears only when it is public. Weighting stays party-based: one engagement, one
+ * vote. The entry is the engagement, so the list length equals `rating_count` and
+ * `engagementRating` is exactly that engagement's contribution to `rating_average`.
+ *
+ * `reviewsRepository.listPublicEntriesByExpert` builds it with an explicit allow-list; it
+ * carries no user, engagement or company id, no surname beyond its initial, and no email.
+ */
+export interface PublicReviewEntry {
+  /** The earliest review's id — stable, and not an engagement id. */
+  key: string;
+  kind: 'project' | 'case';
+  /** `accepted_at` (project) | `closed_at` (case), else the latest review's time. */
+  concludedOnIso: string;
+  products: string[];
+  /** The mean of this engagement's ratings, unrounded. */
+  engagementRating: number;
+  /** In the order the reviews were written. */
+  raters: PublicReviewRater[];
+  /** The company name, only when every rater chose it and it is allowed on reviews. */
+  companyHeader: string | null;
 }

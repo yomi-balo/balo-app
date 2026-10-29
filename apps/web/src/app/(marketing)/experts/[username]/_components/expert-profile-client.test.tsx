@@ -152,6 +152,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
         responsibilitiesHtml: null,
       },
     ],
+    reviews: [],
     ...overrides,
   };
 }
@@ -329,7 +330,7 @@ describe('ExpertProfileClient — sparse profile', () => {
     // "4.8 (12) Rating" — no scale, and no noun on the denominator.
     expect(screen.getByText('Rated 4.8 out of 5 across 12 engagements')).toBeInTheDocument();
     // The section beneath agrees rather than contradicting it.
-    expect(screen.getByText('average across 12 engagements')).toBeInTheDocument();
+    expect(screen.getByText('from 12 engagements')).toBeInTheDocument();
     expect(screen.queryByText('Ratings come from completed work')).not.toBeInTheDocument();
   });
 

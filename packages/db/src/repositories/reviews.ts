@@ -1,10 +1,14 @@
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { QueryBuilder } from 'drizzle-orm/pg-core';
 import { expertPartyDisplayName } from '@balo/shared/parties';
 import {
+  formatReviewAttribution,
   isCompanyNameAllowedOnReviews,
   parseRatingAverage,
-  type PublicReview,
+  publicReviewNote,
+  surnameInitial,
+  type PublicReviewEntry,
+  type PublicReviewRater,
   type ReviewAuthMethod,
   type ReviewBodyVisibility,
   type ReviewLandingContext,
@@ -13,11 +17,15 @@ import {
 import { db } from '../client';
 import {
   agencies,
+  caseEngagementProducts,
   caseEngagements,
   companies,
   engagements,
   expertProfiles,
+  industries,
+  products,
   projectEngagements,
+  projectRequestProducts,
   projectRequests,
   reviews,
   users,
@@ -39,7 +47,7 @@ const queryBuilder = new QueryBuilder();
 /**
  * ⚠⚠ THE ONE DEFINITION OF "ONE ENGAGEMENT, ONE VOTE" (BAL-422, Yomi 2026-08-14).
  *
- *     select avg(rating) as engagement_average
+ *     select engagement_id, avg(rating) as engagement_average
  *     from reviews
  *     where expert_profile_id = $1 and deleted_at is null
  *     group by engagement_id
@@ -48,14 +56,17 @@ const queryBuilder = new QueryBuilder();
  * engagement's own average. Both the READ (`aggregateForExpert`) and the WRITE
  * (`recomputeRatingAggregate`) wrap THIS fragment, so the two cannot drift into
  * different definitions of the aggregate — which is the failure this ticket's
- * anti-drift test exists to catch.
+ * anti-drift test exists to catch. `listPublicEntriesByExpert` joins the same fragment on
+ * `engagement_id`, so a public entry's stars ARE its engagement's contribution. The outer
+ * aggregates read only `engagement_average`; the extra column changes neither.
  *
  * ⚠ THE WEIGHTING IS THE WHOLE POINT. The partial unique on `reviews` permits one live
  * review per (engagement, reviewer, expert), so a 5-member company can contribute FIVE
  * rows to ONE engagement where a 1-person company contributes one. A flat `avg(rating)`
  * over rows would let the larger company outvote the smaller one 5:1 on a single piece
  * of work. Grouping first makes every engagement count once. A rating is a statement by
- * the PARTY, which is the same ruling BAL-390 made for review BODIES.
+ * the PARTY, so the weighting is one engagement, one vote — even though the public entry
+ * names each reviewing person (see `PublicReviewEntry`).
  *
  * ⚠ NO ROUNDING HAPPENS HERE. `avg()` over `integer` returns exact `numeric`, and the
  * outer average over those numerics is exact too — the value never touches `float8` on
@@ -73,7 +84,8 @@ const queryBuilder = new QueryBuilder();
  *      predicate has no production writer. {@link recomputeRatingAggregate} is the seam a
  *      future moderation ticket would call.
  *   2. `engagements.deleted_at` IS NOT CONSULTED. A review whose ENGAGEMENT is soft-deleted
- *      keeps feeding the public rating, and nothing would trigger a recompute if one were.
+ *      keeps feeding the public rating and the public entries (all three readers share
+ *      this fragment), and nothing would trigger a recompute if one were.
  *      Latent for the same reason: `softDeleteEngagementTx` has no production caller. If
  *      either gains one, this fragment needs a join to `engagements` AND that writer needs
  *      to call the recompute — changing only one of the two silently drifts the aggregate.
@@ -90,6 +102,7 @@ const queryBuilder = new QueryBuilder();
 function perEngagementAverages(expertProfileId: string) {
   return queryBuilder
     .select({
+      engagementId: reviews.engagementId,
       engagementAverage: sql<string>`avg(${reviews.rating})`.as('engagement_average'),
     })
     .from(reviews)
@@ -342,8 +355,8 @@ export const UNTITLED_ENGAGEMENT_LABEL = 'your project';
  * surface need, plus (BAL-422) the recompute of the denormalised rating aggregate on
  * `expert_profiles`.
  *
- * ⚠ `listPublicByExpert` REMAINS UNMOUNTED. BAL-422 mounts the AGGREGATE (the number and
- * the count), not review BODIES — those stay out of scope and nothing renders them yet.
+ * `listPublicEntriesByExpert` feeds `/experts/[username]`: one entry per reviewed
+ * engagement, alongside the denormalised aggregate it agrees with.
  *
  * ⚠ NO AUTHORIZATION LIVES HERE. No capability is resolved, no role string is read
  * (ADR-1029: capabilities resolve at the CALL SITE, and both write paths are Next
@@ -745,45 +758,218 @@ export const reviewsRepository = {
   },
 
   /**
-   * D6 — the PUBLIC reviews of one expert, attributed to the CLIENT COMPANY.
+   * D6 — the PUBLIC reviews of one expert: one {@link PublicReviewEntry} per reviewed
+   * engagement, newest concluded first. The disclosure rule is stated once, on
+   * `PublicReviewEntry` in `@balo/shared/reviews`.
    *
-   * ⚠⚠ `reviews.reviewer_user_id` MUST NEVER APPEAR IN THIS PROJECTION. A published
-   * review is a PARTY statement, not a personal one; the column stays in the table for
-   * attribution and audit, and the rendering collapses to the company. The allow-list
-   * below is the mechanism and an integration key-set assertion is the guard.
-   *
-   * Ships and is tested; NOTHING MOUNTS IT, and BAL-422 did not change that. BAL-422
-   * mounts the AGGREGATE (`expert_profiles.rating_average` / `rating_count`) — review
-   * BODIES are explicitly out of its scope, so this still has no caller and no ticket
-   * owns mounting it.
+   * ⚠⚠ AN EXPLICIT ALLOW-LIST, NEVER A RELATIONAL HYDRATE. Every column is named in the
+   * `select({ … })` below and every returned object literal carries only the interface's
+   * keys. The reviewer's id, surname, email, the engagement and company ids and the
+   * company name are read to BUILD the entry and never leave this function: the surname
+   * collapses to its initial through `surnameInitial`, and the attribution comes from the one
+   * formatter, `formatReviewAttribution`. Both guards — the integration key sets and the
+   * source invariant — anchor on this member.
    *
    * ⚠⚠ A PRIVATE NOTE NEVER LEAVES THE DATABASE. `body` is projected only when
-   * `body_visibility = 'public'` (the SQL twin of `publicReviewNote`); a private note reads
-   * as `null` here, so no caller can publish it by forgetting a filter.
+   * `body_visibility = 'public'` (the SQL twin of `publicReviewNote`, which then drops a
+   * blank one); a private note reads as `null` here, so no caller can publish it by
+   * forgetting a filter.
+   *
+   * ⚠ THE COMPANY CHECK RUNS AT READ TIME. `isCompanyNameAllowedOnReviews` reads the
+   * company's CURRENT `is_personal` / `review_name_hidden_at`, so an admin hiding a name
+   * withdraws it from every review already written.
+   *
+   * ⚠ THE STARS ARE THE CONTRIBUTION. Each entry's `engagementRating` is read from the
+   * `perEngagementAverages` fragment the stored aggregate is computed from, and the WHERE is
+   * that fragment's (`reviews.deleted_at IS NULL`, nothing else), so the list length equals
+   * `rating_count`.
+   *
+   * ⚠ A SOFT-DELETED (or missing) REVIEWER IS NOT NAMED: the rater reads as "Verified
+   * client". Everything else they chose when reviewing still applies — the rating counts, a
+   * public note shows, and the role, company and industry follow the review's own settings,
+   * exactly as for a live reviewer.
    */
-  listPublicByExpert: async (expertProfileId: string): Promise<PublicReview[]> => {
+  listPublicEntriesByExpert: async (expertProfileId: string): Promise<PublicReviewEntry[]> => {
+    const perEngagement = perEngagementAverages(expertProfileId).as('per_engagement');
+
     const rows = await db
       .select({
-        id: reviews.id,
+        reviewId: reviews.id,
+        engagementId: reviews.engagementId,
+        engagementType: engagements.engagementType,
+        engagementAverage: perEngagement.engagementAverage,
         rating: reviews.rating,
         body: sql<
           string | null
         >`CASE WHEN ${reviews.bodyVisibility} = 'public' THEN ${reviews.body} END`,
-        clientCompanyName: companies.name,
+        bodyVisibility: reviews.bodyVisibility,
+        reviewerRole: reviews.reviewerRole,
+        showCompany: reviews.showCompany,
+        companyName: companies.name,
+        isPersonal: companies.isPersonal,
+        reviewNameHiddenAt: companies.reviewNameHiddenAt,
+        industryName: industries.name,
+        firstName: users.firstName,
+        lastName: users.lastName,
         createdAt: reviews.createdAt,
+        acceptedAt: projectEngagements.acceptedAt,
+        closedAt: caseEngagements.closedAt,
       })
       .from(reviews)
+      .innerJoin(perEngagement, eq(perEngagement.engagementId, reviews.engagementId))
       .innerJoin(engagements, eq(engagements.id, reviews.engagementId))
       .innerJoin(companies, eq(companies.id, engagements.companyId))
+      // `is_active` in the ON: a retired industry drops out of the descriptor, not the row.
+      .leftJoin(
+        industries,
+        and(eq(industries.id, companies.industryId), eq(industries.isActive, true))
+      )
+      .leftJoin(users, and(eq(users.id, reviews.reviewerUserId), isNull(users.deletedAt)))
+      .leftJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .leftJoin(
+        caseEngagements,
+        and(eq(caseEngagements.engagementId, engagements.id), isNull(caseEngagements.deletedAt))
+      )
       .where(and(eq(reviews.expertProfileId, expertProfileId), isNull(reviews.deletedAt)))
-      .orderBy(desc(reviews.createdAt));
+      .orderBy(asc(reviews.createdAt), asc(reviews.id));
 
-    return rows.map((row) => ({
-      id: row.id,
-      rating: row.rating,
-      body: row.body,
-      clientCompanyName: row.clientCompanyName,
-      createdAtIso: row.createdAt.toISOString(),
-    }));
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const engagementIds = [...new Set(rows.map((row) => row.engagementId))];
+    // No `products.is_active` filter: a retired product still describes delivered work. A
+    // project with no origination request (the retainer seam) has no topics.
+    const [caseProducts, projectProducts] = await Promise.all([
+      db
+        .select({ engagementId: caseEngagementProducts.engagementId, name: products.name })
+        .from(caseEngagementProducts)
+        .innerJoin(products, eq(products.id, caseEngagementProducts.productId))
+        .where(
+          and(
+            inArray(caseEngagementProducts.engagementId, engagementIds),
+            isNull(caseEngagementProducts.deletedAt)
+          )
+        )
+        .orderBy(asc(products.sortOrder), asc(products.name)),
+      db
+        .select({ engagementId: projectEngagements.engagementId, name: products.name })
+        .from(projectEngagements)
+        .innerJoin(
+          projectRequestProducts,
+          and(
+            eq(projectRequestProducts.projectRequestId, projectEngagements.projectRequestId),
+            isNull(projectRequestProducts.deletedAt)
+          )
+        )
+        .innerJoin(products, eq(products.id, projectRequestProducts.productId))
+        .where(
+          and(
+            inArray(projectEngagements.engagementId, engagementIds),
+            isNull(projectEngagements.deletedAt)
+          )
+        )
+        .orderBy(asc(products.sortOrder), asc(products.name)),
+    ]);
+    const productsByEngagement = new Map<string, string[]>();
+    for (const product of [...caseProducts, ...projectProducts]) {
+      const names = productsByEngagement.get(product.engagementId) ?? [];
+      names.push(product.name);
+      productsByEngagement.set(product.engagementId, names);
+    }
+
+    const rowsByEngagement = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const group = rowsByEngagement.get(row.engagementId) ?? [];
+      group.push(row);
+      rowsByEngagement.set(row.engagementId, group);
+    }
+
+    const entries: PublicReviewEntry[] = [];
+    for (const [engagementId, group] of rowsByEngagement) {
+      const [first] = group;
+      if (first === undefined) {
+        continue;
+      }
+      // Reviews exist only on project and case engagements: `findLandingContext` refuses
+      // every other type, so nothing else can reach this list.
+      const kind = first.engagementType === 'case' ? 'case' : 'project';
+      const engagementRating = parseRatingAverage(first.engagementAverage);
+      if (engagementRating === null) {
+        // An integrity violation: the inner join guarantees a grouped average for every row.
+        throw new Error(
+          `listPublicEntriesByExpert: engagement ${engagementId} has no rating average`
+        );
+      }
+
+      const latestReviewAt = group.reduce(
+        (latest, row) => (row.createdAt > latest ? row.createdAt : latest),
+        first.createdAt
+      );
+      const concludedOn =
+        (kind === 'project' ? first.acceptedAt : first.closedAt) ?? latestReviewAt;
+
+      const companyNameAllowed = isCompanyNameAllowedOnReviews({
+        isPersonal: first.isPersonal,
+        reviewNameHiddenAt: first.reviewNameHiddenAt,
+      });
+
+      const raters = group.map((row): PublicReviewRater => {
+        const attribution = formatReviewAttribution({
+          firstName: row.firstName,
+          lastInitial: surnameInitial(row.lastName),
+          role: row.reviewerRole,
+          companyName: row.companyName,
+          industryName: row.industryName,
+          showCompany: row.showCompany,
+          companyNameAllowed,
+        });
+        return {
+          reviewId: row.reviewId,
+          rating: row.rating,
+          body: publicReviewNote({ body: row.body, bodyVisibility: row.bodyVisibility }),
+          name: attribution.name,
+          descriptor: attribution.descriptor,
+          initials: attribution.initials,
+          ratedAtIso: row.createdAt.toISOString(),
+        };
+      });
+
+      // The header names the company only when every rater shows it. Raters who did and did
+      // not still share the one entry; the header blanks and each row keeps its own
+      // descriptor, as the design specifies.
+      const companyHeader =
+        companyNameAllowed &&
+        group.every((row) => row.showCompany) &&
+        first.companyName.trim() !== ''
+          ? first.companyName
+          : null;
+
+      entries.push({
+        key: first.reviewId,
+        kind,
+        concludedOnIso: concludedOn.toISOString(),
+        products: productsByEngagement.get(engagementId) ?? [],
+        engagementRating,
+        raters,
+        companyHeader,
+      });
+    }
+
+    return entries.sort((a, b) => {
+      if (a.concludedOnIso !== b.concludedOnIso) {
+        return a.concludedOnIso < b.concludedOnIso ? 1 : -1;
+      }
+      if (a.key === b.key) {
+        return 0;
+      }
+      return a.key < b.key ? 1 : -1;
+    });
   },
 };
