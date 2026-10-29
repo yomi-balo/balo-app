@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { PublicExpertProfile } from '@balo/db';
-import { mapProfileToView, formatPeriod, formatDuration } from './profile-view';
+import type { PublicReviewEntry } from '@balo/shared/reviews';
+import {
+  mapProfileToView,
+  mapReviewEntriesToView,
+  formatPeriod,
+  formatDuration,
+} from './profile-view';
 
 // Minimal valid PublicExpertProfile graph; tests override the bits they assert.
 function makeProfile(overrides: Partial<PublicExpertProfile> = {}): PublicExpertProfile {
@@ -359,5 +365,97 @@ describe('formatPeriod / formatDuration helpers', () => {
     expect(formatDuration(new Date(Date.UTC(2020, 0, 1)), new Date(Date.UTC(2020, 0, 15)))).toBe(
       '< 1 mo'
     );
+  });
+});
+
+function makeReviewEntry(overrides: Partial<PublicReviewEntry> = {}): PublicReviewEntry {
+  return {
+    key: 'review-1',
+    kind: 'project',
+    concludedOnIso: '2026-10-31T23:00:00.000Z',
+    products: ['Sales Cloud'],
+    engagementRating: 4.5,
+    raters: [
+      {
+        reviewId: 'review-1',
+        rating: 5,
+        body: 'Great work.',
+        name: 'Sam K.',
+        descriptor: 'RevOps Lead',
+        initials: 'SK',
+        ratedAtIso: '2026-10-30T01:00:00.000Z',
+      },
+    ],
+    companyHeader: 'Northwind',
+    ...overrides,
+  };
+}
+
+describe('mapReviewEntriesToView', () => {
+  it('maps an entry to exactly the view keys', () => {
+    const [view] = mapReviewEntriesToView([makeReviewEntry()]);
+    expect(Object.keys(view ?? {}).sort()).toEqual([
+      'dateLabel',
+      'engagementKind',
+      'key',
+      'raters',
+      'rating',
+      'sharedCompanyName',
+      'topics',
+    ]);
+    expect(view).toMatchObject({
+      key: 'review-1',
+      engagementKind: 'project',
+      rating: 4.5,
+      topics: ['Sales Cloud'],
+      sharedCompanyName: 'Northwind',
+    });
+  });
+
+  it('renames the rater fields to the component shape and drops ratedAtIso', () => {
+    const [view] = mapReviewEntriesToView([makeReviewEntry()]);
+    const [rater] = view?.raters ?? [];
+    expect(Object.keys(rater ?? {}).sort()).toEqual(['attribution', 'id', 'note', 'rating']);
+    expect(rater).toEqual({
+      id: 'review-1',
+      rating: 5,
+      note: 'Great work.',
+      attribution: { name: 'Sam K.', descriptor: 'RevOps Lead', initials: 'SK' },
+    });
+    expect(JSON.stringify(view)).not.toContain('ratedAtIso');
+    expect(JSON.stringify(view)).not.toContain('2026-10-30');
+  });
+
+  it('formats the conclusion date as month and year in UTC', () => {
+    const [view] = mapReviewEntriesToView([makeReviewEntry()]);
+    expect(view?.dateLabel).toBe('Oct 2026');
+  });
+
+  it('passes a null company header and a null note through', () => {
+    const base = makeReviewEntry();
+    const [view] = mapReviewEntriesToView([
+      makeReviewEntry({
+        companyHeader: null,
+        raters: [{ ...(base.raters[0] as PublicReviewEntry['raters'][number]), body: null }],
+      }),
+    ]);
+    expect(view?.sharedCompanyName).toBeNull();
+    expect(view?.raters[0]?.note).toBeNull();
+  });
+});
+
+describe('mapProfileToView — reviews', () => {
+  it('carries the mapped entries', () => {
+    const view = mapProfileToView(makeProfile(), [makeReviewEntry()]);
+    expect(view.reviews).toHaveLength(1);
+    expect(view.reviews?.[0]?.key).toBe('review-1');
+  });
+
+  it('passes null through when the entries failed to load', () => {
+    expect(mapProfileToView(makeProfile(), null).reviews).toBeNull();
+  });
+
+  it('carries an empty list for an unreviewed expert', () => {
+    expect(mapProfileToView(makeProfile(), []).reviews).toEqual([]);
   });
 });

@@ -1,5 +1,9 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { EXPERT_PROFILE_EVENTS, type ExpertProfileCta } from './expert-profile';
+import {
+  EXPERT_PROFILE_EVENTS,
+  type ExpertProfileCta,
+  type ExpertReviewsFilter,
+} from './expert-profile';
 
 describe('EXPERT_PROFILE_EVENTS', () => {
   it('has exactly the expected keys', () => {
@@ -9,6 +13,9 @@ describe('EXPERT_PROFILE_EVENTS', () => {
       'PROFILE_CTA_IMPRESSION',
       'PROFILE_SECTION_VIEWED',
       'PROFILE_VIEWED',
+      'REVIEWS_FILTER_SELECTED',
+      'REVIEWS_SHOW_MORE',
+      'REVIEWS_VERIFIED_INFO_OPENED',
     ]);
   });
 
@@ -20,11 +27,16 @@ describe('EXPERT_PROFILE_EVENTS', () => {
     expect(EXPERT_PROFILE_EVENTS.BOOKING_UNAVAILABLE_SHOWN).toBe(
       'expert_profile_booking_unavailable_shown'
     );
+    expect(EXPERT_PROFILE_EVENTS.REVIEWS_FILTER_SELECTED).toBe('expert_reviews_filter_selected');
+    expect(EXPERT_PROFILE_EVENTS.REVIEWS_SHOW_MORE).toBe('expert_reviews_show_more');
+    expect(EXPERT_PROFILE_EVENTS.REVIEWS_VERIFIED_INFO_OPENED).toBe(
+      'expert_reviews_verified_info_opened'
+    );
   });
 
-  it('values follow the naming convention expert_profile_{noun}(_{noun})*', () => {
+  it('values follow the naming convention expert_(profile|reviews)_{noun}(_{noun})*', () => {
     for (const value of Object.values(EXPERT_PROFILE_EVENTS)) {
-      expect(value).toMatch(/^expert_profile_[a-z]+(_[a-z]+)*$/);
+      expect(value).toMatch(/^expert_(profile|reviews)_[a-z]+(_[a-z]+)*$/);
     }
   });
 
@@ -32,5 +44,9 @@ describe('EXPERT_PROFILE_EVENTS', () => {
     expectTypeOf<
       'book' | 'project' | 'quickstart' | 'message' | 'find_similar' | 'match_project'
     >().toEqualTypeOf<ExpertProfileCta>();
+  });
+
+  it('the reviews filter vocabulary is all | project | case', () => {
+    expectTypeOf<'all' | 'project' | 'case'>().toEqualTypeOf<ExpertReviewsFilter>();
   });
 });

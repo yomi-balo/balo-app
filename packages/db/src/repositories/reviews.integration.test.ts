@@ -2,8 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, expertProfiles, industries, reviews } from '../schema';
-import type { AuditEvent, NewCompany } from '../schema';
+import type { PublicReviewEntry, PublicReviewRater } from '@balo/shared/reviews';
+import {
+  auditEvents,
+  caseEngagementProducts,
+  expertProfiles,
+  industries,
+  products,
+  projectRequestProducts,
+  reviews,
+  users,
+  verticals,
+} from '../schema';
+import type { AuditEvent, NewCompany, NewReview, NewUser } from '../schema';
 import {
   caseEngagementFactory,
   companyFactory,
@@ -14,7 +25,6 @@ import {
   userFactory,
   type EngagementFactoryResult,
 } from '../test/factories';
-import { formatReviewAttribution } from '@balo/shared/reviews';
 import { companiesRepository } from './companies';
 import { reviewsRepository, type UpsertReviewInput } from './reviews';
 
@@ -979,6 +989,20 @@ describe('the READ and the WRITE cannot drift apart', () => {
       throw new Error('fixture must produce a rating');
     }
     expect(read.averageRating.toFixed(1)).toBe(stored.ratingAverage);
+
+    // The public list is the same fragment: one entry per counted engagement, and each
+    // entry's stars are exactly that engagement's contribution to the stored average.
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expert.id);
+    expect(entries).toHaveLength(stored.ratingCount);
+    const entryRatings = entries.map((entry) => entry.engagementRating);
+    const meanOfEntries = entryRatings.reduce((sum, r) => sum + r, 0) / entryRatings.length;
+    expect(meanOfEntries.toFixed(1)).toBe(stored.ratingAverage);
+    const fixtureMeans = engagementRatings.map(
+      (ratings) => ratings.reduce((sum, r) => sum + r, 0) / ratings.length
+    );
+    const asSortedFixed = (values: number[]): string[] =>
+      values.map((value) => value.toFixed(6)).sort((a, b) => a.localeCompare(b));
+    expect(asSortedFixed(entryRatings)).toEqual(asSortedFixed(fixtureMeans));
   });
 });
 
@@ -1209,93 +1233,417 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
   });
 });
 
-describe('reviewsRepository.listPublicByExpert — D6', () => {
-  const EXPECTED_KEYS = ['body', 'clientCompanyName', 'createdAtIso', 'id', 'rating'];
+describe('reviewsRepository.listPublicEntriesByExpert', () => {
+  const ENTRY_KEYS = [
+    'companyHeader',
+    'concludedOnIso',
+    'engagementRating',
+    'key',
+    'kind',
+    'products',
+    'raters',
+  ];
+  const RATER_KEYS = ['body', 'descriptor', 'initials', 'name', 'ratedAtIso', 'rating', 'reviewId'];
 
-  it('attributes to the client COMPANY and NEVER exposes the reviewer', async () => {
+  /** The parties a review hangs off — satisfied by both the project and the case factory. */
+  interface ReviewTarget {
+    engagement: { id: string };
+    companyId: string;
+    expertProfileId: string;
+  }
+
+  /**
+   * One review on `target` by a fresh member of its client company, inserted directly so a
+   * test can pin `createdAt` (every row in the per-test transaction otherwise shares `now()`).
+   */
+  async function seedRating(
+    target: ReviewTarget,
+    options: { reviewer?: Partial<NewUser>; values?: Partial<NewReview> } = {}
+  ): Promise<{ reviewId: string; reviewerUserId: string; reviewerEmail: string }> {
+    const reviewer = await userFactory(options.reviewer);
+    await companyMemberFactory({ companyId: target.companyId, userId: reviewer.id });
+    const [review] = await db
+      .insert(reviews)
+      .values({
+        engagementId: target.engagement.id,
+        reviewerUserId: reviewer.id,
+        expertProfileId: target.expertProfileId,
+        rating: 5,
+        body: null,
+        surface: 'end_of_call',
+        authMethod: 'session',
+        bodyVisibility: 'public',
+        showCompany: true,
+        ...options.values,
+      })
+      .returning();
+    if (review === undefined) {
+      throw new Error('review insert failed');
+    }
+    return { reviewId: review.id, reviewerUserId: reviewer.id, reviewerEmail: reviewer.email };
+  }
+
+  let productSeq = 0;
+
+  /** One `products` row on its own vertical (the `case-engagements.integration.test.ts` precedent). */
+  async function seedProduct(name: string, sortOrder: number): Promise<string> {
+    productSeq += 1;
+    const suffix = `${productSeq}-${randomUUID()}`;
+    const [vertical] = await db
+      .insert(verticals)
+      .values({ name: `Vertical ${suffix}`, slug: `vertical-${suffix}`, isActive: true })
+      .returning();
+    if (vertical === undefined) throw new Error('vertical insert failed');
+    const [product] = await db
+      .insert(products)
+      .values({ verticalId: vertical.id, name, slug: `product-${suffix}`, sortOrder })
+      .returning();
+    if (product === undefined) throw new Error('product insert failed');
+    return product.id;
+  }
+
+  async function onlyEntry(expertProfileId: string): Promise<PublicReviewEntry> {
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expertProfileId);
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    if (entry === undefined) {
+      throw new Error('expected one public entry');
+    }
+    return entry;
+  }
+
+  function onlyRater(entry: PublicReviewEntry): PublicReviewRater {
+    expect(entry.raters).toHaveLength(1);
+    const [rater] = entry.raters;
+    if (rater === undefined) {
+      throw new Error('expected one rater');
+    }
+    return rater;
+  }
+
+  it('returns EXACTLY the declared key sets and never an id, surname, email or private note', async () => {
     const expert = await expertDraftFactory();
     const company = await companyFactory({ name: 'Northwind Industrial' });
     const engagement = await engagementFactory({
-      companyId: company.id,
       expertProfileId: expert.id,
+      companyId: company.id,
     });
-    const { reviewerUserId } = await reviewFactory({
-      engagement,
-      values: { rating: 5, body: 'Unblocked us in one call', bodyVisibility: 'public' },
+    const createdAt = new Date('2026-09-01T09:00:00.000Z');
+    const { reviewId, reviewerUserId, reviewerEmail } = await seedRating(engagement, {
+      reviewer: { firstName: 'Sam', lastName: 'Kowalczyk' },
+      values: {
+        rating: 5,
+        body: 'Unblocked us in one call',
+        reviewerRole: 'RevOps Lead',
+        createdAt,
+      },
     });
 
-    const published = await reviewsRepository.listPublicByExpert(expert.id);
-    expect(published).toHaveLength(1);
+    const entry = await onlyEntry(expert.id);
+    const rater = onlyRater(entry);
 
-    const [row] = published;
-    if (row === undefined) {
-      throw new Error('expected one published review');
-    }
     // EXACT SET EQUALITY — the allow-list is the mechanism, this is the guard.
-    expect(Object.keys(row).sort()).toEqual(EXPECTED_KEYS);
-    expect(row).not.toHaveProperty('reviewerUserId');
-    expect(JSON.stringify(published)).not.toContain(reviewerUserId);
-    expect(row.rating).toBe(5);
-    expect(row.body).toBe('Unblocked us in one call');
-    expect(row.clientCompanyName).toBe('Northwind Industrial');
+    expect(Object.keys(entry).sort()).toEqual(ENTRY_KEYS);
+    expect(Object.keys(rater).sort()).toEqual(RATER_KEYS);
+
+    expect(entry).toEqual({
+      key: reviewId,
+      kind: 'project',
+      concludedOnIso: createdAt.toISOString(),
+      products: [],
+      engagementRating: 5,
+      raters: [
+        {
+          reviewId,
+          rating: 5,
+          body: 'Unblocked us in one call',
+          name: 'Sam K.',
+          descriptor: 'RevOps Lead @Northwind Industrial',
+          initials: 'SK',
+          ratedAtIso: createdAt.toISOString(),
+        },
+      ],
+      companyHeader: 'Northwind Industrial',
+    });
+
+    const serialised = JSON.stringify(entry);
+    expect(serialised).not.toContain(reviewerUserId);
+    expect(serialised).not.toContain(engagement.engagement.id);
+    expect(serialised).not.toContain(company.id);
+    expect(serialised).not.toContain(expert.id);
+    expect(serialised).not.toContain('Kowalczyk');
+    expect(serialised).not.toContain(reviewerEmail);
   });
 
-  it('never names a PERSONAL workspace — the review publishes, the company name is null', async () => {
+  it('never names a PERSONAL workspace, even when the reviewer ticked the company', async () => {
+    // `engagementFactory`'s default company is personal ("Acme Co") — the reviewer themself.
     const expert = await expertDraftFactory();
-    const personal = await companyFactory({ name: 'Dana Personal', isPersonal: true });
-    const engagement = await engagementFactory({
-      companyId: personal.id,
-      expertProfileId: expert.id,
-    });
-    await reviewFactory({ engagement, values: { rating: 5, showCompany: true } });
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    await seedRating(engagement, { values: { showCompany: true } });
 
-    const published = await reviewsRepository.listPublicByExpert(expert.id);
-    expect(published).toHaveLength(1);
-    expect(published[0]?.rating).toBe(5);
-    expect(published[0]?.clientCompanyName).toBeNull();
-    expect(JSON.stringify(published)).not.toContain('Dana Personal');
+    const entry = await onlyEntry(expert.id);
+    expect(entry.companyHeader).toBeNull();
+    expect(onlyRater(entry).descriptor).toBeNull();
+    expect(JSON.stringify(entry)).not.toContain('Acme Co');
+  });
+
+  it('falls back to role and industry when the reviewer did not tick the company', async () => {
+    const expert = await expertDraftFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({ name: 'Freightline Partners', industryId });
+    const engagement = await engagementFactory({
+      expertProfileId: expert.id,
+      companyId: company.id,
+    });
+    await seedRating(engagement, { values: { showCompany: false, reviewerRole: 'RevOps Lead' } });
+
+    const entry = await onlyEntry(expert.id);
+    expect(onlyRater(entry).descriptor).toBe('RevOps Lead, Logistics');
+    expect(entry.companyHeader).toBeNull();
+    expect(JSON.stringify(entry)).not.toContain('Freightline Partners');
+  });
+
+  it('withdraws a company name an admin hid, at READ time, from a review already written', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({
+      name: 'Hidden Holdings',
+      reviewNameHiddenAt: new Date('2026-09-02T00:00:00.000Z'),
+    });
+    const engagement = await engagementFactory({
+      expertProfileId: expert.id,
+      companyId: company.id,
+    });
+    await seedRating(engagement, { values: { showCompany: true, reviewerRole: 'CTO' } });
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.companyHeader).toBeNull();
+    expect(onlyRater(entry).descriptor).toBe('CTO');
+    expect(JSON.stringify(entry)).not.toContain('Hidden Holdings');
   });
 
   it('never projects a PRIVATE note — the rating publishes, the body is null', async () => {
     const expert = await expertDraftFactory();
     const engagement = await engagementFactory({ expertProfileId: expert.id });
-    await reviewFactory({
-      engagement,
+    await seedRating(engagement, {
       values: { rating: 4, body: 'For Balo only', bodyVisibility: 'private' },
     });
 
-    const published = await reviewsRepository.listPublicByExpert(expert.id);
-    expect(published).toHaveLength(1);
-    expect(published[0]?.rating).toBe(4);
-    expect(published[0]?.body).toBeNull();
-    expect(JSON.stringify(published)).not.toContain('For Balo only');
+    const entry = await onlyEntry(expert.id);
+    expect(entry.engagementRating).toBe(4);
+    expect(onlyRater(entry).body).toBeNull();
+    expect(JSON.stringify(entry)).not.toContain('For Balo only');
+  });
+
+  it('collapses two raters on one engagement into ONE entry worth their mean', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      expertProfileId: expert.id,
+      companyId: company.id,
+    });
+    const firstAt = new Date('2026-09-03T09:00:00.000Z');
+    const secondAt = new Date('2026-09-03T10:00:00.000Z');
+    const first = await seedRating(engagement, {
+      reviewer: { firstName: 'Dana', lastName: 'Okafor' },
+      values: { rating: 5, createdAt: firstAt },
+    });
+    const second = await seedRating(engagement, {
+      reviewer: { firstName: 'Lee', lastName: 'Park' },
+      values: { rating: 4, createdAt: secondAt },
+    });
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.key).toBe(first.reviewId);
+    expect(entry.engagementRating).toBe(4.5);
+    expect(entry.raters.map((rater) => [rater.reviewId, rater.rating, rater.name])).toEqual([
+      [first.reviewId, 5, 'Dana O.'],
+      [second.reviewId, 4, 'Lee P.'],
+    ]);
+    expect(entry.companyHeader).toBe('Northwind Industrial');
+    expect(entry.concludedOnIso).toBe(secondAt.toISOString());
+  });
+
+  it('drops the company header when any rater on the engagement left the company unticked', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      expertProfileId: expert.id,
+      companyId: company.id,
+    });
+    await seedRating(engagement, { values: { showCompany: true } });
+    await seedRating(engagement, { values: { showCompany: false } });
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.raters).toHaveLength(2);
+    expect(entry.companyHeader).toBeNull();
+  });
+
+  it('names the reviewer by first name alone, or "Verified client" with no initials', async () => {
+    const expert = await expertDraftFactory();
+    const noSurname = await engagementFactory({ expertProfileId: expert.id });
+    await seedRating(noSurname, { reviewer: { firstName: 'Sam', lastName: null } });
+    const noFirstName = await engagementFactory({ expertProfileId: expert.id });
+    await seedRating(noFirstName, { reviewer: { firstName: null, lastName: 'Kowalczyk' } });
+
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expert.id);
+    const attributions = entries
+      .flatMap((entry) => entry.raters)
+      .map((rater) => ({ name: rater.name, initials: rater.initials }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    expect(attributions).toEqual([
+      { name: 'Sam', initials: 'S' },
+      { name: 'Verified client', initials: null },
+    ]);
+    expect(JSON.stringify(entries)).not.toContain('Kowalczyk');
+  });
+
+  it('still counts a soft-deleted reviewer, unnamed but with their chosen company', async () => {
+    const expert = await expertDraftFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({ name: 'Northwind Industrial', industryId });
+    const engagement = await engagementFactory({
+      expertProfileId: expert.id,
+      companyId: company.id,
+    });
+    const { reviewerUserId } = await seedRating(engagement, {
+      reviewer: { firstName: 'Sam', lastName: 'Kowalczyk' },
+      values: {
+        rating: 4,
+        body: 'Sorted our routing rules',
+        reviewerRole: 'RevOps Lead',
+        showCompany: true,
+      },
+    });
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, reviewerUserId));
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.engagementRating).toBe(4);
+    expect(entry.companyHeader).toBe('Northwind Industrial');
+    const rater = onlyRater(entry);
+    expect(rater.name).toBe('Verified client');
+    expect(rater.descriptor).toBe('RevOps Lead @Northwind Industrial');
+    expect(rater.initials).toBeNull();
+    expect(rater.body).toBe('Sorted our routing rules');
+    const serialised = JSON.stringify(entry);
+    for (const identity of ['Sam', 'Kowalczyk']) {
+      expect(serialised).not.toContain(identity);
+    }
+  });
+
+  it('lists the live products of a case in sort order', async () => {
+    const expert = await expertDraftFactory();
+    const caseSeed = await caseEngagementFactory({ expertProfileId: expert.id });
+    const second = await seedProduct('Service Cloud', 2);
+    const first = await seedProduct('Sales Cloud', 1);
+    const removed = await seedProduct('Field Service', 0);
+    await db.insert(caseEngagementProducts).values([
+      { engagementId: caseSeed.engagement.id, productId: second },
+      { engagementId: caseSeed.engagement.id, productId: first },
+      { engagementId: caseSeed.engagement.id, productId: removed, deletedAt: new Date() },
+    ]);
+    await seedRating(caseSeed);
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.kind).toBe('case');
+    expect(entry.products).toEqual(['Sales Cloud', 'Service Cloud']);
+  });
+
+  it('lists the live products of a project from its source request, and none without one', async () => {
+    const expert = await expertDraftFactory();
+    const sourced = await engagementFactory({
+      expertProfileId: expert.id,
+      withSourceProposal: true,
+    });
+    const requestId = sourced.sourceProposal?.projectRequestId;
+    if (requestId === undefined) {
+      throw new Error('expected a source project request');
+    }
+    const productId = await seedProduct('Marketing Cloud', 1);
+    const removedId = await seedProduct('Data Cloud', 0);
+    await db.insert(projectRequestProducts).values([
+      { projectRequestId: requestId, productId },
+      { projectRequestId: requestId, productId: removedId, deletedAt: new Date() },
+    ]);
+    await seedRating(sourced, { values: { createdAt: new Date('2026-09-05T00:00:00.000Z') } });
+
+    const retainer = await engagementFactory({ expertProfileId: expert.id });
+    await seedRating(retainer, { values: { createdAt: new Date('2026-09-04T00:00:00.000Z') } });
+
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expert.id);
+    expect(entries.map((entry) => [entry.kind, entry.products])).toEqual([
+      ['project', ['Marketing Cloud']],
+      ['project', []],
+    ]);
+  });
+
+  it('dates an entry by its conclusion, else its latest review, newest first', async () => {
+    const expert = await expertDraftFactory();
+    const acceptedAt = new Date('2026-08-20T12:00:00.000Z');
+    const accepted = await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'completed', acceptedAt },
+    });
+    await seedRating(accepted, { values: { createdAt: new Date('2026-08-25T00:00:00.000Z') } });
+
+    const closedAt = new Date('2026-07-01T08:00:00.000Z');
+    const closed = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      caseValues: { closedAt, closeReason: 'auto_inactive' },
+      values: { status: 'completed' },
+    });
+    await seedRating(closed, { values: { createdAt: new Date('2026-09-30T00:00:00.000Z') } });
+
+    const open = await engagementFactory({ expertProfileId: expert.id });
+    const latestReviewAt = new Date('2026-09-10T00:00:00.000Z');
+    await seedRating(open, { values: { createdAt: new Date('2026-09-01T00:00:00.000Z') } });
+    await seedRating(open, { values: { createdAt: latestReviewAt } });
+
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expert.id);
+    expect(entries.map((entry) => entry.concludedOnIso)).toEqual([
+      latestReviewAt.toISOString(),
+      acceptedAt.toISOString(),
+      closedAt.toISOString(),
+    ]);
   });
 
   it('excludes soft-deleted reviews', async () => {
     const expert = await expertDraftFactory();
     const engagement = await engagementFactory({ expertProfileId: expert.id });
-    await reviewFactory({ engagement, values: { deletedAt: new Date() } });
+    await seedRating(engagement, { values: { deletedAt: new Date() } });
 
-    await expect(reviewsRepository.listPublicByExpert(expert.id)).resolves.toEqual([]);
+    await expect(reviewsRepository.listPublicEntriesByExpert(expert.id)).resolves.toEqual([]);
   });
 
   it('returns [] for an expert with no reviews', async () => {
     const expert = await expertDraftFactory();
-    await expect(reviewsRepository.listPublicByExpert(expert.id)).resolves.toEqual([]);
+    await expect(reviewsRepository.listPublicEntriesByExpert(expert.id)).resolves.toEqual([]);
   });
 });
 
 describe('the company-level review-name hide reaches every reader (BAL-630)', () => {
-  /** The stored `show_company` of one review — the hide must never rewrite it. */
-  async function storedShowCompany(reviewId: string): Promise<boolean> {
-    const [row] = await db
-      .select({ showCompany: reviews.showCompany })
-      .from(reviews)
-      .where(eq(reviews.id, reviewId));
-    if (row === undefined) {
-      throw new Error(`review ${reviewId} not found`);
+  async function hideCompanyName(companyId: string, hidden: boolean): Promise<void> {
+    const admin = await userFactory();
+    await expect(
+      companiesRepository.setReviewNameHidden({ companyId, hidden, actorUserId: admin.id })
+    ).resolves.toMatchObject({ outcome: 'changed' });
+  }
+
+  async function onlyEntry(expertProfileId: string): Promise<PublicReviewEntry> {
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expertProfileId);
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    if (entry === undefined) {
+      throw new Error('expected one public entry');
     }
-    return row.showCompany;
+    return entry;
+  }
+
+  function descriptorOf(entry: PublicReviewEntry, reviewId: string): string | null {
+    const rater = entry.raters.find((candidate) => candidate.reviewId === reviewId);
+    if (rater === undefined) {
+      throw new Error(`no rater for review ${reviewId}`);
+    }
+    return rater.descriptor;
   }
 
   it('once hidden: no public name, the landing form disallows it, and no prior choice is read', async () => {
@@ -1305,14 +1653,15 @@ describe('the company-level review-name hide reaches every reader (BAL-630)', ()
       companyId: company.id,
       expertProfileId: expert.id,
     });
-    const { reviewerUserId } = await reviewFactory({
+    const { review, reviewerUserId } = await reviewFactory({
       engagement,
       values: { showCompany: true },
     });
 
     // Control: before the hide, every reader names the company.
-    const [before] = await reviewsRepository.listPublicByExpert(expert.id);
-    expect(before?.clientCompanyName).toBe('Northwind Industrial');
+    const before = await onlyEntry(expert.id);
+    expect(before.companyHeader).toBe('Northwind Industrial');
+    expect(descriptorOf(before, review.id)).toBe('Northwind Industrial');
     const contextBefore = await reviewsRepository.findLandingContext(
       engagement.engagement.id,
       reviewerUserId
@@ -1320,19 +1669,12 @@ describe('the company-level review-name hide reaches every reader (BAL-630)', ()
     expect(contextBefore?.clientCompanyNameAllowed).toBe(true);
     await expect(reviewsRepository.findLatestShowCompanyChoice(reviewerUserId)).resolves.toBe(true);
 
-    const admin = await userFactory();
-    await expect(
-      companiesRepository.setReviewNameHidden({
-        companyId: company.id,
-        hidden: true,
-        actorUserId: admin.id,
-      })
-    ).resolves.toMatchObject({ outcome: 'changed' });
+    await hideCompanyName(company.id, true);
 
-    const published = await reviewsRepository.listPublicByExpert(expert.id);
-    expect(published).toHaveLength(1);
-    expect(published[0]?.clientCompanyName).toBeNull();
-    expect(JSON.stringify(published)).not.toContain('Northwind Industrial');
+    const entry = await onlyEntry(expert.id);
+    expect(entry.companyHeader).toBeNull();
+    expect(descriptorOf(entry, review.id)).toBeNull();
+    expect(JSON.stringify(entry)).not.toContain('Northwind Industrial');
 
     const context = await reviewsRepository.findLandingContext(
       engagement.engagement.id,
@@ -1344,51 +1686,30 @@ describe('the company-level review-name hide reaches every reader (BAL-630)', ()
     ).resolves.toBeUndefined();
   });
 
-  it('hide then show restores each reviewer’s own choice', async () => {
+  it('hide then show restores each rater’s own choice on the public entry', async () => {
+    const expert = await expertDraftFactory();
     const company = await companyFactory({ name: 'Northwind Industrial' });
-    const engagement = await engagementFactory({ companyId: company.id });
+    const engagement = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: expert.id,
+    });
     const shown = await reviewFactory({ engagement, values: { showCompany: true } });
     const notShown = await reviewFactory({ engagement, values: { showCompany: false } });
-    const admin = await userFactory();
+    expect(shown.reviewerUserId).not.toBe(notShown.reviewerUserId);
 
-    const attributionFor = async (reviewId: string): Promise<string | null> => {
-      const context = await reviewsRepository.findLandingContext(
-        engagement.engagement.id,
-        shown.reviewerUserId
-      );
-      if (context === undefined) {
-        throw new Error('expected a landing context');
-      }
-      return formatReviewAttribution({
-        firstName: 'Dana',
-        lastInitial: 'K',
-        role: null,
-        companyName: context.clientCompanyName,
-        industryName: context.clientIndustryName,
-        showCompany: await storedShowCompany(reviewId),
-        companyNameAllowed: context.clientCompanyNameAllowed,
-      }).descriptor;
-    };
+    await hideCompanyName(company.id, true);
+    const hidden = await onlyEntry(expert.id);
+    expect(hidden.raters).toHaveLength(2);
+    expect(descriptorOf(hidden, shown.review.id)).toBeNull();
+    expect(descriptorOf(hidden, notShown.review.id)).toBeNull();
+    expect(hidden.companyHeader).toBeNull();
+    expect(JSON.stringify(hidden)).not.toContain('Northwind Industrial');
 
-    await companiesRepository.setReviewNameHidden({
-      companyId: company.id,
-      hidden: true,
-      actorUserId: admin.id,
-    });
-    expect(await attributionFor(shown.review.id)).toBeNull();
-    expect(await attributionFor(notShown.review.id)).toBeNull();
-
-    await companiesRepository.setReviewNameHidden({
-      companyId: company.id,
-      hidden: false,
-      actorUserId: admin.id,
-    });
-    const context = await reviewsRepository.findLandingContext(
-      engagement.engagement.id,
-      shown.reviewerUserId
-    );
-    expect(context?.clientCompanyNameAllowed).toBe(true);
-    expect(await attributionFor(shown.review.id)).toBe('Northwind Industrial');
-    expect(await attributionFor(notShown.review.id)).toBeNull();
+    await hideCompanyName(company.id, false);
+    const restored = await onlyEntry(expert.id);
+    expect(descriptorOf(restored, shown.review.id)).toBe('Northwind Industrial');
+    expect(descriptorOf(restored, notShown.review.id)).toBeNull();
+    // Not every rater shows the company, so the entry header stays blank.
+    expect(restored.companyHeader).toBeNull();
   });
 });
