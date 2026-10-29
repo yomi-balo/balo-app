@@ -2744,3 +2744,34 @@ describe('expertsRepository.saveSettingsCertifications — §settings-lock', () 
     expect(profile?.trailheadUrl).toBe('https://trailblazer.me/id/after');
   });
 });
+
+describe('expertsRepository.countOtherLinkedProfiles (BAL-631)', () => {
+  it('returns an empty Map for no ids', async () => {
+    await expect(expertsRepository.countOtherLinkedProfiles([], randomUUID())).resolves.toEqual(
+      new Map()
+    );
+  });
+
+  it('gives no entry for a solo agency and excludes the viewer’s own profile', async () => {
+    const solo = await agencyFactory();
+    const team = await agencyFactory();
+    const lone = await expertDraftFactory();
+    const viewer = await expertDraftFactory();
+    const mateA = await expertDraftFactory();
+    const mateB = await expertDraftFactory();
+    await expertsRepository.linkAgency(lone.id, solo.id);
+    await expertsRepository.linkAgency(viewer.id, team.id);
+    await expertsRepository.linkAgency(mateA.id, team.id);
+    await expertsRepository.linkAgency(mateB.id, team.id);
+
+    const loneView = await expertsRepository.countOtherLinkedProfiles([solo.id], lone.userId);
+    expect(loneView.has(solo.id)).toBe(false);
+
+    const teamView = await expertsRepository.countOtherLinkedProfiles(
+      [solo.id, team.id],
+      viewer.userId
+    );
+    expect(teamView.get(team.id)).toBe(2);
+    expect(teamView.get(solo.id)).toBe(1);
+  });
+});

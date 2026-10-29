@@ -35,6 +35,7 @@ import {
   type AdminKanbanColumn,
   type AdminPortfolioDTO,
   type AdminTriageCard,
+  type EngagementRowDeriv,
   type PortfolioDTO,
   type PortfolioRowView,
   type PortfolioThreadRef,
@@ -78,7 +79,7 @@ const AUTO_ACCEPT_MS = AUTO_ACCEPT_DAYS * 24 * 60 * 60 * 1000;
  * date is the completion request plus the D7 window; the loader passes the result
  * to the pure deriver as a preformatted string (no `Date` crosses the boundary).
  */
-function formatAutoAcceptLabel(completionRequestedAt: Date): string {
+export function formatAutoAcceptLabel(completionRequestedAt: Date): string {
   const at = new Date(completionRequestedAt.getTime() + AUTO_ACCEPT_MS);
   return new Intl.DateTimeFormat('en-GB', {
     month: 'short',
@@ -358,6 +359,33 @@ function toExpertRowView(
 }
 
 /**
+ * The shared engagement-row derivation for every lens: formats the UTC-pinned auto-accept label
+ * for a `pending_acceptance` engagement and runs the pure deriver. Returns the label too, since
+ * the agency lens shows it as row detail.
+ */
+export function deriveRowForEngagement(
+  e: PortfolioProjectEngagementView,
+  lens: 'client' | 'expert' | 'agency',
+  counterpartName: string
+): { derived: EngagementRowDeriv; autoAcceptLabel: string | null } {
+  const autoAcceptLabel =
+    e.status === 'pending_acceptance' && e.completionRequestedAt !== null
+      ? formatAutoAcceptLabel(e.completionRequestedAt)
+      : null;
+  const derived = deriveEngagementRow({
+    engagementId: e.id,
+    status: e.status,
+    lens,
+    hasChangeRequest: e.status === 'active' && e.changeRequestNote !== null,
+    counterpartName,
+    totalMilestones: e.totalMilestones,
+    completedMilestones: e.completedMilestones,
+    autoAcceptLabel,
+  });
+  return { derived, autoAcceptLabel };
+}
+
+/**
  * Build a delivery-engagement inbox row from a hydrated portfolio engagement.
  * The counterpart (client lens → the expert party display name; expert lens → the
  * client company) is resolved here, so only the resulting string crosses the RSC
@@ -378,22 +406,9 @@ function toEngagementRowView(
         })
       : e.company.name;
 
-  const autoAcceptLabel =
-    e.status === 'pending_acceptance' && e.completionRequestedAt !== null
-      ? formatAutoAcceptLabel(e.completionRequestedAt)
-      : null;
-
+  const { derived } = deriveRowForEngagement(e, lens, counterpartName);
   const { needsYou, nudgeLabel, href, progressLabel, moveKind, clientMoveKind, deliveryState } =
-    deriveEngagementRow({
-      engagementId: e.id,
-      status: e.status,
-      lens,
-      hasChangeRequest: e.status === 'active' && e.changeRequestNote !== null,
-      counterpartName,
-      totalMilestones: e.totalMilestones,
-      completedMilestones: e.completedMilestones,
-      autoAcceptLabel,
-    });
+    derived;
 
   const recencyAt = e.lastActivityAt ?? e.createdAt;
 

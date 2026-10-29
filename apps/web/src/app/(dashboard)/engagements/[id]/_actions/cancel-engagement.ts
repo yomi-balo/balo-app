@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { projectEngagementsRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, personAtCompany } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -90,6 +90,10 @@ export async function cancelEngagementAction(input: {
         projectTitle: deriveEngagementTitle(engagement, parties),
         cancelledOn: formatLongUtc(now),
         reason,
+        actorUserId: user.id,
+        clientCompanyName: parties.clientCompanyName,
+        deliveringExpertName: parties.expertPerson,
+        actorLabel: personAtCompany({ firstName: user.firstName, lastName: user.lastName }, 'Balo'),
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });

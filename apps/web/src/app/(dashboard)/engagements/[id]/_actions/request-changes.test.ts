@@ -185,6 +185,8 @@ describe('requestProjectChangesAction', () => {
         engagementId: ENGAGEMENT_ID,
         expertProfileId: 'expert-1',
         actorClientLabel: 'Dana @ Northwind Industrial',
+        actorUserId: 'client-1',
+        deliveringExpertName: 'Priya Sharma',
         projectTitle: 'CPQ implementation',
         note: NOTE,
         reviewDays: 7,

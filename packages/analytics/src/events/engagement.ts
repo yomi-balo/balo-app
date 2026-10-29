@@ -103,7 +103,7 @@ export type EngagementWorkspaceLens = 'client' | 'expert' | 'admin';
  * inbox row (D6); `direct` = a bare URL visit / bookmark (default; also the
  * fallback when `?from` is absent or not whitelisted).
  */
-export type EngagementWorkspaceEntry = 'request_detail' | 'inbox' | 'direct';
+export type EngagementWorkspaceEntry = 'request_detail' | 'inbox' | 'direct' | 'agency';
 
 /** Who started a change order: a client request, or the expert proposing one unprompted. */
 export type ChangeOrderInitiator = 'client' | 'expert';

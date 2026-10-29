@@ -523,6 +523,7 @@ export type {
   FindOrCreateMembershipResult,
   SoftRemoveMembershipResult,
   PartyJoinSettings,
+  EligibleAgency,
 } from './party-memberships';
 export {
   clientPartyRecipientsRepository,

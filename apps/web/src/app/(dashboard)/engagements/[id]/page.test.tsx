@@ -379,6 +379,33 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
     );
   });
 
+  it('?from=agency records the agency entry and sends the back link to the agency lens', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(
+      engagement({
+        expertProfile: { ...engagement().expertProfile, agencyId: 'agency-1' },
+      })
+    );
+
+    await renderPage('agency');
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ entry: 'agency' })
+    );
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/projects?lens=agency&agency=agency-1'
+    );
+  });
+
+  it('keeps the plain projects back link when the engagement has no agency', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage('agency');
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute('href', '/projects');
+  });
+
   it('collapses an unknown ?from to direct', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     mockFindWithMilestones.mockResolvedValue(engagement());

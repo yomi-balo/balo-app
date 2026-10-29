@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 import type { DashboardTrackStage } from '@balo/analytics/events';
-import type { ProjectsInboxLens } from '@/lib/analytics';
+import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import type { StageKey } from '@/lib/projects-inbox/portfolio-row';
 import { participantStageFor } from '@/lib/projects-inbox/project-stages';
 
@@ -15,7 +15,7 @@ import { participantStageFor } from '@/lib/projects-inbox/project-stages';
 
 interface StageChipProps {
   stage: StageKey;
-  lens: ProjectsInboxLens;
+  lens: RequestLens;
   label: string;
   className?: string;
 }
@@ -52,7 +52,7 @@ const PARTICIPANT_TONE: Record<DashboardTrackStage, string> = {
   delivery: TONE.success,
 };
 
-function toneFor(lens: ProjectsInboxLens, stage: StageKey): string {
+function toneFor(lens: RequestLens, stage: StageKey): string {
   if (lens === 'admin') return ADMIN_STAGE_TONE[stage];
   const participant = participantStageFor(lens, stage);
   return participant === null ? TONE.muted : PARTICIPANT_TONE[participant.key];

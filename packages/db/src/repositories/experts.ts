@@ -1,4 +1,5 @@
 import {
+  count,
   eq,
   and,
   asc,
@@ -1148,6 +1149,34 @@ export const expertsRepository = {
     if (row === undefined) {
       throw new Error(`Expert profile not found: ${expertProfileId}`);
     }
+  },
+
+  /**
+   * Per agency, how many expert profiles are linked to it besides `excludeUserId`'s own.
+   * Departed teammates count: the `agency_id` link persists after membership ends.
+   * Agencies with none are absent from the Map; an empty input returns an empty Map.
+   */
+  async countOtherLinkedProfiles(
+    agencyIds: string[],
+    excludeUserId: string
+  ): Promise<Map<string, number>> {
+    if (agencyIds.length === 0) {
+      return new Map();
+    }
+    const rows = await db
+      .select({ agencyId: expertProfiles.agencyId, total: count() })
+      .from(expertProfiles)
+      .where(
+        and(inArray(expertProfiles.agencyId, agencyIds), ne(expertProfiles.userId, excludeUserId))
+      )
+      .groupBy(expertProfiles.agencyId);
+    const byAgency = new Map<string, number>();
+    for (const row of rows) {
+      if (row.agencyId !== null) {
+        byAgency.set(row.agencyId, row.total);
+      }
+    }
+    return byAgency;
   },
 
   /**

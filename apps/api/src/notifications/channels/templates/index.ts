@@ -44,6 +44,7 @@ import { EngagementTimeEntryChangedEmail } from './engagement-time-entry-changed
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
+import { EngagementCancelledAgencyEmail } from './engagement-cancelled-agency.js';
 import { ReviewReminderEmail } from './engagement-review-reminder.js';
 import { AutoAcceptedEmail } from './engagement-auto-accepted.js';
 import { AcceptedClientEmail } from './engagement-accepted-emails.js';
@@ -113,6 +114,7 @@ import {
 } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
+import { optionalText } from './shared.js';
 import {
   MeetingGuestInvitedEmail,
   MeetingGuestLinkResentEmail,
@@ -1073,6 +1075,30 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(projectTitle)} has been cancelled`,
+    };
+  },
+
+  // BAL-631 engagement cancelled — the delivering agency's owners/admins. Subject names the
+  // project and, when the publisher supplied it, the client company.
+  'engagement-cancelled-agency': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const clientName = optionalText(data.clientCompanyName);
+    const subjectTitle = sanitizeSubjectTitle(projectTitle);
+    return {
+      component: React.createElement(EngagementCancelledAgencyEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        cancelledOn: (data.cancelledOn as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+        deliveringExpertName: optionalText(data.deliveringExpertName),
+        deliveringAgencyName: optionalText(data.deliveringAgencyName),
+        clientCompanyName: clientName,
+        actorLabel: optionalText(data.actorLabel),
+      }),
+      subject: clientName
+        ? `${subjectTitle} for ${sanitizeSubjectTitle(clientName)} has been cancelled`
+        : `${subjectTitle} has been cancelled`,
     };
   },
 

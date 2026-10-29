@@ -19,6 +19,7 @@ import {
   engagementChangeOrders,
   engagementMilestones,
   engagements,
+  expertProfiles,
   projectChangeRequestMilestones,
   projectChangeRequests,
   projectEngagements,
@@ -771,13 +772,25 @@ async function aggregateMilestoneProgress(
  * in the oversight tiles.
  */
 function queryPortfolioProjectEngagements(
-  scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+  scope:
+    | { companyId: string }
+    | { expertProfileId: string }
+    | { agencyId: string }
+    | { platform: true }
 ) {
   let scopeCondition: SQL | undefined;
   if ('companyId' in scope) {
     scopeCondition = eq(engagements.companyId, scope.companyId);
   } else if ('expertProfileId' in scope) {
     scopeCondition = eq(engagements.expertProfileId, scope.expertProfileId);
+  } else if ('agencyId' in scope) {
+    scopeCondition = inArray(
+      engagements.expertProfileId,
+      db
+        .select({ id: expertProfiles.id })
+        .from(expertProfiles)
+        .where(eq(expertProfiles.agencyId, scope.agencyId))
+    );
   }
 
   return db.query.engagements.findMany({
@@ -1418,7 +1431,11 @@ export const projectEngagementsRepository = {
    * NEVER stripeConnectId / workosId / email / phone. Empty → `[]`.
    */
   async listPortfolio(
-    scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+    scope:
+      | { companyId: string }
+      | { expertProfileId: string }
+      | { agencyId: string }
+      | { platform: true }
   ): Promise<PortfolioProjectEngagementView[]> {
     const rows = await queryPortfolioProjectEngagements(scope);
     if (rows.length === 0) {
@@ -1444,6 +1461,39 @@ export const projectEngagementsRepository = {
       (a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0)
     );
     return hydrated;
+  },
+
+  /**
+   * Live project engagements per agency: not soft-deleted, `delivery_status` in
+   * (`active`, `pending_acceptance`), delivered by any expert profile linked to the
+   * agency (`expert_profiles.agency_id`). Agencies with none are absent from the Map.
+   * An empty input returns an empty Map without querying.
+   */
+  async countLiveByAgency(agencyIds: string[]): Promise<Map<string, number>> {
+    if (agencyIds.length === 0) {
+      return new Map();
+    }
+    const rows = await db
+      .select({ agencyId: expertProfiles.agencyId, total: count() })
+      .from(projectEngagements)
+      .innerJoin(engagements, eq(engagements.id, projectEngagements.engagementId))
+      .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      .where(
+        and(
+          inArray(expertProfiles.agencyId, agencyIds),
+          isNull(engagements.deletedAt),
+          isNull(projectEngagements.deletedAt),
+          inArray(projectEngagements.deliveryStatus, ['active', 'pending_acceptance'])
+        )
+      )
+      .groupBy(expertProfiles.agencyId);
+    const byAgency = new Map<string, number>();
+    for (const row of rows) {
+      if (row.agencyId !== null) {
+        byAgency.set(row.agencyId, row.total);
+      }
+    }
+    return byAgency;
   },
 
   /**

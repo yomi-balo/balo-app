@@ -151,3 +151,38 @@ describe('BAL-494 / ADR-1053 — expand/contract pin (site 5)', () => {
     expect(lens).toBe('client');
   });
 });
+
+describe('resolvePortfolioLens: agency lens', () => {
+  const overseer = { canOverseeAgency: true };
+
+  it('offers agency between expert and admin only when the viewer oversees an agency', () => {
+    const user = makeUser({ platformRole: 'admin', expertProfileId: 'expert-1' });
+    expect(resolvePortfolioLens(user, undefined, overseer).allowedLenses).toEqual([
+      'client',
+      'expert',
+      'agency',
+      'admin',
+    ]);
+    expect(resolvePortfolioLens(user).allowedLenses).toEqual(['client', 'expert', 'admin']);
+  });
+
+  it('honours ?lens=agency for an overseer', () => {
+    expect(resolvePortfolioLens(makeUser(), 'agency', overseer).lens).toBe('agency');
+  });
+
+  it('falls back silently when ?lens=agency is requested without oversight', () => {
+    expect(resolvePortfolioLens(makeUser(), 'agency').lens).toBe('client');
+  });
+
+  it.each([
+    ['a platform admin', makeUser({ platformRole: 'admin' }), 'admin'],
+    [
+      'an expert-mode user',
+      makeUser({ activeMode: 'expert', expertProfileId: 'expert-1' }),
+      'expert',
+    ],
+    ['a holder with no expert profile', makeUser(), 'client'],
+  ])('never defaults to agency for %s', (_label, user, expected) => {
+    expect(resolvePortfolioLens(user, undefined, overseer).lens).toBe(expected);
+  });
+});

@@ -100,7 +100,12 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRequireUser.mockResolvedValue({ id: 'admin-1', platformRole: 'admin' });
+  mockRequireUser.mockResolvedValue({
+    id: 'admin-1',
+    firstName: 'Mia',
+    lastName: 'Joseph',
+    platformRole: 'admin',
+  });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue({ lens: 'admin', archetype: 'observer' });
   mockCancel.mockResolvedValue({ status: 'cancelled' });
@@ -180,6 +185,10 @@ describe('cancelEngagementAction', () => {
         expertProfileId: 'expert-1',
         projectTitle: 'CPQ implementation',
         reason: 'Client changed direction.',
+        actorUserId: 'admin-1',
+        clientCompanyName: 'Northwind Industrial',
+        deliveringExpertName: 'Priya Sharma',
+        actorLabel: 'Mia @ Balo',
       })
     );
 
