@@ -176,7 +176,7 @@ describe('invariant: a published review names the company, never the person (BAL
   it('the public projection joins through the ENGAGEMENT to get the company name', () => {
     // Non-vacuity for the assertions above: prove the projection really does carry the
     // company attribution it is supposed to, not merely that it lacks the reviewer.
-    expect(projection).toContain('clientCompanyName: companies.name');
+    expect(projection).toContain('THEN ${companies.name} END');
     expect(projection).toContain('innerJoin(engagements');
     expect(projection).toContain('innerJoin(companies');
   });

@@ -12,6 +12,11 @@ export type {
   SeedBillingEmailResult,
   SetBillingEmailInput,
   SetBillingEmailResult,
+  CompanyAdminDetails,
+  SetCompanyIndustryInput,
+  SetCompanyIndustryResult,
+  SetCompanyReviewNameHiddenInput,
+  SetCompanyReviewNameHiddenResult,
 } from './companies';
 export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
 export type {

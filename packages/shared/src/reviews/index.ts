@@ -404,8 +404,9 @@ export function surnameInitial(lastName: string | null): string | null {
  * Whether a company's name may appear on a review. A personal "company" is the reviewer
  * themself, and an admin can hide a company's name from reviews.
  *
- * `reviewsRepository.findLatestShowCompanyChoice` restates this predicate in SQL
- * (`is_personal = false AND review_name_hidden_at IS NULL`); change both together.
+ * `reviewsRepository.findLatestShowCompanyChoice` and the `clientCompanyName` CASE in
+ * `reviewsRepository.listPublicByExpert` restate this predicate in SQL
+ * (`is_personal = false AND review_name_hidden_at IS NULL`); change all three together.
  */
 export function isCompanyNameAllowedOnReviews(company: {
   isPersonal: boolean;
@@ -588,6 +589,7 @@ export interface PublicReview {
   id: string;
   rating: number;
   body: string | null;
-  clientCompanyName: string;
+  /** `null` for a personal workspace, or while an admin has hidden the company's name. */
+  clientCompanyName: string | null;
   createdAtIso: string;
 }

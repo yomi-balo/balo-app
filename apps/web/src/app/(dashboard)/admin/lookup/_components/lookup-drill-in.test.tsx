@@ -168,6 +168,23 @@ describe('LookupDrillIn — the Open-link matrix', () => {
     expect(screen.queryByRole('link', { name: 'Domains' })).not.toBeInTheDocument();
   });
 
+  it('BAL-630 — a company renders a Company details link', () => {
+    render(
+      <LookupDrillIn selection={selection({ type: 'company', id: 'co1' })} onTabSelect={vi.fn()} />
+    );
+    expect(screen.getByRole('link', { name: 'Company details' })).toHaveAttribute(
+      'href',
+      '/admin/companies/co1'
+    );
+  });
+
+  it('BAL-630 — an agency renders no Company details link', () => {
+    render(
+      <LookupDrillIn selection={selection({ type: 'agency', id: 'ag1' })} onTabSelect={vi.fn()} />
+    );
+    expect(screen.queryByRole('link', { name: 'Company details' })).not.toBeInTheDocument();
+  });
+
   it('BAL-593 — a reviewable expert application renders an Application link alongside Open when public', () => {
     render(
       <LookupDrillIn

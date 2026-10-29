@@ -14,6 +14,8 @@ import {
   userFactory,
   type EngagementFactoryResult,
 } from '../test/factories';
+import { formatReviewAttribution } from '@balo/shared/reviews';
+import { companiesRepository } from './companies';
 import { reviewsRepository, type UpsertReviewInput } from './reviews';
 
 /** A fresh engagement plus a member of its client company — the canonical reviewer shape. */
@@ -1212,7 +1214,11 @@ describe('reviewsRepository.listPublicByExpert — D6', () => {
 
   it('attributes to the client COMPANY and NEVER exposes the reviewer', async () => {
     const expert = await expertDraftFactory();
-    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: expert.id,
+    });
     const { reviewerUserId } = await reviewFactory({
       engagement,
       values: { rating: 5, body: 'Unblocked us in one call', bodyVisibility: 'public' },
@@ -1231,7 +1237,23 @@ describe('reviewsRepository.listPublicByExpert — D6', () => {
     expect(JSON.stringify(published)).not.toContain(reviewerUserId);
     expect(row.rating).toBe(5);
     expect(row.body).toBe('Unblocked us in one call');
-    expect(row.clientCompanyName.length).toBeGreaterThan(0);
+    expect(row.clientCompanyName).toBe('Northwind Industrial');
+  });
+
+  it('never names a PERSONAL workspace — the review publishes, the company name is null', async () => {
+    const expert = await expertDraftFactory();
+    const personal = await companyFactory({ name: 'Dana Personal', isPersonal: true });
+    const engagement = await engagementFactory({
+      companyId: personal.id,
+      expertProfileId: expert.id,
+    });
+    await reviewFactory({ engagement, values: { rating: 5, showCompany: true } });
+
+    const published = await reviewsRepository.listPublicByExpert(expert.id);
+    expect(published).toHaveLength(1);
+    expect(published[0]?.rating).toBe(5);
+    expect(published[0]?.clientCompanyName).toBeNull();
+    expect(JSON.stringify(published)).not.toContain('Dana Personal');
   });
 
   it('never projects a PRIVATE note — the rating publishes, the body is null', async () => {
@@ -1260,5 +1282,113 @@ describe('reviewsRepository.listPublicByExpert — D6', () => {
   it('returns [] for an expert with no reviews', async () => {
     const expert = await expertDraftFactory();
     await expect(reviewsRepository.listPublicByExpert(expert.id)).resolves.toEqual([]);
+  });
+});
+
+describe('the company-level review-name hide reaches every reader (BAL-630)', () => {
+  /** The stored `show_company` of one review — the hide must never rewrite it. */
+  async function storedShowCompany(reviewId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ showCompany: reviews.showCompany })
+      .from(reviews)
+      .where(eq(reviews.id, reviewId));
+    if (row === undefined) {
+      throw new Error(`review ${reviewId} not found`);
+    }
+    return row.showCompany;
+  }
+
+  it('once hidden: no public name, the landing form disallows it, and no prior choice is read', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: expert.id,
+    });
+    const { reviewerUserId } = await reviewFactory({
+      engagement,
+      values: { showCompany: true },
+    });
+
+    // Control: before the hide, every reader names the company.
+    const [before] = await reviewsRepository.listPublicByExpert(expert.id);
+    expect(before?.clientCompanyName).toBe('Northwind Industrial');
+    const contextBefore = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewerUserId
+    );
+    expect(contextBefore?.clientCompanyNameAllowed).toBe(true);
+    await expect(reviewsRepository.findLatestShowCompanyChoice(reviewerUserId)).resolves.toBe(true);
+
+    const admin = await userFactory();
+    await expect(
+      companiesRepository.setReviewNameHidden({
+        companyId: company.id,
+        hidden: true,
+        actorUserId: admin.id,
+      })
+    ).resolves.toMatchObject({ outcome: 'changed' });
+
+    const published = await reviewsRepository.listPublicByExpert(expert.id);
+    expect(published).toHaveLength(1);
+    expect(published[0]?.clientCompanyName).toBeNull();
+    expect(JSON.stringify(published)).not.toContain('Northwind Industrial');
+
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewerUserId
+    );
+    expect(context?.clientCompanyNameAllowed).toBe(false);
+    await expect(
+      reviewsRepository.findLatestShowCompanyChoice(reviewerUserId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('hide then show restores each reviewer’s own choice', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({ companyId: company.id });
+    const shown = await reviewFactory({ engagement, values: { showCompany: true } });
+    const notShown = await reviewFactory({ engagement, values: { showCompany: false } });
+    const admin = await userFactory();
+
+    const attributionFor = async (reviewId: string): Promise<string | null> => {
+      const context = await reviewsRepository.findLandingContext(
+        engagement.engagement.id,
+        shown.reviewerUserId
+      );
+      if (context === undefined) {
+        throw new Error('expected a landing context');
+      }
+      return formatReviewAttribution({
+        firstName: 'Dana',
+        lastInitial: 'K',
+        role: null,
+        companyName: context.clientCompanyName,
+        industryName: context.clientIndustryName,
+        showCompany: await storedShowCompany(reviewId),
+        companyNameAllowed: context.clientCompanyNameAllowed,
+      }).descriptor;
+    };
+
+    await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden: true,
+      actorUserId: admin.id,
+    });
+    expect(await attributionFor(shown.review.id)).toBeNull();
+    expect(await attributionFor(notShown.review.id)).toBeNull();
+
+    await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden: false,
+      actorUserId: admin.id,
+    });
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      shown.reviewerUserId
+    );
+    expect(context?.clientCompanyNameAllowed).toBe(true);
+    expect(await attributionFor(shown.review.id)).toBe('Northwind Industrial');
+    expect(await attributionFor(notShown.review.id)).toBeNull();
   });
 });

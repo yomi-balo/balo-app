@@ -502,7 +502,8 @@ export const reviewsRepository = {
    * never re-defaulted to ticked.
    *
    * ⚠ THE COMPANY JOIN RESTATES `isCompanyNameAllowedOnReviews` (`@balo/shared/reviews`) IN
-   * SQL — `is_personal = false AND review_name_hidden_at IS NULL`. Change both together. It
+   * SQL — `is_personal = false AND review_name_hidden_at IS NULL` — as does the
+   * `clientCompanyName` CASE in `listPublicByExpert`. Change all three together. It
    * skips not-allowed companies because a review there stored a FORCED `false`, which is not
    * the reviewer's choice and must not untick their next review.
    *
@@ -760,6 +761,13 @@ export const reviewsRepository = {
    * ⚠⚠ A PRIVATE NOTE NEVER LEAVES THE DATABASE. `body` is projected only when
    * `body_visibility = 'public'` (the SQL twin of `publicReviewNote`); a private note reads
    * as `null` here, so no caller can publish it by forgetting a filter.
+   *
+   * ⚠⚠ A NOT-ALLOWED COMPANY NAME NEVER LEAVES THE DATABASE either. For a personal workspace,
+   * or while an admin has hidden the company from reviews, `clientCompanyName` reads as `null`:
+   * the SQL twin of `isCompanyNameAllowedOnReviews`, as the note's CASE is of `publicReviewNote`.
+   *
+   * ⚠ The per-review `show_company` choice is NOT applied here yet (BAL-629 owns it); apply it
+   * before mounting this reader.
    */
   listPublicByExpert: async (expertProfileId: string): Promise<PublicReview[]> => {
     const rows = await db
@@ -769,7 +777,9 @@ export const reviewsRepository = {
         body: sql<
           string | null
         >`CASE WHEN ${reviews.bodyVisibility} = 'public' THEN ${reviews.body} END`,
-        clientCompanyName: companies.name,
+        clientCompanyName: sql<
+          string | null
+        >`CASE WHEN NOT ${companies.isPersonal} AND ${companies.reviewNameHiddenAt} IS NULL THEN ${companies.name} END`,
         createdAt: reviews.createdAt,
       })
       .from(reviews)
