@@ -1496,7 +1496,7 @@ describe('reviewsRepository.listPublicEntriesByExpert', () => {
     expect(JSON.stringify(entries)).not.toContain('Kowalczyk');
   });
 
-  it('still counts a soft-deleted reviewer, unnamed and without the company', async () => {
+  it('still counts a soft-deleted reviewer, unnamed but with their chosen company', async () => {
     const expert = await expertDraftFactory();
     const industryId = await seedIndustry('Logistics');
     const company = await companyFactory({ name: 'Northwind Industrial', industryId });
@@ -1517,14 +1517,14 @@ describe('reviewsRepository.listPublicEntriesByExpert', () => {
 
     const entry = await onlyEntry(expert.id);
     expect(entry.engagementRating).toBe(4);
-    expect(entry.companyHeader).toBeNull();
+    expect(entry.companyHeader).toBe('Northwind Industrial');
     const rater = onlyRater(entry);
     expect(rater.name).toBe('Verified client');
-    expect(rater.descriptor).toBe('RevOps Lead, Logistics');
+    expect(rater.descriptor).toBe('RevOps Lead @Northwind Industrial');
     expect(rater.initials).toBeNull();
     expect(rater.body).toBe('Sorted our routing rules');
     const serialised = JSON.stringify(entry);
-    for (const identity of ['Sam', 'Kowalczyk', 'Northwind']) {
+    for (const identity of ['Sam', 'Kowalczyk']) {
       expect(serialised).not.toContain(identity);
     }
   });

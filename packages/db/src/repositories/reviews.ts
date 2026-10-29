@@ -784,10 +784,10 @@ export const reviewsRepository = {
    * that fragment's (`reviews.deleted_at IS NULL`, nothing else), so the list length equals
    * `rating_count`.
    *
-   * ⚠ A SOFT-DELETED (or missing) REVIEWER IS NOT NAMED. Their rating still counts and a
-   * public note still shows — both are the party's statement about the expert — and their
-   * role and the company's industry still describe them. The rater reads as "Verified
-   * client" with no company, and the entry's company header blanks with it.
+   * ⚠ A SOFT-DELETED (or missing) REVIEWER IS NOT NAMED: the rater reads as "Verified
+   * client". Everything else they chose when reviewing still applies — the rating counts, a
+   * public note shows, and the role, company and industry follow the review's own settings,
+   * exactly as for a live reviewer.
    */
   listPublicEntriesByExpert: async (expertProfileId: string): Promise<PublicReviewEntry[]> => {
     const perEngagement = perEngagementAverages(expertProfileId).as('per_engagement');
@@ -809,7 +809,6 @@ export const reviewsRepository = {
         isPersonal: companies.isPersonal,
         reviewNameHiddenAt: companies.reviewNameHiddenAt,
         industryName: industries.name,
-        reviewerIsLive: sql<boolean>`${users.id} IS NOT NULL`,
         firstName: users.firstName,
         lastName: users.lastName,
         createdAt: reviews.createdAt,
@@ -921,10 +920,6 @@ export const reviewsRepository = {
         reviewNameHiddenAt: first.reviewNameHiddenAt,
       });
 
-      // Whether this rater's company is shown. A soft-deleted reviewer shows none (see above).
-      const showsCompany = (row: (typeof group)[number]): boolean =>
-        row.reviewerIsLive && row.showCompany;
-
       const raters = group.map((row): PublicReviewRater => {
         const attribution = formatReviewAttribution({
           firstName: row.firstName,
@@ -932,7 +927,7 @@ export const reviewsRepository = {
           role: row.reviewerRole,
           companyName: row.companyName,
           industryName: row.industryName,
-          showCompany: showsCompany(row),
+          showCompany: row.showCompany,
           companyNameAllowed,
         });
         return {
@@ -950,7 +945,9 @@ export const reviewsRepository = {
       // not still share the one entry; the header blanks and each row keeps its own
       // descriptor, as the design specifies.
       const companyHeader =
-        companyNameAllowed && group.every(showsCompany) && first.companyName.trim() !== ''
+        companyNameAllowed &&
+        group.every((row) => row.showCompany) &&
+        first.companyName.trim() !== ''
           ? first.companyName
           : null;
 
