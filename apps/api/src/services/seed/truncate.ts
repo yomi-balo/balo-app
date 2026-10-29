@@ -347,8 +347,8 @@ async function deleteProfileChildren(tx: Tx, profileIds: string[]): Promise<void
  * `app.ts` gates the seed ROUTES on `if (NODE_ENV !== 'production')`, which **fails OPEN on
  * an unset variable**. `apps/api` starts with a bare `node dist/index.js` and sets nothing
  * itself (unlike `apps/web`, where `next start` sets it), so unset is a reachable state.
- * `railway.toml`'s `startCommand` pins it — but a startCommand overridden in the Railway
- * dashboard would silently un-pin it with no review.
+ * `.railway/railway.ts`'s `start` command pins it — but a start command overridden in the
+ * Railway dashboard would silently un-pin it with no review.
  *
  * A denylist here (`=== 'production'` → throw) would have shared that EXACT failure mode: in
  * the un-pinned scenario `NODE_ENV` is unset, `unset === 'production'` is false, and both

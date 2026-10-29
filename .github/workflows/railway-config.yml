@@ -1,0 +1,90 @@
+name: Railway config
+
+# Plans `.railway/` (Railway Infrastructure as Code) on pull requests and applies the pinned plan
+# when the pull request merges. Merge does not re-plan: the apply fails if `.railway/` or the
+# Railway environment changed after the reviewed plan. Fork pull requests are skipped because
+# they get no secrets. RAILWAY_TOKEN is a Railway project token scoped to the production
+# environment. If the merge-time apply fails, recover by hand as `.railway/railway.ts`'s header
+# describes (`railway config plan` then `railway config apply` from an up-to-date main checkout).
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - '.railway/**'
+      - '.github/workflows/railway-config.yml'
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Railway plan
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # A new push supersedes the PR's in-flight plan.
+    concurrency:
+      group: railway-config-plan-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      # Lets the plan comment post under the Railway GitHub App identity.
+      id-token: write
+    steps:
+      - name: Require RAILWAY_TOKEN
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::The RAILWAY_TOKEN repository secret is not set."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # The action sets up its own Node 24 (the `railway` SDK needs >= 22, CI's other jobs use 20),
+      # enables pnpm through corepack (the version is package.json's `packageManager`) and runs
+      # `pnpm install --frozen-lockfile`, so `.railway/railway.ts` can import `railway/iac`. The
+      # v1 tag (v1.2.0) predates package-manager detection and runs `npm install`, which fails on
+      # the `workspace:*` dependencies, so both steps pin a main commit.
+      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: pnpm detection; no tag yet
+        with:
+          command: plan
+          railway-token: ${{ secrets.RAILWAY_TOKEN }}
+          cli-version: 5.71.0
+          package-manager: pnpm
+
+  apply:
+    name: Railway apply
+    if: github.event.action == 'closed' && github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Applies run one at a time and are never cancelled midway.
+    concurrency:
+      group: railway-config-apply
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Downloads the plan artifact the plan job uploaded.
+      actions: read
+    steps:
+      - name: Require RAILWAY_TOKEN
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::The RAILWAY_TOKEN repository secret is not set."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      # Destructive changes (deleting the service) fail rather than apply on merge. Apply installs
+      # no dependencies: it downloads the `railway-plan` artifact planned on the PR head SHA.
+      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: pnpm detection; no tag yet
+        with:
+          command: apply
+          railway-token: ${{ secrets.RAILWAY_TOKEN }}
+          cli-version: 5.71.0
+          confirm-destructive: 'false'
