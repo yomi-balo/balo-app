@@ -210,6 +210,10 @@ export interface EngagementMilestoneEstimateExceededPayload {
   milestoneTitle: string;
   loggedHoursLabel: string; // e.g. "8.5 hrs"
   estimatedHoursLabel: string; // e.g. "8 hrs"
+  // Optional so a Vercel-ahead or Railway-ahead deploy still validates.
+  expertProfileId?: string; // delivering expert profile → delivering_agency_admins fan-out
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
 }
 
 // BAL-626 (D15b) someone other than a time entry's author edited or removed it. Goes to the
@@ -338,6 +342,11 @@ export interface EngagementCancelledPayload {
   projectTitle: string; // {title} — email subject/body + in-app body
   cancelledOn: string; // "9 Jul 2026" (pre-formatted, UTC)
   reason: string; // verbatim cancellation reason (email body block)
+  // Optional so a Vercel-ahead or Railway-ahead deploy still validates.
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
+  clientCompanyName?: string; // agency notice copy
+  actorLabel?: string; // retrospective person label, e.g. "MJ @ Balo"
 }
 
 // BAL-338 (D7) client accepted the project (pending_acceptance → completed, method
@@ -403,6 +412,8 @@ export interface EngagementChangesRequestedPayload {
   // Optional on both the TS and Zod sides so a Vercel-ahead or Railway-ahead deploy still validates.
   roundNumber?: number; // change-request round ordinal (count of live rounds, this one included)
   taggedMilestoneTitles?: string[]; // titles in sort order the client tagged; empty = untagged round
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
 }
 
 // BAL-622 change orders on a live project. Six events share one base: the order, its

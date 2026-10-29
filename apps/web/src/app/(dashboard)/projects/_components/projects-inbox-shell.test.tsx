@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import type { AdminPortfolioDTO, PortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
+import type {
+  AdminPortfolioDTO,
+  AgencyPortfolioDTO,
+  PortfolioDTO,
+} from '@/lib/projects-inbox/portfolio-row';
 import { ProjectsInboxShell } from './projects-inbox-shell';
 
 vi.mock('next/navigation', () => ({
@@ -9,6 +13,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('motion/react', () => ({
+  useReducedMotion: () => false,
   motion: new Proxy(
     {},
     {
@@ -44,7 +49,28 @@ const ADMIN_DTO: AdminPortfolioDTO = {
   isEmpty: false,
 };
 
+const AGENCY_DTO: AgencyPortfolioDTO = {
+  lens: 'agency',
+  allowedLenses: ['client', 'agency'],
+  agency: { id: 'ag-1', name: 'Cloudline Partners' },
+  agencies: [{ id: 'ag-1', name: 'Cloudline Partners', liveCount: 0 }],
+  rows: [],
+  finishedRows: [],
+  tiles: { changesRequested: 0, inDelivery: 0, pendingAcceptance: 0, live: 0, expertCount: 0 },
+  isEmpty: true,
+};
+
 describe('ProjectsInboxShell', () => {
+  it('names the agency in the subtitle and renders the agency body (with its own empty state)', () => {
+    render(<ProjectsInboxShell dto={AGENCY_DTO} viewerUserId="viewer-1" />);
+    expect(
+      screen.getByText('Projects Cloudline Partners experts are delivering for clients.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Agency', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /agency/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText("Cloudline Partners's projects will gather here")).toBeInTheDocument();
+  });
+
   it('renders the per-lens "Viewing as" line and subtitle', () => {
     render(<ProjectsInboxShell dto={EMPTY_CLIENT} viewerUserId="viewer-1" />);
     expect(screen.getByText('Client')).toBeInTheDocument();

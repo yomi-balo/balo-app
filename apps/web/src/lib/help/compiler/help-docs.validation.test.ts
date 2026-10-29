@@ -9,6 +9,7 @@ import { validateHelpDocs } from './validate';
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../../../..');
 
 const EXPECTED_FILES = [
+  'agency-projects.md',
   'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
@@ -41,6 +42,7 @@ const EXPECTED_FILES = [
 
 /** Publishing is a reviewed decision: flipping a guide means adding it here too. */
 const PUBLISHED_FILES = [
+  'agency-projects.md',
   'booking-a-consultation.md',
   'buying-credit.md',
   'connecting-your-calendar.md',

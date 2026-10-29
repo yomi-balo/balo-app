@@ -466,3 +466,83 @@ describe('partyMembershipsRepository.listCapabilityEligibleCompanies (BAL-400 D1
     expect(second.map((c) => c.id)).toEqual(expected);
   });
 });
+
+describe('partyMembershipsRepository.listCapabilityEligibleAgencies (BAL-631)', () => {
+  it('returns agencies where the role grants MANAGE_MEMBERS, ordered by name', async () => {
+    const user = await userFactory();
+    const owner = await userFactory();
+    const zed = await agencyFactory({ name: 'Zed Agency' });
+    const alpha = await agencyFactory({ name: 'Alpha Agency' });
+    const asExpert = await agencyFactory({ name: 'Expert Agency' });
+    const removed = await agencyFactory({ name: 'Removed Agency' });
+    await agencyMemberFactory({ agencyId: zed.id, userId: user.id, role: 'owner' });
+    await agencyMemberFactory({ agencyId: alpha.id, userId: user.id, role: 'admin' });
+    await agencyMemberFactory({ agencyId: asExpert.id, userId: user.id, role: 'expert' });
+    await agencyMemberFactory({
+      agencyId: removed.id,
+      userId: user.id,
+      role: 'admin',
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    const eligible = await partyMembershipsRepository.listCapabilityEligibleAgencies(
+      user.id,
+      CAPABILITIES.MANAGE_MEMBERS
+    );
+    expect(eligible).toEqual([
+      { id: alpha.id, name: 'Alpha Agency' },
+      { id: zed.id, name: 'Zed Agency' },
+    ]);
+  });
+
+  it('ignores company memberships and returns [] for a user with none', async () => {
+    const user = await userFactory();
+    const company = await companyFactory();
+    await companyMemberFactory({ companyId: company.id, userId: user.id, role: 'owner' });
+    await expect(
+      partyMembershipsRepository.listCapabilityEligibleAgencies(
+        user.id,
+        CAPABILITIES.MANAGE_MEMBERS
+      )
+    ).resolves.toEqual([]);
+  });
+});
+
+describe('partyMembershipsRepository.listMemberUserIds (BAL-631)', () => {
+  it('returns live agency members of any role, dropping soft-deleted rows', async () => {
+    const agency = await agencyFactory();
+    const owner = await userFactory();
+    const expertUser = await userFactory();
+    const gone = await userFactory();
+    await agencyMemberFactory({ agencyId: agency.id, userId: owner.id, role: 'owner' });
+    await agencyMemberFactory({ agencyId: agency.id, userId: expertUser.id, role: 'expert' });
+    await agencyMemberFactory({
+      agencyId: agency.id,
+      userId: gone.id,
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    const ids = await partyMembershipsRepository.listMemberUserIds('agency', agency.id);
+    expect(ids.slice().sort()).toEqual([owner.id, expertUser.id].sort());
+  });
+
+  it('resolves company members and drops soft-deleted rows', async () => {
+    const company = await companyFactory();
+    const owner = await userFactory();
+    const gone = await userFactory();
+    await companyMemberFactory({ companyId: company.id, userId: owner.id, role: 'owner' });
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: gone.id,
+      role: 'member',
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    await expect(
+      partyMembershipsRepository.listMemberUserIds('company', company.id)
+    ).resolves.toEqual([owner.id]);
+  });
+});

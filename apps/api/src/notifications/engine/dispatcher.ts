@@ -28,6 +28,8 @@ const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'meeting_party_participants',
   // BAL-540 — every expert whose track was live at request-close.
   'request_track_experts',
+  // BAL-631 — the delivering expert's agency owners/admins.
+  'delivering_agency_admins',
 ]);
 
 /**
@@ -261,6 +263,11 @@ function resolveRecipientIds(
       // names the audience so the rules table stays legible, but both are publisher-resolved
       // id lists (the tracks that were live at close), never hydrated here.
       source = context.payload.recipientUserIds;
+      break;
+    case 'delivering_agency_admins':
+      // BAL-631: owners/admins of the delivering expert's agency, hydrated by the resolver
+      // (`hydrateDeliveringAgencyAdmins`) with the delivering expert and the actor excluded.
+      source = context.data.deliveringAgencyAdminUserIds;
       break;
     default:
       return [];

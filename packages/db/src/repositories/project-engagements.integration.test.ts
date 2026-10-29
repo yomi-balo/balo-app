@@ -4,6 +4,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
+  agencyMembers,
   auditEvents,
   companies,
   conversations,
@@ -24,6 +25,8 @@ import {
   type ProjectChangeRequest,
 } from '../schema';
 import {
+  agencyFactory,
+  agencyMemberFactory,
   caseEngagementFactory,
   engagementChangeOrderFactory,
   engagementFactory,
@@ -40,6 +43,7 @@ import type { ProposalFactoryResult } from '../test/factories';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
 import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 import { engagementsRepository } from './engagements';
+import { expertsRepository } from './experts';
 import {
   projectEngagementsRepository,
   KickoffGatesIncompleteError,
@@ -2191,6 +2195,60 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     expect(rows.map((r) => r.id)).toEqual([mine.engagement.id]);
   });
 
+  it('agency scope returns engagements of every linked profile, never another agency or a case', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const otherAgency = await agencyFactory();
+    const expertA = await expertDraftFactory();
+    const expertB = await expertDraftFactory();
+    const outsider = await expertDraftFactory();
+    const otherAgencyExpert = await expertDraftFactory();
+    for (const [expert, linkedAgency] of [
+      [expertA, agency],
+      [expertB, agency],
+      [otherAgencyExpert, otherAgency],
+    ] as const) {
+      await expertsRepository.linkAgency(expert.id, linkedAgency.id);
+      await agencyMemberFactory({
+        agencyId: linkedAgency.id,
+        userId: expert.userId,
+        role: 'expert',
+      });
+    }
+    const a = await engagementFactory({ companyId, expertProfileId: expertA.id });
+    const b = await engagementFactory({
+      companyId,
+      expertProfileId: expertB.id,
+      projectValues: { deliveryStatus: 'completed' },
+    });
+    await engagementFactory({ companyId, expertProfileId: outsider.id });
+    await engagementFactory({ companyId, expertProfileId: otherAgencyExpert.id });
+    await caseEngagementFactory({ companyId, expertProfileId: expertA.id });
+
+    const rows = await projectEngagementsRepository.listPortfolio({ agencyId: agency.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([a.engagement.id, b.engagement.id].sort());
+  });
+
+  it('agency scope still lists an engagement whose expert has left the agency membership', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+    const member = await agencyMemberFactory({
+      agencyId: agency.id,
+      userId: expert.userId,
+      role: 'expert',
+    });
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+    await db
+      .update(agencyMembers)
+      .set({ deletedAt: new Date() })
+      .where(eq(agencyMembers.id, member.id));
+
+    const rows = await projectEngagementsRepository.listPortfolio({ agencyId: agency.id });
+    expect(rows.map((r) => r.id)).toEqual([engagement.id]);
+  });
+
   it('platform scope returns engagements spanning ≥2 companies', async () => {
     const companyA = await seedCompanyId();
     const companyB = await seedCompanyId();
@@ -3583,5 +3641,50 @@ describe('projectEngagementsRepository.requestCompletion — an open change orde
 
     const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
     expect(advanced.status).toBe('pending_acceptance');
+  });
+});
+
+describe('projectEngagementsRepository.countLiveByAgency', () => {
+  it('returns an empty Map for no ids', async () => {
+    await expect(projectEngagementsRepository.countLiveByAgency([])).resolves.toEqual(new Map());
+  });
+
+  it('counts active and pending_acceptance only, grouped by agency', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const otherAgency = await agencyFactory();
+    const emptyAgency = await agencyFactory();
+    const expert = await expertDraftFactory();
+    const otherExpert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+    await expertsRepository.linkAgency(otherExpert.id, otherAgency.id);
+
+    for (const deliveryStatus of [
+      'active',
+      'pending_acceptance',
+      'completed',
+      'cancelled',
+    ] as const) {
+      await engagementFactory({
+        companyId,
+        expertProfileId: expert.id,
+        projectValues: { deliveryStatus },
+      });
+    }
+    await engagementFactory({
+      companyId,
+      expertProfileId: expert.id,
+      values: { deletedAt: new Date() },
+    });
+    await engagementFactory({ companyId, expertProfileId: otherExpert.id });
+
+    const counts = await projectEngagementsRepository.countLiveByAgency([
+      agency.id,
+      otherAgency.id,
+      emptyAgency.id,
+    ]);
+    expect(counts.get(agency.id)).toBe(2);
+    expect(counts.get(otherAgency.id)).toBe(1);
+    expect(counts.has(emptyAgency.id)).toBe(false);
   });
 });

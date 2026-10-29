@@ -5,9 +5,10 @@ import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import { LensSwitch } from './lens-switch';
 
 const mockReplace = vi.fn();
+let mockSearch = '';
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace }),
-  useSearchParams: () => new URLSearchParams(''),
+  useSearchParams: () => new URLSearchParams(mockSearch),
 }));
 
 const trackMock = vi.mocked(track);
@@ -16,6 +17,26 @@ describe('LensSwitch', () => {
   beforeEach(() => {
     trackMock.mockClear();
     mockReplace.mockClear();
+    mockSearch = '';
+  });
+
+  it('shows an Agency tab only when the lens is allowed', () => {
+    const { rerender } = render(<LensSwitch lens="client" allowedLenses={['client', 'expert']} />);
+    expect(screen.queryByRole('tab', { name: /agency/i })).not.toBeInTheDocument();
+    rerender(<LensSwitch lens="client" allowedLenses={['client', 'expert', 'agency']} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'Client',
+      'Expert',
+      'Agency',
+    ]);
+  });
+
+  it('drops a stale ?agency= when leaving the agency lens', async () => {
+    mockSearch = 'lens=agency&agency=ag-2';
+    const user = userEvent.setup();
+    render(<LensSwitch lens="agency" allowedLenses={['client', 'agency']} />);
+    await user.click(screen.getByRole('tab', { name: /client/i }));
+    expect(mockReplace).toHaveBeenCalledWith('/projects?lens=client', { scroll: false });
   });
 
   it('renders nothing when the viewer qualifies for a single lens', () => {

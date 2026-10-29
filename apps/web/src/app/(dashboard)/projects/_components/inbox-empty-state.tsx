@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { NewRequestButton } from '@/components/balo/project-request/new-request-button';
-import type { PortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens';
+import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import { EXPERT_PROFILE_HREF } from './constants';
 
 /**
@@ -16,7 +16,7 @@ import { EXPERT_PROFILE_HREF } from './constants';
  */
 
 interface InboxEmptyStateProps {
-  lens: PortfolioLens;
+  lens: RequestLens;
 }
 
 interface EmptyContent {
@@ -29,7 +29,7 @@ interface EmptyContent {
   cta?: { kind: 'panel'; label: string } | { kind: 'link'; label: string; href: string };
 }
 
-const EMPTY_CONTENT: Record<PortfolioLens, EmptyContent> = {
+const EMPTY_CONTENT: Record<RequestLens, EmptyContent> = {
   client: {
     icon: Briefcase,
     iconWrap: 'bg-gradient-to-br from-primary/10 to-violet-500/10',

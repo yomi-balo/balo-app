@@ -369,6 +369,10 @@ const engagementMilestoneEstimateExceededPayload = z.object({
   milestoneTitle: z.string().min(1).max(200),
   loggedHoursLabel: z.string().min(1).max(40),
   estimatedHoursLabel: z.string().min(1).max(40),
+  // BAL-631 optional agency-notice fields; an older publisher omits them.
+  expertProfileId: z.uuid().optional(),
+  actorUserId: z.uuid().optional(),
+  deliveringExpertName: z.string().min(1).max(200).optional(),
 });
 
 // BAL-626 (D15b) a time entry edited or removed by someone other than its author. Mirrors
@@ -480,6 +484,11 @@ const engagementCancelledPayload = z.object({
   projectTitle: z.string().min(1).max(200),
   cancelledOn: z.string().min(1).max(40),
   reason: z.string().min(1).max(2000),
+  // BAL-631 optional agency-notice fields; an older publisher omits them.
+  actorUserId: z.uuid().optional(),
+  deliveringExpertName: z.string().min(1).max(200).optional(),
+  clientCompanyName: z.string().min(1).max(200).optional(),
+  actorLabel: z.string().min(1).max(200).optional(),
 });
 
 // BAL-338 (D7) client accepted the project (client → expert + admins). `correlationId`
@@ -564,6 +573,9 @@ const engagementChangesRequestedPayload = z.object({
   reviewCycle: z.number().int().positive(),
   roundNumber: z.number().int().positive().optional(),
   taggedMilestoneTitles: z.array(z.string().min(1).max(200)).max(100).optional(),
+  // BAL-631 optional agency-notice fields; an older publisher omits them.
+  actorUserId: z.uuid().optional(),
+  deliveringExpertName: z.string().min(1).max(200).optional(),
 });
 
 // BAL-622 change orders. Every payload shares the base below; `correlationId` is

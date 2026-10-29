@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { ChevronRight, Clock, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
-import type { ProjectsInboxLens, ProjectsInboxFilter } from '@/lib/analytics';
+import type { ProjectsInboxFilter } from '@/lib/analytics';
+import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import { StageChip } from './stage-chip';
@@ -23,7 +24,7 @@ import { StageChip } from './stage-chip';
 
 interface ListRowProps {
   row: PortfolioRowView;
-  lens: ProjectsInboxLens;
+  lens: RequestLens;
   fromFilter: ProjectsInboxFilter;
   last: boolean;
 }

@@ -2161,3 +2161,86 @@ describe('publishBodySchema — BAL-622 change orders', () => {
     });
   });
 });
+
+describe('BAL-631 optional agency-notice fields', () => {
+  const ENG = '550e8400-e29b-41d4-a716-446655440001';
+  const USER = '550e8400-e29b-41d4-a716-446655440005';
+  const PROFILE = '550e8400-e29b-41d4-a716-446655440004';
+  const parse = (event: string, payload: Record<string, unknown>) =>
+    publishBodySchema.safeParse({ event, payload });
+
+  const changesRequested = {
+    correlationId: `${ENG}:changes_requested:1719705600000`,
+    engagementId: ENG,
+    expertProfileId: PROFILE,
+    actorClientLabel: 'Dana @ Northwind Industrial',
+    projectTitle: 'CPQ implementation',
+    note: 'Please fix the quote template.',
+    reviewDays: 7,
+    reviewCycle: 1,
+  };
+  const overEstimate = {
+    correlationId: `${ENG}:milestone_estimate_exceeded:1`,
+    engagementId: ENG,
+    milestoneId: '550e8400-e29b-41d4-a716-446655440006',
+    expertPartyLabel: 'CloudPeak',
+    actorExpertLabel: 'Priya @ CloudPeak',
+    projectTitle: 'CPQ implementation',
+    milestoneTitle: 'Data migration',
+    loggedHoursLabel: '14 hrs',
+    estimatedHoursLabel: '10 hrs',
+  };
+  const cancelled = {
+    correlationId: `${ENG}:cancelled`,
+    engagementId: ENG,
+    expertProfileId: PROFILE,
+    projectTitle: 'CPQ implementation',
+    cancelledOn: '9 Jul 2026',
+    reason: 'Client changed direction.',
+  };
+
+  it.each([
+    ['engagement.changes_requested', changesRequested],
+    ['engagement.milestone_estimate_exceeded', overEstimate],
+    ['engagement.cancelled', cancelled],
+  ])('%s parses without any of the new keys', (event, payload) => {
+    expect(parse(event, payload).success).toBe(true);
+  });
+
+  it.each([
+    [
+      'engagement.changes_requested',
+      changesRequested,
+      { actorUserId: USER, deliveringExpertName: 'Priya Shah' },
+    ],
+    [
+      'engagement.milestone_estimate_exceeded',
+      overEstimate,
+      { expertProfileId: PROFILE, actorUserId: USER, deliveringExpertName: 'Priya Shah' },
+    ],
+    [
+      'engagement.cancelled',
+      cancelled,
+      {
+        actorUserId: USER,
+        deliveringExpertName: 'Priya Shah',
+        clientCompanyName: 'Northwind Industrial',
+        actorLabel: 'MJ Okonkwo @ Balo',
+      },
+    ],
+  ])('%s parses with the new keys and keeps them', (event, base, extra) => {
+    const result = parse(event, { ...base, ...extra });
+    expect(result.success).toBe(true);
+    expect(result.data?.payload).toMatchObject(extra);
+  });
+
+  it('rejects a non-uuid actorUserId and an empty name', () => {
+    expect(parse('engagement.cancelled', { ...cancelled, actorUserId: 'not-a-uuid' }).success).toBe(
+      false
+    );
+    expect(
+      parse('engagement.changes_requested', { ...changesRequested, deliveringExpertName: '' })
+        .success
+    ).toBe(false);
+  });
+});

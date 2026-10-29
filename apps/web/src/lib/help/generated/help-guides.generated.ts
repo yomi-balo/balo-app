@@ -3,6 +3,104 @@ import type { HelpGuide } from '../types';
 
 export const HELP_GUIDES: readonly HelpGuide[] = [
   {
+    "slug": "agency-projects",
+    "title": "Keeping an eye on your agency projects",
+    "summary": "See every project your agency experts are delivering, and hear about the moments that need you.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 7,
+    "updated": "2026-10-29",
+    "related": [
+      "rate-and-payouts",
+      "weekly-schedule"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>If you run an agency on Balo, the Agency view on your Projects page gathers every project your\nagency's experts are delivering for clients in one place. It's there for oversight: you can see\nhow each project is going, who is delivering it, and step in whenever you'd like.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Who sees the Agency tab",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The Agency tab appears on the Projects page for agency owners and admins, once your agency has\nat least one other expert besides you. Until then there's nothing to oversee, so the tab stays\nout of the way.</p>\n<ul>\n<li>Experts who are members of the agency don't see the tab. Their own work stays under the\nExpert view.</li>\n<li>The Agency tab is never the view you land on. Select <strong>Agency</strong> next to Client and Expert to\nswitch to it.</li>\n</ul>\n<p>If you lose the owner or admin role, the tab disappears the next time you open Projects.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "What you see",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Four tiles sit at the top. Each one counts the live projects in that state, and you can select\na tile to narrow the list below it. Select the same tile again to clear it.</p>\n<ul>\n<li><strong>Changes requested</strong> (<em>Your agency's move</em>) counts projects where the client asked for\nchanges. The number stands out whenever it isn't zero.</li>\n<li><strong>In delivery</strong> (<em>Work underway</em>) counts projects being worked on.</li>\n<li><strong>Awaiting review</strong> (<em>With the client</em>) counts projects the expert has marked ready, and the\nclient is reviewing.</li>\n<li><strong>Live</strong> counts all of them, and tells you how many experts they're spread across.</li>\n</ul>\n<p>The list shows the most pressing projects first: changes requested, then awaiting client\nreview, then in delivery, with the most recent activity first in each group. Every row shows\nthe project and its client, who is delivering it, its status, and when it last moved. A project\nwith changes requested also shows the client's note. Select a row to open the project and step\nin on delivery. The back link on the project brings you right back to the Agency view.</p>\n<p>Below the list, <strong>Completed and cancelled</strong> holds finished projects. It starts collapsed, and it\nonly appears once there's something in it.</p>\n<p>When your agency doesn't have any projects yet, the page says \"{Agency name}'s projects will gather\nhere\", with your agency's name in place, and fills in as soon as a client kicks off a project with one of\nyour experts.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Finding one expert's projects",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Use <strong>Delivered by</strong> above the list to narrow it to one person. It starts on <strong>Everyone</strong>,\nlists <strong>You</strong> first if you deliver projects yourself, and then the rest of your team by name.\nEach option shows how many projects that person has under the tile you've selected.</p>\n<p>The tiles and <strong>Delivered by</strong> work together: pick <strong>In delivery</strong> and one expert to see only\ntheir projects in that state. The filter also narrows <strong>Completed and cancelled</strong>. If nothing\nmatches, the list says \"No live projects match these filters.\" and <strong>Show all</strong> clears both.</p>\n<p>If everything your agency has delivered is finished, the list says \"Nothing is in delivery right\nnow — new projects with {Agency name} experts will show up here.\" and the finished projects wait\nunder <strong>Completed and cancelled</strong>.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "When a teammate has moved on",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If an expert is no longer a member of your agency, their projects stay on the list so nothing\ngoes missing, and you can still open and run them. A short line under their name reads <strong>No\nlonger at</strong> followed by your agency's name, so you know who the project originally came from.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "If you own more than one agency",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When you're an owner or admin of two or more agencies that each have another expert on the team,\nan <strong>Agency</strong> picker appears above the tiles. An agency with no other experts yet isn't offered.\nIt lists your agencies by name with each one's live project count. Pick one and the whole view,\nfrom the tiles to the list, shows that agency alone. Your choice is saved in the page\naddress, so you can bookmark or share it.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "Hearing about it as it happens",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with the\nreason it was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "booking-a-consultation",
     "title": "Booking a consultation",
     "summary": "Choose how long you need, pick a time with an expert and confirm the call.",

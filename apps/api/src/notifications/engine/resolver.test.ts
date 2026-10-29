@@ -11,6 +11,7 @@ const {
   mockListAdminUserIds,
   mockListBillingUserIds,
   mockGetAgencySummaryById,
+  mockFindDisplayProfileById,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockListAdminUserIds: vi.fn(),
   mockListBillingUserIds: vi.fn(),
   mockGetAgencySummaryById: vi.fn(),
+  mockFindDisplayProfileById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -32,6 +34,7 @@ vi.mock('@balo/db', () => ({
   expertsRepository: {
     findUserIdByProfileId: mockFindUserIdByProfileId,
     findUserIdsByProfileIds: mockFindUserIdsByProfileIds,
+    findDisplayProfileById: mockFindDisplayProfileById,
   },
   companiesRepository: { findById: mockCompanyFindById, findNameById: mockCompanyFindNameById },
   proposalsRepository: { listByRequest: mockListByRequest },
@@ -493,6 +496,105 @@ describe('resolveContext', () => {
         '550e8400-e29b-41d4-a716-446655440004'
       );
       expect(context.data.expert).toEqual(expert);
+    });
+  });
+
+  // ── BAL-631 delivering-agency admin fan-out ──
+  describe('delivering agency admin hydration (BAL-631)', () => {
+    const PROFILE_ID = '550e8400-e29b-41d4-a716-446655440004';
+    const AGENCY_ID = 'agency-1';
+    const payload = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440001:cancelled',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      expertProfileId: PROFILE_ID,
+    };
+
+    beforeEach(() => {
+      mockGetAgencySummaryById.mockResolvedValue({ id: AGENCY_ID, name: 'Cloudline Partners' });
+    });
+
+    it.each([
+      'engagement.changes_requested',
+      'engagement.milestone_estimate_exceeded',
+      'engagement.cancelled',
+    ])('lists the agency owner and admin for %s, plus the agency name', async (event) => {
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: AGENCY_ID });
+      mockListAdminUserIds.mockResolvedValue(['owner-1', 'admin-2']);
+
+      const context = await resolveContext(event, payload);
+
+      expect(mockFindDisplayProfileById).toHaveBeenCalledWith(PROFILE_ID);
+      expect(mockListAdminUserIds).toHaveBeenCalledWith('agency', AGENCY_ID);
+      expect(mockGetAgencySummaryById).toHaveBeenCalledWith(AGENCY_ID);
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual(['owner-1', 'admin-2']);
+      expect(context.data.deliveringAgencyName).toBe('Cloudline Partners');
+    });
+
+    it('excludes the delivering expert when they are also an owner or admin', async () => {
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'owner-1', agencyId: AGENCY_ID });
+      mockListAdminUserIds.mockResolvedValue(['owner-1', 'admin-2']);
+
+      const context = await resolveContext('engagement.cancelled', payload);
+
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual(['admin-2']);
+    });
+
+    it('excludes the actor', async () => {
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: AGENCY_ID });
+      mockListAdminUserIds.mockResolvedValue(['owner-1', 'admin-2']);
+
+      const context = await resolveContext('engagement.changes_requested', {
+        ...payload,
+        actorUserId: 'admin-2',
+      });
+
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual(['owner-1']);
+    });
+
+    it('gives an empty list for a solo agency (the expert is the only admin)', async () => {
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'owner-1', agencyId: AGENCY_ID });
+      mockListAdminUserIds.mockResolvedValue(['owner-1']);
+
+      const context = await resolveContext('engagement.cancelled', payload);
+
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual([]);
+    });
+
+    it('gives an empty list, with no admin lookup, for an independent expert (null agencyId)', async () => {
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: null });
+
+      const context = await resolveContext('engagement.cancelled', payload);
+
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual([]);
+      expect(mockListAdminUserIds).not.toHaveBeenCalled();
+    });
+
+    it('gives an empty list when the profile no longer exists', async () => {
+      mockFindDisplayProfileById.mockResolvedValue(undefined);
+
+      const context = await resolveContext('engagement.cancelled', payload);
+
+      expect(context.data.deliveringAgencyAdminUserIds).toEqual([]);
+    });
+
+    it('skips hydration when the payload carries no expertProfileId (old producer)', async () => {
+      const { expertProfileId: _omit, ...withoutProfile } = payload;
+
+      const context = await resolveContext(
+        'engagement.milestone_estimate_exceeded',
+        withoutProfile
+      );
+
+      expect(mockFindDisplayProfileById).not.toHaveBeenCalled();
+      expect(context.data.deliveringAgencyAdminUserIds).toBeUndefined();
+    });
+
+    it('does not call listAdminUserIds for unrelated events', async () => {
+      const context = await resolveContext('project.request_submitted', payload);
+
+      expect(mockFindDisplayProfileById).not.toHaveBeenCalled();
+      expect(mockListAdminUserIds).not.toHaveBeenCalled();
+      expect(context.data.deliveringAgencyAdminUserIds).toBeUndefined();
     });
   });
 

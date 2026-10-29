@@ -2,13 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { PROJECTS_INBOX_EVENTS } from './projects-inbox';
 
 describe('PROJECTS_INBOX_EVENTS', () => {
-  it('has exactly the five A7 portfolio-dashboard events', () => {
+  it('has exactly the A7 portfolio-dashboard events plus the agency-lens filters', () => {
     expect(Object.keys(PROJECTS_INBOX_EVENTS)).toEqual([
       'INBOX_VIEWED',
       'INBOX_FILTER_APPLIED',
       'INBOX_LENS_SWITCHED',
       'INBOX_HERO_CTA_CLICKED',
       'INBOX_LIST_ROW_CLICKED',
+      'INBOX_EXPERT_FILTER_APPLIED',
+      'INBOX_AGENCY_SWITCHED',
     ]);
   });
 
@@ -24,5 +26,9 @@ describe('PROJECTS_INBOX_EVENTS', () => {
     expect(PROJECTS_INBOX_EVENTS.INBOX_LENS_SWITCHED).toBe('projects_inbox_lens_switched');
     expect(PROJECTS_INBOX_EVENTS.INBOX_HERO_CTA_CLICKED).toBe('projects_inbox_hero_cta_clicked');
     expect(PROJECTS_INBOX_EVENTS.INBOX_LIST_ROW_CLICKED).toBe('projects_inbox_list_row_clicked');
+    expect(PROJECTS_INBOX_EVENTS.INBOX_EXPERT_FILTER_APPLIED).toBe(
+      'projects_inbox_expert_filter_applied'
+    );
+    expect(PROJECTS_INBOX_EVENTS.INBOX_AGENCY_SWITCHED).toBe('projects_inbox_agency_switched');
   });
 });

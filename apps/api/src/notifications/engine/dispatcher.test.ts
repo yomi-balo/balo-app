@@ -495,6 +495,42 @@ describe('dispatch', () => {
       expect(mockAdd).not.toHaveBeenCalled();
     });
 
+    // ── BAL-631: delivering_agency_admins fan-out ──
+    const agencyAdminsRule: NotificationRule = {
+      channel: 'in-app',
+      recipient: 'delivering_agency_admins',
+      template: 'engagement-changes-requested-agency',
+      timing: 'immediate',
+    };
+
+    it('enqueues one job per id in data.deliveringAgencyAdminUserIds (BAL-631)', async () => {
+      const context: RuleContext = {
+        event: 'engagement.changes_requested',
+        payload: { correlationId: 'eng-1:changes_requested:1' },
+        data: { deliveringAgencyAdminUserIds: ['owner-1', 'admin-2'] },
+      };
+
+      await dispatch(agencyAdminsRule, context);
+
+      expect(mockAdd).toHaveBeenCalledTimes(2);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['owner-1', 'admin-2']);
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(new Set(jobIds).size).toBe(2);
+    });
+
+    it('does not enqueue when data.deliveringAgencyAdminUserIds is empty or absent (BAL-631)', async () => {
+      for (const data of [{ deliveringAgencyAdminUserIds: [] }, {}]) {
+        await dispatch(agencyAdminsRule, {
+          event: 'engagement.changes_requested',
+          payload: { correlationId: 'eng-1:changes_requested:1' },
+          data,
+        });
+      }
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+
     it('does not enqueue when data.adminUserIds is absent', async () => {
       const context: RuleContext = {
         event: 'project.proposal_accepted',

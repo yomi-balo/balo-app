@@ -1,13 +1,19 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { Shield, User, Users, type LucideIcon } from 'lucide-react';
+import { Building2, Shield, User, Users, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { AdminPortfolioDTO, PortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
+import type {
+  AdminPortfolioDTO,
+  AgencyPortfolioDTO,
+  PortfolioDTO,
+} from '@/lib/projects-inbox/portfolio-row';
+import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import type { PortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens';
 import { LensSwitch } from './lens-switch';
 import { ParticipantDash } from './participant-dash';
 import { AdminDash } from './admin-dash';
+import { AgencyDash } from './agency-dash';
 import { InboxEmptyState } from './inbox-empty-state';
 
 /**
@@ -18,7 +24,7 @@ import { InboxEmptyState } from './inbox-empty-state';
  * arrives fully serialised from the server loader.
  */
 
-type ShellDTO = PortfolioDTO | AdminPortfolioDTO;
+type ShellDTO = PortfolioDTO | AdminPortfolioDTO | AgencyPortfolioDTO;
 
 interface ProjectsInboxShellProps {
   dto: ShellDTO;
@@ -30,38 +36,56 @@ interface ProjectsInboxShellProps {
   viewerUserId: string;
 }
 
-const LENS_META: Record<
-  PortfolioLens,
-  { icon: LucideIcon; tone: string; ring: string; subtitle: string }
-> = {
+const LENS_META: Record<PortfolioLens, { icon: LucideIcon; tone: string; ring: string }> = {
   client: {
     icon: User,
     tone: 'text-primary',
     ring: 'border-primary/25 bg-primary/5',
-    subtitle: 'Your project requests, from idea to kickoff.',
   },
   expert: {
     icon: Shield,
     tone: 'text-violet-600 dark:text-violet-400',
     ring: 'border-violet-500/25 bg-violet-500/5',
-    subtitle: 'Your invitations and active engagements.',
+  },
+  agency: {
+    icon: Building2,
+    tone: 'text-success',
+    ring: 'border-success/25 bg-success/5',
   },
   admin: {
     icon: Users,
     tone: 'text-info',
     ring: 'border-info/25 bg-info/5',
-    subtitle: 'Triage new requests and keep the pipeline moving.',
   },
+};
+
+const SUBTITLE: Record<RequestLens, string> = {
+  client: 'Your project requests, from idea to kickoff.',
+  expert: 'Your invitations and active engagements.',
+  admin: 'Triage new requests and keep the pipeline moving.',
 };
 
 const LENS_LABEL: Record<PortfolioLens, string> = {
   client: 'Client',
   expert: 'Expert',
+  agency: 'Agency',
   admin: 'Admin',
 };
 
-/** Pick the lens body — empty state, admin board, or participant dashboard. */
+/** The lens subtitle; the agency lens names the agency being viewed. */
+function subtitleFor(dto: ShellDTO): string {
+  if (dto.lens === 'agency') {
+    return `Projects ${dto.agency.name} experts are delivering for clients.`;
+  }
+  return SUBTITLE[dto.lens];
+}
+
+/**
+ * Pick the lens body — empty state, admin board, agency oversight, or participant dashboard.
+ * The agency dashboard owns its empty state so the agency picker stays reachable.
+ */
 function renderBody(dto: ShellDTO, viewerUserId: string): React.JSX.Element {
+  if (dto.lens === 'agency') return <AgencyDash key={dto.agency.id} dto={dto} />;
   if (dto.isEmpty) return <InboxEmptyState lens={dto.lens} />;
   if (dto.lens === 'admin') return <AdminDash dto={dto} viewerUserId={viewerUserId} />;
   return <ParticipantDash dto={dto} />;
@@ -99,7 +123,7 @@ export function ProjectsInboxShell({
         className="mb-6"
       >
         <h2 className="text-foreground text-2xl font-semibold">Projects</h2>
-        <p className="text-muted-foreground mt-1 text-sm">{meta.subtitle}</p>
+        <p className="text-muted-foreground mt-1 text-sm">{subtitleFor(dto)}</p>
       </motion.div>
 
       {renderBody(dto, viewerUserId)}

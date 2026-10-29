@@ -21,6 +21,7 @@ import {
   resolveWorkspaceAccess,
 } from '@/lib/engagement/resolve-engagement-viewer';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
+import { resolveWorkspaceBackHref } from '@/lib/engagement/workspace-back-href';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
 import {
   deriveEngagementParties,
@@ -82,7 +83,7 @@ const GENERIC_METADATA: Metadata = {
  * or unrecognised (e.g. `?from=bogus`) collapses to `direct`.
  */
 function resolveEntry(from: string | undefined): EngagementWorkspaceEntry {
-  return from === 'request_detail' || from === 'inbox' ? from : 'direct';
+  return from === 'request_detail' || from === 'inbox' || from === 'agency' ? from : 'direct';
 }
 
 /**
@@ -251,7 +252,8 @@ export default async function EngagementWorkspacePage({
       engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
       ...loadTimeReads(engagement, billingPeriod),
     ]);
-  const view = mapEngagementToWorkspaceView(
+  const { from, action } = await searchParams;
+  const mappedView = mapEngagementToWorkspaceView(
     engagement,
     ctx,
     now,
@@ -259,6 +261,13 @@ export default async function EngagementWorkspacePage({
     contentEdits,
     latestTimeLoggedAt(timeEntries)
   );
+  const view = {
+    ...mappedView,
+    header: {
+      ...mappedView.header,
+      backHref: resolveWorkspaceBackHref(from, engagement.expertProfile.agencyId),
+    },
+  };
   const time = mapTimeToView({
     engagement,
     ctx,
@@ -298,7 +307,6 @@ export default async function EngagementWorkspacePage({
   // Fire the server-side view event on the authorised path. `after()` is
   // registered here (before any later throw) so the flush lands even on
   // serverless. Entry is derived from the whitelisted `?from` query.
-  const { from, action } = await searchParams;
   const viewed = {
     engagement_id: engagement.id,
     entry: resolveEntry(from),

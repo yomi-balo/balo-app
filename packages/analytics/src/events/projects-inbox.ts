@@ -4,13 +4,22 @@ export const PROJECTS_INBOX_EVENTS = {
   INBOX_LENS_SWITCHED: 'projects_inbox_lens_switched',
   INBOX_HERO_CTA_CLICKED: 'projects_inbox_hero_cta_clicked',
   INBOX_LIST_ROW_CLICKED: 'projects_inbox_list_row_clicked',
+  INBOX_EXPERT_FILTER_APPLIED: 'projects_inbox_expert_filter_applied',
+  INBOX_AGENCY_SWITCHED: 'projects_inbox_agency_switched',
 } as const;
 
 /** Which lens the portfolio dashboard is showing. */
-export type ProjectsInboxLens = 'client' | 'expert' | 'admin';
+export type ProjectsInboxLens = 'client' | 'expert' | 'admin' | 'agency';
 
 /** The stat-tile filter applied to the participant list. */
-export type ProjectsInboxFilter = 'all' | 'needs' | 'in_progress' | 'kicked';
+export type ProjectsInboxFilter =
+  | 'all'
+  | 'needs'
+  | 'in_progress'
+  | 'kicked'
+  | 'changes_requested'
+  | 'in_delivery'
+  | 'pending_acceptance';
 
 /**
  * A7 tri-lens portfolio dashboard events (BAL-274). All client-side via
@@ -50,5 +59,13 @@ export interface ProjectsInboxEventMap {
     stage: string;
     needs_you: boolean;
     from_filter: ProjectsInboxFilter;
+  };
+  [PROJECTS_INBOX_EVENTS.INBOX_EXPERT_FILTER_APPLIED]: {
+    lens: ProjectsInboxLens;
+    is_self: boolean;
+    result_count: number;
+  };
+  [PROJECTS_INBOX_EVENTS.INBOX_AGENCY_SWITCHED]: {
+    agency_count: number;
   };
 }
