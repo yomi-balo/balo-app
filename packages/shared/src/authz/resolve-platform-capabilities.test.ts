@@ -58,6 +58,7 @@ const ADMIN_BUNDLE: readonly PlatformCapability[] = [
   'manage_any_request_sourcing',
   'manage_any_kickoff_gate',
   'manage_party_domains',
+  'manage_company_details',
 ];
 
 /** The four role-differentiated tokens, in the order the role map spreads them. */
@@ -170,9 +171,9 @@ const MATRIX: readonly MatrixCell[] = [
 
 describe('resolvePlatformCapabilities — the D3 role × override matrix', () => {
   it('the matrix fixtures are the sizes claimed (non-vacuity for every cell below)', () => {
-    expect(ADMIN_BUNDLE).toHaveLength(16);
-    expect(SUPER_ADMIN_BUNDLE).toHaveLength(20);
-    expect(FULL_AXIS).toHaveLength(20);
+    expect(ADMIN_BUNDLE).toHaveLength(17);
+    expect(SUPER_ADMIN_BUNDLE).toHaveLength(21);
+    expect(FULL_AXIS).toHaveLength(21);
     expect(SUBSET).toHaveLength(2);
     expect(MATRIX).toHaveLength(9);
     expect(NON_STAFF_ROLES).toHaveLength(7);
@@ -218,8 +219,8 @@ describe('platformActorHasCapability — a NULL override is byte-identical to to
   it('a NULL override resolves byte-identically to platformRoleHasCapability for EVERY role × EVERY token', () => {
     // ⚠ The two length assertions are not decoration. Without them a future refactor that
     // emptied `PLATFORM_CAPABILITIES` would make this loop run zero times and pass.
-    expect(EVERY_TOKEN).toHaveLength(20);
-    expect(EVERY_ROLE.length * EVERY_TOKEN.length).toBe(180);
+    expect(EVERY_TOKEN).toHaveLength(21);
+    expect(EVERY_ROLE.length * EVERY_TOKEN.length).toBe(189);
 
     for (const role of EVERY_ROLE) {
       for (const token of EVERY_TOKEN) {
@@ -304,14 +305,14 @@ describe('PLATFORM_ROLE_CAPABILITIES — the exact-set pins (D3)', () => {
    * fails CI by name. This is the hermetic delivery of the ticket's "every real staff account"
    * AC — see this file's header.
    */
-  it('admin holds exactly the 16-token staff bundle, in order', () => {
+  it('admin holds exactly the 17-token staff bundle, in order', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toEqual([...ADMIN_BUNDLE]);
-    expect(PLATFORM_ROLE_CAPABILITIES.admin).toHaveLength(16);
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toHaveLength(17);
   });
 
-  it('super_admin holds exactly those 16 plus the four role-differentiated tokens, in order', () => {
+  it('super_admin holds exactly those 17 plus the four role-differentiated tokens, in order', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toEqual([...SUPER_ADMIN_BUNDLE]);
-    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toHaveLength(20);
+    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toHaveLength(21);
   });
 
   it('user has no entry at all — a plain user holds nothing', () => {
@@ -322,7 +323,7 @@ describe('PLATFORM_ROLE_CAPABILITIES — the exact-set pins (D3)', () => {
 
 describe('isPlatformCapability', () => {
   it('accepts every token on the axis', () => {
-    expect(FULL_AXIS).toHaveLength(20);
+    expect(FULL_AXIS).toHaveLength(21);
     for (const token of FULL_AXIS) {
       expect(isPlatformCapability(token), token).toBe(true);
     }
@@ -369,11 +370,11 @@ describe('platformActorHasCapability === resolvePlatformCapabilities(...).includ
     { label: 'a non-array scalar', stored: 'x' },
   ];
 
-  it('agrees for every role × stored-override shape × token (4 × 6 × 20 = 480 checks)', () => {
+  it('agrees for every role × stored-override shape × token (4 × 6 × 21 = 504 checks)', () => {
     // Non-vacuity: the fixture sizes are what the product below assumes, not a shrunken stand-in.
     expect(ROLES).toHaveLength(4);
     expect(STORED_OVERRIDES).toHaveLength(6);
-    expect(EVERY_TOKEN).toHaveLength(20);
+    expect(EVERY_TOKEN).toHaveLength(21);
 
     let iterations = 0;
     for (const role of ROLES) {
@@ -391,6 +392,6 @@ describe('platformActorHasCapability === resolvePlatformCapabilities(...).includ
 
     // The loop actually ran the claimed number of times — not zero, not a partial sweep.
     expect(iterations).toBe(ROLES.length * STORED_OVERRIDES.length * EVERY_TOKEN.length);
-    expect(iterations).toBe(480);
+    expect(iterations).toBe(504);
   });
 });

@@ -305,6 +305,27 @@ describe('describeAuditEvent — mapped actions', () => {
       metadata: { domain: 'northwind.com.au' },
       expected: 'Promoted to an organization on northwind.com.au',
     },
+    {
+      action: 'company.industry_set',
+      metadata: { from: null, to: 'ind-1', fromName: null, toName: 'Logistics' },
+      expected: 'Industry set to Logistics',
+    },
+    {
+      action: 'company.industry_set',
+      metadata: { from: 'ind-1', to: null, fromName: 'Logistics', toName: null },
+      expected: 'Industry cleared',
+    },
+    { action: 'company.industry_set', metadata: { to: 42 }, expected: 'Industry changed' },
+    {
+      action: 'company.review_name_hidden',
+      metadata: {},
+      expected: 'Company name hidden on reviews',
+    },
+    {
+      action: 'company.review_name_shown',
+      metadata: {},
+      expected: 'Company name can show on reviews again',
+    },
     { action: 'agency.created', metadata: {}, expected: 'Agency created' },
     { action: 'agency.ownership_transferred', metadata: {}, expected: 'Ownership transferred' },
     {

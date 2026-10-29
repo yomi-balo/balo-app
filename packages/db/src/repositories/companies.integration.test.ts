@@ -1355,3 +1355,396 @@ describe('migration 0121 — the review-attribution columns on companies (BAL-62
     );
   });
 });
+
+// ── BAL-630: staff company details ───────────────────────────────────
+
+/** Audit rows of one action on one company (test-local helper). */
+async function companyAuditRows(
+  companyId: string,
+  action: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'company'),
+        eq(auditEvents.entityId, companyId),
+        eq(auditEvents.action, action)
+      )
+    );
+}
+
+/** The three columns the staff writers touch, plus `updatedAt`, read raw. */
+async function staffColumnsOf(companyId: string): Promise<{
+  industryId: string | null;
+  reviewNameHiddenAt: Date | null;
+  reviewNameHiddenByUserId: string | null;
+  updatedAt: Date;
+}> {
+  const [row] = await db
+    .select({
+      industryId: companies.industryId,
+      reviewNameHiddenAt: companies.reviewNameHiddenAt,
+      reviewNameHiddenByUserId: companies.reviewNameHiddenByUserId,
+      updatedAt: companies.updatedAt,
+    })
+    .from(companies)
+    .where(eq(companies.id, companyId));
+  if (row === undefined) throw new Error(`company ${companyId} not found`);
+  return row;
+}
+
+/** A fixed past `updatedAt`, so an untouched row is distinguishable from a written one. */
+const SEEDED_UPDATED_AT = new Date('2026-01-01T00:00:00.000Z');
+
+describe('companiesRepository.findAdminDetailsById — the STAFF read (BAL-630)', () => {
+  it('returns the company with its active industry', async () => {
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({
+      name: 'Northwind Logistics',
+      industryId,
+      billingEmail: 'accounts@northwind.test',
+    });
+
+    const row = await companiesRepository.findAdminDetailsById(company.id);
+
+    expect(row).toEqual({
+      id: company.id,
+      name: 'Northwind Logistics',
+      isPersonal: false,
+      industryId,
+      industryName: 'Logistics',
+      industryIsActive: true,
+      reviewNameHiddenAt: null,
+    });
+    expect(JSON.stringify(row)).not.toContain('northwind.test');
+  });
+
+  it('still returns a RETIRED industry, flagged inactive', async () => {
+    const industryId = await seedIndustry('Retail', false);
+    const hiddenAt = new Date('2026-08-01T00:00:00.000Z');
+    const company = await companyFactory({ industryId, reviewNameHiddenAt: hiddenAt });
+
+    const row = await companiesRepository.findAdminDetailsById(company.id);
+
+    expect(row?.industryId).toBe(industryId);
+    expect(row?.industryName).toBe('Retail');
+    expect(row?.industryIsActive).toBe(false);
+    expect(row?.reviewNameHiddenAt?.toISOString()).toBe(hiddenAt.toISOString());
+  });
+
+  it('returns null industry fields when none is set', async () => {
+    const company = await companyFactory();
+    const row = await companiesRepository.findAdminDetailsById(company.id);
+    expect(row).toMatchObject({ industryId: null, industryName: null, industryIsActive: null });
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(companiesRepository.findAdminDetailsById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
+describe('companiesRepository.setIndustry (BAL-630)', () => {
+  it('sets an industry and writes exactly one company.industry_set audit row', async () => {
+    const actor = await userFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({ name: 'Northwind', updatedAt: SEEDED_UPDATED_AT });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({
+      outcome: 'changed',
+      companyName: 'Northwind',
+      from: null,
+      to: industryId,
+      toName: 'Logistics',
+    });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.industryId).toBe(industryId);
+    expect(stored.updatedAt.getTime()).toBeGreaterThan(SEEDED_UPDATED_AT.getTime());
+
+    const audits = await companyAuditRows(company.id, 'company.industry_set');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(actor.id);
+    expect(audits[0]?.metadata).toEqual({
+      from: null,
+      to: industryId,
+      fromName: null,
+      toName: 'Logistics',
+    });
+  });
+
+  it('records the previous industry by id and name when changing it', async () => {
+    const actor = await userFactory();
+    const fromId = await seedIndustry('Retail');
+    const toId = await seedIndustry('Logistics');
+    const company = await companyFactory({ industryId: fromId });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId: toId,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toMatchObject({ outcome: 'changed', from: fromId, to: toId });
+    const [audit] = await companyAuditRows(company.id, 'company.industry_set');
+    expect(audit?.metadata).toEqual({
+      from: fromId,
+      to: toId,
+      fromName: 'Retail',
+      toName: 'Logistics',
+    });
+  });
+
+  it('is a no-op for the same value: unchanged, no audit, updatedAt untouched', async () => {
+    const actor = await userFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({
+      name: 'Northwind',
+      industryId,
+      updatedAt: SEEDED_UPDATED_AT,
+    });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'unchanged', companyName: 'Northwind' });
+    expect((await staffColumnsOf(company.id)).updatedAt.toISOString()).toBe(
+      SEEDED_UPDATED_AT.toISOString()
+    );
+    await expect(companyAuditRows(company.id, 'company.industry_set')).resolves.toHaveLength(0);
+  });
+
+  it('clears the industry with null and audits `to: null`', async () => {
+    const actor = await userFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory({ industryId });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId: null,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toMatchObject({ outcome: 'changed', from: industryId, to: null, toName: null });
+    expect((await staffColumnsOf(company.id)).industryId).toBeNull();
+    const [audit] = await companyAuditRows(company.id, 'company.industry_set');
+    expect(audit?.metadata).toEqual({
+      from: industryId,
+      to: null,
+      fromName: 'Logistics',
+      toName: null,
+    });
+  });
+
+  it('clears a RETIRED current industry', async () => {
+    const actor = await userFactory();
+    const retiredId = await seedIndustry('Retail', false);
+    const company = await companyFactory({ industryId: retiredId });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId: null,
+      actorUserId: actor.id,
+    });
+
+    expect(result.outcome).toBe('changed');
+    expect((await staffColumnsOf(company.id)).industryId).toBeNull();
+  });
+
+  it.each([
+    ['a retired industry', async (): Promise<string> => seedIndustry('Retail', false)],
+    ['an unknown industry', async (): Promise<string> => randomUUID()],
+  ])('refuses %s → industry_unavailable, nothing written', async (_label, target) => {
+    const actor = await userFactory();
+    const currentId = await seedIndustry('Logistics');
+    const company = await companyFactory({ industryId: currentId, updatedAt: SEEDED_UPDATED_AT });
+
+    const result = await companiesRepository.setIndustry({
+      companyId: company.id,
+      industryId: await target(),
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'industry_unavailable' });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.industryId).toBe(currentId);
+    expect(stored.updatedAt.toISOString()).toBe(SEEDED_UPDATED_AT.toISOString());
+    await expect(companyAuditRows(company.id, 'company.industry_set')).resolves.toHaveLength(0);
+  });
+
+  it('returns company_not_found for an unknown company', async () => {
+    const actor = await userFactory();
+    await expect(
+      companiesRepository.setIndustry({
+        companyId: randomUUID(),
+        industryId: await seedIndustry('Logistics'),
+        actorUserId: actor.id,
+      })
+    ).resolves.toEqual({ outcome: 'company_not_found' });
+  });
+
+  it('rolls the column back when the audit insert throws (atomicity)', async () => {
+    const actor = await userFactory();
+    const industryId = await seedIndustry('Logistics');
+    const company = await companyFactory();
+
+    const spy = vi
+      .spyOn(auditEventsRepository, 'record')
+      .mockRejectedValueOnce(new Error('audit boom'));
+
+    await expect(
+      companiesRepository.setIndustry({ companyId: company.id, industryId, actorUserId: actor.id })
+    ).rejects.toThrow('audit boom');
+
+    spy.mockRestore();
+
+    expect((await staffColumnsOf(company.id)).industryId).toBeNull();
+    await expect(companyAuditRows(company.id, 'company.industry_set')).resolves.toHaveLength(0);
+  });
+});
+
+describe('companiesRepository.setReviewNameHidden (BAL-630)', () => {
+  it('hiding stamps both columns and writes company.review_name_hidden', async () => {
+    const actor = await userFactory();
+    const company = await companyFactory({ name: 'Northwind' });
+
+    const result = await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden: true,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'changed', companyName: 'Northwind', hidden: true });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.reviewNameHiddenAt).toBeInstanceOf(Date);
+    expect(stored.reviewNameHiddenByUserId).toBe(actor.id);
+
+    const audits = await companyAuditRows(company.id, 'company.review_name_hidden');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(actor.id);
+    expect(audits[0]?.metadata).toEqual({});
+  });
+
+  it('showing nulls both columns and writes company.review_name_shown', async () => {
+    const hider = await userFactory();
+    const actor = await userFactory();
+    const company = await companyFactory({
+      reviewNameHiddenAt: new Date('2026-08-01T00:00:00.000Z'),
+      reviewNameHiddenByUserId: hider.id,
+    });
+
+    const result = await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden: false,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toMatchObject({ outcome: 'changed', hidden: false });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.reviewNameHiddenAt).toBeNull();
+    expect(stored.reviewNameHiddenByUserId).toBeNull();
+    const audits = await companyAuditRows(company.id, 'company.review_name_shown');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(actor.id);
+  });
+
+  it.each([
+    ['hiding an already-hidden company', true, new Date('2026-08-01T00:00:00.000Z')],
+    ['showing an already-shown company', false, null],
+  ])('%s → unchanged, no write, no audit', async (_label, hidden, reviewNameHiddenAt) => {
+    const actor = await userFactory();
+    const company = await companyFactory({
+      name: 'Northwind',
+      reviewNameHiddenAt,
+      updatedAt: SEEDED_UPDATED_AT,
+    });
+
+    const result = await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'unchanged', companyName: 'Northwind', hidden });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.updatedAt.toISOString()).toBe(SEEDED_UPDATED_AT.toISOString());
+    expect(stored.reviewNameHiddenAt?.toISOString() ?? null).toBe(
+      reviewNameHiddenAt?.toISOString() ?? null
+    );
+    await expect(companyAuditRows(company.id, 'company.review_name_hidden')).resolves.toHaveLength(
+      0
+    );
+    await expect(companyAuditRows(company.id, 'company.review_name_shown')).resolves.toHaveLength(
+      0
+    );
+  });
+
+  it('refuses a personal workspace → personal_workspace, no write', async () => {
+    const actor = await userFactory();
+    const company = await companyFactory({
+      name: 'Dana Personal',
+      isPersonal: true,
+      updatedAt: SEEDED_UPDATED_AT,
+    });
+
+    const result = await companiesRepository.setReviewNameHidden({
+      companyId: company.id,
+      hidden: true,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'personal_workspace', companyName: 'Dana Personal' });
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.reviewNameHiddenAt).toBeNull();
+    expect(stored.updatedAt.toISOString()).toBe(SEEDED_UPDATED_AT.toISOString());
+    await expect(companyAuditRows(company.id, 'company.review_name_hidden')).resolves.toHaveLength(
+      0
+    );
+  });
+
+  it('returns company_not_found for an unknown company', async () => {
+    const actor = await userFactory();
+    await expect(
+      companiesRepository.setReviewNameHidden({
+        companyId: randomUUID(),
+        hidden: true,
+        actorUserId: actor.id,
+      })
+    ).resolves.toEqual({ outcome: 'company_not_found' });
+  });
+
+  it('rolls the stamp back when the audit insert throws (atomicity)', async () => {
+    const actor = await userFactory();
+    const company = await companyFactory();
+
+    const spy = vi
+      .spyOn(auditEventsRepository, 'record')
+      .mockRejectedValueOnce(new Error('audit boom'));
+
+    await expect(
+      companiesRepository.setReviewNameHidden({
+        companyId: company.id,
+        hidden: true,
+        actorUserId: actor.id,
+      })
+    ).rejects.toThrow('audit boom');
+
+    spy.mockRestore();
+
+    const stored = await staffColumnsOf(company.id);
+    expect(stored.reviewNameHiddenAt).toBeNull();
+    expect(stored.reviewNameHiddenByUserId).toBeNull();
+    await expect(companyAuditRows(company.id, 'company.review_name_hidden')).resolves.toHaveLength(
+      0
+    );
+  });
+});

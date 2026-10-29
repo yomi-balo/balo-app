@@ -25,6 +25,7 @@ import {
   userFactory,
   type EngagementFactoryResult,
 } from '../test/factories';
+import { companiesRepository } from './companies';
 import { reviewsRepository, type UpsertReviewInput } from './reviews';
 
 /** A fresh engagement plus a member of its client company — the canonical reviewer shape. */
@@ -1616,5 +1617,99 @@ describe('reviewsRepository.listPublicEntriesByExpert', () => {
   it('returns [] for an expert with no reviews', async () => {
     const expert = await expertDraftFactory();
     await expect(reviewsRepository.listPublicEntriesByExpert(expert.id)).resolves.toEqual([]);
+  });
+});
+
+describe('the company-level review-name hide reaches every reader (BAL-630)', () => {
+  async function hideCompanyName(companyId: string, hidden: boolean): Promise<void> {
+    const admin = await userFactory();
+    await expect(
+      companiesRepository.setReviewNameHidden({ companyId, hidden, actorUserId: admin.id })
+    ).resolves.toMatchObject({ outcome: 'changed' });
+  }
+
+  async function onlyEntry(expertProfileId: string): Promise<PublicReviewEntry> {
+    const entries = await reviewsRepository.listPublicEntriesByExpert(expertProfileId);
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    if (entry === undefined) {
+      throw new Error('expected one public entry');
+    }
+    return entry;
+  }
+
+  function descriptorOf(entry: PublicReviewEntry, reviewId: string): string | null {
+    const rater = entry.raters.find((candidate) => candidate.reviewId === reviewId);
+    if (rater === undefined) {
+      throw new Error(`no rater for review ${reviewId}`);
+    }
+    return rater.descriptor;
+  }
+
+  it('once hidden: no public name, the landing form disallows it, and no prior choice is read', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: expert.id,
+    });
+    const { review, reviewerUserId } = await reviewFactory({
+      engagement,
+      values: { showCompany: true },
+    });
+
+    // Control: before the hide, every reader names the company.
+    const before = await onlyEntry(expert.id);
+    expect(before.companyHeader).toBe('Northwind Industrial');
+    expect(descriptorOf(before, review.id)).toBe('Northwind Industrial');
+    const contextBefore = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewerUserId
+    );
+    expect(contextBefore?.clientCompanyNameAllowed).toBe(true);
+    await expect(reviewsRepository.findLatestShowCompanyChoice(reviewerUserId)).resolves.toBe(true);
+
+    await hideCompanyName(company.id, true);
+
+    const entry = await onlyEntry(expert.id);
+    expect(entry.companyHeader).toBeNull();
+    expect(descriptorOf(entry, review.id)).toBeNull();
+    expect(JSON.stringify(entry)).not.toContain('Northwind Industrial');
+
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewerUserId
+    );
+    expect(context?.clientCompanyNameAllowed).toBe(false);
+    await expect(
+      reviewsRepository.findLatestShowCompanyChoice(reviewerUserId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('hide then show restores each rater’s own choice on the public entry', async () => {
+    const expert = await expertDraftFactory();
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const engagement = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: expert.id,
+    });
+    const shown = await reviewFactory({ engagement, values: { showCompany: true } });
+    const notShown = await reviewFactory({ engagement, values: { showCompany: false } });
+    expect(shown.reviewerUserId).not.toBe(notShown.reviewerUserId);
+
+    await hideCompanyName(company.id, true);
+    const hidden = await onlyEntry(expert.id);
+    expect(hidden.raters).toHaveLength(2);
+    expect(descriptorOf(hidden, shown.review.id)).toBeNull();
+    expect(descriptorOf(hidden, notShown.review.id)).toBeNull();
+    expect(hidden.companyHeader).toBeNull();
+    expect(JSON.stringify(hidden)).not.toContain('Northwind Industrial');
+
+    await hideCompanyName(company.id, false);
+    const restored = await onlyEntry(expert.id);
+    expect(descriptorOf(restored, shown.review.id)).toBe('Northwind Industrial');
+    expect(descriptorOf(restored, notShown.review.id)).toBeNull();
+    // Not every rater shows the company, so the entry header stays blank.
+    expect(restored.companyHeader).toBeNull();
   });
 });
