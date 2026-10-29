@@ -1,12 +1,20 @@
 import { Button, Heading, Section, Text } from '@react-email/components';
-import { shared, EmailShell, LogoRow, StatusPill, SupportFooter } from './shared.js';
+import {
+  colors,
+  shared,
+  EmailShell,
+  LogoRow,
+  StatusPill,
+  SupportFooter,
+  Callout,
+} from './shared.js';
 
 /**
  * BAL-631 — a project one of the agency's experts was delivering was cancelled; the agency's
  * owners and admins are notified. Same structure as `engagement-cancelled.tsx`, but written for
  * the agency (names the delivering expert and client, makes no billing or milestone claim) and
  * its CTA deep-links to the delivery workspace with `?from=agency` so the back link returns to
- * the Agency lens. The optional names drop their clauses when the publisher omitted them.
+ * the Agency lens. The optional names drop their clauses, and the recorded reason its block, when the publisher omitted them.
  */
 export interface EngagementCancelledAgencyEmailProps {
   readonly firstName: string;
@@ -18,6 +26,7 @@ export interface EngagementCancelledAgencyEmailProps {
   readonly deliveringAgencyName?: string;
   readonly clientCompanyName?: string;
   readonly actorLabel?: string;
+  readonly reason?: string;
 }
 
 const cancelledPillStyle = {
@@ -56,7 +65,7 @@ function buildBodyLine(props: Readonly<EngagementCancelledAgencyEmailProps>): st
 export function EngagementCancelledAgencyEmail(
   props: Readonly<EngagementCancelledAgencyEmailProps>
 ): React.JSX.Element {
-  const { firstName, projectTitle, engagementId, baseUrl, deliveringAgencyName } = props;
+  const { firstName, projectTitle, engagementId, baseUrl, deliveringAgencyName, reason } = props;
   const agencyLabel = deliveringAgencyName ?? 'your agency';
   return (
     <EmailShell
@@ -74,6 +83,16 @@ export function EngagementCancelledAgencyEmail(
       <Section style={shared.card}>
         <Text style={shared.greeting}>Hi {firstName},</Text>
         <Text style={shared.bodyText}>{buildBodyLine(props)}</Text>
+        {reason && (
+          <Callout
+            emoji="📋"
+            heading="Reason"
+            text={reason}
+            bg={colors.bg}
+            borderColor={colors.border}
+            headingColor={colors.text}
+          />
+        )}
         <Text style={shared.bodyText}>
           {`Nothing more is needed from ${agencyLabel} unless you'd like to follow up with the team.`}
         </Text>

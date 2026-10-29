@@ -13,7 +13,8 @@ const fullData = {
   clientCompanyName: 'Northwind Industrial',
   deliveringExpertName: 'Priya Shah',
   deliveringAgencyName: 'Cloudline Partners',
-  actorLabel: 'MJ Okonkwo @ Balo',
+  actorLabel: 'Balo',
+  reason: 'Scope no longer needed',
   recipientName: 'Sam',
 };
 
@@ -33,18 +34,21 @@ describe('EngagementCancelledAgencyEmail (BAL-631)', () => {
         deliveringExpertName: 'Priya Shah',
         deliveringAgencyName: 'Cloudline Partners',
         clientCompanyName: 'Northwind Industrial',
-        actorLabel: 'MJ Okonkwo @ Balo',
+        actorLabel: 'Balo',
+        reason: 'Scope no longer needed',
       })
     );
     expect(html).toContain('Delivered by Priya Shah at Cloudline Partners.');
     expect(html).toContain('Hi ');
     expect(html).toContain('Sam');
     expect(html).toContain(
-      '&#x27;CPQ implementation&#x27;, the project Priya Shah was delivering for Northwind Industrial, was cancelled on 12 Nov. It was cancelled by MJ Okonkwo @ Balo.'
+      '&#x27;CPQ implementation&#x27;, the project Priya Shah was delivering for Northwind Industrial, was cancelled on 12 Nov. It was cancelled by Balo.'
     );
     expect(html).toContain(
       'Nothing more is needed from Cloudline Partners unless you&#x27;d like to follow up with the team.'
     );
+    expect(html).toContain('Reason');
+    expect(html).toContain('Scope no longer needed');
     expect(html).toContain('View the project');
     expect(html).toContain(`${BASE}/engagements/eng-1?from=agency`);
     expect(html).not.toContain('invoice');
@@ -56,6 +60,7 @@ describe('EngagementCancelledAgencyEmail (BAL-631)', () => {
     expect(html).not.toContain('was delivering');
     expect(html).not.toContain('It was cancelled by');
     expect(html).not.toContain('Delivered by');
+    expect(html).not.toContain('Reason');
     expect(html).toContain('Nothing more is needed from your agency');
   });
 
@@ -166,7 +171,7 @@ describe('agency in-app templates (BAL-631)', () => {
     const out = inApp('engagement-cancelled-agency', fullData);
     expect(out?.title).toBe('Project cancelled');
     expect(out?.body).toBe(
-      "'CPQ implementation' for Northwind Industrial, delivered by Priya Shah, was cancelled on 12 Nov. Cancelled by MJ Okonkwo @ Balo."
+      "'CPQ implementation' for Northwind Industrial, delivered by Priya Shah, was cancelled on 12 Nov. Cancelled by Balo."
     );
     expect(out?.actionUrl).toBe('/engagements/eng-1?from=agency');
   });

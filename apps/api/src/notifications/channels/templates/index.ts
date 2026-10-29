@@ -1095,6 +1095,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         deliveringAgencyName: optionalText(data.deliveringAgencyName),
         clientCompanyName: clientName,
         actorLabel: optionalText(data.actorLabel),
+        reason: optionalText(data.reason),
       }),
       subject: clientName
         ? `${subjectTitle} for ${sanitizeSubjectTitle(clientName)} has been cancelled`

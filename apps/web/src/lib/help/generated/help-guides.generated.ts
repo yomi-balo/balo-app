@@ -13,7 +13,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 7,
-    "updated": "2026-10-30",
+    "updated": "2026-10-29",
     "related": [
       "rate-and-payouts",
       "weekly-schedule"
@@ -92,7 +92,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with a\n<strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
+            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with the\nreason it was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
             "id": "s6-b0"
           }
         ],

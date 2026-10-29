@@ -49,6 +49,9 @@ function toAgencyRow(
       name: personDisplayName(expertUser.firstName, expertUser.lastName, 'An expert'),
       avatarUrl: expertUser.avatarUrl,
       isViewer: e.expertProfile.id === user.expertProfileId,
+      // Relies on every `expert_profiles.agency_id` link being written alongside a live
+      // `agency_members` row, so a missing row means the expert left. Any future import or
+      // link path must create that row too.
       isFormerMember: !memberIds.has(expertUser.id),
     },
     updatedRelative: formatPostedRelative(recencyAt, now),

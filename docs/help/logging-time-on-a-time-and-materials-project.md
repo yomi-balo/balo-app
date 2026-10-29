@@ -47,7 +47,8 @@ turns amber, so you can see the estimate coming up.
 When you log time, the form tells you if the entry takes the milestone past its estimate, and by
 how much. Logging is never blocked. The first time a milestone goes over its estimate, the client
 is sent a notice that says how many hours are logged against the estimate and points to the time
-log. They aren't told again for that estimate unless you raise it and then pass the new figure.
+log. If you're part of an agency, its owners and admins also get an in-app notice. They aren't told
+again for that estimate unless you raise it and then pass the new figure.
 
 ## Raising an estimate
 

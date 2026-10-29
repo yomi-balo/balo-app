@@ -2203,9 +2203,18 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     const expertB = await expertDraftFactory();
     const outsider = await expertDraftFactory();
     const otherAgencyExpert = await expertDraftFactory();
-    await expertsRepository.linkAgency(expertA.id, agency.id);
-    await expertsRepository.linkAgency(expertB.id, agency.id);
-    await expertsRepository.linkAgency(otherAgencyExpert.id, otherAgency.id);
+    for (const [expert, linkedAgency] of [
+      [expertA, agency],
+      [expertB, agency],
+      [otherAgencyExpert, otherAgency],
+    ] as const) {
+      await expertsRepository.linkAgency(expert.id, linkedAgency.id);
+      await agencyMemberFactory({
+        agencyId: linkedAgency.id,
+        userId: expert.userId,
+        role: 'expert',
+      });
+    }
     const a = await engagementFactory({ companyId, expertProfileId: expertA.id });
     const b = await engagementFactory({
       companyId,

@@ -188,7 +188,7 @@ describe('cancelEngagementAction', () => {
         actorUserId: 'admin-1',
         clientCompanyName: 'Northwind Industrial',
         deliveringExpertName: 'Priya Sharma',
-        actorLabel: 'Mia @ Balo',
+        actorLabel: 'Balo',
       })
     );
 

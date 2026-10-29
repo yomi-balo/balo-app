@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 7
 published: true
-updated: 2026-10-30
+updated: 2026-10-29
 related: [rate-and-payouts, weekly-schedule]
 ---
 
@@ -90,8 +90,8 @@ Agency view.
   the expert delivering.
 - **Milestone over estimate.** A milestone has logged more hours than estimated. It shows the
   hours so far and the estimate.
-- **Project cancelled.** A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with a
-  **View the project** button, so it reaches you even if you aren't in Balo that day.
+- **Project cancelled.** A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with the
+  reason it was cancelled and a **View the project** button, so it reaches you even if you aren't in Balo that day.
 
 You aren't notified about your own work: if you're the one delivering the project, or the
 person who made the change, you won't get a second notice. Agency members who aren't owners or
