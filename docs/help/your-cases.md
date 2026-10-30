@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 1
 published: true
-updated: 2026-10-17
+updated: 2026-10-31
 related: [booking-a-consultation, joining-a-call, turning-a-case-into-a-project]
 ---
 
@@ -34,8 +34,8 @@ end, or until the call itself ends, whichever comes first.
 Every other open case shows as a card with what's happening next on it:
 
 - **A booked time** — the day and time of the next consultation.
-- **"Nothing booked"** — the case is open and waiting on a next step. **Book another** takes you
-  to the expert's profile to pick a time.
+- **"Nothing booked"** — the case is open and waiting on a next step. **Book another** opens the
+  case, where you can pick a time.
 - **"No consultation booked"** — nothing has been held on this case yet. **Book a time** gets it
   started.
 

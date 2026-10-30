@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-10-22
+updated: 2026-10-31
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -37,8 +37,10 @@ right there, with that case already chosen.
 ## If your balance is low when you book
 
 Your company's funding is checked as **Review & confirm** opens, before anything is booked. It
-passes when your company has an active card on file. Without a card, your available balance needs
-to cover this call plus your company's other booked calls.
+passes when your company has an active card on file and nothing left unpaid from an earlier call.
+Without a card, your available balance needs to cover this call plus your company's other booked
+calls. While an earlier call is left unpaid, a top-up is needed before booking, even with a card on
+file.
 
 If it doesn't and you manage billing for the company you're booking for, a top-up appears right
 under the form, with the smallest amount that covers the call already selected. Pay with a saved

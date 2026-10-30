@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 1
 published: true
-updated: 2026-10-18
+updated: 2026-10-31
 related: [connecting-your-calendar, pausing-new-work]
 ---
 
@@ -16,7 +16,10 @@ week, with time off for anything out of the ordinary.
 ## Set your weekly hours
 
 Go to **Settings → Schedule**. The **Availability** card has your **Weekly hours**: turn a day on,
-then set when your hours start and end. You can add more than one window to a day.
+then set when your hours start and end. You can add more than one window to a day. Under them,
+**Booking rules** set a **Buffer before** and **Buffer after** each consultation and the **Minimum
+notice** a client must give. Choose **Save schedule** when you're done — your hours and booking
+rules aren't saved until you do.
 
 Clients see these hours minus anything already busy on your connected calendar, converted to their
 own timezone. [Connecting your calendar](/help/connecting-your-calendar) keeps that busy time up
@@ -26,12 +29,12 @@ to date.
 
 ## Your timezone
 
-Your hours are set in one timezone. The line under them reads "Hours are set in {timezone} —
+Your hours are set in one timezone. The line under the page title reads "Hours are set in {timezone} —
 currently {time}". To switch, choose **Change timezone**. Balo asks "Change your timezone?" first,
 because your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every
 bookable slot shifts. Busy times on your connected calendar aren't affected.
 
-![The timezone line under the weekly hours, with Change timezone highlighted.](02)
+![The timezone line under the page title, with Change timezone highlighted.](02)
 
 ## Hours that run past midnight
 

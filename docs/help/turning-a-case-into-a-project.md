@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 3
 published: false
-updated: 2026-10-17
+updated: 2026-10-31
 related: [requesting-a-project, your-cases]
 ---
 
@@ -21,6 +21,11 @@ open and resolved cases alike, so you don't need to close anything first. Conver
 changes the case itself — it stays exactly as it is, open or resolved, and you can keep using it
 as normal.
 
+The request goes to the case's expert, whose card you'll see under **Send request to**. If you'd
+rather we find someone else, choose **Get matched with someone else instead**. If the expert isn't
+taking on new work right now, you'll see a note saying so and can't send it to them — choose **Get
+matched instead** and we'll find someone with similar experience.
+
 ## The AI draft
 
 As soon as the form opens, we read through the case's messages and consultation transcripts and
@@ -33,6 +38,9 @@ the draft may suggest some for you to review.
 
 If the case doesn't have enough history to draft from, we'll let you know and leave the
 description blank for you to write yourself.
+
+If you close the form and come back to it, you'll pick up where you left off — we only draft
+automatically while the description is still blank and no files are attached.
 
 ## Editing and redrafting
 

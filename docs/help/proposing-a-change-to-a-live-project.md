@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 4
 published: false
-updated: 2026-10-29
+updated: 2026-10-31
 related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---
 
@@ -20,7 +20,10 @@ the project page with their note. You can **Propose a change** from it, or **Ans
 change order** if the plan and price can stay as they are. Your answer is shown to the client as
 **Answered**, and the request closes.
 
-You can also propose a change without a request, from the project page.
+You can also propose a change without a request, from the project page. Only one change can be
+open at a time. While you have a draft, **Propose a change** reads **Continue draft change**, and
+while a change is waiting on the client, **Propose a change** is unavailable and says "A change is
+already waiting on {client}".
 
 ## Building the change
 
@@ -30,8 +33,9 @@ changing and why, because the client reads it word for word. Describe the change
 to the price box.
 
 - **Wording and scope.** Fixing the wording of a milestone is a plain edit. It applies straight
-  away and the client is told. Anything that moves the price or cap, or adds or removes scope, goes
-  through a change order.
+  away and the client is told. Anything that moves the price, cap or an estimate goes through a
+  change order. So does adding a milestone on time and materials, or removing agreed scope on a
+  fixed price.
 - **Fixed price.** Enter the new project total. The composer shows the difference from the current
   price.
 - **Time and materials.** Set the estimate on each milestone. The composer shows how the total
@@ -63,6 +67,7 @@ difference on a fixed-price project is settled on the final invoice.
 
 If you own or administer the agency that delivers the project, you can do all of this on its
 behalf: propose, answer and withdraw changes, move milestones along and mark the project ready.
+Your agency's projects are listed under **Agency** on your Projects page.
 The notices the client receives name the person who acted. The summary of what changed since the
 proposal names your agency.
 

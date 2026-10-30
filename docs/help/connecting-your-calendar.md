@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 0
 published: true
-updated: 2026-10-18
+updated: 2026-10-31
 related: [weekly-schedule, pausing-new-work]
 ---
 
@@ -16,7 +16,8 @@ consultations are added to the calendar you choose.
 ## Add a calendar
 
 Go to **Settings → Schedule**. In the **Calendars** card, choose **Add calendar** and pick
-**Google Calendar** or **Microsoft Outlook**. You can connect more than one account.
+**Google Calendar** or **Microsoft Outlook**. You can connect one Google account and one
+Microsoft account.
 
 ![The Add calendar menu on the Schedule tab, listing Google Calendar and Microsoft Outlook.](01)
 
@@ -27,8 +28,10 @@ tick both, otherwise Balo can't read your busy times or add bookings. When you'r
 shows your account email and **Connected**.
 
 Under **Where bookings go**, choose which calendar new consultations are added to. We start with
-your primary one, and you can change it any time. If no calendar is set there yet, we email you a
-calendar invite for each booking until you choose one.
+your primary one, and you can change it any time. If no connected account has a calendar set yet,
+we email you a calendar invite for each booking until you choose one. With Google and Microsoft
+both connected, bookings go to one account at a time — the other card names the account they're
+going to.
 
 ![A connected Google calendar card showing the account email and the Connected label.](02)
 
@@ -40,6 +43,10 @@ changed", with a **Try again** button.
 Other times the account connects but we can't read its calendars yet. You'll see "We're still
 setting up this calendar" and a **Fix permissions** button, which runs the sign-in again without
 creating a new account. This often clears on its own within a few minutes.
+
+If we lose access to a calendar — usually after a password change, or when calendar access is
+turned off — you'll see a **Reconnect** button. If that calendar is checked for busy time, bookings
+with you are paused until you reconnect.
 
 If the permission boxes don't come back for Google, remove Balo in your Google account's
 permissions and connect again.
@@ -66,7 +73,8 @@ again**. Choose **Not now** to step away; nothing is lost.
 
 ## What Balo can see
 
-Events on any connected calendar block that time from client bookings. We only read event times —
+Events on the calendars switched on under **Busy calendars** block that time from client bookings.
+Your primary calendar is always on; switch on any others you want checked. We only read event times —
 details are never shared with clients. Balo only adds the consultations you've booked, to the
 calendar you chose under **Where bookings go**.
 

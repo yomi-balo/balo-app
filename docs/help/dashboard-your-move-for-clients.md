@@ -6,7 +6,7 @@ category:
   client: getting-started
 order: 5
 published: false
-updated: 2026-10-21
+updated: 2026-10-31
 related: [dashboard-up-next, requesting-a-project]
 ---
 
@@ -15,17 +15,18 @@ cards, most pressing first. Scroll sideways to see them all.
 
 ## What shows up
 
-- A balance to settle. While it is outstanding, new bookings are on hold.
+- A balance to settle, if you're an owner or admin of your company. While it is outstanding, new
+  bookings are on hold.
 - New times an expert has suggested for a call, for you to choose from.
 - A project an expert has marked ready for your review.
 - A kickoff that needs billing confirmed. If someone else on your team confirms billing, the card
   lets you view the kickoff instead.
 - An upfront invoice to pay, once Balo has sent it. The project kicks off as soon as Balo sees
-  the payment.
+  the payment. If someone else on your team pays it, the card lets you view the kickoff instead.
 - An exploratory call with Balo to book, so we can find the right experts for your brief.
 - Experts who have replied to your request and are waiting to hear back.
 - A proposal to review.
-- People who have asked to join your team.
+- People who have asked to join your team, if you're an owner or admin.
 - Open action items assigned to you, and unread messages from your experts.
 
 When more than one kind is waiting, filter chips above the row narrow it down.

@@ -6,7 +6,7 @@ category:
   expert: getting-started
 order: 5
 published: false
-updated: 2026-10-21
+updated: 2026-10-31
 related: [dashboard-up-next, project-requests-for-experts]
 ---
 
@@ -29,7 +29,7 @@ When more than one kind is waiting, filter chips above the row narrow it down.
 
 ## Opening a card
 
-Select a card, or its button, to go straight to the case, project or page it belongs to.
+Select a card's title, or its button, to go straight to the case, project or page it belongs to.
 
 A card stays until the thing it points to is done: the invitation is answered, the proposal is
 sent, the action item is completed. Opening a card or reading a

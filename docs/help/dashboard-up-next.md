@@ -7,11 +7,11 @@ category:
   expert: getting-started
 order: 4
 published: false
-updated: 2026-10-23
+updated: 2026-10-31
 related: [your-cases]
 ---
 
-The Up next card on your dashboard lists up to four of your upcoming meetings, soonest
+The Up next card on your dashboard lists up to four of your meetings in the next 14 days, soonest
 first — across consultations, project kickoffs, project calls, discovery calls and intro calls. Times show
 in your device's timezone.
 
@@ -24,16 +24,19 @@ Selecting a row opens the case or project it belongs to.
 
 **Join** appears 3 minutes before a meeting starts and takes you straight into the call — you're
 already signed in, so there's no name or email step. It stays available until 30 minutes after
-the meeting's scheduled end, or until the meeting itself ends, whichever comes first.
+the meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call
+room isn't ready yet, "Setting up room" shows in place of **Join**. Once the room is ready,
+**Join** appears here when you refresh the page or come back to the tab.
 
 "New times suggested" means the expert has proposed new times for that meeting. Open the
 case to choose one.
 
-Nothing booked yet? Use **Find an expert** to start a project or book a consultation.
+Nothing booked in the next 14 days? Use **Find an expert** to start a project or book a consultation.
 
 ## For experts
 
-The card lists your own upcoming meetings — the same bookings you'll see in Calendar.
+The card lists your own upcoming meetings — the same bookings you'll see in Calendar. **Join** works the same way as for clients, and
+**Open calendar** at the bottom of the card takes you to Calendar.
 
 "Waiting on their reply" means a reschedule you proposed is still with the client.
 

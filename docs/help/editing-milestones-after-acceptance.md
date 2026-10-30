@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 5
 published: false
-updated: 2026-10-26
+updated: 2026-10-31
 related: [proposing-a-change-to-a-live-project]
 ---
 
@@ -21,17 +21,26 @@ immediately and the client is told. A milestone from the accepted proposal is th
 can open **What changed** to compare what it said before with what it says now. When you mark the
 project ready, the review card also lists every milestone whose wording changed.
 
+The exception is a milestone that's part of a change waiting on the client. It's marked
+**Change pending**, and you can't edit or remove it until the client decides or you withdraw the
+change.
+
 ## What needs a change
 
 - **Time and materials.** New milestones need a change the client approves. On these projects
   the **Add milestone** button is replaced by **Propose a change**, or by **Propose the first
-  milestone** while the plan is empty. Either one opens the change composer. A milestone with
+  milestone** while the plan is empty. Either one opens the change composer. While you have a
+  draft change open, **Propose a change** reads **Continue draft change**. A milestone with
   time logged on it can't be removed, so complete it instead.
 - **Fixed price.** Removing a milestone from the agreed scope needs a change. That covers
   milestones from the accepted proposal and ones added by an approved change. Choosing **Remove**
   on one of these opens a **Needs approval first** dialog instead of removing it. Its **Propose a
   change** button opens the composer with that milestone's removal already added. Review it, add
   a note on why, and send it like any other change.
+
+Only one change can be with the client at a time. While one is waiting on them, you can't propose
+another: **Propose a change** is greyed out, or replaced by "A change is already waiting on
+{client}".
 
 Milestones you added yourself on a fixed-price project, and that the client hasn't approved
 through a change, can still be removed directly.

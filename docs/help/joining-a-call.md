@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 2
 published: true
-updated: 2026-10-23
+updated: 2026-10-31
 related: [booking-a-consultation, your-cases]
 ---
 
@@ -73,8 +73,8 @@ link visitors are, so admit only people you're expecting. Up to 10 people can be
 that, the next person sees "This call is full — 10 people is the limit."
 
 Use **Share a file** in the Files panel to add a file. Anything you drop there stays with this
-consultation. Everyone in the call can chat with **Message everyone…**, and **React** sends a quick
-reaction. While the call is recorded, a notice says: "This call is being recorded and may be
+consultation. You can chat with **Message everyone…**, and **React** sends a quick reaction.
+Guests can see the files but can't share one, post in the chat or react. While the call is recorded, a notice says: "This call is being recorded and may be
 transcribed".
 
 ## If your company's balance runs low
@@ -85,11 +85,12 @@ your company has a card on file you can choose **Keep going**, and the extra tim
 card afterwards. Either way you'll see "Your call keeps going — top up whenever you like to bring
 your balance back up." If extra time isn't covered by a card, the next top-up covers it.
 
-If you're on a team and can't manage billing, you'll see **Ask {name} to top up** instead, which
-lets your billing admin know.
+If you're on a team and can't manage billing, you'll see **Team balance running low** and **Let
+{name} know** instead, which lets your billing admin know. Later in the call the button becomes
+**Ask {name} to top up**.
 
-A call that goes well past its scheduled end finishes on its own 30 minutes after the scheduled
-end. See [Buying credit](/help/buying-credit) for how to top up.
+A call that keeps running finishes on its own four and a half hours after its scheduled start, or 30
+minutes after its scheduled end if it's booked for longer than four hours. See [Buying credit](/help/buying-credit) for how to top up.
 
 ## When the call ends
 

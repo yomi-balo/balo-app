@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 3
 published: false
-updated: 2026-10-29
+updated: 2026-10-31
 related: [writing-and-sending-a-proposal, proposing-a-change-to-a-live-project]
 ---
 
@@ -18,7 +18,8 @@ guide covers what you receive, how to work through it and how to send the projec
 You get an email with the client's note, word for word, and a notification in Balo that links to
 the project. The project goes back to active, and the project page shows a banner with the note at
 the top. If the client picked particular milestones, the banner names them. If you're part of an
-agency, its owners and admins are also notified in Balo when a client requests changes.
+agency, its owners and admins are also notified in Balo when a client requests changes, and they
+can work through the request and mark the project ready again on its behalf.
 
 ## Tagged and untagged requests
 

@@ -6,7 +6,7 @@ category:
   client: credit-billing
 order: 1
 published: true
-updated: 2026-10-18
+updated: 2026-10-31
 related: [redeeming-a-promo-code, booking-a-consultation]
 ---
 
@@ -50,17 +50,21 @@ Choose what happens as your balance runs down under **When your balance runs low
 - **Auto top-up** adds credit for you whenever your balance drops below an amount you choose, and
   keeps calls going if it still runs out.
 - **Keep me going** never interrupts a call. Any extra time settles to your card afterwards.
-- **Just notify me** lets you know when you're running low, and you top up yourself.
+- **Just notify me** lets you know when you're running low, and you top up yourself. Time you use
+  beyond your balance is still charged: it settles to your card afterwards if it's set up for
+  automatic charging, or your next top-up covers it.
 
 Auto top-up and Keep me going need a saved card. Whichever you choose, a call never stops because
-your balance reaches zero.
+your balance reaches zero. While a consultation is running, you can't switch from Auto top-up or
+Keep me going to Just notify me — change it once the call ends.
 
 ![The low-balance options on the top-up page, with Auto top-up, Keep me going and Just notify me highlighted.](04)
 
 ## If someone else manages billing
 
 Only owners and admins of your company can buy credit. If that isn't you, you'll see the shared
-**Team balance** instead of the top-up controls. When the balance is low or used up, a button
-(**Ask {name} to top up**) lets the person who manages billing know.
+**Team balance** instead of the top-up controls. When the balance is low, a button (**Nudge {name}
+to top up**) lets the person who manages billing know. Once it's used up, the button reads **Ask
+{name} to top up**.
 
 ![The Team balance card a team member sees, with the button asking a billing admin to top up highlighted.](05)
