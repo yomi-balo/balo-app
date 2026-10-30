@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 6
 published: false
-updated: 2026-10-29
+updated: 2026-10-31
 related: [approving-a-change-to-your-project, reviewing-a-finished-project]
 ---
 
@@ -16,7 +16,9 @@ This guide explains what the project page shows and what to do if the hours are 
 ## The hours bar and the time log
 
 Each milestone has an hours bar. It compares the hours logged so far with the expert's estimate
-for that milestone. A milestone with no estimate shows only the hours logged.
+for that milestone. A milestone with no estimate shows only the hours logged. From 80% of the
+estimate the bar shows the hours left, for example "1 hr left of estimate", and once the milestone
+is over it shows "2 hrs over estimate".
 
 Open a milestone's time log to see each entry: the date it was worked, the hours
 and a note saying what the time went on. Entries are listed with the most recent first, and each
@@ -34,7 +36,8 @@ weeks, and run by the expert's calendar.
 ## When a milestone goes over its estimate
 
 The first time a milestone goes past its estimate, your company's owner gets an email, and a notification appears, that names
-the milestone and compares the hours logged with the estimate. Open the time log to see what the
+the milestone and compares the hours logged with the estimate. While a milestone is over, the
+project page also shows a banner saying it "has gone over estimate". Open the time log to see what the
 hours went on.
 
 Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the
@@ -46,6 +49,7 @@ including when the hours pass it before you approve the raise.
 
 If you want the plan to change, for example because you'd like to adjust scope or you expect the
 hours to keep growing, choose **Request a change** on the project page and describe what you'd like.
-Your expert replies with a proposal that sets new estimates, and you approve or decline it. The
+Your expert replies with a proposal, which can set new estimates, or with an answer. You approve or
+decline a proposal, and nothing changes until you approve. The
 change card shows the hours already logged on each milestone whose estimate changes. See
 **Approving or declining a change to your project** for the steps.

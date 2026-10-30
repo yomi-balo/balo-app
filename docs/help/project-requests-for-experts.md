@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 1
 published: false
-updated: 2026-10-26
+updated: 2026-10-31
 related: [pausing-new-work]
 ---
 
@@ -26,7 +26,8 @@ A file you attach in the conversation goes to the client only. It isn't shared w
 ## Passing on a project
 
 If a project isn't right for you, you can pass on it. Choose **Pass on this project**, just below
-your main action on the request, and confirm.
+your main action on the request, and confirm. You can pass until you send a proposal; once you've
+sent one, the option is no longer there.
 
 Here's what happens when you pass:
 
@@ -35,7 +36,8 @@ Here's what happens when you pass:
 - **The client may be told.** If the client can already see you on the request, they're told
   you're no longer available. If not, they aren't notified.
 - **Any draft proposal is withdrawn.**
-- **Your files stay readable.** Anything you had access to stays exactly as it was.
+- **You lose access to the request.** Opening it shows only that you passed, not the brief, the
+  conversation or its files.
 
 Passing can't be undone, and you can't rejoin the project yourself. If you change your mind, get in
 touch with the Balo team.

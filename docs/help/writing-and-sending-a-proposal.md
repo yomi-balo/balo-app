@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 2
 published: false
-updated: 2026-10-26
+updated: 2026-10-31
 related: [project-requests-for-experts]
 ---
 
@@ -23,7 +23,7 @@ The sections always appear in the same order:
 3. **Price and payments** — one price for the project and how it's paid. For **Time & materials**
    this section is called **Rates and billing**.
 4. **Not included** — anything out of scope, so there are no surprises later. This one is optional.
-5. **Attachments** — reference documents you want the client to see.
+5. **Attachments** — reference documents you want the client to see. This one is optional too.
 
 Above the first section, the client's request is summarised for you. Choose **Show brief** to read
 the full request while you write, and **Hide brief** to tuck it away again.
@@ -127,5 +127,5 @@ choose **Mark as addressed** on the note. You can bring the note back any time w
 
 A revision isn't saved as you go: the page says "Not saved until you resend". Your changes go to
 the client when you choose **Preview and resend**, then **Resend**. If you leave before that, the
-version the client last saw stays as it was. Documents you upload while revising are the exception:
-they attach to the current proposal straight away.
+version the client last saw stays as it was. You can't add or remove documents while revising: the
+ones already attached carry over to the version you resend.

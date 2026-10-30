@@ -6,7 +6,7 @@ category:
   client: credit-billing
 order: 2
 published: false
-updated: 2026-10-21
+updated: 2026-10-31
 related: [buying-credit, booking-a-consultation]
 ---
 
@@ -16,7 +16,8 @@ payment required.
 ## How to redeem
 
 From your dashboard, choose **Have a promo code?** at the bottom of your wallet card to reach the
-redeem screen — or go straight to **/redeem**.
+redeem screen — or choose **Redeem a code** in **Settings → Credits & billing**, or go straight
+to **/redeem**.
 
 Type your code (codes aren't case-sensitive) and choose **Redeem**. You only need to be an
 owner or admin of your company to redeem — if you aren't, ask a teammate who is.
@@ -38,4 +39,5 @@ the card your company has on file, after the call. If there's no card on file, t
 owed instead and your next top-up covers it.
 
 Adding a card to your company charges nothing. A card on file is used for time beyond your balance,
-and for Auto top-up if you turn it on. See [Buying credit](/help/buying-credit) for how to top up.
+and for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:
+under "Keep going when your credit runs out", choose **Add a card** — it's optional. See [Buying credit](/help/buying-credit) for how to top up.

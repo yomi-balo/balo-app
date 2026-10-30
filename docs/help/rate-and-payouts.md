@@ -6,16 +6,16 @@ category:
   expert: getting-paid
 order: 1
 published: true
-updated: 2026-10-18
+updated: 2026-10-31
 related: [what-happens-after-you-apply, connecting-your-calendar]
 ---
 
 Two of the six setup steps are about money: **Set your rate** and **Set up payouts**. Both live in
-**Settings**, and both only take a few minutes.
+**Expert Settings**, and both only take a few minutes.
 
 ## Set your rate
 
-Go to **Settings → Rate**. Under **Your Rate**, choose **Per minute** or **Per hour**, enter your
+Go to **Expert Settings → Rate**. Under **Your Rate**, choose **Per minute** or **Per hour**, enter your
 number, then choose **Save rate**.
 
 You're paid per minute. If you enter an hourly figure, Balo shows the per-minute equivalent, and
@@ -29,7 +29,7 @@ You can change your rate any time.
 
 ## Add your payout details
 
-Go to **Settings → Payouts**. Pick the country your bank account is in — popular countries are
+Go to **Expert Settings → Payouts**. Pick the country your bank account is in — popular countries are
 listed first, then **All countries** — and the form asks for the bank details that country uses.
 Fill them in and save.
 
@@ -41,7 +41,7 @@ disbursements." To change them later, choose **Edit payout details**.
 ## Appearing in search
 
 **Set your rate** and **Set up payouts** are two of the six steps on your setup list, alongside
-your profile, phone, calendar and availability. Until all six are done, Settings shows that you're
+your profile, phone, calendar and availability. Until all six are done, Expert Settings shows that you're
 not visible to clients yet. When they are, it says "You're appearing in search."
 
 ![The banner on Expert Settings saying you're appearing in search.](03)

@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 2
 published: true
-updated: 2026-10-17
+updated: 2026-10-31
 related: [weekly-schedule, connecting-your-calendar, project-requests-for-experts]
 ---
 
@@ -33,7 +33,7 @@ confirmation needed.
   to match them with someone similar.
 - **Project invites.** You won't be invited to new project requests.
 
-Your profile stays visible and clients can still message you. While you're paused, search won't show you as available.
+Your profile stays visible. While you're paused, search won't show you as available.
 
 ![Your public profile while paused, with the card saying you aren't taking on new work highlighted.](02)
 
@@ -53,8 +53,8 @@ Your profile stays visible and clients can still message you. While you're pause
 
 ## Your settings are kept
 
-While you're paused, your weekly hours, booking rules and time off are greyed out but never
-cleared. When you turn **Available for new work** back on, everything is exactly as you left it
+While you're paused, your weekly hours and booking rules are greyed out but never cleared,
+and you can still add or remove time off. When you turn **Available for new work** back on, everything is exactly as you left it
 and your open times return straight away.
 
 ![The Availability card while paused, with the note that your hours are kept highlighted and your weekly hours greyed out.](04)

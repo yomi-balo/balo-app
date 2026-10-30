@@ -111,7 +111,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "calls"
     },
     "order": 1,
-    "updated": "2026-10-22",
+    "updated": "2026-10-31",
     "related": [
       "your-cases",
       "joining-a-call",
@@ -149,7 +149,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your company's funding is checked as <strong>Review &amp; confirm</strong> opens, before anything is booked. It\npasses when your company has an active card on file. Without a card, your available balance needs\nto cover this call plus your company's other booked calls.</p>\n<p>If it doesn't and you manage billing for the company you're booking for, a top-up appears right\nunder the form, with the smallest amount that covers the call already selected. Pay with a saved\ncard or add a new one, and the call books as soon as the credit lands. Nothing you've entered is\nlost along the way. See <a href=\"/help/buying-credit\">Buying credit</a> for more on topping up.</p>\n<p>When your company has no payment on hold, you'll also see <strong>Pay after the call</strong> beside the top-up. Choose it if you'd rather not top up first. Nothing is charged now,\nand any time beyond your balance is charged to the card after the call. Choosing it switches your\nteam's low-balance setting to <strong>Keep me going</strong>, and you can change that setting any time in\nBilling settings.</p>\n<p>If you can't manage billing yourself, you'll see <strong>Save and finish later</strong> instead. It lets your\ncompany's billing admins know a top-up is needed, and when you were starting a new case it keeps\nyour booking details on this device so you can pick up where you left off. It doesn't hold the\ntime, so the slot is only yours once the call is booked.</p>\n<p>If you manage billing but you're booking for a company other than the one you're viewing, the\nbutton reads <strong>Switch to <em>your company's name</em> and top up</strong>. It switches you to that company so\nyou can top up there.</p>\n<p>If the amount needed is very large, you'll see the full billing window instead. <strong>Top up</strong> takes\nyou to billing to add credit, or <strong>Set up billing</strong> if the company isn't set up to pay yet.\n<strong>I'll do this later</strong> closes the window with nothing booked.</p>",
+            "html": "<p>Your company's funding is checked as <strong>Review &amp; confirm</strong> opens, before anything is booked. It\npasses when your company has an active card on file and nothing left unpaid from an earlier call.\nWithout a card, your available balance needs to cover this call plus your company's other booked\ncalls. While an earlier call is left unpaid, a top-up is needed before booking, even with a card on\nfile.</p>\n<p>If it doesn't and you manage billing for the company you're booking for, a top-up appears right\nunder the form, with the smallest amount that covers the call already selected. Pay with a saved\ncard or add a new one, and the call books as soon as the credit lands. Nothing you've entered is\nlost along the way. See <a href=\"/help/buying-credit\">Buying credit</a> for more on topping up.</p>\n<p>When your company has no payment on hold, you'll also see <strong>Pay after the call</strong> beside the top-up. Choose it if you'd rather not top up first. Nothing is charged now,\nand any time beyond your balance is charged to the card after the call. Choosing it switches your\nteam's low-balance setting to <strong>Keep me going</strong>, and you can change that setting any time in\nBilling settings.</p>\n<p>If you can't manage billing yourself, you'll see <strong>Save and finish later</strong> instead. It lets your\ncompany's billing admins know a top-up is needed, and when you were starting a new case it keeps\nyour booking details on this device so you can pick up where you left off. It doesn't hold the\ntime, so the slot is only yours once the call is booked.</p>\n<p>If you manage billing but you're booking for a company other than the one you're viewing, the\nbutton reads <strong>Switch to <em>your company's name</em> and top up</strong>. It switches you to that company so\nyou can top up there.</p>\n<p>If the amount needed is very large, you'll see the full billing window instead. <strong>Top up</strong> takes\nyou to billing to add credit, or <strong>Set up billing</strong> if the company isn't set up to pay yet.\n<strong>I'll do this later</strong> closes the window with nothing booked.</p>",
             "id": "s2-b0"
           }
         ],
@@ -258,7 +258,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "credit-billing"
     },
     "order": 1,
-    "updated": "2026-10-18",
+    "updated": "2026-10-31",
     "related": [
       "redeeming-a-promo-code",
       "booking-a-consultation"
@@ -331,7 +331,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Choose what happens as your balance runs down under <strong>When your balance runs low</strong>:</p>\n<ul>\n<li><strong>Auto top-up</strong> adds credit for you whenever your balance drops below an amount you choose, and\nkeeps calls going if it still runs out.</li>\n<li><strong>Keep me going</strong> never interrupts a call. Any extra time settles to your card afterwards.</li>\n<li><strong>Just notify me</strong> lets you know when you're running low, and you top up yourself.</li>\n</ul>\n<p>Auto top-up and Keep me going need a saved card. Whichever you choose, a call never stops because\nyour balance reaches zero.</p>",
+            "html": "<p>Choose what happens as your balance runs down under <strong>When your balance runs low</strong>:</p>\n<ul>\n<li><strong>Auto top-up</strong> adds credit for you whenever your balance drops below an amount you choose, and\nkeeps calls going if it still runs out.</li>\n<li><strong>Keep me going</strong> never interrupts a call. Any extra time settles to your card afterwards.</li>\n<li><strong>Just notify me</strong> lets you know when you're running low, and you top up yourself. Time you use\nbeyond your balance is still charged: it settles to your card afterwards if it's set up for\nautomatic charging, or your next top-up covers it.</li>\n</ul>\n<p>Auto top-up and Keep me going need a saved card. Whichever you choose, a call never stops because\nyour balance reaches zero. While a consultation is running, you can't switch from Auto top-up or\nKeep me going to Just notify me — change it once the call ends.</p>",
             "id": "s4-b0"
           }
         ],
@@ -349,7 +349,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Only owners and admins of your company can buy credit. If that isn't you, you'll see the shared\n<strong>Team balance</strong> instead of the top-up controls. When the balance is low or used up, a button\n(<strong>Ask {name} to top up</strong>) lets the person who manages billing know.</p>",
+            "html": "<p>Only owners and admins of your company can buy credit. If that isn't you, you'll see the shared\n<strong>Team balance</strong> instead of the top-up controls. When the balance is low, a button (<strong>Nudge {name}\nto top up</strong>) lets the person who manages billing know. Once it's used up, the button reads <strong>Ask\n{name} to top up</strong>.</p>",
             "id": "s5-b0"
           }
         ],
@@ -374,7 +374,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 0,
-    "updated": "2026-10-18",
+    "updated": "2026-10-31",
     "related": [
       "weekly-schedule",
       "pausing-new-work"
@@ -393,7 +393,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Schedule</strong>. In the <strong>Calendars</strong> card, choose <strong>Add calendar</strong> and pick\n<strong>Google Calendar</strong> or <strong>Microsoft Outlook</strong>. You can connect more than one account.</p>",
+            "html": "<p>Go to <strong>Settings → Schedule</strong>. In the <strong>Calendars</strong> card, choose <strong>Add calendar</strong> and pick\n<strong>Google Calendar</strong> or <strong>Microsoft Outlook</strong>. You can connect one Google account and one\nMicrosoft account.</p>",
             "id": "s1-b0"
           }
         ],
@@ -411,7 +411,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Choosing <strong>Google Calendar</strong> takes you to Google to sign in. Google shows two permission boxes —\ntick both, otherwise Balo can't read your busy times or add bookings. When you're back, the card\nshows your account email and <strong>Connected</strong>.</p>\n<p>Under <strong>Where bookings go</strong>, choose which calendar new consultations are added to. We start with\nyour primary one, and you can change it any time. If no calendar is set there yet, we email you a\ncalendar invite for each booking until you choose one.</p>",
+            "html": "<p>Choosing <strong>Google Calendar</strong> takes you to Google to sign in. Google shows two permission boxes —\ntick both, otherwise Balo can't read your busy times or add bookings. When you're back, the card\nshows your account email and <strong>Connected</strong>.</p>\n<p>Under <strong>Where bookings go</strong>, choose which calendar new consultations are added to. We start with\nyour primary one, and you can change it any time. If no connected account has a calendar set yet,\nwe email you a calendar invite for each booking until you choose one. With Google and Microsoft\nboth connected, bookings go to one account at a time — the other card names the account they're\ngoing to.</p>",
             "id": "s2-b0"
           }
         ],
@@ -429,7 +429,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Sometimes a sign-in doesn't finish. You'll then see \"That sign-in didn't finish — nothing\nchanged\", with a <strong>Try again</strong> button.</p>\n<p>Other times the account connects but we can't read its calendars yet. You'll see \"We're still\nsetting up this calendar\" and a <strong>Fix permissions</strong> button, which runs the sign-in again without\ncreating a new account. This often clears on its own within a few minutes.</p>\n<p>If the permission boxes don't come back for Google, remove Balo in your Google account's\npermissions and connect again.</p>",
+            "html": "<p>Sometimes a sign-in doesn't finish. You'll then see \"That sign-in didn't finish — nothing\nchanged\", with a <strong>Try again</strong> button.</p>\n<p>Other times the account connects but we can't read its calendars yet. You'll see \"We're still\nsetting up this calendar\" and a <strong>Fix permissions</strong> button, which runs the sign-in again without\ncreating a new account. This often clears on its own within a few minutes.</p>\n<p>If we lose access to a calendar — usually after a password change, or when calendar access is\nturned off — you'll see a <strong>Reconnect</strong> button. If that calendar is checked for busy time, bookings\nwith you are paused until you reconnect.</p>\n<p>If the permission boxes don't come back for Google, remove Balo in your Google account's\npermissions and connect again.</p>",
             "id": "s3-b0"
           }
         ],
@@ -483,7 +483,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Events on any connected calendar block that time from client bookings. We only read event times —\ndetails are never shared with clients. Balo only adds the consultations you've booked, to the\ncalendar you chose under <strong>Where bookings go</strong>.</p>\n<p>Apple calendars can't be connected yet. Your weekly hours still work on their own, and clients can\nbook you as normal.</p>",
+            "html": "<p>Events on the calendars switched on under <strong>Busy calendars</strong> block that time from client bookings.\nYour primary calendar is always on; switch on any others you want checked. We only read event times —\ndetails are never shared with clients. Balo only adds the consultations you've booked, to the\ncalendar you chose under <strong>Where bookings go</strong>.</p>\n<p>Apple calendars can't be connected yet. Your weekly hours still work on their own, and clients can\nbook you as normal.</p>",
             "id": "s6-b0"
           }
         ],
@@ -510,7 +510,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "calls-cases"
     },
     "order": 2,
-    "updated": "2026-10-23",
+    "updated": "2026-10-31",
     "related": [
       "booking-a-consultation",
       "your-cases"
@@ -601,7 +601,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The <strong>People</strong> panel lists everyone <strong>In the call</strong> and anyone <strong>Waiting to join</strong>. Whoever hosts\nthe call can <strong>Admit</strong> or <strong>Deny</strong> each person waiting. Balo reminds them it hasn't checked who\nlink visitors are, so admit only people you're expecting. Up to 10 people can be in a call. After\nthat, the next person sees \"This call is full — 10 people is the limit.\"</p>\n<p>Use <strong>Share a file</strong> in the Files panel to add a file. Anything you drop there stays with this\nconsultation. Everyone in the call can chat with <strong>Message everyone…</strong>, and <strong>React</strong> sends a quick\nreaction. While the call is recorded, a notice says: \"This call is being recorded and may be\ntranscribed\".</p>",
+            "html": "<p>The <strong>People</strong> panel lists everyone <strong>In the call</strong> and anyone <strong>Waiting to join</strong>. Whoever hosts\nthe call can <strong>Admit</strong> or <strong>Deny</strong> each person waiting. Balo reminds them it hasn't checked who\nlink visitors are, so admit only people you're expecting. Up to 10 people can be in a call. After\nthat, the next person sees \"This call is full — 10 people is the limit.\"</p>\n<p>Use <strong>Share a file</strong> in the Files panel to add a file. Anything you drop there stays with this\nconsultation. You can chat with <strong>Message everyone…</strong>, and <strong>React</strong> sends a quick reaction.\nGuests can see the files but can't share one, post in the chat or react. While the call is recorded, a notice says: \"This call is being recorded and may be\ntranscribed\".</p>",
             "id": "s5-b0"
           }
         ],
@@ -613,7 +613,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>This part is for clients only; experts don't see it. The call has a balance meter, and you'll see\n<strong>Running low</strong> when your company's credit is getting close to used up. Nothing stops the call. If\nyour company has a card on file you can choose <strong>Keep going</strong>, and the extra time settles to your\ncard afterwards. Either way you'll see \"Your call keeps going — top up whenever you like to bring\nyour balance back up.\" If extra time isn't covered by a card, the next top-up covers it.</p>\n<p>If you're on a team and can't manage billing, you'll see <strong>Ask {name} to top up</strong> instead, which\nlets your billing admin know.</p>\n<p>A call that goes well past its scheduled end finishes on its own 30 minutes after the scheduled\nend. See <a href=\"/help/buying-credit\">Buying credit</a> for how to top up.</p>",
+            "html": "<p>This part is for clients only; experts don't see it. The call has a balance meter, and you'll see\n<strong>Running low</strong> when your company's credit is getting close to used up. Nothing stops the call. If\nyour company has a card on file you can choose <strong>Keep going</strong>, and the extra time settles to your\ncard afterwards. Either way you'll see \"Your call keeps going — top up whenever you like to bring\nyour balance back up.\" If extra time isn't covered by a card, the next top-up covers it.</p>\n<p>If you're on a team and can't manage billing, you'll see <strong>Team balance running low</strong> and <strong>Let\n{name} know</strong> instead, which lets your billing admin know. Later in the call the button becomes\n<strong>Ask {name} to top up</strong>.</p>\n<p>A call that keeps running finishes on its own four and a half hours after its scheduled start, or 30\nminutes after its scheduled end if it's booked for longer than four hours. See <a href=\"/help/buying-credit\">Buying credit</a> for how to top up.</p>",
             "id": "s6-b0"
           }
         ],
@@ -650,7 +650,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 2,
-    "updated": "2026-10-17",
+    "updated": "2026-10-31",
     "related": [
       "weekly-schedule",
       "connecting-your-calendar",
@@ -688,7 +688,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<ul>\n<li><strong>New consultations.</strong> Clients can't book a new consultation with you. Your profile stops\nshowing open times and offers to introduce them to an expert with similar experience instead.</li>\n<li><strong>New project briefs.</strong> Clients can't send you a project request directly. Your profile offers\nto match them with someone similar.</li>\n<li><strong>Project invites.</strong> You won't be invited to new project requests.</li>\n</ul>\n<p>Your profile stays visible and clients can still message you. While you're paused, search won't show you as available.</p>",
+            "html": "<ul>\n<li><strong>New consultations.</strong> Clients can't book a new consultation with you. Your profile stops\nshowing open times and offers to introduce them to an expert with similar experience instead.</li>\n<li><strong>New project briefs.</strong> Clients can't send you a project request directly. Your profile offers\nto match them with someone similar.</li>\n<li><strong>Project invites.</strong> You won't be invited to new project requests.</li>\n</ul>\n<p>Your profile stays visible. While you're paused, search won't show you as available.</p>",
             "id": "s2-b0"
           }
         ],
@@ -724,7 +724,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>While you're paused, your weekly hours, booking rules and time off are greyed out but never\ncleared. When you turn <strong>Available for new work</strong> back on, everything is exactly as you left it\nand your open times return straight away.</p>",
+            "html": "<p>While you're paused, your weekly hours and booking rules are greyed out but never cleared,\nand you can still add or remove time off. When you turn <strong>Available for new work</strong> back on, everything is exactly as you left it\nand your open times return straight away.</p>",
             "id": "s4-b0"
           },
           {
@@ -754,7 +754,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-paid"
     },
     "order": 1,
-    "updated": "2026-10-18",
+    "updated": "2026-10-31",
     "related": [
       "what-happens-after-you-apply",
       "connecting-your-calendar"
@@ -762,7 +762,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     "intro": [
       {
         "kind": "html",
-        "html": "<p>Two of the six setup steps are about money: <strong>Set your rate</strong> and <strong>Set up payouts</strong>. Both live in\n<strong>Settings</strong>, and both only take a few minutes.</p>",
+        "html": "<p>Two of the six setup steps are about money: <strong>Set your rate</strong> and <strong>Set up payouts</strong>. Both live in\n<strong>Expert Settings</strong>, and both only take a few minutes.</p>",
         "id": "intro-b0"
       }
     ],
@@ -773,7 +773,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Rate</strong>. Under <strong>Your Rate</strong>, choose <strong>Per minute</strong> or <strong>Per hour</strong>, enter your\nnumber, then choose <strong>Save rate</strong>.</p>\n<p>You're paid per minute. If you enter an hourly figure, Balo shows the per-minute equivalent, and\nwhen the hourly number doesn't divide evenly it tells you so: \"You're paid per minute, so this\nsaves as…\" with the per-minute and hourly amounts side by side, so you can see exactly what you've\nsaved.</p>\n<p>You can change your rate any time.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Rate</strong>. Under <strong>Your Rate</strong>, choose <strong>Per minute</strong> or <strong>Per hour</strong>, enter your\nnumber, then choose <strong>Save rate</strong>.</p>\n<p>You're paid per minute. If you enter an hourly figure, Balo shows the per-minute equivalent, and\nwhen the hourly number doesn't divide evenly it tells you so: \"You're paid per minute, so this\nsaves as…\" with the per-minute and hourly amounts side by side, so you can see exactly what you've\nsaved.</p>\n<p>You can change your rate any time.</p>",
             "id": "s1-b0"
           }
         ],
@@ -791,7 +791,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Payouts</strong>. Pick the country your bank account is in — popular countries are\nlisted first, then <strong>All countries</strong> — and the form asks for the bank details that country uses.\nFill them in and save.</p>\n<p>Once they're saved you'll see \"Your bank details are saved and will be used for payout\ndisbursements.\" To change them later, choose <strong>Edit payout details</strong>.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Payouts</strong>. Pick the country your bank account is in — popular countries are\nlisted first, then <strong>All countries</strong> — and the form asks for the bank details that country uses.\nFill them in and save.</p>\n<p>Once they're saved you'll see \"Your bank details are saved and will be used for payout\ndisbursements.\" To change them later, choose <strong>Edit payout details</strong>.</p>",
             "id": "s2-b0"
           }
         ],
@@ -809,7 +809,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p><strong>Set your rate</strong> and <strong>Set up payouts</strong> are two of the six steps on your setup list, alongside\nyour profile, phone, calendar and availability. Until all six are done, Settings shows that you're\nnot visible to clients yet. When they are, it says \"You're appearing in search.\"</p>",
+            "html": "<p><strong>Set your rate</strong> and <strong>Set up payouts</strong> are two of the six steps on your setup list, alongside\nyour profile, phone, calendar and availability. Until all six are done, Expert Settings shows that you're\nnot visible to clients yet. When they are, it says \"You're appearing in search.\"</p>",
             "id": "s3-b0"
           }
         ],
@@ -834,7 +834,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 1,
-    "updated": "2026-10-18",
+    "updated": "2026-10-31",
     "related": [
       "connecting-your-calendar",
       "pausing-new-work"
@@ -853,7 +853,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Schedule</strong>. The <strong>Availability</strong> card has your <strong>Weekly hours</strong>: turn a day on,\nthen set when your hours start and end. You can add more than one window to a day.</p>\n<p>Clients see these hours minus anything already busy on your connected calendar, converted to their\nown timezone. <a href=\"/help/connecting-your-calendar\">Connecting your calendar</a> keeps that busy time up\nto date.</p>",
+            "html": "<p>Go to <strong>Settings → Schedule</strong>. The <strong>Availability</strong> card has your <strong>Weekly hours</strong>: turn a day on,\nthen set when your hours start and end. You can add more than one window to a day. Under them,\n<strong>Booking rules</strong> set a <strong>Buffer before</strong> and <strong>Buffer after</strong> each consultation and the <strong>Minimum\nnotice</strong> a client must give. Choose <strong>Save schedule</strong> when you're done — your hours and booking\nrules aren't saved until you do.</p>\n<p>Clients see these hours minus anything already busy on your connected calendar, converted to their\nown timezone. <a href=\"/help/connecting-your-calendar\">Connecting your calendar</a> keeps that busy time up\nto date.</p>",
             "id": "s1-b0"
           }
         ],
@@ -871,12 +871,12 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your hours are set in one timezone. The line under them reads \"Hours are set in {timezone} —\ncurrently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>",
+            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone} —\ncurrently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>",
             "id": "s2-b0"
           }
         ],
         "screenshot": {
-          "alt": "The timezone line under the weekly hours, with Change timezone highlighted.",
+          "alt": "The timezone line under the page title, with Change timezone highlighted.",
           "lightSrc": "/help/weekly-schedule/02-light.png",
           "darkSrc": "/help/weekly-schedule/02-dark.png",
           "width": 1208,
@@ -1050,7 +1050,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "calls-cases"
     },
     "order": 1,
-    "updated": "2026-10-17",
+    "updated": "2026-10-31",
     "related": [
       "booking-a-consultation",
       "joining-a-call",
@@ -1070,7 +1070,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The list is company-wide: it shows every case your company has booked with an expert, not just\nthe ones you started yourself.</p>\n<p>Your next consultation is promoted to a ticket at the top of the list, with the day, the time and\nhow long it runs. <strong>Join call</strong> appears 3 minutes before it starts and takes you straight into\nthe call — you're already signed in, so there's no name or email step. Outside that window the\nticket says when Join opens instead. Join stays available until 30 minutes after the scheduled\nend, or until the call itself ends, whichever comes first.</p>\n<p>Every other open case shows as a card with what's happening next on it:</p>\n<ul>\n<li><strong>A booked time</strong> — the day and time of the next consultation.</li>\n<li><strong>\"Nothing booked\"</strong> — the case is open and waiting on a next step. <strong>Book another</strong> takes you\nto the expert's profile to pick a time.</li>\n<li><strong>\"No consultation booked\"</strong> — nothing has been held on this case yet. <strong>Book a time</strong> gets it\nstarted.</li>\n</ul>\n<p>Two situations put a coloured band across the top of a card, because both are waiting on you:</p>\n<ul>\n<li><strong>Amber, \"{Name} suggested {n} new times\"</strong> — the expert has asked to move a booked\nconsultation. <strong>Choose a time</strong> opens the case, where you can pick one of their times or keep\nthe one you have. If you do nothing, your original time simply stands.</li>\n<li><strong>Violet, \"{Name} thinks this one's sorted\"</strong> — the expert believes the work is done and has\nasked whether you agree. <strong>Review</strong> opens the case, where you can mark it resolved or say not\nyet. Only you can close a case; an expert can only ask.</li>\n</ul>\n<p>The name on a band is the person who actually did it. If they work through an agency and aren't\nthe expert delivering your case, their agency is named after them — \"Priya @ CloudPeak\".</p>\n<p>Each card also shows how many consultations have been held, how many open action items are\nassigned to your side, and whether there are messages you haven't read.</p>\n<p>The row of dots is the case's consultation history, oldest first:</p>\n<ul>\n<li><strong>Filled</strong> — held.</li>\n<li><strong>Outlined</strong> — booked, still to come.</li>\n<li><strong>Dashed</strong> — cancelled.</li>\n<li><strong>Solid grey</strong> — missed: the call was due, but one side didn't arrive.</li>\n<li><strong>Pale grey</strong> — the call ended, but what happened wasn't recorded.</li>\n</ul>\n<p>If you use a screen reader, the row reads as a summary — \"Consultations: 2 held, 1 booked\".</p>\n<p><strong>Resolved</strong> holds closed cases. Each says whether it was resolved or closed automatically after\n30 days with no consultations, bookings or messages, and how many consultations were held.\nEverything in a resolved case stays readable. <strong>Book again</strong> starts a new case with the same\nexpert — the closed one stays as it is.</p>\n<p>Nothing here yet? <strong>Book a consultation</strong> takes you to expert search.</p>",
+            "html": "<p>The list is company-wide: it shows every case your company has booked with an expert, not just\nthe ones you started yourself.</p>\n<p>Your next consultation is promoted to a ticket at the top of the list, with the day, the time and\nhow long it runs. <strong>Join call</strong> appears 3 minutes before it starts and takes you straight into\nthe call — you're already signed in, so there's no name or email step. Outside that window the\nticket says when Join opens instead. Join stays available until 30 minutes after the scheduled\nend, or until the call itself ends, whichever comes first.</p>\n<p>Every other open case shows as a card with what's happening next on it:</p>\n<ul>\n<li><strong>A booked time</strong> — the day and time of the next consultation.</li>\n<li><strong>\"Nothing booked\"</strong> — the case is open and waiting on a next step. <strong>Book another</strong> opens the\ncase, where you can pick a time.</li>\n<li><strong>\"No consultation booked\"</strong> — nothing has been held on this case yet. <strong>Book a time</strong> gets it\nstarted.</li>\n</ul>\n<p>Two situations put a coloured band across the top of a card, because both are waiting on you:</p>\n<ul>\n<li><strong>Amber, \"{Name} suggested {n} new times\"</strong> — the expert has asked to move a booked\nconsultation. <strong>Choose a time</strong> opens the case, where you can pick one of their times or keep\nthe one you have. If you do nothing, your original time simply stands.</li>\n<li><strong>Violet, \"{Name} thinks this one's sorted\"</strong> — the expert believes the work is done and has\nasked whether you agree. <strong>Review</strong> opens the case, where you can mark it resolved or say not\nyet. Only you can close a case; an expert can only ask.</li>\n</ul>\n<p>The name on a band is the person who actually did it. If they work through an agency and aren't\nthe expert delivering your case, their agency is named after them — \"Priya @ CloudPeak\".</p>\n<p>Each card also shows how many consultations have been held, how many open action items are\nassigned to your side, and whether there are messages you haven't read.</p>\n<p>The row of dots is the case's consultation history, oldest first:</p>\n<ul>\n<li><strong>Filled</strong> — held.</li>\n<li><strong>Outlined</strong> — booked, still to come.</li>\n<li><strong>Dashed</strong> — cancelled.</li>\n<li><strong>Solid grey</strong> — missed: the call was due, but one side didn't arrive.</li>\n<li><strong>Pale grey</strong> — the call ended, but what happened wasn't recorded.</li>\n</ul>\n<p>If you use a screen reader, the row reads as a summary — \"Consultations: 2 held, 1 booked\".</p>\n<p><strong>Resolved</strong> holds closed cases. Each says whether it was resolved or closed automatically after\n30 days with no consultations, bookings or messages, and how many consultations were held.\nEverything in a resolved case stays readable. <strong>Book again</strong> starts a new case with the same\nexpert — the closed one stays as it is.</p>\n<p>Nothing here yet? <strong>Book a consultation</strong> takes you to expert search.</p>",
             "id": "s1-b0"
           }
         ],
