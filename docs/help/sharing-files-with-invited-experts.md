@@ -33,5 +33,6 @@ with that expert only. Each expert sees only the files shared with them.
 Open **All files** on the request to see every file in one place, with who can see each one. From
 there you can remove one expert's access to a file you shared with specific experts, or remove a
 file for everyone it was shared with, which can't be undone. A file shared with all interested
-experts can only be removed for everyone. No one is notified either way. On a request matched to several experts,
-**Share with several experts** lets you upload a new file and choose who receives it.
+experts can only be removed for everyone. No one is notified either way. On a request matched to
+several experts, **Share with several experts** lets you upload a new file and choose who receives
+it.

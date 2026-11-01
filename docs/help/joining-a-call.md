@@ -73,9 +73,9 @@ link visitors are, so admit only people you're expecting. Up to 10 people can be
 that, the next person sees "This call is full — 10 people is the limit."
 
 Use **Share a file** in the Files panel to add a file. Anything you drop there stays with this
-consultation. You can chat with **Message everyone…**, and **React** sends a quick reaction.
-Guests can see the files but can't share one, post in the chat or react. While the call is recorded, a notice says: "This call is being recorded and may be
-transcribed".
+consultation. You can chat with **Message everyone…**, and **React** sends a quick reaction. Guests
+can see the files but can't share one, post in the chat or react. While the call is recorded, a
+notice says: "This call is being recorded and may be transcribed".
 
 ## If your company's balance runs low
 
@@ -90,7 +90,8 @@ If you're on a team and can't manage billing, you'll see **Team balance running 
 **Ask {name} to top up**.
 
 A call that keeps running finishes on its own four and a half hours after its scheduled start, or 30
-minutes after its scheduled end if it's booked for longer than four hours. See [Buying credit](/help/buying-credit) for how to top up.
+minutes after its scheduled end if it's booked for longer than four hours. See [Buying
+credit](/help/buying-credit) for how to top up.
 
 ## When the call ends
 

@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 0
 published: true
-updated: 2026-10-31
+updated: 2026-11-02
 related: [weekly-schedule, pausing-new-work]
 ---
 
@@ -15,7 +15,7 @@ consultations are added to the calendar you choose.
 
 ## Add a calendar
 
-Go to **Settings → Schedule**. In the **Calendars** card, choose **Add calendar** and pick
+Go to **Expert Settings → Schedule**. In the **Calendars** card, choose **Add calendar** and pick
 **Google Calendar** or **Microsoft Outlook**. You can connect one Google account and one
 Microsoft account.
 
@@ -74,8 +74,8 @@ again**. Choose **Not now** to step away; nothing is lost.
 ## What Balo can see
 
 Events on the calendars switched on under **Busy calendars** block that time from client bookings.
-Your primary calendar is always on; switch on any others you want checked. We only read event times —
-details are never shared with clients. Balo only adds the consultations you've booked, to the
+Your primary calendar is always on; switch on any others you want checked. We only read event times
+— details are never shared with clients. Balo only adds the consultations you've booked, to the
 calendar you chose under **Where bookings go**.
 
 Apple calendars can't be connected yet. Your weekly hours still work on their own, and clients can

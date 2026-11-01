@@ -54,9 +54,9 @@ your experts.
 
 ## Finding one expert's projects
 
-Use **Delivered by** above the list to narrow it to one person. It starts on **Everyone**,
-lists **You** first if you deliver projects yourself, and then the rest of your team who have projects, by name.
-Each option shows how many projects that person has under the tile you've selected.
+Use **Delivered by** above the list to narrow it to one person. It starts on **Everyone**, lists
+**You** first if you deliver projects yourself, and then the rest of your team who have projects, by
+name. Each option shows how many projects that person has under the tile you've selected.
 
 The tiles and **Delivered by** work together: pick **In delivery** and one expert to see only
 their projects in that state. The filter also narrows **Completed and cancelled**. If nothing
@@ -90,8 +90,10 @@ Agency view.
   the expert delivering.
 - **Milestone over estimate.** A milestone has logged more hours than estimated. It shows the
   hours so far and the estimate.
-- **Project cancelled.** A project was cancelled. Only Balo cancels a project, so the notification gives the date and says it was cancelled by Balo. This one also arrives by email, with the
-  reason it was cancelled and a **View the project** button, so it reaches you even if you aren't in Balo that day.
+- **Project cancelled.** A project was cancelled. Only Balo cancels a project, so the notification
+  gives the date and says it was cancelled by Balo. This one also arrives by email, with the reason
+  it was cancelled and a **View the project** button, so it reaches you even if you aren't in Balo
+  that day.
 
 You aren't notified about your own work: if you're the one delivering the project, or the
 person who made the change, you won't get a second notice. Agency members who aren't owners or

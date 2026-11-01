@@ -56,7 +56,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Use <strong>Delivered by</strong> above the list to narrow it to one person. It starts on <strong>Everyone</strong>,\nlists <strong>You</strong> first if you deliver projects yourself, and then the rest of your team who have projects, by name.\nEach option shows how many projects that person has under the tile you've selected.</p>\n<p>The tiles and <strong>Delivered by</strong> work together: pick <strong>In delivery</strong> and one expert to see only\ntheir projects in that state. The filter also narrows <strong>Completed and cancelled</strong>. If nothing\nmatches, the list says \"No live projects match these filters.\" and <strong>Show all</strong> clears both.</p>\n<p>If everything your agency has delivered is finished, the list says \"Nothing is in delivery right\nnow — new projects with {Agency name} experts will show up here.\" and the finished projects wait\nunder <strong>Completed and cancelled</strong>.</p>",
+            "html": "<p>Use <strong>Delivered by</strong> above the list to narrow it to one person. It starts on <strong>Everyone</strong>, lists\n<strong>You</strong> first if you deliver projects yourself, and then the rest of your team who have projects, by\nname. Each option shows how many projects that person has under the tile you've selected.</p>\n<p>The tiles and <strong>Delivered by</strong> work together: pick <strong>In delivery</strong> and one expert to see only\ntheir projects in that state. The filter also narrows <strong>Completed and cancelled</strong>. If nothing\nmatches, the list says \"No live projects match these filters.\" and <strong>Show all</strong> clears both.</p>\n<p>If everything your agency has delivered is finished, the list says \"Nothing is in delivery right\nnow — new projects with {Agency name} experts will show up here.\" and the finished projects wait\nunder <strong>Completed and cancelled</strong>.</p>",
             "id": "s3-b0"
           }
         ],
@@ -92,7 +92,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. Only Balo cancels a project, so the notification gives the date and says it was cancelled by Balo. This one also arrives by email, with the\nreason it was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
+            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. Only Balo cancels a project, so the notification\ngives the date and says it was cancelled by Balo. This one also arrives by email, with the reason\nit was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo\nthat day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
             "id": "s6-b0"
           }
         ],
@@ -141,7 +141,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your expert explains what's changing and why, and lists each milestone that would be added,\nedited or removed, with what it says now next to what it would say after the change. If the price\nmoves, you see how much your price would go up or down and the new project total. Any difference\nis settled on the final invoice, so nothing is charged on its own when you approve. On a time and\nmaterials project, you see the total estimate in hours before and after the change and, where a\nmilestone's estimate changes, the hours already logged on it. A change can also raise or lower the cap, which is the most you can be billed. You see\nthe new cap and how much it moves. You're still billed for the time logged, up to that cap.</p>\n<p>Nothing changes until your company approves. While a change is waiting for you, the milestones it\ntouches are marked <strong>Change pending</strong> and can't be edited.</p>",
+            "html": "<p>Your expert explains what's changing and why, and lists each milestone that would be added, edited\nor removed, with what it says now next to what it would say after the change. If the price moves,\nyou see how much your price would go up or down and the new project total. Any difference is settled\non the final invoice, so nothing is charged on its own when you approve. On a time and materials\nproject, you see the total estimate in hours before and after the change and, where a milestone's\nestimate changes, the hours already logged on it. A change can also raise or lower the cap, which is\nthe most you can be billed. You see the new cap and how much it moves. You're still billed for the\ntime logged, up to that cap.</p>\n<p>Nothing changes until your company approves. While a change is waiting for you, the milestones it\ntouches are marked <strong>Change pending</strong> and can't be edited.</p>",
             "id": "s2-b0"
           }
         ],
@@ -153,7 +153,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Choose <strong>Approve change</strong>. The milestones and the price (or the estimates and cap, on time and\nmaterials) update straight away, and your expert is told. Approving is a decision for your company, so anyone who can approve proposals for it can\ndo it.</p>\n<p>On a time and materials project, time can still be logged while a change waits. If the time\nlogged has already gone past the lower estimate or cap the change would set, or has been logged on a milestone\nthe change would remove, the approval doesn't go through and nothing changes. You can decline it, and your expert can propose a different change.</p>",
+            "html": "<p>Choose <strong>Approve change</strong>. The milestones and the price (or the estimates and cap, on time and\nmaterials) update straight away, and your expert is told. Approving is a decision for your company, so anyone who can approve proposals for it can\ndo it.</p>\n<p>On a time and materials project, time can still be logged while a change waits. If the time logged\nhas already gone past the lower estimate or cap the change would set, or has been logged on a\nmilestone the change would remove, the approval doesn't go through and nothing changes. You can\ndecline it, and your expert can propose a different change.</p>",
             "id": "s3-b0"
           }
         ],
@@ -471,7 +471,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 0,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "weekly-schedule",
       "pausing-new-work"
@@ -490,7 +490,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Schedule</strong>. In the <strong>Calendars</strong> card, choose <strong>Add calendar</strong> and pick\n<strong>Google Calendar</strong> or <strong>Microsoft Outlook</strong>. You can connect one Google account and one\nMicrosoft account.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Schedule</strong>. In the <strong>Calendars</strong> card, choose <strong>Add calendar</strong> and pick\n<strong>Google Calendar</strong> or <strong>Microsoft Outlook</strong>. You can connect one Google account and one\nMicrosoft account.</p>",
             "id": "s1-b0"
           }
         ],
@@ -580,7 +580,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Events on the calendars switched on under <strong>Busy calendars</strong> block that time from client bookings.\nYour primary calendar is always on; switch on any others you want checked. We only read event times —\ndetails are never shared with clients. Balo only adds the consultations you've booked, to the\ncalendar you chose under <strong>Where bookings go</strong>.</p>\n<p>Apple calendars can't be connected yet. Your weekly hours still work on their own, and clients can\nbook you as normal.</p>",
+            "html": "<p>Events on the calendars switched on under <strong>Busy calendars</strong> block that time from client bookings.\nYour primary calendar is always on; switch on any others you want checked. We only read event times\n— details are never shared with clients. Balo only adds the consultations you've booked, to the\ncalendar you chose under <strong>Where bookings go</strong>.</p>\n<p>Apple calendars can't be connected yet. Your weekly hours still work on their own, and clients can\nbook you as normal.</p>",
             "id": "s6-b0"
           }
         ],
@@ -607,14 +607,14 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-started"
     },
     "order": 4,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "your-cases"
     ],
     "intro": [
       {
         "kind": "html",
-        "html": "<p>The Up next card on your dashboard lists up to four of your meetings in the next 14 days, soonest\nfirst — across consultations, project kickoffs, project calls, discovery calls and intro calls. Times show\nin your device's timezone.</p>",
+        "html": "<p>The Up next card on your dashboard lists up to four of your meetings in the next 14 days, soonest\nfirst — across consultations, project kickoffs, project calls, discovery calls and intro calls.\nTimes show in your device's timezone.</p>",
         "id": "intro-b0"
       }
     ],
@@ -625,7 +625,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The list is company-wide: it shows every upcoming meeting on your company's cases,\nprojects and project requests, not just meetings you were personally invited to.</p>\n<p>Selecting a row opens the case or project it belongs to.</p>\n<p><strong>Join</strong> appears 3 minutes before a meeting starts and takes you straight into the call — you're\nalready signed in, so there's no name or email step. It stays available until 30 minutes after\nthe meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call\nroom isn't ready yet, \"Setting up room\" shows in place of <strong>Join</strong>. Once the room is ready,\n<strong>Join</strong> appears here when you refresh the page or come back to the tab.</p>\n<p>\"New times suggested\" means the expert has proposed new times for that meeting. Open the\ncase to choose one.</p>\n<p>Nothing booked in the next 14 days? Use <strong>Find an expert</strong> to start a project or book a consultation.</p>",
+            "html": "<p>The list is company-wide: it shows every upcoming meeting on your company's cases,\nprojects and project requests, not just meetings you were personally invited to.</p>\n<p>Selecting a row opens the case or project it belongs to.</p>\n<p><strong>Join</strong> appears 3 minutes before a meeting starts and takes you straight into the call — you're\nalready signed in, so there's no name or email step. It stays available until 30 minutes after\nthe meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call\nroom isn't ready yet, \"Setting up room\" shows in place of <strong>Join</strong>.</p>\n<p>\"New times suggested\" means the expert has proposed new times for that meeting. Open the\ncase to choose one.</p>\n<p>Nothing booked in the next 14 days? Use <strong>Find an expert</strong> to start a project or book a\nconsultation.</p>",
             "id": "s1-b0"
           }
         ],
@@ -637,7 +637,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The card lists your own upcoming meetings — the same bookings you'll see in Calendar. <strong>Join</strong> works the same way as for clients, and\n<strong>Open calendar</strong> at the bottom of the card takes you to Calendar.</p>\n<p>\"Waiting on their reply\" means a reschedule you proposed is still with the client.</p>\n<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
+            "html": "<p>The card lists your own upcoming meetings — the same bookings you'll see in Calendar. <strong>Join</strong> works\nthe same way as for clients, and <strong>Open calendar</strong> at the bottom of the card takes you to Calendar.</p>\n<p>\"Waiting on their reply\" means a reschedule you proposed is still with the client.</p>\n<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
             "id": "s2-b0"
           }
         ],
@@ -1020,7 +1020,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The <strong>People</strong> panel lists everyone <strong>In the call</strong> and anyone <strong>Waiting to join</strong>. Whoever hosts\nthe call can <strong>Admit</strong> or <strong>Deny</strong> each person waiting. Balo reminds them it hasn't checked who\nlink visitors are, so admit only people you're expecting. Up to 10 people can be in a call. After\nthat, the next person sees \"This call is full — 10 people is the limit.\"</p>\n<p>Use <strong>Share a file</strong> in the Files panel to add a file. Anything you drop there stays with this\nconsultation. You can chat with <strong>Message everyone…</strong>, and <strong>React</strong> sends a quick reaction.\nGuests can see the files but can't share one, post in the chat or react. While the call is recorded, a notice says: \"This call is being recorded and may be\ntranscribed\".</p>",
+            "html": "<p>The <strong>People</strong> panel lists everyone <strong>In the call</strong> and anyone <strong>Waiting to join</strong>. Whoever hosts\nthe call can <strong>Admit</strong> or <strong>Deny</strong> each person waiting. Balo reminds them it hasn't checked who\nlink visitors are, so admit only people you're expecting. Up to 10 people can be in a call. After\nthat, the next person sees \"This call is full — 10 people is the limit.\"</p>\n<p>Use <strong>Share a file</strong> in the Files panel to add a file. Anything you drop there stays with this\nconsultation. You can chat with <strong>Message everyone…</strong>, and <strong>React</strong> sends a quick reaction. Guests\ncan see the files but can't share one, post in the chat or react. While the call is recorded, a\nnotice says: \"This call is being recorded and may be transcribed\".</p>",
             "id": "s5-b0"
           }
         ],
@@ -1032,7 +1032,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>This part is for clients only; experts don't see it. The call has a balance meter, and you'll see\n<strong>Running low</strong> when your company's credit is getting close to used up. Nothing stops the call. If\nyour company has a card on file you can choose <strong>Keep going</strong>, and the extra time settles to your\ncard afterwards. Either way you'll see \"Your call keeps going — top up whenever you like to bring\nyour balance back up.\" If extra time isn't covered by a card, the next top-up covers it.</p>\n<p>If you're on a team and can't manage billing, you'll see <strong>Team balance running low</strong> and <strong>Let\n{name} know</strong> instead, which lets your billing admin know. Later in the call the button becomes\n<strong>Ask {name} to top up</strong>.</p>\n<p>A call that keeps running finishes on its own four and a half hours after its scheduled start, or 30\nminutes after its scheduled end if it's booked for longer than four hours. See <a href=\"/help/buying-credit\">Buying credit</a> for how to top up.</p>",
+            "html": "<p>This part is for clients only; experts don't see it. The call has a balance meter, and you'll see\n<strong>Running low</strong> when your company's credit is getting close to used up. Nothing stops the call. If\nyour company has a card on file you can choose <strong>Keep going</strong>, and the extra time settles to your\ncard afterwards. Either way you'll see \"Your call keeps going — top up whenever you like to bring\nyour balance back up.\" If extra time isn't covered by a card, the next top-up covers it.</p>\n<p>If you're on a team and can't manage billing, you'll see <strong>Team balance running low</strong> and <strong>Let\n{name} know</strong> instead, which lets your billing admin know. Later in the call the button becomes\n<strong>Ask {name} to top up</strong>.</p>\n<p>A call that keeps running finishes on its own four and a half hours after its scheduled start, or 30\nminutes after its scheduled end if it's booked for longer than four hours. See <a href=\"/help/buying-credit\">Buying\ncredit</a> for how to top up.</p>",
             "id": "s6-b0"
           }
         ],
@@ -1069,7 +1069,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 2,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "weekly-schedule",
       "connecting-your-calendar",
@@ -1089,7 +1089,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Schedule</strong> and turn off <strong>Available for new work</strong>. We'll show you what pausing\nchanges, including how many upcoming consultations and active projects you have, before anything\nhappens. Choose <strong>Pause new work</strong> to confirm, or <strong>Keep me available</strong> to leave things as they\nare.</p>\n<p>To come back, turn <strong>Available for new work</strong> on again. It takes effect straight away, no\nconfirmation needed.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Schedule</strong> and turn off <strong>Available for new work</strong>. We'll show you what\npausing changes, including how many upcoming consultations and active projects you have, before\nanything happens. Choose <strong>Pause new work</strong> to confirm, or <strong>Keep me available</strong> to leave things as\nthey are.</p>\n<p>To come back, turn <strong>Available for new work</strong> on again. It takes effect straight away, no\nconfirmation needed.</p>",
             "id": "s1-b0"
           }
         ],
@@ -1125,7 +1125,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<ul>\n<li><strong>Upcoming consultations and active projects.</strong> Everything already booked or underway goes\nahead exactly as planned, and you can join, reschedule and deliver as usual.</li>\n<li><strong>Open cases.</strong> Clients you're already working with can book follow-up consultations on a case\nthat's still open, booked from that case's page.</li>\n<li><strong>Requests already sent to you.</strong> Intro and discovery calls on a project request you've already\nreceived can still be booked.</li>\n<li><strong>Messages.</strong> Clients can still send you a message.</li>\n<li><strong>Your calendar connection.</strong> It keeps syncing, so existing bookings and conflict checks stay\ncorrect.</li>\n</ul>",
+            "html": "<ul>\n<li><strong>Upcoming consultations and active projects.</strong> Everything already booked or underway goes\nahead exactly as planned, and you can join, reschedule and deliver as usual.</li>\n<li><strong>Open cases.</strong> Clients you're already working with can book follow-up consultations on a case\nthat's still open, booked from that case's page.</li>\n<li><strong>Requests already sent to you.</strong> Intro and discovery calls on a project request you've already\nreceived can still be booked.</li>\n<li><strong>Messages.</strong> Clients on an open case or project can still message you.</li>\n<li><strong>Your calendar connection.</strong> It keeps syncing, so existing bookings and conflict checks stay\ncorrect.</li>\n</ul>",
             "id": "s3-b0"
           }
         ],
@@ -1143,7 +1143,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>While you're paused, your weekly hours and booking rules are greyed out but never cleared,\nand you can still add or remove time off. When you turn <strong>Available for new work</strong> back on, everything is exactly as you left it\nand your open times return straight away.</p>",
+            "html": "<p>While you're paused, your weekly hours and booking rules are greyed out but never cleared, and you\ncan still add or remove time off. When you turn <strong>Available for new work</strong> back on, everything is\nexactly as you left it and your open times return straight away.</p>",
             "id": "s4-b0"
           },
           {
@@ -1363,7 +1363,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Expert Settings → Rate</strong>. Under <strong>Your Rate</strong>, choose <strong>Per minute</strong> or <strong>Per hour</strong>, enter your\nnumber, then choose <strong>Save rate</strong>.</p>\n<p>You're paid per minute. If you enter an hourly figure, Balo shows the per-minute equivalent, and\nwhen the hourly number doesn't divide evenly it tells you so: \"You're paid per minute, so this\nsaves as…\" with the per-minute and hourly amounts side by side, so you can see exactly what you've\nsaved.</p>\n<p>You can change your rate any time.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Rate</strong>. Under <strong>Your Rate</strong>, choose <strong>Per minute</strong> or <strong>Per hour</strong>, enter\nyour number, then choose <strong>Save rate</strong>.</p>\n<p>You're paid per minute. If you enter an hourly figure, Balo shows the per-minute equivalent, and\nwhen the hourly number doesn't divide evenly it tells you so: \"You're paid per minute, so this\nsaves as…\" with the per-minute and hourly amounts side by side, so you can see exactly what you've\nsaved.</p>\n<p>You can change your rate any time.</p>",
             "id": "s1-b0"
           }
         ],
@@ -1381,7 +1381,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Expert Settings → Payouts</strong>. Pick the country your bank account is in — popular countries are\nlisted first, then <strong>All countries</strong> — and the form asks for the bank details that country uses.\nFill them in and save.</p>\n<p>Once they're saved you'll see \"Your bank details are saved and will be used for payout\ndisbursements.\" To change them later, choose <strong>Edit payout details</strong>.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Payouts</strong>. Pick the country your bank account is in — popular countries\nare listed first, then <strong>All countries</strong> — and the form asks for the bank details that country uses.\nFill them in and save.</p>\n<p>Once they're saved you'll see \"Your bank details are saved and will be used for payout\ndisbursements.\" To change them later, choose <strong>Edit payout details</strong>.</p>",
             "id": "s2-b0"
           }
         ],
@@ -1399,7 +1399,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p><strong>Set your rate</strong> and <strong>Set up payouts</strong> are two of the six steps on your setup list, alongside\nyour profile, phone, calendar and availability. Until all six are done, Expert Settings shows that you're\nnot visible to clients yet. When they are, it says \"You're appearing in search.\"</p>",
+            "html": "<p><strong>Set your rate</strong> and <strong>Set up payouts</strong> are two of the six steps on your setup list, alongside your\nprofile, phone, calendar and availability. Until all six are done, Expert Settings shows that you're\nnot visible to clients yet. When they are, it says \"You're appearing in search.\"</p>",
             "id": "s3-b0"
           }
         ],
@@ -1467,7 +1467,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your calls never pause because the balance reaches zero. Time beyond your balance is charged to\nthe card your company has on file, after the call. If there's no card on file, that amount is\nowed instead and your next top-up covers it.</p>\n<p>Adding a card to your company charges nothing. A card on file is used for time beyond your balance,\nand for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:\nunder \"Keep going when your credit runs out\", choose <strong>Add a card</strong> — it's optional. See <a href=\"/help/buying-credit\">Buying credit</a> for how to top up.</p>",
+            "html": "<p>Your calls never pause because the balance reaches zero. Time beyond your balance is charged to\nthe card your company has on file, after the call. If there's no card on file, that amount is\nowed instead and your next top-up covers it.</p>\n<p>Adding a card to your company charges nothing. A card on file is used for time beyond your balance,\nand for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:\nunder \"Keep going when your credit runs out\", choose <strong>Add a card</strong> — it's optional. See <a href=\"/help/buying-credit\">Buying\ncredit</a> for how to top up.</p>",
             "id": "s3-b0"
           }
         ],
@@ -1602,7 +1602,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Open <strong>All files</strong> on the request to see every file in one place, with who can see each one. From\nthere you can remove one expert's access to a file you shared with specific experts, or remove a\nfile for everyone it was shared with, which can't be undone. A file shared with all interested\nexperts can only be removed for everyone. No one is notified either way. On a request matched to several experts,\n<strong>Share with several experts</strong> lets you upload a new file and choose who receives it.</p>",
+            "html": "<p>Open <strong>All files</strong> on the request to see every file in one place, with who can see each one. From\nthere you can remove one expert's access to a file you shared with specific experts, or remove a\nfile for everyone it was shared with, which can't be undone. A file shared with all interested\nexperts can only be removed for everyone. No one is notified either way. On a request matched to\nseveral experts, <strong>Share with several experts</strong> lets you upload a new file and choose who receives\nit.</p>",
             "id": "s3-b0"
           }
         ],
@@ -1750,7 +1750,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The first time a milestone goes past its estimate, your company's owner gets an email, and a notification appears, that names\nthe milestone and compares the hours logged with the estimate. While a milestone is over, the\nproject page also shows a banner saying it \"has gone over estimate\". Open the time log to see what the\nhours went on.</p>\n<p>Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the\nwork, and a project can need more time than planned. You won't be told again about the same\nestimate, but you will be if the estimate is raised and the milestone passes the new figure,\nincluding when the hours pass it before you approve the raise.</p>",
+            "html": "<p>The first time a milestone goes past its estimate, your company's owner gets an email, and a\nnotification appears, that names the milestone and compares the hours logged with the estimate.\nWhile a milestone is over, the project page also shows a banner saying it \"has gone over estimate\".\nOpen the time log to see what the hours went on.</p>\n<p>Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the\nwork, and a project can need more time than planned. You won't be told again about the same\nestimate, but you will be if the estimate is raised and the milestone passes the new figure,\nincluding when the hours pass it before you approve the raise.</p>",
             "id": "s3-b0"
           }
         ],
@@ -1781,7 +1781,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 1,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "connecting-your-calendar",
       "pausing-new-work"
@@ -1800,7 +1800,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Go to <strong>Settings → Schedule</strong>. The <strong>Availability</strong> card has your <strong>Weekly hours</strong>: turn a day on,\nthen set when your hours start and end. You can add more than one window to a day. Under them,\n<strong>Booking rules</strong> set a <strong>Buffer before</strong> and <strong>Buffer after</strong> each consultation and the <strong>Minimum\nnotice</strong> a client must give. Choose <strong>Save schedule</strong> when you're done — your hours and booking\nrules aren't saved until you do.</p>\n<p>Clients see these hours minus anything already busy on your connected calendar, converted to their\nown timezone. <a href=\"/help/connecting-your-calendar\">Connecting your calendar</a> keeps that busy time up\nto date.</p>",
+            "html": "<p>Go to <strong>Expert Settings → Schedule</strong>. The <strong>Availability</strong> card has your <strong>Weekly hours</strong>: turn a\nday on, then set when your hours start and end. You can add more than one window to a day. Under\nthem, <strong>Booking rules</strong> set a <strong>Buffer before</strong> and <strong>Buffer after</strong> each consultation and the\n<strong>Minimum notice</strong> a client must give. Choose <strong>Save schedule</strong> when you're done — your hours and\nbooking rules aren't saved until you do.</p>\n<p>Clients see these hours minus anything already busy on your connected calendar, converted to their\nown timezone. <a href=\"/help/connecting-your-calendar\">Connecting your calendar</a> keeps that busy time up\nto date.</p>",
             "id": "s1-b0"
           }
         ],
@@ -1818,7 +1818,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone} —\ncurrently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>",
+            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>",
             "id": "s2-b0"
           }
         ],
@@ -1897,7 +1897,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-started"
     },
     "order": 1,
-    "updated": "2026-10-18",
+    "updated": "2026-11-02",
     "related": [
       "rate-and-payouts",
       "connecting-your-calendar",
@@ -1947,7 +1947,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>You'll get an email letting you know you're in. The next step is finishing your expert setup in\n<strong>Settings</strong>. There are six steps:</p>\n<ul>\n<li><strong>Complete your profile</strong></li>\n<li><strong>Verify your phone</strong></li>\n<li><strong>Set your rate</strong></li>\n<li><strong>Connect calendar</strong></li>\n<li><strong>Set your availability</strong></li>\n<li><strong>Set up payouts</strong></li>\n</ul>\n<p>Until all six are done, Settings tells you that you're not visible to clients yet and shows which\nstep is next, with a <strong>Continue setup</strong> button that takes you straight to it. Once everything is\ndone, it changes to \"You're appearing in search.\" It only takes a few minutes. The guides below\nwalk through the longer steps.</p>",
+            "html": "<p>You'll get an email letting you know you're in. The next step is finishing your expert setup in\n<strong>Expert Settings</strong>. There are six steps:</p>\n<ul>\n<li><strong>Complete your profile</strong></li>\n<li><strong>Verify your phone</strong></li>\n<li><strong>Set your rate</strong></li>\n<li><strong>Connect calendar</strong></li>\n<li><strong>Set your availability</strong></li>\n<li><strong>Set up payouts</strong></li>\n</ul>\n<p>Until all six are done, Settings tells you that you're not visible to clients yet and shows which\nstep is next, with a <strong>Continue setup</strong> button that takes you straight to it. Once everything is\ndone, it changes to \"You're appearing in search.\" It only takes a few minutes. The guides below\nwalk through the longer steps.</p>",
             "id": "s3-b0"
           },
           {

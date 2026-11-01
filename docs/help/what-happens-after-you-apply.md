@@ -6,7 +6,7 @@ category:
   expert: getting-started
 order: 1
 published: true
-updated: 2026-10-18
+updated: 2026-11-02
 related: [rate-and-payouts, connecting-your-calendar, weekly-schedule]
 ---
 
@@ -34,7 +34,7 @@ When we review an application, it comes down to four things:
 ## If your application is approved
 
 You'll get an email letting you know you're in. The next step is finishing your expert setup in
-**Settings**. There are six steps:
+**Expert Settings**. There are six steps:
 
 - **Complete your profile**
 - **Verify your phone**

@@ -35,10 +35,10 @@ weeks, and run by the expert's calendar.
 
 ## When a milestone goes over its estimate
 
-The first time a milestone goes past its estimate, your company's owner gets an email, and a notification appears, that names
-the milestone and compares the hours logged with the estimate. While a milestone is over, the
-project page also shows a banner saying it "has gone over estimate". Open the time log to see what the
-hours went on.
+The first time a milestone goes past its estimate, your company's owner gets an email, and a
+notification appears, that names the milestone and compares the hours logged with the estimate.
+While a milestone is over, the project page also shows a banner saying it "has gone over estimate".
+Open the time log to see what the hours went on.
 
 Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the
 work, and a project can need more time than planned. You won't be told again about the same

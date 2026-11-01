@@ -21,13 +21,14 @@ with a plain answer if no change is needed. A project can have one change open a
 
 ## What a proposed change shows
 
-Your expert explains what's changing and why, and lists each milestone that would be added,
-edited or removed, with what it says now next to what it would say after the change. If the price
-moves, you see how much your price would go up or down and the new project total. Any difference
-is settled on the final invoice, so nothing is charged on its own when you approve. On a time and
-materials project, you see the total estimate in hours before and after the change and, where a
-milestone's estimate changes, the hours already logged on it. A change can also raise or lower the cap, which is the most you can be billed. You see
-the new cap and how much it moves. You're still billed for the time logged, up to that cap.
+Your expert explains what's changing and why, and lists each milestone that would be added, edited
+or removed, with what it says now next to what it would say after the change. If the price moves,
+you see how much your price would go up or down and the new project total. Any difference is settled
+on the final invoice, so nothing is charged on its own when you approve. On a time and materials
+project, you see the total estimate in hours before and after the change and, where a milestone's
+estimate changes, the hours already logged on it. A change can also raise or lower the cap, which is
+the most you can be billed. You see the new cap and how much it moves. You're still billed for the
+time logged, up to that cap.
 
 Nothing changes until your company approves. While a change is waiting for you, the milestones it
 touches are marked **Change pending** and can't be edited.
@@ -38,9 +39,10 @@ Choose **Approve change**. The milestones and the price (or the estimates and ca
 materials) update straight away, and your expert is told. Approving is a decision for your company, so anyone who can approve proposals for it can
 do it.
 
-On a time and materials project, time can still be logged while a change waits. If the time
-logged has already gone past the lower estimate or cap the change would set, or has been logged on a milestone
-the change would remove, the approval doesn't go through and nothing changes. You can decline it, and your expert can propose a different change.
+On a time and materials project, time can still be logged while a change waits. If the time logged
+has already gone past the lower estimate or cap the change would set, or has been logged on a
+milestone the change would remove, the approval doesn't go through and nothing changes. You can
+decline it, and your expert can propose a different change.
 
 ## Declining
 

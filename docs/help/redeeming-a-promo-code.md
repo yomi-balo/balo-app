@@ -40,4 +40,5 @@ owed instead and your next top-up covers it.
 
 Adding a card to your company charges nothing. A card on file is used for time beyond your balance,
 and for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:
-under "Keep going when your credit runs out", choose **Add a card** — it's optional. See [Buying credit](/help/buying-credit) for how to top up.
+under "Keep going when your credit runs out", choose **Add a card** — it's optional. See [Buying
+credit](/help/buying-credit) for how to top up.
