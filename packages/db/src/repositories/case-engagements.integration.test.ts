@@ -16,6 +16,7 @@ import {
   type AuditEvent,
 } from '../schema';
 import {
+  agencyFactory,
   caseEngagementFactory,
   companyFactory,
   companyMemberFactory,
@@ -31,6 +32,7 @@ import {
 } from './case-engagements';
 import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
 import { conversationsRepository } from './conversations';
+import { expertsRepository } from './experts';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
 import {
   expectCheckViolation,
@@ -92,6 +94,46 @@ describe('caseEngagementsRepository.create', () => {
       .where(eq(caseEngagements.engagementId, created.id));
     expect(child?.engagementType).toBe('case');
     expect(child?.title).toBe('Flow fails on record update');
+  });
+
+  it("BAL-632 — pins the agency-linked expert's agency on the row it writes", async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'Agency-delivered case',
+      description: '<p>x</p>',
+    });
+
+    expect(created.deliveringAgencyId).toBe(agency.id);
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, created.id));
+    expect(parent?.deliveringAgencyId).toBe(agency.id);
+  });
+
+  it('BAL-632 — an independent expert gets a NULL pin', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const created = await caseEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      title: 'Independently delivered case',
+      description: '<p>x</p>',
+    });
+
+    expect(created.deliveringAgencyId).toBeNull();
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, created.id));
+    expect(parent?.deliveringAgencyId).toBeNull();
   });
 
   it('BAL-424 — provisions an engagement-anchored conversation with NO relationship row anywhere', async () => {
@@ -270,6 +312,7 @@ describe('caseEngagementsRepository.create', () => {
         'createdAt',
         'currency',
         'deletedAt',
+        'deliveringAgencyId',
         'description',
         'engagementType',
         'expertProfileId',

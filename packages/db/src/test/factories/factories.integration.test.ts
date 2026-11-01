@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { userFactory, expertFactory, expertDraftFactory, meetingFactory } from './index';
+import {
+  agencyFactory,
+  caseEngagementFactory,
+  engagementFactory,
+  userFactory,
+  expertFactory,
+  expertDraftFactory,
+  meetingFactory,
+} from './index';
+import { expertsRepository } from '../../repositories/experts';
 
 describe('Test factories', () => {
   it('userFactory creates a user with an id', async () => {
@@ -38,5 +47,38 @@ describe('Test factories', () => {
     expect(contexts).toHaveLength(1);
     expect(contexts[0]?.contextType).toBe('case');
     expect(contexts[0]?.contextId).toBe(caseEngagementId);
+  });
+
+  it("engagementFactory and caseEngagementFactory pin the profile's agency by default", async () => {
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const project = await engagementFactory({ expertProfileId: expert.id });
+    const kase = await caseEngagementFactory({ expertProfileId: expert.id });
+
+    expect(project.engagement.deliveringAgencyId).toBe(agency.id);
+    expect(kase.engagement.deliveringAgencyId).toBe(agency.id);
+  });
+
+  it('an independent expert gets a NULL pin, and values.deliveringAgencyId: null overrides an agency', async () => {
+    const independent = await engagementFactory();
+    expect(independent.engagement.deliveringAgencyId).toBeNull();
+
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const project = await engagementFactory({
+      expertProfileId: expert.id,
+      values: { deliveringAgencyId: null },
+    });
+    const kase = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      values: { deliveringAgencyId: null },
+    });
+
+    expect(project.engagement.deliveringAgencyId).toBeNull();
+    expect(kase.engagement.deliveringAgencyId).toBeNull();
   });
 });

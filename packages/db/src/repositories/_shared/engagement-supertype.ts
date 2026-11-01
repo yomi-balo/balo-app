@@ -3,6 +3,7 @@ import { db } from '../../client';
 import {
   caseEngagements,
   engagements,
+  expertProfiles,
   projectEngagements,
   type Engagement,
   type ProjectEngagement,
@@ -80,6 +81,29 @@ export function projectDeliveryToEngagementStatus(s: ProjectDeliveryStatus): Eng
 }
 
 /**
+ * The delivering agency for a new engagement: the expert profile's `agency_id` as it
+ * stands inside `tx`, or NULL for an independent expert and for a profile id that does
+ * not exist (the insert then fails on the `expert_profile_id` FK).
+ *
+ * No lock is taken. `expert_profiles.agency_id` only ever moves from NULL to an agency:
+ * the link flow returns `already_linked` without writing when the profile already has
+ * one (`apps/web/src/lib/expert-agency/link-expert-agency.ts`). A read racing a link
+ * therefore sees either NULL or the newly linked agency, and both are a correct value
+ * for the moment of insert.
+ */
+export async function resolveDeliveringAgencyIdTx(
+  tx: DbTx,
+  expertProfileId: string
+): Promise<string | null> {
+  const [row] = await tx
+    .select({ agencyId: expertProfiles.agencyId })
+    .from(expertProfiles)
+    .where(eq(expertProfiles.id, expertProfileId))
+    .limit(1);
+  return row?.agencyId ?? null;
+}
+
+/**
  * Insert the SUPERTYPE row. EVERY concrete engagement writer calls this FIRST, inside
  * its own transaction, then inserts its child row against the returned id. Extracted
  * so the parent insert exists exactly once (Sonar new-code duplication) and so
@@ -88,6 +112,11 @@ export function projectDeliveryToEngagementStatus(s: ProjectDeliveryStatus): Eng
  * `baloFeeBps` is accepted because PROJECT engagements snapshot it at kickoff. The
  * CASE path passes `null` EXPLICITLY (D3: `credit_sessions.balo_fee_bps` is the
  * case-margin SSOT), and `CaseEngagementRow` omits the column entirely.
+ *
+ * `delivering_agency_id` is not an input: it is read once from the expert profile
+ * inside `tx` (`resolveDeliveringAgencyIdTx`) and written here, the only repository
+ * write of the column. It is write-once: a later change to the profile's `agency_id`
+ * never reaches it (`invariants/the-delivering-agency-pin-is-write-once.test.ts`).
  */
 export async function insertEngagementRowTx(
   tx: DbTx,
@@ -112,12 +141,14 @@ export async function insertEngagementRowTx(
     activatedAt?: Date;
   }
 ): Promise<Engagement> {
+  const deliveringAgencyId = await resolveDeliveringAgencyIdTx(tx, input.expertProfileId);
   const [row] = await tx
     .insert(engagements)
     .values({
       engagementType: input.engagementType,
       companyId: input.companyId,
       expertProfileId: input.expertProfileId,
+      deliveringAgencyId,
       status: input.status,
       currency: input.currency,
       baloFeeBps: input.baloFeeBps,

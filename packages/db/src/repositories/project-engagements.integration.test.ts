@@ -337,6 +337,48 @@ describe('projectEngagementsRepository.create — the seam proof', () => {
       .where(eq(projectEngagements.engagementId, engagement.id));
     expect(survivorChild?.sourceProposalId).toBeNull();
   });
+
+  it("BAL-632 — create() pins the agency-linked expert's agency on the row it writes", async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBe(agency.id);
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBe(agency.id);
+  });
+
+  it('BAL-632 — create() gives an independent expert a NULL pin', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBeNull();
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBeNull();
+  });
 });
 
 describe('engagement_balo_fee_bps_case_null — the NULLABLE-FOR-CASES invariant (project side)', () => {
@@ -777,6 +819,31 @@ describe('projectEngagementsRepository.findByProjectRequestId (BAL-331 deep-link
 });
 
 describe('projectEngagementsRepository.materializeFromKickoff — accept→approve writer', () => {
+  it("BAL-632 — pins the agency-linked expert's agency on the engagement it materialises", async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(source.expertProfileId, agency.id);
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBe(agency.id);
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBe(agency.id);
+  });
+
   it('happy path: advances the request to kickoff_approved AND materialises the engagement with snapshotted terms', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
 

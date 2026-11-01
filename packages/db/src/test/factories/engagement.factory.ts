@@ -1,7 +1,10 @@
 import { db } from '../../client';
 import { companies, engagements, projectEngagements } from '../../schema';
 import type { NewEngagement, NewProjectEngagement } from '../../schema';
-import { projectDeliveryToEngagementStatus } from '../../repositories/_shared/engagement-supertype';
+import {
+  projectDeliveryToEngagementStatus,
+  resolveDeliveringAgencyIdTx,
+} from '../../repositories/_shared/engagement-supertype';
 import type { ProjectEngagementRow } from '../../repositories/project-engagements';
 import { expertDraftFactory } from './expert-draft.factory';
 import { proposalFactory, type ProposalFactoryResult } from './proposal.factory';
@@ -107,6 +110,9 @@ export async function engagementFactory(
         expertProfileId,
         status: projectDeliveryToEngagementStatus(deliveryStatus),
         activatedAt: new Date(),
+        // Mirrors `insertEngagementRowTx`; `values.deliveringAgencyId` (incl. an explicit
+        // null, for a pre-pin row) wins.
+        deliveringAgencyId: await resolveDeliveringAgencyIdTx(tx, expertProfileId),
         ...overrides.values,
       })
       .returning();
