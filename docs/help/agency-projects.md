@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 7
 published: true
-updated: 2026-10-29
+updated: 2026-11-02
 related: [rate-and-payouts, weekly-schedule]
 ---
 
@@ -55,7 +55,7 @@ your experts.
 ## Finding one expert's projects
 
 Use **Delivered by** above the list to narrow it to one person. It starts on **Everyone**,
-lists **You** first if you deliver projects yourself, and then the rest of your team by name.
+lists **You** first if you deliver projects yourself, and then the rest of your team who have projects, by name.
 Each option shows how many projects that person has under the tile you've selected.
 
 The tiles and **Delivered by** work together: pick **In delivery** and one expert to see only
@@ -90,7 +90,7 @@ Agency view.
   the expert delivering.
 - **Milestone over estimate.** A milestone has logged more hours than estimated. It shows the
   hours so far and the estimate.
-- **Project cancelled.** A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with the
+- **Project cancelled.** A project was cancelled. Only Balo cancels a project, so the notification gives the date and says it was cancelled by Balo. This one also arrives by email, with the
   reason it was cancelled and a **View the project** button, so it reaches you even if you aren't in Balo that day.
 
 You aren't notified about your own work: if you're the one delivering the project, or the

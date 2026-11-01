@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: cases-projects
 order: 2
-published: false
+published: true
 updated: 2026-10-31
 related: [turning-a-case-into-a-project, booking-a-consultation]
 ---

@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: cases-projects
 order: 3
-published: false
+published: true
 updated: 2026-10-31
 related: [requesting-a-project, your-cases]
 ---

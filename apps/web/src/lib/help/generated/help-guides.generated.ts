@@ -13,7 +13,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 7,
-    "updated": "2026-10-29",
+    "updated": "2026-11-02",
     "related": [
       "rate-and-payouts",
       "weekly-schedule"
@@ -56,7 +56,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Use <strong>Delivered by</strong> above the list to narrow it to one person. It starts on <strong>Everyone</strong>,\nlists <strong>You</strong> first if you deliver projects yourself, and then the rest of your team by name.\nEach option shows how many projects that person has under the tile you've selected.</p>\n<p>The tiles and <strong>Delivered by</strong> work together: pick <strong>In delivery</strong> and one expert to see only\ntheir projects in that state. The filter also narrows <strong>Completed and cancelled</strong>. If nothing\nmatches, the list says \"No live projects match these filters.\" and <strong>Show all</strong> clears both.</p>\n<p>If everything your agency has delivered is finished, the list says \"Nothing is in delivery right\nnow — new projects with {Agency name} experts will show up here.\" and the finished projects wait\nunder <strong>Completed and cancelled</strong>.</p>",
+            "html": "<p>Use <strong>Delivered by</strong> above the list to narrow it to one person. It starts on <strong>Everyone</strong>,\nlists <strong>You</strong> first if you deliver projects yourself, and then the rest of your team who have projects, by name.\nEach option shows how many projects that person has under the tile you've selected.</p>\n<p>The tiles and <strong>Delivered by</strong> work together: pick <strong>In delivery</strong> and one expert to see only\ntheir projects in that state. The filter also narrows <strong>Completed and cancelled</strong>. If nothing\nmatches, the list says \"No live projects match these filters.\" and <strong>Show all</strong> clears both.</p>\n<p>If everything your agency has delivered is finished, the list says \"Nothing is in delivery right\nnow — new projects with {Agency name} experts will show up here.\" and the finished projects wait\nunder <strong>Completed and cancelled</strong>.</p>",
             "id": "s3-b0"
           }
         ],
@@ -92,7 +92,104 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. The notification gives the date and, when known, who cancelled it. This one also arrives by email, with the\nreason it was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
+            "html": "<p>Your agency's owners and admins get a notification when something happens on a project one of\nyour experts is delivering. Each one opens the project, with the back link returning to the\nAgency view.</p>\n<ul>\n<li><strong>Changes requested.</strong> A client asked for changes. The notification names who asked and\nthe expert delivering.</li>\n<li><strong>Milestone over estimate.</strong> A milestone has logged more hours than estimated. It shows the\nhours so far and the estimate.</li>\n<li><strong>Project cancelled.</strong> A project was cancelled. Only Balo cancels a project, so the notification gives the date and says it was cancelled by Balo. This one also arrives by email, with the\nreason it was cancelled and a <strong>View the project</strong> button, so it reaches you even if you aren't in Balo that day.</li>\n</ul>\n<p>You aren't notified about your own work: if you're the one delivering the project, or the\nperson who made the change, you won't get a second notice. Agency members who aren't owners or\nadmins don't receive these notifications.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "approving-a-change-to-your-project",
+    "title": "Approving or declining a change to your project",
+    "summary": "Ask for a change, then approve or decline what your expert proposes.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 5,
+    "updated": "2026-10-31",
+    "related": [
+      "reviewing-a-finished-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Plans shift while a project is under way. This guide covers how to ask for a change, what a\nproposed change shows you and what happens when you approve or decline it.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Asking for a change",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>On the project page, choose <strong>Request a change</strong> and describe what you'd like to be different.\nYour expert is told straight away and can answer in one of two ways: with a proposed change, or\nwith a plain answer if no change is needed. A project can have one change open at a time.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "What a proposed change shows",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Your expert explains what's changing and why, and lists each milestone that would be added,\nedited or removed, with what it says now next to what it would say after the change. If the price\nmoves, you see how much your price would go up or down and the new project total. Any difference\nis settled on the final invoice, so nothing is charged on its own when you approve. On a time and\nmaterials project, you see the total estimate in hours before and after the change and, where a\nmilestone's estimate changes, the hours already logged on it. A change can also raise or lower the cap, which is the most you can be billed. You see\nthe new cap and how much it moves. You're still billed for the time logged, up to that cap.</p>\n<p>Nothing changes until your company approves. While a change is waiting for you, the milestones it\ntouches are marked <strong>Change pending</strong> and can't be edited.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Approving",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Choose <strong>Approve change</strong>. The milestones and the price (or the estimates and cap, on time and\nmaterials) update straight away, and your expert is told. Approving is a decision for your company, so anyone who can approve proposals for it can\ndo it.</p>\n<p>On a time and materials project, time can still be logged while a change waits. If the time\nlogged has already gone past the lower estimate or cap the change would set, or has been logged on a milestone\nthe change would remove, the approval doesn't go through and nothing changes. You can decline it, and your expert can propose a different change.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Declining",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Choose <strong>Decline</strong> and give a reason, which your expert reads. Declining leaves the plan and the\nprice exactly as they were, and your expert can propose a different change if that helps.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "Answered requests",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If your expert answers your request without proposing a change, it appears as <strong>Answered</strong>\nwith their reply. The plan and price stay as they were. You can ask again whenever you like.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "While a change is open",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The project can't be marked ready for your review while a change is waiting on you or while one\nthat started from your request is still being worked on. If a change has been waiting for a while,\nthe Balo team may check in to help move it along.</p>",
             "id": "s6-b0"
           }
         ],
@@ -498,6 +595,328 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "dashboard-up-next",
+    "title": "Up next on your dashboard",
+    "summary": "Your upcoming meetings at a glance, and where each one takes you.",
+    "audience": [
+      "client",
+      "expert"
+    ],
+    "category": {
+      "client": "getting-started",
+      "expert": "getting-started"
+    },
+    "order": 4,
+    "updated": "2026-10-31",
+    "related": [
+      "your-cases"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>The Up next card on your dashboard lists up to four of your meetings in the next 14 days, soonest\nfirst — across consultations, project kickoffs, project calls, discovery calls and intro calls. Times show\nin your device's timezone.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "For clients",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The list is company-wide: it shows every upcoming meeting on your company's cases,\nprojects and project requests, not just meetings you were personally invited to.</p>\n<p>Selecting a row opens the case or project it belongs to.</p>\n<p><strong>Join</strong> appears 3 minutes before a meeting starts and takes you straight into the call — you're\nalready signed in, so there's no name or email step. It stays available until 30 minutes after\nthe meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call\nroom isn't ready yet, \"Setting up room\" shows in place of <strong>Join</strong>. Once the room is ready,\n<strong>Join</strong> appears here when you refresh the page or come back to the tab.</p>\n<p>\"New times suggested\" means the expert has proposed new times for that meeting. Open the\ncase to choose one.</p>\n<p>Nothing booked in the next 14 days? Use <strong>Find an expert</strong> to start a project or book a consultation.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "For experts",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The card lists your own upcoming meetings — the same bookings you'll see in Calendar. <strong>Join</strong> works the same way as for clients, and\n<strong>Open calendar</strong> at the bottom of the card takes you to Calendar.</p>\n<p>\"Waiting on their reply\" means a reschedule you proposed is still with the client.</p>\n<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "dashboard-your-move",
+    "title": "Your move on your dashboard",
+    "summary": "What is waiting on you right now, and where each card takes you.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "getting-started"
+    },
+    "order": 5,
+    "updated": "2026-10-31",
+    "related": [
+      "dashboard-up-next",
+      "project-requests-for-experts"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Your move sits on your dashboard and gathers everything that is waiting on you into\none row of cards, most pressing first. Scroll sideways to see them all.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What shows up",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li>Invitations to a project request you haven't answered yet.</li>\n<li>Interest you've sent where the client is waiting on a reply or on your availability for an\nintro call.</li>\n<li>A proposal the client has asked you to send, or asked you to revise.</li>\n<li>Change requests on work you're delivering.</li>\n<li>Open action items assigned to you on your active cases and projects.</li>\n<li>Unread messages from your clients.</li>\n<li>A calendar connection that needs reconnecting. While it's disconnected, you won't appear in\nexpert search.</li>\n</ul>\n<p>When more than one kind is waiting, filter chips above the row narrow it down.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Opening a card",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Select a card's title, or its button, to go straight to the case, project or page it belongs to.</p>\n<p>A card stays until the thing it points to is done: the invitation is answered, the proposal is\nsent, the action item is completed. Opening a card or reading a\nnotification doesn't clear it. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Where your projects stand",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Below Your move, every live project sits under its stage (invited, interest sent, proposal, kickoff or delivery), marked your move, waiting on the client, or in progress; select one to open it.</p>\n<p>Hover over or select a stage, or a legend item, to see what it means; on a phone, tap it.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "dashboard-your-move-for-clients",
+    "title": "Your move on your dashboard",
+    "summary": "What is waiting on you right now, and where each card takes you.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "getting-started"
+    },
+    "order": 5,
+    "updated": "2026-10-31",
+    "related": [
+      "dashboard-up-next",
+      "requesting-a-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Your move sits on your dashboard and gathers everything that is waiting on you into one row of\ncards, most pressing first. Scroll sideways to see them all.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What shows up",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li>A balance to settle, if you're an owner or admin of your company. While it is outstanding, new\nbookings are on hold.</li>\n<li>New times an expert has suggested for a call, for you to choose from.</li>\n<li>A project an expert has marked ready for your review.</li>\n<li>A kickoff that needs billing confirmed. If someone else on your team confirms billing, the card\nlets you view the kickoff instead.</li>\n<li>An upfront invoice to pay, once Balo has sent it. The project kicks off as soon as Balo sees\nthe payment. If someone else on your team pays it, the card lets you view the kickoff instead.</li>\n<li>An exploratory call with Balo to book, so we can find the right experts for your brief.</li>\n<li>Experts who have replied to your request and are waiting to hear back.</li>\n<li>A proposal to review.</li>\n<li>People who have asked to join your team, if you're an owner or admin.</li>\n<li>Open action items assigned to you, and unread messages from your experts.</li>\n</ul>\n<p>When more than one kind is waiting, filter chips above the row narrow it down.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Opening a card",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Select a card, or its button, to go straight to the project, case or page it belongs to.</p>\n<p>A card stays until the thing it points to is done: the balance is settled, a time is chosen, the\nwork is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear\nit. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Where your projects stand",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Below Your move, every live project sits under its stage (matching, interest, proposals, kickoff or delivery), marked your move, waiting on others, or in progress; select one to open it.</p>\n<p>Hover over or select a stage, or a legend item, to see what it means; on a phone, tap it.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "editing-milestones-after-acceptance",
+    "title": "Editing milestones after acceptance",
+    "summary": "What you can change directly once a proposal is accepted, and what needs a change.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 5,
+    "updated": "2026-10-31",
+    "related": [
+      "proposing-a-change-to-a-live-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Once the client has accepted your proposal, some edits to a milestone apply straight away and\nothers need the client to agree first. This guide covers which is which.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Wording edits",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Fixing the title, description or \"Done when\" of a milestone is a plain edit. It applies\nimmediately and the client is told. A milestone from the accepted proposal is then marked\n<strong>Changed since proposal</strong>. The client sees that label on the milestone throughout delivery, and\ncan open <strong>What changed</strong> to compare what it said before with what it says now. When you mark the\nproject ready, the review card also lists every milestone whose wording changed.</p>\n<p>The exception is a milestone that's part of a change waiting on the client. It's marked\n<strong>Change pending</strong>, and you can't edit or remove it until the client decides or you withdraw the\nchange.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "What needs a change",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li><strong>Time and materials.</strong> New milestones need a change the client approves. On these projects\nthe <strong>Add milestone</strong> button is replaced by <strong>Propose a change</strong>, or by <strong>Propose the first\nmilestone</strong> while the plan is empty. Either one opens the change composer. While you have a\ndraft change open, <strong>Propose a change</strong> reads <strong>Continue draft change</strong>. A milestone with\ntime logged on it can't be removed, so complete it instead.</li>\n<li><strong>Fixed price.</strong> Removing a milestone from the agreed scope needs a change. That covers\nmilestones from the accepted proposal and ones added by an approved change. Choosing <strong>Remove</strong>\non one of these opens a <strong>Needs approval first</strong> dialog instead of removing it. Its <strong>Propose a\nchange</strong> button opens the composer with that milestone's removal already added. Review it, add\na note on why, and send it like any other change.</li>\n</ul>\n<p>Only one change can be with the client at a time. While one is waiting on them, you can't propose\nanother: <strong>Propose a change</strong> is greyed out, or replaced by \"A change is already waiting on\n{client}\".</p>\n<p>Milestones you added yourself on a fixed-price project, and that the client hasn't approved\nthrough a change, can still be removed directly.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "handling-a-change-request",
+    "title": "Handling a change request",
+    "summary": "Work through the feedback, then mark the project ready again.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 3,
+    "updated": "2026-10-31",
+    "related": [
+      "writing-and-sending-a-proposal",
+      "proposing-a-change-to-a-live-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Sometimes a client reviews your finished project and asks for changes instead of accepting. This\nguide covers what you receive, how to work through it and how to send the project back.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What you receive",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You get an email with the client's note, word for word, and a notification in Balo that links to\nthe project. The project goes back to active, and the project page shows a banner with the note at\nthe top. If the client picked particular milestones, the banner names them. If you're part of an\nagency, its owners and admins are also notified in Balo when a client requests changes, and they\ncan work through the request and mark the project ready again on its behalf.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Tagged and untagged requests",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>A client can attach their feedback to specific milestones, or leave it general.</p>\n<ul>\n<li><strong>Tagged.</strong> Each milestone the client picked moves back to in progress, and the client's note is\nquoted on it. Any milestone they didn't pick stays completed.</li>\n<li><strong>Untagged.</strong> No milestones are reopened. Read the note, then reopen whatever needs work.</li>\n</ul>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Working through it",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Do the work in the milestones that came back. If the note points to a milestone that is still\nmarked complete, choose <strong>Move back to in progress</strong> on it, make your changes, then complete it\nagain as usual. Wording fixes on a milestone are plain edits. If the feedback calls for new paid\nscope, such as an added milestone or a different price, send it as a change order instead. The\nclient approves it first, and the new work has to be completed too before the project is ready to\ngo back. See <a href=\"/help/proposing-a-change-to-a-live-project\">Proposing a change to a live project</a>.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "When the banner changes to \"Changes made\"",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Once every milestone the client tagged is complete again, and every other milestone on the project\nis complete too, the banner changes to <strong>Changes made</strong> and offers to send the project back to the\nclient. Until then, the project page keeps its <strong>Mark project ready again</strong> button, which stays\nunavailable while any milestone is unfinished, and while a change is open on the project: a\nclient's request for a change, a draft you made from one, or a change you've sent and the client\nhasn't decided. For an untagged request, the same button is there\nand you choose when you're done.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "Marking the project ready again",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Choose <strong>Mark project ready again</strong> and confirm. The client is told the project is ready for their\nreview again, and the review window starts over from that moment. The client can then accept the\nproject or ask for more changes.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "Repeated rounds",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>A client may go through more than one round. Every round is kept on the project, and the latest\none is always the one shown to you. When a project comes back for a second round or more, the\nBalo team may check in with you and the client to help get it over the line.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "joining-a-call",
     "title": "Joining a call",
     "summary": "When Join opens, how to get in from a link or an invitation and what happens when the call ends.",
@@ -744,6 +1163,177 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "project-requests-for-experts",
+    "title": "Project requests",
+    "summary": "Expressing interest, talking it through and sending a proposal.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 1,
+    "updated": "2026-10-31",
+    "related": [
+      "pausing-new-work"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>When a request started life as a case, the new-request notification names the case it came\nfrom, so you know there's message history and consultation records behind it before you reply.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "When a client asks for you directly",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>A request a client sends straight to you opens with a choice: <strong>Propose times</strong> to take it on, or\n<strong>Pass on this project</strong>. Once you've proposed times or sent the client a message, the request\ncarries on like any other.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Sharing files in the conversation",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>A file you attach in the conversation goes to the client only. It isn't shared with other experts.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Passing on a project",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If a project isn't right for you, you can pass on it. Choose <strong>Pass on this project</strong>, just below\nyour main action on the request, and confirm. You can pass until you send a proposal; once you've\nsent one, the option is no longer there.</p>\n<p>Here's what happens when you pass:</p>\n<ul>\n<li><strong>The request leaves your projects.</strong> It disappears from your projects list and from <strong>Your\nmove</strong>, and Balo looks for other experts.</li>\n<li><strong>The client may be told.</strong> If the client can already see you on the request, they're told\nyou're no longer available. If not, they aren't notified.</li>\n<li><strong>Any draft proposal is withdrawn.</strong></li>\n<li><strong>You lose access to the request.</strong> Opening it shows only that you passed, not the brief, the\nconversation or its files.</li>\n</ul>\n<p>Passing can't be undone, and you can't rejoin the project yourself. If you change your mind, get in\ntouch with the Balo team.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "proposing-a-change-to-a-live-project",
+    "title": "Proposing a change to a live project",
+    "summary": "Answer a request or propose a change to the plan and price.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 4,
+    "updated": "2026-10-31",
+    "related": [
+      "handling-a-change-request",
+      "editing-milestones-after-acceptance"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>When the scope of a live project shifts, you propose a change and the client approves it. This\nguide covers answering a request, building the change and what happens next.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Answering a request",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When a client asks for a change, you get an email and a notification, and the request appears on\nthe project page with their note. You can <strong>Propose a change</strong> from it, or <strong>Answer without a\nchange order</strong> if the plan and price can stay as they are. Your answer is shown to the client as\n<strong>Answered</strong>, and the request closes.</p>\n<p>You can also propose a change without a request, from the project page. Only one change can be\nopen at a time. While you have a draft, <strong>Propose a change</strong> reads <strong>Continue draft change</strong>, and\nwhile a change is waiting on the client, <strong>Propose a change</strong> is unavailable and says \"A change is\nalready waiting on {client}\".</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Building the change",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The composer lists every milestone. For each one you can leave it unchanged, edit it, remove it,\nor add new ones. Each row shows its state: Unchanged, Edited, New or Removed. Add a note on what's\nchanging and why, because the client reads it word for word. Describe the change and leave amounts\nto the price box.</p>\n<ul>\n<li><strong>Wording and scope.</strong> Fixing the wording of a milestone is a plain edit. It applies straight\naway and the client is told. Anything that moves the price, cap or an estimate goes through a\nchange order. So does adding a milestone on time and materials, or removing agreed scope on a\nfixed price.</li>\n<li><strong>Fixed price.</strong> Enter the new project total. The composer shows the difference from the current\nprice.</li>\n<li><strong>Time and materials.</strong> Set the estimate on each milestone. The composer shows how the total\nestimate moves. The cap box starts at the current cap. If your rate times the new estimate comes\nto more than the cap, the composer says so and offers <strong>Raise cap</strong>, so the approved scope can\nstill be billed. Enter a higher cap and the client approves it along with the change. The cap can't be lowered\nbelow the value of time already logged, a milestone's estimate can't be set below the hours\nalready logged on it, and a milestone with logged time can't be removed.</li>\n</ul>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Draft or send",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Save a draft as often as you like. The client sees nothing until you send it. Discarding a draft\nthat began from a request puts the request back, so it's still waiting for you.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "After you send",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The client is told and can approve or decline. Until they decide, the milestones the change touches\nare marked <strong>Change pending</strong> and can't be edited, though you can still start, complete or revert\nthem. Choose <strong>Withdraw</strong> if you want to take the change back. If the client declines, you see\ntheir reason.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "Approval",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When the client approves, the milestones and the price update right away and you're told. On a\ntime and materials project the estimates update and, if you raised it, the cap. Any price\ndifference on a fixed-price project is settled on the final invoice.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "Working as an agency owner or admin",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If you own or administer the agency that delivers the project, you can do all of this on its\nbehalf: propose, answer and withdraw changes, move milestones along and mark the project ready.\nYour agency's projects are listed under <strong>Agency</strong> on your Projects page.\nThe notices the client receives name the person who acted. The summary of what changed since the\nproposal names your agency.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 7,
+        "title": "Marking the project ready",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You can't mark the project ready for review while a change is open: a client request, a draft made\nfrom one, or a change waiting for the client. Choose <strong>Answer without a change order</strong>, discard the\ndraft, choose <strong>Withdraw</strong>, or wait for a decision first.</p>",
+            "id": "s7-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "rate-and-payouts",
     "title": "Rate and payouts",
     "summary": "Set your per-minute rate and add the bank details you are paid into.",
@@ -820,6 +1410,363 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 598,
           "height": 220
         }
+      }
+    ]
+  },
+  {
+    "slug": "redeeming-a-promo-code",
+    "title": "Redeeming a promo code",
+    "summary": "Add promo credit to your company without paying.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "credit-billing"
+    },
+    "order": 2,
+    "updated": "2026-10-31",
+    "related": [
+      "buying-credit",
+      "booking-a-consultation"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Have a Balo promo code? Redeeming it adds prepaid credit to your company — no card and no\npayment required.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "How to redeem",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>From your dashboard, choose <strong>Have a promo code?</strong> at the bottom of your wallet card to reach the\nredeem screen — or choose <strong>Redeem a code</strong> in <strong>Settings → Credits &amp; billing</strong>, or go straight\nto <strong>/redeem</strong>.</p>\n<p>Type your code (codes aren't case-sensitive) and choose <strong>Redeem</strong>. You only need to be an\nowner or admin of your company to redeem — if you aren't, ask a teammate who is.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "What \"A$X added\" means",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When a code is redeemed, we add that amount of <strong>prepaid Balo credit</strong> to your company's\nbalance. It's yours to put towards a project, a Quick Start, or a live consultation\nwhenever you're ready. There's nothing to pay and no card on file — the credit is simply\nthere to use.</p>\n<p>Each code can be redeemed <strong>once per company</strong>. If you enter a code your company already\nredeemed, we'll let you know and nothing is added twice.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "When your promo balance runs out",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Your calls never pause because the balance reaches zero. Time beyond your balance is charged to\nthe card your company has on file, after the call. If there's no card on file, that amount is\nowed instead and your next top-up covers it.</p>\n<p>Adding a card to your company charges nothing. A card on file is used for time beyond your balance,\nand for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:\nunder \"Keep going when your credit runs out\", choose <strong>Add a card</strong> — it's optional. See <a href=\"/help/buying-credit\">Buying credit</a> for how to top up.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "requesting-a-project",
+    "title": "Requesting a project",
+    "summary": "Describe the work, get proposals from experts and choose one.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 2,
+    "updated": "2026-10-31",
+    "related": [
+      "turning-a-case-into-a-project",
+      "booking-a-consultation"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Have a piece of work in mind? Tell us about it once and we'll get it to the right person. Where\nyou start decides who sees it first.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "From the home page or your Projects page",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When you start a project from the home page, from <strong>Raise a project request</strong> or <strong>New request</strong>\non your Projects page, or from <strong>Start your next project</strong> once a project wraps up, we match you.\nDescribe what you need and our team reviews your brief, then introduces a matched expert with the\nright experience.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "From an expert's profile",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When you start a project from an expert's profile, the request goes straight to that expert. They\nreview your brief and reply with a proposal.</p>\n<p>If you'd rather we find the right fit, choose <strong>Get matched with someone else instead</strong>. Our team\nthen reviews your brief and introduces a matched expert. Everything you've written stays exactly\nas it is, so you can switch back and forth without starting over.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "If an expert isn't taking on new work",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Experts can pause new work for a while. When they do, their profile says they aren't taking on\nnew work right now and offers <strong>Find a similar expert</strong> or <strong>Get matched for a project</strong>, which\nopens your request ready for our team to match.</p>\n<p>If you open their request form another way, you'll see a note saying they aren't taking on new\nwork right now. If they pause while you're writing, the note appears when you send. Either way,\nchoose <strong>Get matched instead</strong> and we'll find someone with similar experience, keeping your brief\nas you wrote it.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Calls with your expert",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Calls with the expert on your project are free, so talk things through whenever it helps. Choose\n<strong>Book a call</strong> in the conversation header on your request page. You can book from the moment you\nstart talking, right through kickoff and delivery.</p>\n<p>If your request has moved on from an expert (you went with someone else, or the request closed),\nor your project has finished or been cancelled, <strong>Book a call</strong> opens that expert's profile\ninstead. Calls booked there are paid consultations, not free project calls.</p>\n<p>Once a call is booked, the header shows <strong>Next call</strong> with the date and time, and a countdown\nsuch as <strong>Join tomorrow</strong> that becomes <strong>Join now</strong> when it's time. To book more, use the calendar\nbutton next to it. You can have up to 3 calls booked at a time, and once one has happened you can\nbook another.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "sharing-files-with-invited-experts",
+    "title": "Sharing files with invited experts",
+    "summary": "Send a file from the conversation, choose who sees it and find everything in All files.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 3,
+    "updated": "2026-10-31",
+    "related": [
+      "requesting-a-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Have a brief, a spec or a screenshot that will help an expert prepare? Share it right from the\nconversation, with a short note if you like. The expert gets a notification, and when your\nconversation with them is open, the file and your note also appear as a message in the thread.\nOtherwise they'll find the file waiting in Files.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Share from the conversation",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>In a conversation with an invited expert, attach a file from the message box and add a note if\nyou'd like to explain it. The button names who you're sharing with, such as <strong>Share with Priya</strong>,\nand the file lands in the thread for that expert.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Choose who sees it",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>By default, a file goes to just this expert. If you sent your request to several experts, you can\nwiden a file to all of them, or pick specific experts. With <strong>All interested experts</strong>, experts who\nexpress interest later will also see the file. A request sent directly to one expert shares\nwith that expert only. Each expert sees only the files shared with them.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Find everything in All files",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Open <strong>All files</strong> on the request to see every file in one place, with who can see each one. From\nthere you can remove one expert's access to a file you shared with specific experts, or remove a\nfile for everyone it was shared with, which can't be undone. A file shared with all interested\nexperts can only be removed for everyone. No one is notified either way. On a request matched to several experts,\n<strong>Share with several experts</strong> lets you upload a new file and choose who receives it.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "turning-a-case-into-a-project",
+    "title": "Turning a case into a project",
+    "summary": "Start a project from a case without losing its history.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 3,
+    "updated": "2026-10-31",
+    "related": [
+      "requesting-a-project",
+      "your-cases"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>If a case has grown into something bigger than its next consultation, you can turn it into a\nproject request — with its own written scope and a proposal to review — without losing anything\nyou and the expert have already built up in the case.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Where to find it",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Open the case and look in the top right of its header for <strong>Convert to project</strong>. It's there on\nopen and resolved cases alike, so you don't need to close anything first. Converting never\nchanges the case itself — it stays exactly as it is, open or resolved, and you can keep using it\nas normal.</p>\n<p>The request goes to the case's expert, whose card you'll see under <strong>Send request to</strong>. If you'd\nrather we find someone else, choose <strong>Get matched with someone else instead</strong>. If the expert isn't\ntaking on new work right now, you'll see a note saying so and can't send it to them — choose <strong>Get\nmatched instead</strong> and we'll find someone with similar experience.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "The AI draft",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>As soon as the form opens, we read through the case's messages and consultation transcripts and\nput together a first draft of the project description — what the problem is, what's already been\nresolved in the case, what's left, and the likely scope. You'll see \"Drafting a brief from your\ncase…\" while it works, then the draft fills in a section at a time.</p>\n<p>The title and any products from the case carry over automatically. Tags aren't carried over, but\nthe draft may suggest some for you to review.</p>\n<p>If the case doesn't have enough history to draft from, we'll let you know and leave the\ndescription blank for you to write yourself.</p>\n<p>If you close the form and come back to it, you'll pick up where you left off — we only draft\nautomatically while the description is still blank and no files are attached.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Editing and redrafting",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Everything the draft writes is yours to edit. If you'd rather start over, choose <strong>Redraft from\ncase</strong> — we'll ask you to confirm before replacing your edits with a fresh draft.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Adding case files",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You can attach files already shared in the case instead of uploading them again — each one is\ncopied into your request, so the original stays where it is. A file can't be added if it's over\n5 MB or isn't a PDF, PNG, JPEG or WEBP; the picker marks those as unavailable and says why. Case\nfiles count toward the same four-file limit as anything you upload directly.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "The link back",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The request records the case it came from. You'll see \"Linked to case\" on the review step\nbefore you send it, and again on the confirmation screen once it's sent.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "understanding-the-hours-on-your-project",
+    "title": "Understanding the hours on your project",
+    "summary": "Read the hours bar, the time log and the totals card on a time and materials project.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 6,
+    "updated": "2026-10-31",
+    "related": [
+      "approving-a-change-to-your-project",
+      "reviewing-a-finished-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>On a time and materials project, your expert logs hours as they work and you can see every one.\nThis guide explains what the project page shows and what to do if the hours are running over.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "The hours bar and the time log",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Each milestone has an hours bar. It compares the hours logged so far with the expert's estimate\nfor that milestone. A milestone with no estimate shows only the hours logged. From 80% of the\nestimate the bar shows the hours left, for example \"1 hr left of estimate\", and once the milestone\nis over it shows \"2 hrs over estimate\".</p>\n<p>Open a milestone's time log to see each entry: the date it was worked, the hours\nand a note saying what the time went on. Entries are listed with the most recent first, and each\nmilestone has one \"Logged by …\" line naming who logged the time. If an owner or admin of your\nexpert's agency changes an entry they didn't log, that entry also shows an \"Edited by …\" line\nnaming them.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "The totals card",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The totals card adds up the project. It shows the hours logged on milestones that have an estimate\nagainst their total estimate, the hours in the current billing period and the date of the next\ninvoice. Billing periods follow the cadence agreed for the project, either monthly or every two\nweeks, and run by the expert's calendar.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "When a milestone goes over its estimate",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The first time a milestone goes past its estimate, your company's owner gets an email, and a notification appears, that names\nthe milestone and compares the hours logged with the estimate. While a milestone is over, the\nproject page also shows a banner saying it \"has gone over estimate\". Open the time log to see what the\nhours went on.</p>\n<p>Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the\nwork, and a project can need more time than planned. You won't be told again about the same\nestimate, but you will be if the estimate is raised and the milestone passes the new figure,\nincluding when the hours pass it before you approve the raise.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Asking for a change",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If you want the plan to change, for example because you'd like to adjust scope or you expect the\nhours to keep growing, choose <strong>Request a change</strong> on the project page and describe what you'd like.\nYour expert replies with a proposal, which can set new estimates, or with an answer. You approve or\ndecline a proposal, and nothing changes until you approve. The\nchange card shows the hours already logged on each milestone whose estimate changes. See\n<strong>Approving or declining a change to your project</strong> for the steps.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
       }
     ]
   },
@@ -1038,6 +1985,127 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "writing-and-sending-a-proposal",
+    "title": "Writing and sending a proposal",
+    "summary": "Build a proposal on one page, check it in preview and send it.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "projects"
+    },
+    "order": 2,
+    "updated": "2026-10-31",
+    "related": [
+      "project-requests-for-experts"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>A proposal is one page that you work through from top to bottom. Your draft saves as you go, so\nyou can leave and come back to it. When it's ready, you preview the proposal as the client will\nread it, with the amounts you typed, and send it from there.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "One page, top to bottom",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The sections always appear in the same order:</p>\n<ol>\n<li><strong>Overview</strong> — what you'll do and how you'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work.</li>\n<li><strong>Price and payments</strong> — one price for the project and how it's paid. For <strong>Time &amp; materials</strong>\nthis section is called <strong>Rates and billing</strong>.</li>\n<li><strong>Not included</strong> — anything out of scope, so there are no surprises later. This one is optional.</li>\n<li><strong>Attachments</strong> — reference documents you want the client to see. This one is optional too.</li>\n</ol>\n<p>Above the first section, the client's request is summarised for you. Choose <strong>Show brief</strong> to read\nthe full request while you write, and <strong>Hide brief</strong> to tuck it away again.</p>\n<p>The first time you open a new proposal, Balo drafts the <strong>Overview</strong> and the <strong>Milestones</strong> from the\nclient's request, so you start with something to edit instead of a blank page. A moment of\n<strong>Drafting from {name}'s request…</strong> shows while it works, then the draft appears with a\n<strong>Drafted from {name}'s request</strong> label on the Overview and <strong>Suggested from the brief</strong> on the\nMilestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and\ndrafted text never includes links. Edit anything you like, or choose <strong>Clear</strong> to empty a section\nand start from scratch. You'll see <strong>Overview cleared.</strong> (or <strong>Suggested milestones cleared.</strong>)\nwith <strong>Undo</strong>, which puts the drafted section back. If you start typing in the <strong>Overview</strong> before\nthe draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made\nonce per request, so it won't change if you come back to the page later.</p>\n<p>If Balo can't put a draft together, you'll see <strong>Couldn't draft this one. Start from scratch.</strong>\nat the top of the <strong>Overview</strong>. Nothing is wrong with your proposal: the sections are simply empty,\nand you write it yourself just as you would without a draft.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "The property bar",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Three choices sit at the top of the page, because they shape everything below them:</p>\n<ul>\n<li><strong>Pricing method</strong> — <strong>Fixed price</strong> or <strong>Time &amp; materials</strong>. If you switch, your typed price\nand your hour estimates are kept, so switching back brings them back. A message confirms the\nswitch and offers <strong>Undo</strong>.</li>\n<li><strong>Timeframe</strong> — choose <strong>Add timeframe</strong>, then use the stepper to say roughly how many weeks the\nwork will take. It's a duration, not a date. Choose <strong>Remove timeframe</strong> if you'd rather leave\nit open.</li>\n<li><strong>Terms</strong> — Balo standard terms apply to every proposal. Choose <strong>Attach your terms</strong> to add\nyour own alongside them. The chip changes to \"Balo standard and your terms\" once they're attached.</li>\n</ul>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Fixed price: price first",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Under <strong>Fixed price</strong>, start with <strong>Project price</strong>: the full amount you'll receive for the whole\nproject. Experts tend to think \"this project costs A$15,000\", not \"each deliverable costs this\", so\nthat's where you begin.</p>\n<p>Then choose <strong>Payment schedule</strong>. The presets are <strong>One payment</strong>, <strong>30 / 70</strong>, <strong>50 / 50</strong>,\n<strong>30 / 40 / 30</strong> and <strong>One per milestone</strong>. <strong>One per milestone</strong> creates one payment for each of\nyour milestones, split in proportion to their amounts, or evenly if you haven't priced them, and it\nkeeps up as you add, remove, rename or reprice milestones. The preset you've chosen stays\nhighlighted until you edit a payment by hand.</p>\n<p>You can edit the name and percentage of any payment, and choose <strong>Add payment</strong> to add another; it\nstarts with whatever percentage is left to assign. The payments need to add up to 100%.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Pricing each milestone is optional",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You don't have to put an amount on every milestone. By default the milestones are just a\ndescription of the work, and the <strong>Project price</strong> covers the lot.</p>\n<p>If you want amounts, turn on <strong>Price each milestone</strong> beneath the milestone list. Then:</p>\n<ul>\n<li>Every milestone needs an amount.</li>\n<li>The amounts must add up to your project price. The page shows how much is left to assign, or\nhow far over you are. Once every milestone has an amount, <strong>Set price to</strong> updates the project\nprice to match the total.</li>\n</ul>\n<p>Turning <strong>Price each milestone</strong> off clears the amounts, and your project price stays the same.\nA message offers <strong>Undo</strong> if you change your mind.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "Time & materials",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Under <strong>Time &amp; materials</strong>, you set an hourly rate and a deposit in <strong>Rates and billing</strong>, and\nchoose whether invoices go out <strong>Fortnightly</strong> or <strong>Monthly</strong>. Each milestone needs an hour\nestimate, and the page shows the total hours and the estimated cost. Milestones are a guide, not a\ncap.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "The checklist and Preview and send",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>On the right of the page, the checklist lists what's still missing, such as an overview, a project\nprice or a payment schedule that doesn't add up. Choose any item to jump straight to it.</p>\n<p><strong>Preview and send</strong> is always available. If something is missing, choosing it takes you to the\nfirst thing to fix instead of sending anything. When everything is in place it opens the preview.\nOn a phone, the same button and a short count of what's left sit in a bar at the bottom of the\nscreen.</p>\n<p>You can also press <strong>Cmd+Enter</strong> (Mac) or <strong>Ctrl+Enter</strong> to preview.</p>\n<p>The preview shows the proposal the way the client will read it. Nothing is sent until you choose\n<strong>Send</strong> there, or <strong>Back to editing</strong> to keep working.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 7,
+        "title": "What the client sees",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>In the preview, the amounts are the figures you typed, and the preview says so: \"Amounts are what\nyou receive.\" The client sees the price with Balo's service added, so the numbers on their screen\nare higher than the ones on your page. You never need to work that out yourself.</p>\n<p>If a milestone has no amount, none is shown for it.</p>\n<p>Once you send, you'll see a confirmation. The client gets an email and a notification, and from\nthere it's their call.</p>",
+            "id": "s7-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 8,
+        "title": "Revising after feedback",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If the client asks for changes, you'll see their note beside the section it's about, with a\nsummary at the top of the page and a <strong>Go to note</strong> link. Update the proposal as needed, then\nchoose <strong>Mark as addressed</strong> on the note. You can bring the note back any time with <strong>Show note</strong>.</p>\n<p>A revision isn't saved as you go: the page says \"Not saved until you resend\". Your changes go to\nthe client when you choose <strong>Preview and resend</strong>, then <strong>Resend</strong>. If you leave before that, the\nversion the client last saw stays as it was. You can't add or remove documents while revising: the\nones already attached carry over to the version you resend.</p>",
+            "id": "s8-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "your-cases",
     "title": "Your cases",
     "summary": "How cases are listed, what the coloured bands mean and when a case closes.",
@@ -1117,6 +2185,56 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 1984,
           "height": 196
         }
+      }
+    ]
+  },
+  {
+    "slug": "your-live-status",
+    "title": "Your live status",
+    "summary": "See at a glance whether clients can find and book you, and what to do when they cannot.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "getting-booked"
+    },
+    "order": 3,
+    "updated": "2026-10-31",
+    "related": [
+      "connecting-your-calendar",
+      "pausing-new-work"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Once your setup is complete and you've gone live, a small status pill tells you how you appear to\nclients. You'll see it under your name in the sidebar, and a matching dot on your avatar. On a phone,\nopen <strong>More</strong> to find it. Select the pill to see what it means and what to do next.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What each status means",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li><strong>Live.</strong> Clients can find you in search and book you. Nothing to do.</li>\n<li><strong>Bookings paused.</strong> You still appear in search, but clients can't book you until your calendar is\nreconnected. Choose <strong>Reconnect calendar</strong>.</li>\n<li><strong>Not taking work.</strong> You still appear in search, but clients are offered a similar expert instead\nof booking you. Choose <strong>Change availability</strong> to turn new work back on.</li>\n<li><strong>Not listed.</strong> Clients can't find you right now. If your calendar has disconnected, choose\n<strong>Reconnect calendar</strong>. If another setup step needs attention, the pill points you to it. If\nnothing is missing, this usually clears up within a few minutes; if it doesn't, get in touch.</li>\n</ul>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Good to know",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li><strong>Not taking work</strong> is something you choose, and you stay visible in search while it's on. See\n<strong>Pausing new work</strong> for what changes.</li>\n<li>Select <strong>View public profile</strong> in the pill to see your profile the way clients do. It isn't\noffered while you're <strong>Not listed</strong>.</li>\n<li>Before you've gone live, your setup checklist on the dashboard is where to look instead.</li>\n</ul>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
       }
     ]
   }

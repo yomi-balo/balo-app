@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: projects
 order: 3
-published: false
+published: true
 updated: 2026-10-31
 related: [writing-and-sending-a-proposal, proposing-a-change-to-a-live-project]
 ---

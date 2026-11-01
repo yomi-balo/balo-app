@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: projects
 order: 2
-published: false
+published: true
 updated: 2026-10-31
 related: [project-requests-for-experts]
 ---

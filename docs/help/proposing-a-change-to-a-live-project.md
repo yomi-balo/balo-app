@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: projects
 order: 4
-published: false
+published: true
 updated: 2026-10-31
 related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---

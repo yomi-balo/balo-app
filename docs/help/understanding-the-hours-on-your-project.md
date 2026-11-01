@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: cases-projects
 order: 6
-published: false
+published: true
 updated: 2026-10-31
 related: [approving-a-change-to-your-project, reviewing-a-finished-project]
 ---

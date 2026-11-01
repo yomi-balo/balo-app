@@ -5,7 +5,7 @@ audience: [expert]
 category:
   expert: getting-started
 order: 5
-published: false
+published: true
 updated: 2026-10-31
 related: [dashboard-up-next, project-requests-for-experts]
 ---

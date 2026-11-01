@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: credit-billing
 order: 2
-published: false
+published: true
 updated: 2026-10-31
 related: [buying-credit, booking-a-consultation]
 ---
