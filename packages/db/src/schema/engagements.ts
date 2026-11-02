@@ -2,6 +2,7 @@ import { pgTable, uuid, integer, text, timestamp, index, check, unique } from 'd
 import { relations, sql } from 'drizzle-orm';
 import { engagementStatusEnum, engagementTypeEnum } from './enums';
 import { companies } from './companies';
+import { agencies } from './agencies';
 import { expertProfiles } from './experts';
 import { engagementMilestones } from './engagement-milestones';
 import { projectEngagements } from './project-engagements';
@@ -90,6 +91,23 @@ export const engagements = pgTable(
     expertProfileId: uuid('expert_profile_id')
       .notNull()
       .references(() => expertProfiles.id, { onDelete: 'cascade' }),
+    /**
+     * The agency delivering this engagement, fixed when the row is created from the
+     * expert profile's `agency_id`. NULL means the profile had no agency link when the
+     * engagement was created; it does NOT mean a solo expert, whose profile links an
+     * agency-of-one. Readers treat NULL as "no agency" and grant nothing agency-scoped
+     * from it (fail closed).
+     *
+     * WRITE-ONCE. The only writer is `insertEngagementRowTx`
+     * (repositories/_shared/engagement-supertype.ts), which reads the profile inside
+     * the caller's transaction; the value never follows a later change to the
+     * profile's `agency_id`. `invariants/the-delivering-agency-pin-is-write-once.test.ts`
+     * fails CI on any other write.
+     *
+     * The FK is NO ACTION on purpose, like `expert_profiles.agency_id` and
+     * `agency_members.agency_id`: SET NULL would silently erase delivery history.
+     */
+    deliveringAgencyId: uuid('delivering_agency_id').references(() => agencies.id),
 
     /**
      * The COARSE, type-agnostic lifecycle (3 labels). For a PROJECT it is the lossy
@@ -160,6 +178,7 @@ export const engagements = pgTable(
   (t) => [
     index('engagement_company_idx').on(t.companyId),
     index('engagement_expert_idx').on(t.expertProfileId),
+    index('engagement_delivering_agency_idx').on(t.deliveringAgencyId),
     // ⚠ ON A CASE ROW (`balo_fee_bps IS NULL`) THIS EVALUATES TO NULL, WHICH POSTGRES
     // TREATS AS SATISFIED — AND THAT IS EXACTLY WHAT WE WANT. This is the BENIGN
     // direction of the three-valued-logic quirk: the range only ever has to constrain a
@@ -232,6 +251,10 @@ export const engagementsRelations = relations(engagements, ({ one, many }) => ({
   expertProfile: one(expertProfiles, {
     fields: [engagements.expertProfileId],
     references: [expertProfiles.id],
+  }),
+  deliveringAgency: one(agencies, {
+    fields: [engagements.deliveringAgencyId],
+    references: [agencies.id],
   }),
   // The concrete-shape child. Exactly ONE is non-null, and WHICH one is determined by
   // `engagement_type` — enforced at the DB by each child's composite FK against

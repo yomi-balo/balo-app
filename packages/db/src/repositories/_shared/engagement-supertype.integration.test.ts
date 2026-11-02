@@ -3,11 +3,18 @@ import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../../client';
 import { caseEngagements, companies, engagements, projectEngagements } from '../../schema';
-import { caseEngagementFactory, engagementFactory, expertDraftFactory } from '../../test/factories';
+import {
+  agencyFactory,
+  caseEngagementFactory,
+  engagementFactory,
+  expertDraftFactory,
+} from '../../test/factories';
+import { expertsRepository } from '../experts';
 import {
   EngagementTypeMismatchError,
   insertEngagementRowTx,
   lockEngagementRowTx,
+  resolveDeliveringAgencyIdTx,
   softDeleteEngagementTx,
 } from './engagement-supertype';
 
@@ -88,6 +95,84 @@ describe('insertEngagementRowTx', () => {
         sql`INSERT INTO engagements (company_id, expert_profile_id) VALUES (${companyId}::uuid, ${expert.id}::uuid)`
       )
     ).rejects.toMatchObject({ code: '23502' });
+  });
+
+  it("pins the expert profile's agency at insert, and the pin does not follow a later re-link", async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const original = await agencyFactory();
+    const later = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, original.id);
+
+    const row = await db.transaction(async (tx) =>
+      insertEngagementRowTx(tx, {
+        engagementType: 'project',
+        companyId,
+        expertProfileId: expert.id,
+      })
+    );
+    expect(row.deliveringAgencyId).toBe(original.id);
+
+    await expertsRepository.linkAgency(expert.id, later.id);
+
+    const [persisted] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, row.id));
+    expect(persisted?.deliveringAgencyId).toBe(original.id);
+  });
+
+  it('an expert with no agency link gets a NULL pin', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const row = await db.transaction(async (tx) =>
+      insertEngagementRowTx(tx, {
+        engagementType: 'project',
+        companyId,
+        expertProfileId: expert.id,
+      })
+    );
+    expect(row.deliveringAgencyId).toBeNull();
+  });
+
+  it('the deliveringAgency relation resolves the pinned agency', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const row = await db.transaction(async (tx) =>
+      insertEngagementRowTx(tx, {
+        engagementType: 'project',
+        companyId,
+        expertProfileId: expert.id,
+      })
+    );
+
+    const loaded = await db.query.engagements.findFirst({
+      where: eq(engagements.id, row.id),
+      with: { deliveringAgency: true },
+    });
+    expect(loaded?.deliveringAgency?.id).toBe(agency.id);
+    expect(loaded?.deliveringAgency?.name).toBe(agency.name);
+  });
+});
+
+describe('resolveDeliveringAgencyIdTx', () => {
+  it("returns the profile's agency, or NULL for an unlinked profile or an unknown one", async () => {
+    const unlinked = await expertDraftFactory();
+    const linked = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(linked.id, agency.id);
+
+    const resolved = await db.transaction(async (tx) => ({
+      linked: await resolveDeliveringAgencyIdTx(tx, linked.id),
+      unlinked: await resolveDeliveringAgencyIdTx(tx, unlinked.id),
+      unknown: await resolveDeliveringAgencyIdTx(tx, randomUUID()),
+    }));
+
+    expect(resolved).toEqual({ linked: agency.id, unlinked: null, unknown: null });
   });
 });
 

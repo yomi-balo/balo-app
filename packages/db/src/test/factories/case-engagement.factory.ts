@@ -8,6 +8,7 @@ import {
 } from '../../schema';
 import type { NewCaseEngagement, NewEngagement } from '../../schema';
 import { toCaseRow, type CaseEngagementRow } from '../../repositories/case-engagements';
+import { resolveDeliveringAgencyIdTx } from '../../repositories/_shared/engagement-supertype';
 import { companyMemberFactory } from './company.factory';
 import { expertDraftFactory } from './expert-draft.factory';
 import { userFactory } from './user.factory';
@@ -93,6 +94,9 @@ export async function caseEngagementFactory(
         // fee on a case, so omitting this would 23514 every case fixture.
         baloFeeBps: null,
         activatedAt: new Date(),
+        // Mirrors `insertEngagementRowTx`; `values.deliveringAgencyId` (incl. an explicit
+        // null, for a pre-pin row) wins.
+        deliveringAgencyId: await resolveDeliveringAgencyIdTx(tx, expertProfileId),
         ...overrides.values,
       })
       .returning();
