@@ -404,8 +404,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "alt": "An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.",
           "lightSrc": "/help/booking-a-consultation/07-light.png",
           "darkSrc": "/help/booking-a-consultation/07-dark.png",
-          "width": 848,
-          "height": 1226
+          "width": 768,
+          "height": 876
         }
       }
     ]
@@ -1291,8 +1291,8 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "alt": "Your public profile while paused, with the card saying you aren't taking on new work highlighted.",
           "lightSrc": "/help/pausing-new-work/02-light.png",
           "darkSrc": "/help/pausing-new-work/02-dark.png",
-          "width": 848,
-          "height": 1226
+          "width": 768,
+          "height": 876
         }
       },
       {
