@@ -178,6 +178,9 @@ images to Git LFS.
 4. Prefer role and text locators for `target` and `crop`. Keep the clip inside 1280x800; the runner
    throws rather than shooting the full page.
 5. Run `pnpm help:screenshots <slug>` and check both the light and dark PNGs.
+6. Check that no shot shows a project, rate or amount that a guide for the other side also shows.
+   Client screens include Balo's fee, so the pair would reveal it (see Sales Cloud territory
+   planning above). Crop prices out where they're incidental.
 
 ## Reproducibility
 

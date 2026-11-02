@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-10-31
+updated: 2026-11-03
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -117,11 +117,10 @@ right now" instead of open times, and you can't start a new case with them. You 
 
 - **Find a similar expert**, which searches for experts with similar experience who are available.
 - **Get matched for a project**, and our team introduces a matched expert.
-- **Send them a message**, which still reaches them.
 
-If you already have an open case with that expert, you can still book follow-up consultations on
-it. Book it from that case's page, using **Book with {name} again** or **Book a consultation**,
-which opens their calendar right there, already attached to the case. You can switch to another
-of your open cases with them, but not start a new one.
+If you already have an open case with that expert, you can still message them on it and book
+follow-up consultations. Book from that case's page, using **Book with {name} again** or **Book a
+consultation**, which opens their calendar right there, already attached to the case. You can
+switch to another of your open cases with them, but not start a new one.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](07)
