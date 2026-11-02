@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 import type { Database } from '../client';
 import {
   actionItems,
@@ -74,7 +75,6 @@ const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
 const FIXED_DECISION_TIME = new Date('2026-01-05T00:00:00Z');
 const DIRECT_REQUEST_EOI_MESSAGE = '<p>Invited by client</p>';
-const BALO_FEE_BPS = 2500;
 
 /** `days` after the anchor Monday at `hour:minute:second` UTC (negative days are before it). */
 function atAnchor(ctx: HelpWorldContext, days: number, hour: number, minute = 0, second = 0): Date {
@@ -199,6 +199,11 @@ export async function deleteHelpWorld(db: HelpExecutor): Promise<void> {
       ])
     );
   await db.delete(userNotifications).where(inArray(userNotifications.id, AGENCY_NOTIFICATION_IDS));
+  // audit_events is append-only by convention only (no DB guard; see its schema header), and
+  // this delete runs solely inside cli.ts's transaction, which refuses a non-localhost
+  // DATABASE_URL. If an insert-only trigger ever lands, add this path to its exemptions beside
+  // the seed truncate, or insert the row with onConflictDoNothing and keep it: `entity_id` has
+  // no FK, so the orphan is inert.
   await db.delete(auditEvents).where(eq(auditEvents.id, W.fixed.contentEditAudit));
   await db
     .delete(actionItems)
@@ -502,7 +507,7 @@ async function insertProjectEngagement(
     expertProfileId: input.expertProfileId,
     status: input.status ?? 'active',
     currency: 'aud',
-    baloFeeBps: BALO_FEE_BPS,
+    baloFeeBps: DEFAULT_BALO_FEE_BPS,
     activatedAt: input.activatedAt,
     createdAt: input.activatedAt,
   });
@@ -2311,6 +2316,11 @@ function milestoneCount(projects: readonly AgencyProject[]): number {
 /**
  * Priya's three agency-oversight notices, worded as the BAL-631 in-app templates word them.
  * Times are anchor-relative because the panel prints them against the frozen browser clock.
+ *
+ * The bodies are hand-copied: the templates live in apps/api, which a package cannot import.
+ * Each mirrors the entry of the same `template` key in the `templates` record of
+ * `apps/api/src/notifications/channels/templates/in-app-templates.ts`; when one changes,
+ * change its body here or the screenshots keep the old copy.
  */
 async function insertAgencyNotifications(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
   const cancelledAt = atAnchor(ctx, CANCELLED_DAYS_BEFORE_ANCHOR, 15);
