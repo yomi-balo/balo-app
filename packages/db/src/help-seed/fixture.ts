@@ -741,25 +741,25 @@ async function applyWorldState(
 ): Promise<void> {
   switch (state) {
     case 'projects':
-      await seedProjectsWorld(db, ctx, 'normal', 'none');
+      await seedProjectsWorld(db, ctx, 'normal', 'none', 'normal');
       return;
     case 'change-requested':
-      await seedProjectsWorld(db, ctx, 'normal', 'requested');
+      await seedProjectsWorld(db, ctx, 'normal', 'requested', 'absent');
       return;
     case 'change-draft':
-      await seedProjectsWorld(db, ctx, 'normal', 'draft');
+      await seedProjectsWorld(db, ctx, 'normal', 'draft', 'absent');
       return;
     case 'change-sent':
-      await seedProjectsWorld(db, ctx, 'sent', 'sent');
+      await seedProjectsWorld(db, ctx, 'normal', 'sent', 'sent');
       return;
     case 'change-approved':
-      await seedProjectsWorld(db, ctx, 'normal', 'approved');
+      await seedProjectsWorld(db, ctx, 'normal', 'approved', 'absent');
       return;
     case 'change-round':
-      await seedProjectsWorld(db, ctx, 'round', 'none');
+      await seedProjectsWorld(db, ctx, 'round', 'none', 'absent');
       return;
     case 'changes-made':
-      await seedProjectsWorld(db, ctx, 'changes-made', 'none');
+      await seedProjectsWorld(db, ctx, 'changes-made', 'none', 'absent');
       return;
     case 'requests':
       await seedRequestsWorld(db, ctx);

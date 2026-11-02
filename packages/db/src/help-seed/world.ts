@@ -108,6 +108,7 @@ function formatLongUtc(date: Date): string {
 const WORLD_ENGAGEMENT_IDS = [
   W.fixed.engagement,
   W.tm.engagement,
+  W.territory.engagement,
   W.dashboards.migrationEngagement,
   W.dashboards.referralsEngagement,
   W.agency.routing,
@@ -124,6 +125,7 @@ const WORLD_ENGAGEMENT_IDS = [
 const WORLD_REQUEST_IDS = [
   W.fixed.request,
   W.tm.request,
+  W.territory.request,
   W.requests.direct,
   W.requests.drafted,
   W.requests.fixed,
@@ -153,6 +155,7 @@ const WORLD_REQUEST_IDS = [
 const WORLD_RELATIONSHIP_IDS = [
   W.fixed.relationship,
   W.tm.relationship,
+  W.territory.relationship,
   W.requests.directRelationship,
   W.requests.draftedRelationship,
   W.requests.fixedRelationship,
@@ -518,119 +521,163 @@ async function insertProjectEngagement(
   });
 }
 
-// ── Fixed-price project (Sales Cloud rollout) ─────────────────────────────
+// ── Fixed-price projects ──────────────────────────────────────────────────
 
-/** How the fixed-price project looks in each state that carries it. */
-export type FixedProjectShape = 'normal' | 'sent' | 'round' | 'changes-made';
+/** The ids every fixed-price project has (`HELP_WORLD_IDS.fixed` and `.territory`). */
+type FixedProjectIds = Pick<
+  typeof W.territory,
+  | 'request'
+  | 'relationship'
+  | 'eoi'
+  | 'proposal'
+  | 'proposalMilestone1'
+  | 'proposalMilestone2'
+  | 'proposalMilestone3'
+  | 'installment1'
+  | 'installment2'
+  | 'engagement'
+  | 'milestone1'
+  | 'milestone2'
+  | 'milestone3'
+  | 'answeredOrder'
+>;
 
-const FX = W.fixed;
-const FIXED_PRICE_CENTS = 1_000_000;
-const FIXED_VALUES = [300_000, 450_000, 250_000] as const;
-const BUILD_DESCRIPTION =
-  '<p>Opportunity stages, lead assignment and the sales dashboards, built in a sandbox.</p>';
-const MIGRATION_CRITERIA =
-  'All account, contact and opportunity records imported and spot-checked with Northwind.';
+interface FixedMilestone {
+  title: string;
+  descriptionHtml: string;
+  acceptanceCriteria: string;
+  valueCents: number;
+}
 
-const FIXED_PROPOSAL_MILESTONES = [
-  {
-    id: FX.proposalMilestone1,
-    title: 'Discovery and design',
-    descriptionHtml: '<p>Workshops with the sales team and a signed-off solution design.</p>',
-    acceptanceCriteria: 'Solution design signed off by Northwind.',
-  },
-  {
-    id: FX.proposalMilestone2,
-    title: 'Build and configure',
-    descriptionHtml: BUILD_DESCRIPTION,
-    acceptanceCriteria: 'Configuration demoed to the sales leads in the sandbox.',
-  },
-  {
-    id: FX.proposalMilestone3,
-    title: 'Data migration',
-    descriptionHtml: '<p>Move accounts, contacts and open opportunities from the old CRM.</p>',
-    acceptanceCriteria: 'All account and contact records imported.',
-  },
-] as const;
+/**
+ * A fixed-price Northwind project with Priya: the request, the accepted proposal, the engagement
+ * with three milestones (done, in progress, not started) and a change request Priya answered
+ * without a change order.
+ */
+interface FixedProjectDef {
+  ids: FixedProjectIds;
+  title: string;
+  requestDescription: string;
+  timeline: string;
+  overview: string;
+  timeframeWeeks: number;
+  /** What Priya receives. Client screens show it with Balo's fee added. */
+  priceCents: number;
+  milestones: readonly [FixedMilestone, FixedMilestone, FixedMilestone];
+  /** The third milestone's "done when" as Priya edited it after acceptance, if she did. */
+  lastCriteriaEdited?: string;
+  answered: { requestNote: string; declineReason: string };
+}
 
-async function insertFixedOrigin(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
+async function insertFixedOrigin(
+  db: HelpExecutor,
+  ctx: HelpWorldContext,
+  def: FixedProjectDef
+): Promise<void> {
+  const { ids } = def;
   await insertRequest(db, ctx, {
-    id: FX.request,
+    id: ids.request,
     companyId: HELP_IDS.company,
     expertProfileId: HELP_IDS.expertProfile,
     status: 'kickoff_approved',
-    title: 'Sales Cloud rollout',
-    description:
-      '<p>We are moving the sales team off spreadsheets and onto Sales Cloud, with lead assignment and dashboards for the sales leads.</p>',
-    timeline: 'Within the next three months',
+    title: def.title,
+    description: def.requestDescription,
+    timeline: def.timeline,
     createdAt: atAnchor(ctx, -49, 10),
   });
   await insertRelationship(db, ctx, {
-    id: FX.relationship,
-    requestId: FX.request,
+    id: ids.relationship,
+    requestId: ids.request,
     expertProfileId: HELP_IDS.expertProfile,
     status: 'accepted',
     invitedAt: atAnchor(ctx, -49, 10),
     proposalRequestedAt: atAnchor(ctx, -47, 10),
     updatedAt: atAnchor(ctx, -42, 10),
-    eoi: { id: FX.eoi, message: DIRECT_REQUEST_EOI_MESSAGE, submittedAt: atAnchor(ctx, -49, 10) },
+    eoi: { id: ids.eoi, message: DIRECT_REQUEST_EOI_MESSAGE, submittedAt: atAnchor(ctx, -49, 10) },
   });
   await db.insert(proposals).values({
-    id: FX.proposal,
-    relationshipId: FX.relationship,
-    projectRequestId: FX.request,
+    id: ids.proposal,
+    relationshipId: ids.relationship,
+    projectRequestId: ids.request,
     expertProfileId: HELP_IDS.expertProfile,
     status: 'accepted',
     pricingMethod: 'fixed',
-    overview:
-      '<p>A staged Sales Cloud rollout: design with your sales leads, build in a sandbox, then move your data across.</p>',
-    timeframeWeeks: 8,
-    priceCents: FIXED_PRICE_CENTS,
+    overview: def.overview,
+    timeframeWeeks: def.timeframeWeeks,
+    priceCents: def.priceCents,
     submittedAt: atAnchor(ctx, -45, 10),
     acceptedAt: atAnchor(ctx, -42, 10),
     acceptedByUserId: ctx.danaId,
   });
-  await db.insert(proposalMilestones).values(
-    FIXED_PROPOSAL_MILESTONES.map((milestone, sortOrder) => ({
-      ...milestone,
-      proposalId: FX.proposal,
-      sortOrder,
-      valueCents: FIXED_VALUES[sortOrder],
-    }))
-  );
+  const [first, second, third] = def.milestones;
+  await db.insert(proposalMilestones).values([
+    { ...first, id: ids.proposalMilestone1, proposalId: ids.proposal, sortOrder: 0 },
+    { ...second, id: ids.proposalMilestone2, proposalId: ids.proposal, sortOrder: 1 },
+    { ...third, id: ids.proposalMilestone3, proposalId: ids.proposal, sortOrder: 2 },
+  ]);
   await db.insert(proposalPaymentInstallments).values([
-    { id: FX.installment1, proposalId: FX.proposal, sortOrder: 0, label: 'Upfront', pct: 50 },
-    { id: FX.installment2, proposalId: FX.proposal, sortOrder: 1, label: 'On delivery', pct: 50 },
+    { id: ids.installment1, proposalId: ids.proposal, sortOrder: 0, label: 'Upfront', pct: 50 },
+    { id: ids.installment2, proposalId: ids.proposal, sortOrder: 1, label: 'On delivery', pct: 50 },
   ]);
 }
 
-function fixedMilestones(ctx: HelpWorldContext, shape: FixedProjectShape): MilestoneSpec[] {
-  const [design, build, migration] = FIXED_PROPOSAL_MILESTONES;
+async function insertFixedEngagement(
+  db: HelpExecutor,
+  ctx: HelpWorldContext,
+  def: FixedProjectDef,
+  extra: Partial<ProjectRow>
+): Promise<void> {
+  const { ids } = def;
+  await insertProjectEngagement(db, {
+    id: ids.engagement,
+    companyId: HELP_IDS.company,
+    expertProfileId: HELP_IDS.expertProfile,
+    activatedAt: atAnchor(ctx, -35, 9),
+    project: {
+      deliveryStatus: 'active',
+      pricingMethod: 'fixed',
+      priceCents: def.priceCents,
+      sourceProposalId: ids.proposal,
+      relationshipId: ids.relationship,
+      projectRequestId: ids.request,
+      ...extra,
+    },
+  });
+}
+
+/** How the Sales Cloud rollout looks in each state that carries it. */
+export type FixedProjectShape = 'normal' | 'round' | 'changes-made';
+
+function fixedMilestones(
+  ctx: HelpWorldContext,
+  def: FixedProjectDef,
+  shape: FixedProjectShape
+): MilestoneSpec[] {
+  const { ids, lastCriteriaEdited } = def;
+  const [first, second, third] = def.milestones;
   const inRound = shape === 'round' || shape === 'changes-made';
   return [
     {
-      ...design,
-      id: FX.milestone1,
-      sourceProposalMilestoneId: design.id,
-      valueCents: FIXED_VALUES[0],
+      ...first,
+      id: ids.milestone1,
+      sourceProposalMilestoneId: ids.proposalMilestone1,
       status: 'completed',
       startedAt: atAnchor(ctx, -35, 10),
       completedAt: atAnchor(ctx, -28, 15),
     },
     {
-      ...build,
-      id: FX.milestone2,
-      sourceProposalMilestoneId: build.id,
-      valueCents: FIXED_VALUES[1],
+      ...second,
+      id: ids.milestone2,
+      sourceProposalMilestoneId: ids.proposalMilestone2,
       status: shape === 'changes-made' ? 'completed' : 'in_progress',
       startedAt: atAnchor(ctx, -27, 10),
       ...(shape === 'changes-made' ? { completedAt: atAnchor(ctx, -8, 15) } : {}),
     },
     {
-      ...migration,
-      id: FX.milestone3,
-      sourceProposalMilestoneId: migration.id,
-      valueCents: FIXED_VALUES[2],
-      acceptanceCriteria: MIGRATION_CRITERIA,
+      ...third,
+      id: ids.milestone3,
+      sourceProposalMilestoneId: ids.proposalMilestone3,
+      ...(lastCriteriaEdited === undefined ? {} : { acceptanceCriteria: lastCriteriaEdited }),
       // In the review round every milestone had been delivered; otherwise it has not started.
       ...(inRound
         ? {
@@ -638,14 +685,85 @@ function fixedMilestones(ctx: HelpWorldContext, shape: FixedProjectShape): Miles
             startedAt: atAnchor(ctx, -20, 10),
             completedAt: atAnchor(ctx, -12, 15),
           }
-        : { status: 'pending' as const, contentEditedAt: atAnchor(ctx, -20, 11) }),
+        : {
+            status: 'pending' as const,
+            ...(lastCriteriaEdited === undefined
+              ? {}
+              : { contentEditedAt: atAnchor(ctx, -20, 11) }),
+          }),
     },
   ];
 }
 
+/** A request Priya answered without a change order: declined, never sent. */
+async function insertAnsweredOrder(
+  db: HelpExecutor,
+  ctx: HelpWorldContext,
+  def: FixedProjectDef
+): Promise<void> {
+  await db.insert(engagementChangeOrders).values({
+    id: def.ids.answeredOrder,
+    engagementId: def.ids.engagement,
+    status: 'declined',
+    requestNote: def.answered.requestNote,
+    requestedByUserId: ctx.danaId,
+    requestedAt: atAnchor(ctx, -22, 10),
+    createdByUserId: ctx.danaId,
+    decidedByUserId: ctx.priyaId,
+    decidedAt: atAnchor(ctx, -21, 11),
+    declineReason: def.answered.declineReason,
+    createdAt: atAnchor(ctx, -22, 10),
+  });
+}
+
+// ── Sales Cloud rollout (expert-side guides) ──────────────────────────────
+
+const FX = W.fixed;
+
+/** A$10,000 to Priya; only expert-side guides show it. */
+const SALES_CLOUD: FixedProjectDef = {
+  ids: FX,
+  title: 'Sales Cloud rollout',
+  requestDescription:
+    '<p>We are moving the sales team off spreadsheets and onto Sales Cloud, with lead assignment and dashboards for the sales leads.</p>',
+  timeline: 'Within the next three months',
+  overview:
+    '<p>A staged Sales Cloud rollout: design with your sales leads, build in a sandbox, then move your data across.</p>',
+  timeframeWeeks: 8,
+  priceCents: 1_000_000,
+  milestones: [
+    {
+      title: 'Discovery and design',
+      descriptionHtml: '<p>Workshops with the sales team and a signed-off solution design.</p>',
+      acceptanceCriteria: 'Solution design signed off by Northwind.',
+      valueCents: 300_000,
+    },
+    {
+      title: 'Build and configure',
+      descriptionHtml:
+        '<p>Opportunity stages, lead assignment and the sales dashboards, built in a sandbox.</p>',
+      acceptanceCriteria: 'Configuration demoed to the sales leads in the sandbox.',
+      valueCents: 450_000,
+    },
+    {
+      title: 'Data migration',
+      descriptionHtml: '<p>Move accounts, contacts and open opportunities from the old CRM.</p>',
+      acceptanceCriteria: 'All account and contact records imported.',
+      valueCents: 250_000,
+    },
+  ],
+  lastCriteriaEdited:
+    'All account, contact and opportunity records imported and spot-checked with Northwind.',
+  answered: {
+    requestNote: 'Can the rollout also cover the new Pacific sales territory?',
+    declineReason:
+      'The Pacific territory is already part of the Build and configure milestone, so nothing needs to change.',
+  },
+};
+
 /** Priya's direct edit of the data migration's "done when", as `editDescriptive` audits it. */
 async function insertContentEdit(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
-  const [, , migration] = FIXED_PROPOSAL_MILESTONES;
+  const [, , migration] = SALES_CLOUD.milestones;
   await db.insert(auditEvents).values({
     id: FX.contentEditAudit,
     actorUserId: ctx.priyaId,
@@ -659,76 +777,6 @@ async function insertContentEdit(db: HelpExecutor, ctx: HelpWorldContext): Promi
     },
     createdAt: atAnchor(ctx, -20, 11),
   });
-}
-
-/** A request Priya answered without a change order: declined, never sent. */
-async function insertAnsweredOrder(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
-  await db.insert(engagementChangeOrders).values({
-    id: FX.answeredOrder,
-    engagementId: FX.engagement,
-    status: 'declined',
-    requestNote: 'Can the rollout also cover the new Pacific sales territory?',
-    requestedByUserId: ctx.danaId,
-    requestedAt: atAnchor(ctx, -22, 10),
-    createdByUserId: ctx.danaId,
-    decidedByUserId: ctx.priyaId,
-    decidedAt: atAnchor(ctx, -21, 11),
-    declineReason:
-      'The Pacific territory is already part of the Build and configure milestone, so nothing needs to change.',
-    createdAt: atAnchor(ctx, -22, 10),
-  });
-}
-
-/** A sent change: one milestone added, one edited, one removed, A$1,000 more for Priya. */
-async function insertFixedSentOrder(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
-  const [, build, migration] = FIXED_PROPOSAL_MILESTONES;
-  await db.insert(engagementChangeOrders).values({
-    id: FX.sentOrder,
-    engagementId: FX.engagement,
-    status: 'sent',
-    requestNote: 'Could we add a regional forecast dashboard for the sales managers?',
-    note: "Adds a regional forecast dashboard to the build. Northwind's team will move the old CRM data themselves, so the data migration milestone comes out.",
-    priceDeltaCents: 100_000,
-    requestedByUserId: ctx.danaId,
-    requestedAt: atAnchor(ctx, -12, 10),
-    createdByUserId: ctx.danaId,
-    sentByUserId: ctx.priyaId,
-    sentAt: atAnchor(ctx, -10, 14),
-    createdAt: atAnchor(ctx, -12, 10),
-  });
-  await db.insert(engagementChangeOrderLines).values([
-    {
-      id: FX.sentLineAdd,
-      changeOrderId: FX.sentOrder,
-      op: 'add',
-      title: 'Regional forecast dashboard',
-      descriptionHtml: '<p>A forecast view by region and quarter for the sales managers.</p>',
-      valueCents: 350_000,
-      sortOrder: 0,
-    },
-    {
-      id: FX.sentLineEdit,
-      changeOrderId: FX.sentOrder,
-      op: 'edit',
-      engagementMilestoneId: FX.milestone2,
-      title: build.title,
-      descriptionHtml:
-        '<p>Opportunity stages, lead assignment and the sales dashboards, plus the regional forecast view, built in a sandbox.</p>',
-      beforeTitle: build.title,
-      beforeDescriptionHtml: build.descriptionHtml,
-      sortOrder: 1,
-    },
-    {
-      id: FX.sentLineRemove,
-      changeOrderId: FX.sentOrder,
-      op: 'remove',
-      engagementMilestoneId: FX.milestone3,
-      title: migration.title,
-      beforeTitle: migration.title,
-      beforeDescriptionHtml: migration.descriptionHtml,
-      sortOrder: 2,
-    },
-  ]);
 }
 
 const ROUND_NOTE =
@@ -759,37 +807,140 @@ async function seedFixedProject(
   shape: FixedProjectShape
 ): Promise<void> {
   const inRound = shape === 'round' || shape === 'changes-made';
-  await insertFixedOrigin(db, ctx);
-  await insertProjectEngagement(db, {
-    id: FX.engagement,
-    companyId: HELP_IDS.company,
-    expertProfileId: HELP_IDS.expertProfile,
-    activatedAt: atAnchor(ctx, -35, 9),
-    project: {
-      deliveryStatus: 'active',
-      pricingMethod: 'fixed',
-      priceCents: FIXED_PRICE_CENTS,
-      sourceProposalId: FX.proposal,
-      relationshipId: FX.relationship,
-      projectRequestId: FX.request,
-      ...(inRound
-        ? {
-            changeRequestNote: ROUND_NOTE,
-            changeRequestedByUserId: ctx.danaId,
-            changeRequestedAt: atAnchor(ctx, -9, 10),
-          }
-        : {}),
-    },
-  });
-  await insertMilestones(db, FX.engagement, ctx.priyaId, fixedMilestones(ctx, shape));
+  await insertFixedOrigin(db, ctx, SALES_CLOUD);
+  await insertFixedEngagement(
+    db,
+    ctx,
+    SALES_CLOUD,
+    inRound
+      ? {
+          changeRequestNote: ROUND_NOTE,
+          changeRequestedByUserId: ctx.danaId,
+          changeRequestedAt: atAnchor(ctx, -9, 10),
+        }
+      : {}
+  );
+  await insertMilestones(db, FX.engagement, ctx.priyaId, fixedMilestones(ctx, SALES_CLOUD, shape));
   if (inRound) {
     await insertReviewRound(db, ctx);
     return;
   }
   await insertContentEdit(db, ctx);
-  await insertAnsweredOrder(db, ctx);
+  await insertAnsweredOrder(db, ctx, SALES_CLOUD);
+}
+
+// ── Sales Cloud territory planning (client-side guides) ───────────────────
+
+/** Whether the territory project is seeded, and whether it carries Priya's sent change. */
+export type TerritoryProjectShape = 'absent' | 'normal' | 'sent';
+
+const TR = W.territory;
+
+/** A$6,400 to Priya; only client-side guides show it, with Balo's fee added. */
+const TERRITORY: FixedProjectDef = {
+  ids: TR,
+  title: 'Sales Cloud territory planning',
+  requestDescription:
+    '<p>We are splitting the sales team into regional territories and want accounts and leads to reach the right territory automatically.</p>',
+  timeline: 'Within the next two months',
+  overview:
+    '<p>Map the territories with your sales leads, build the assignment rules, then tidy the account data so every account lands in the right territory.</p>',
+  timeframeWeeks: 6,
+  priceCents: 640_000,
+  milestones: [
+    {
+      title: 'Territory design',
+      descriptionHtml: '<p>Workshops with the sales leads and a signed-off territory map.</p>',
+      acceptanceCriteria: 'Territory map signed off by Northwind.',
+      valueCents: 160_000,
+    },
+    {
+      title: 'Assignment rules',
+      descriptionHtml:
+        '<p>Account and lead assignment rules for each territory, built in a sandbox.</p>',
+      acceptanceCriteria: 'Assignment rules demoed to the sales leads in the sandbox.',
+      valueCents: 320_000,
+    },
+    {
+      title: 'Account data cleanup',
+      descriptionHtml: '<p>Merge duplicate accounts and fill in missing billing regions.</p>',
+      acceptanceCriteria: 'Every active account has one record and a billing region.',
+      valueCents: 160_000,
+    },
+  ],
+  answered: {
+    requestNote: 'Can the territories also cover the new Pacific accounts?',
+    declineReason:
+      'The Pacific accounts are already part of the Assignment rules milestone, so nothing needs to change.',
+  },
+};
+
+/** A sent change: one milestone added, one edited, one removed, A$800 more for Priya. */
+async function insertTerritorySentOrder(db: HelpExecutor, ctx: HelpWorldContext): Promise<void> {
+  const [, rules, cleanup] = TERRITORY.milestones;
+  await db.insert(engagementChangeOrders).values({
+    id: TR.sentOrder,
+    engagementId: TR.engagement,
+    status: 'sent',
+    requestNote: 'Could we add a quota dashboard for each territory?',
+    note: "Adds a quota dashboard for each territory. Northwind's sales operations team will tidy the account data themselves, so the data cleanup milestone comes out.",
+    priceDeltaCents: 80_000,
+    requestedByUserId: ctx.danaId,
+    requestedAt: atAnchor(ctx, -12, 10),
+    createdByUserId: ctx.danaId,
+    sentByUserId: ctx.priyaId,
+    sentAt: atAnchor(ctx, -10, 14),
+    createdAt: atAnchor(ctx, -12, 10),
+  });
+  await db.insert(engagementChangeOrderLines).values([
+    {
+      id: TR.sentLineAdd,
+      changeOrderId: TR.sentOrder,
+      op: 'add',
+      title: 'Territory quota dashboard',
+      descriptionHtml: '<p>Quota and attainment by territory and quarter for the sales leads.</p>',
+      valueCents: 240_000,
+      sortOrder: 0,
+    },
+    {
+      id: TR.sentLineEdit,
+      changeOrderId: TR.sentOrder,
+      op: 'edit',
+      engagementMilestoneId: TR.milestone2,
+      title: rules.title,
+      descriptionHtml:
+        '<p>Account and lead assignment rules for each territory, plus the quota fields the dashboard reads, built in a sandbox.</p>',
+      beforeTitle: rules.title,
+      beforeDescriptionHtml: rules.descriptionHtml,
+      sortOrder: 1,
+    },
+    {
+      id: TR.sentLineRemove,
+      changeOrderId: TR.sentOrder,
+      op: 'remove',
+      engagementMilestoneId: TR.milestone3,
+      title: cleanup.title,
+      beforeTitle: cleanup.title,
+      beforeDescriptionHtml: cleanup.descriptionHtml,
+      sortOrder: 2,
+    },
+  ]);
+}
+
+async function seedTerritoryProject(
+  db: HelpExecutor,
+  ctx: HelpWorldContext,
+  shape: TerritoryProjectShape
+): Promise<void> {
+  if (shape === 'absent') {
+    return;
+  }
+  await insertFixedOrigin(db, ctx, TERRITORY);
+  await insertFixedEngagement(db, ctx, TERRITORY, {});
+  await insertMilestones(db, TR.engagement, ctx.priyaId, fixedMilestones(ctx, TERRITORY, 'normal'));
+  await insertAnsweredOrder(db, ctx, TERRITORY);
   if (shape === 'sent') {
-    await insertFixedSentOrder(db, ctx);
+    await insertTerritorySentOrder(db, ctx);
   }
 }
 
@@ -1027,15 +1178,20 @@ async function seedTmProject(
   }
 }
 
-/** The project states: both Northwind projects, with the state's change on one of them. */
+/**
+ * The project states: both Northwind projects the expert-side guides show, with the state's
+ * change on one of them, plus the territory project when a client-side guide needs it.
+ */
 export async function seedProjectsWorld(
   db: HelpExecutor,
   ctx: HelpWorldContext,
   fixedShape: FixedProjectShape,
-  tmOrder: TmOrderState
+  tmOrder: TmOrderState,
+  territory: TerritoryProjectShape
 ): Promise<void> {
   await seedFixedProject(db, ctx, fixedShape);
   await seedTmProject(db, ctx, tmOrder);
+  await seedTerritoryProject(db, ctx, territory);
 }
 
 // ── Requests and proposals ────────────────────────────────────────────────

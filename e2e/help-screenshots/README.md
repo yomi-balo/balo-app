@@ -82,10 +82,10 @@ a state can change to its base value, then applies its own change, in one transa
 | `rejected`         | the application was rejected seven days ago (inside the cooldown)                          |
 | `client-member`    | Dana is a Northwind `member`, not the owner                                                |
 | `auto-closed`      | a second Northwind case with Priya was closed automatically ten days before the anchor     |
-| `projects`         | two live Northwind projects with Priya (see "The project world" below), no open change     |
+| `projects`         | three live Northwind projects with Priya (see "The project world" below), no open change   |
 | `change-requested` | `projects`, plus Dana's open change request on the T&M project                             |
 | `change-draft`     | `projects`, plus Priya's unsent draft answering that request (its estimate passes the cap) |
-| `change-sent`      | sent changes on both projects: T&M edit + add, fixed-price add + edit + remove             |
+| `change-sent`      | sent changes: T&M edit + add, territory planning add + edit + remove                       |
 | `change-approved`  | `projects`, with the T&M change approved and applied to the plan                           |
 | `change-round`     | the fixed-price project reopened by a review round tagging "Build and configure"           |
 | `changes-made`     | `change-round`, with "Build and configure" completed again                                 |
@@ -105,6 +105,14 @@ earlier states render exactly as before. Ids are in `HELP_WORLD_IDS` (`constants
   Priya), milestones "Discovery and design" (done), "Build and configure" (in progress) and "Data
   migration" (pending, its "done when" edited since the proposal), plus one change request Priya
   answered without a change order.
+- **Sales Cloud territory planning** (`projects` and `change-sent` only): a second fixed-price
+  Northwind project (A$6,400 to Priya, so A$8,000 to Northwind) that only client-side guides open,
+  with an answered request and, in `change-sent`, Priya's sent change (a milestone added, one edited,
+  one removed, A$800 more to Priya). Help pages are public, so no project, rate or amount may show
+  on both sides: client screens show prices with Balo's fee added, and a reader holding both figures
+  for one subject could work the fee out. Expert-side guides keep to Sales Cloud rollout and the T&M
+  project; client-side guides show no amount from either. For the same reason, shots of Priya's
+  public profile leave its price band out of frame: `rate-and-payouts` shows her own rate.
 - **Service Cloud case routing**: a T&M Northwind project (A$180/hr, A$7,200 cap, fortnightly from
   four weeks before the anchor) with seven time entries: "Discovery and data model" is two hours
   over its estimate and "Case routing rules" has one hour left.

@@ -1,9 +1,13 @@
 import type { Locator, Page } from '@playwright/test';
+import { HELP_WORLD_IDS } from '../../../packages/db/src/help-seed/constants';
 import { defineGuide } from '../guide';
 import type { Box } from '../ring';
 
-/** The fixed-price "Sales Cloud rollout" project (`HELP_WORLD_IDS`). */
-const PROJECT_ROUTE = '/engagements/b1a10598-0000-4000-8000-00000000110a';
+/**
+ * The fixed-price "Sales Cloud territory planning" project. Only this client guide shows it, so
+ * its client price never sits beside an expert-side figure for the same project.
+ */
+const PROJECT_ROUTE = `/engagements/${HELP_WORLD_IDS.territory.engagement}`;
 /** The page's cards fade in; wait for the entrance to finish. */
 const SETTLE_MS = 1500;
 /** Space kept around a hand-computed crop (the runner pads by 0 for those). */
@@ -111,7 +115,7 @@ defineGuide('approving-a-change-to-your-project', [
       await settle(page);
       await page.getByRole('button', { name: 'Decline', exact: true }).click();
       await declineField(page).fill(
-        "We'd like to keep the data migration milestone in the plan for now."
+        "We'd like to keep the account data cleanup in the plan for now."
       );
       await blur(page);
     },

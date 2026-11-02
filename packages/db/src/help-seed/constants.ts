@@ -79,7 +79,7 @@ export function helpThreadIds(relationshipId: string): { conversation: string; c
  * and removed by `deleteHelpWorld`, which `restoreBase` and `resetHelpFixture` both call, so the
  * base fixture never carries them. Ranges: people `0x10…`, fixed-price project `0x11…`, T&M
  * project `0x12…`, request world `0x13…`, dashboards `0x14…`, agencies `0x15…`, case files
- * `0x16…`.
+ * `0x16…`, client-guide fixed-price project `0x17…`.
  */
 export const HELP_WORLD_IDS = {
   people: helpIdBlock(0x1001, [
@@ -119,10 +119,6 @@ export const HELP_WORLD_IDS = {
     'milestone3',
     'contentEditAudit',
     'answeredOrder',
-    'sentOrder',
-    'sentLineAdd',
-    'sentLineEdit',
-    'sentLineRemove',
     'round',
     'roundTag',
   ]),
@@ -266,6 +262,31 @@ export const HELP_WORLD_IDS = {
     'notificationCancelled',
   ]),
   caseFiles: helpIdBlock(0x1601, ['errorLog', 'screenshot', 'export', 'mapping']),
+  /**
+   * The fixed-price project only client-side guides show. It never shares a screen with the
+   * expert-side "Sales Cloud rollout", so no two help images give the same project's price with
+   * and without Balo's markup.
+   */
+  territory: helpIdBlock(0x1701, [
+    'request',
+    'relationship',
+    'eoi',
+    'proposal',
+    'proposalMilestone1',
+    'proposalMilestone2',
+    'proposalMilestone3',
+    'installment1',
+    'installment2',
+    'engagement',
+    'milestone1',
+    'milestone2',
+    'milestone3',
+    'answeredOrder',
+    'sentOrder',
+    'sentLineAdd',
+    'sentLineEdit',
+    'sentLineRemove',
+  ]),
 } as const;
 
 /** First id of the agency world's milestone block; `world.ts` numbers milestones from here. */
