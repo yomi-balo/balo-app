@@ -1,4 +1,4 @@
-import { personDisplayName } from '@balo/shared/parties';
+import { personDisplayName, type DeliveringAgencySource } from '@balo/shared/parties';
 
 /** The three name columns the client-side expert-counterparty rule needs. */
 export interface ExpertCounterpartyNameFields {
@@ -23,4 +23,18 @@ export function expertCounterpartyLabels(fields: ExpertCounterpartyNameFields): 
     personName: personDisplayName(fields.firstName, fields.lastName, 'An expert'),
     agencyLabel: fields.agencyName,
   };
+}
+
+/**
+ * Where a meeting's delivering agency comes from: an engagement-grain meeting (a case, kickoff,
+ * project call, package session or retainer check-in) names its engagement's pinned agency;
+ * every other meeting (request grain, admin) the expert profile's current one.
+ */
+export function counterpartyAgencySource(
+  isEngagementGrain: boolean,
+  engagementRow: { deliveringAgencyId: string | null } | undefined
+): DeliveringAgencySource {
+  return isEngagementGrain
+    ? { from: 'engagement', deliveringAgencyId: engagementRow?.deliveringAgencyId ?? null }
+    : { from: 'expert_profile' };
 }

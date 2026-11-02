@@ -28,7 +28,7 @@ export type {
   ProvisionResult,
   TransferOwnershipInput,
 } from './agencies';
-export { expertsRepository, isUniqueViolation } from './experts';
+export { expertsRepository, isUniqueViolation, ExpertAgencyAlreadyLinkedError } from './experts';
 // BAL-549 — the application-decision value exports. `PENDING_APPLICATION_STATUSES` is the ONE
 // definition of "pending" both Server Actions and the list read share (orchestrator D4);
 // `APPLICATION_REVIEW_FILTERS` is the `/admin/applications` chip vocabulary.

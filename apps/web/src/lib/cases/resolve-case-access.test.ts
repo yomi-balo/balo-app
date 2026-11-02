@@ -51,6 +51,7 @@ beforeEach(() => {
     id: ENGAGEMENT_ID,
     companyId: COMPANY_ID,
     expertProfileId: PROFILE_ID,
+    deliveringAgencyId: AGENCY_ID,
     status: 'active',
   });
   mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
@@ -111,6 +112,13 @@ describe('resolveCaseAccess — the EXPERT arm is the shipped VISIBILITY rule, d
   });
 
   it('admits an INDEPENDENT delivering expert (agencyId null) with no agency lookup', async () => {
+    mockFindEngagement.mockResolvedValue({
+      id: ENGAGEMENT_ID,
+      companyId: COMPANY_ID,
+      expertProfileId: PROFILE_ID,
+      deliveringAgencyId: null,
+      status: 'active',
+    });
     mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
     const access = await resolveCaseAccess(ENGAGEMENT_ID, EXPERT_USER_ID);
     expect(access?.lens).toBe('expert');

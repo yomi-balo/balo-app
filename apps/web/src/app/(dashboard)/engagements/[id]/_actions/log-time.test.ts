@@ -206,7 +206,7 @@ describe('logTimeAction', () => {
     expect(mockHasExpertCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'admin-1' }),
       ENGAGEMENT_CAPABILITIES.LOG_TIME,
-      expect.any(String),
+      expect.objectContaining({ agency: expect.objectContaining({ from: 'engagement' }) }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
   });

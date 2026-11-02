@@ -116,23 +116,25 @@ export function projectEngagementTitle(
 /**
  * Derive every party / person string for an engagement from the hydrated read
  * model. `isAgencyExpert = expertProfile.type === 'agency'`; the person always comes
- * from `expertProfile.user` (gender-neutral full + first name).
+ * from `expertProfile.user` (gender-neutral full + first name) and the agency name from the
+ * engagement's pinned `deliveringAgency`, so a later change to the expert's agency link does
+ * not rename past work.
  *
  * ⚠ DELIBERATELY NOT WIDENED TO THE SUPERTYPE (BAL-417). Unlike
  * `resolveEngagementLens`, this reads HYDRATED RELATIONS (`expertProfile.user`,
- * `expertProfile.agency`, `company`), not flat supertype scalars — a
+ * `deliveringAgency`, `company`), not flat supertype scalars — a
  * `CaseEngagementRow` is a flat row with no relations and could not satisfy a
  * structural minimum anyway, and hand-writing one here would fork the repository's
  * `columns:` allow-list into a second place that will drift. Give it a case overload
  * only when BAL-421 supplies a hydrated case graph.
  */
 export function deriveEngagementParties(e: ProjectEngagementWithMilestones): EngagementParties {
-  const { user, agency, headline, type } = e.expertProfile;
+  const { user, headline, type } = e.expertProfile;
 
   return {
     ...deriveExpertPartyLabels({
       type,
-      agencyName: agency?.name ?? null,
+      agencyName: e.deliveringAgency?.name ?? null,
       firstName: user.firstName,
       lastName: user.lastName,
     }),
@@ -193,7 +195,7 @@ export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties)
  * actor falls back to the expert party so the label never renders a dangling `@`.
  */
 export function expertSideActorLabel(
-  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile'>,
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile' | 'deliveringAgency'>,
   parties: EngagementParties,
   actor: { id: string; firstName: string | null; lastName: string | null } | null
 ): string {
@@ -205,7 +207,7 @@ export function expertSideActorLabel(
     return parties.expertParty;
   }
   const showsAgencyName =
-    parties.isAgencyExpert && (engagement.expertProfile.agency?.name.trim() ?? '') !== '';
+    parties.isAgencyExpert && (engagement.deliveringAgency?.name.trim() ?? '') !== '';
   return showsAgencyName ? `${name} @ ${parties.expertParty}` : name;
 }
 
@@ -215,7 +217,7 @@ export function expertSideActorLabel(
  * any other holder (an agency owner/admin) is named as {@link expertSideActorLabel} names them.
  */
 export function milestoneCompleterLabel(
-  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile'>,
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile' | 'deliveringAgency'>,
   parties: EngagementParties,
   completer: { id: string; firstName: string | null; lastName: string | null } | null
 ): string {

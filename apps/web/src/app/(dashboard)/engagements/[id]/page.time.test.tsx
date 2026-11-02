@@ -100,11 +100,9 @@ function engagement(
     milestones: [],
     expertProfile: {
       id: 'expert-1',
-      agencyId: null,
       type: 'freelancer',
       headline: null,
       user: { id: 'user-expert', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-      agency: null,
     },
     company: { id: 'company-1', name: 'Northwind' },
     projectRequest: { id: 'req-1', title: 'CPQ' },
@@ -279,7 +277,10 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
     expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
       expert,
       'manage_engagement',
-      'expert-1',
+      expect.objectContaining({
+        expertProfileId: 'expert-1',
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     const time = props.time as { byMilestoneId: Record<string, { canLog: boolean }> };
@@ -340,11 +341,11 @@ describe('EngagementWorkspacePage — time and materials wiring', () => {
     mockFindWithMilestones.mockResolvedValue(
       engagement({
         milestones: [BUILD],
+        deliveringAgencyId: 'agency-1',
+        deliveringAgency: { id: 'agency-1', name: 'CloudPeak' },
         expertProfile: {
           ...base.expertProfile,
-          agencyId: 'agency-1',
           type: 'agency',
-          agency: { id: 'agency-1', name: 'CloudPeak' },
         },
       } as Partial<ProjectEngagementWithMilestones>)
     );

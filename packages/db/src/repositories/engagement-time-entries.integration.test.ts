@@ -9,9 +9,11 @@ import {
   type EngagementMilestone,
 } from '../schema';
 import {
+  agencyFactory,
   engagementFactory,
   engagementMilestoneFactory,
   engagementTimeEntryFactory,
+  expertDraftFactory,
   userFactory,
 } from '../test/factories';
 import {
@@ -21,6 +23,7 @@ import {
   type TimeEntryRefusal,
 } from './engagement-time-entries';
 import { engagementChangeOrdersRepository } from './engagement-change-orders';
+import { expertsRepository } from './experts';
 import { EngagementNotActiveError } from './_shared/engagement-lock';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 
@@ -882,6 +885,25 @@ describe('engagementTimeEntriesRepository.listOverEstimateForAlerts', () => {
       estimatedMinutes: 480,
       agencyName: null,
     });
+  });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const engagementId = await seedWithLogged(900, { project: { expertProfileId: expert.id } });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const row = (await repo.listOverEstimateForAlerts(1000)).find(
+      (r) => r.engagementId === engagementId
+    );
+    expect(row?.agencyName).toBe('Pinned Partners');
   });
 
   it('compares only time on live milestones that have an estimate', async () => {

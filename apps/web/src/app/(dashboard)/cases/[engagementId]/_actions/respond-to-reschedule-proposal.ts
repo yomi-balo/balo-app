@@ -187,6 +187,7 @@ export async function acceptRescheduleProposalAction(
       engagementId,
       companyId,
       expertProfileId,
+      deliveringAgencyId: caseRow.deliveringAgencyId,
       caseTitle: caseRow.title,
       recipientId: user.id,
       previousScheduledStart: result.data.previousScheduledStart,

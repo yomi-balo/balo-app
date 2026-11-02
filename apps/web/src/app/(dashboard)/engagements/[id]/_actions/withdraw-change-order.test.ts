@@ -129,7 +129,10 @@ describe('withdrawChangeOrderAction', () => {
     expect(mockHasExpertCapability).toHaveBeenCalledWith(
       expect.anything(),
       'manage_engagement',
-      'expert-1',
+      expect.objectContaining({
+        expertProfileId: 'expert-1',
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       expect.any(Object)
     );
     expect(mockWithdraw).not.toHaveBeenCalled();
@@ -195,14 +198,14 @@ describe('withdrawChangeOrderAction', () => {
     });
     mockFindEngagement.mockResolvedValue(
       makeProject({
+        deliveringAgencyId: 'agency-1',
+        deliveringAgency: { name: 'CloudPeak' },
         expertProfile: {
           id: 'expert-1',
-          agencyId: 'agency-1',
           type: 'agency',
           headline: null,
           timezone: 'UTC',
           user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
-          agency: { name: 'CloudPeak' },
         },
       } as never)
     );

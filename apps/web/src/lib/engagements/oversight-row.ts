@@ -165,8 +165,8 @@ export function isEngagementStalled(item: AdminProjectEngagementListItem, now: D
  * D5 stays consistent with the D6 inbox and the D1 workspace.
  */
 function deriveExpertLabel(item: AdminProjectEngagementListItem): string {
-  const { type, user, agency } = item.expertProfile;
-  const agencyName = agency?.name ?? null;
+  const { type, user } = item.expertProfile;
+  const agencyName = item.deliveringAgency?.name ?? null;
   if (agencyName !== null) {
     return `${personDisplayName(user.firstName, user.lastName)} @ ${agencyName}`;
   }
@@ -204,7 +204,7 @@ function actorLabel(item: AdminProjectEngagementListItem, actor: EngagementActor
   return engagementActorAttribution({
     actor,
     expertUserId: item.expertProfile.user.id,
-    expertAgencyName: item.expertProfile.agency?.name ?? null,
+    expertAgencyName: item.deliveringAgency?.name ?? null,
     companyName: item.company.name,
   });
 }

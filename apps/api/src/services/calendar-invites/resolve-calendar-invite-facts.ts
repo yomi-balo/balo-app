@@ -8,7 +8,7 @@ import {
 import { memberCallUrl } from '../consultation-events/member-call-url.js';
 import { resolveExpertCalendarFacts } from '../consultation-events/resolve-calendar-facts.js';
 import {
-  deliveringExpertProfileIdForMeeting,
+  deliveringContextOwnerForMeeting,
   deliveringPartyName,
 } from '../meetings/delivering-party.js';
 import type { CalendarInviteParty } from '../../notifications/calendar-invite-spec.js';
@@ -127,8 +127,8 @@ export async function resolveCalendarInviteFacts(
       // ADR-1044 §4: names the client COMPANY, byte-identical to the provider event's title.
       summary = `${facts.eventLabel} with ${facts.clientCompanyName}`;
     } else {
-      const deliveringProfileId = await deliveringExpertProfileIdForMeeting(meetingId);
-      const partyName = await deliveringPartyName(deliveringProfileId);
+      const owner = await deliveringContextOwnerForMeeting(meetingId);
+      const partyName = await deliveringPartyName(owner);
       summary = `${facts.eventLabel} with ${partyName ?? 'your expert'}`;
     }
 

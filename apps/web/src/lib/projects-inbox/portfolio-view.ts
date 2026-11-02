@@ -400,7 +400,7 @@ function toEngagementRowView(
     lens === 'client'
       ? expertPartyDisplayName({
           type: e.expertProfile.type,
-          agencyName: e.expertProfile.agency?.name ?? null,
+          agencyName: e.deliveringAgency?.name ?? null,
           firstName: e.expertProfile.user.firstName,
           lastName: e.expertProfile.user.lastName,
         })

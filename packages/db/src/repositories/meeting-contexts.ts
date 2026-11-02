@@ -196,7 +196,11 @@ function ownerReadsTx(exec: DbExecutor): MeetingContextOwnerReads {
   return {
     findEngagement: async (engagementId) => {
       const [row] = await exec
-        .select({ companyId: engagements.companyId, expertProfileId: engagements.expertProfileId })
+        .select({
+          companyId: engagements.companyId,
+          expertProfileId: engagements.expertProfileId,
+          deliveringAgencyId: engagements.deliveringAgencyId,
+        })
         .from(engagements)
         .where(and(eq(engagements.id, engagementId), isNull(engagements.deletedAt)))
         .limit(1);

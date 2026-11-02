@@ -837,15 +837,39 @@ describe('caseEngagementsRepository.listClosedBetween', () => {
     expect(found.title).toBe(seeded.engagement.title);
     // Shape-identical to the PROJECT candidate apart from `closeReason`, which only a
     // case can have — the sweep still never branches, it just forwards the field.
+    expect(found.deliveringAgencyId).toBeNull();
     expect(Object.keys(found).sort()).toEqual([
       'anchorAt',
       'closeReason',
       'companyId',
+      'deliveringAgencyId',
       'engagementId',
       'engagementKind',
       'expertProfileId',
       'title',
     ]);
+  });
+
+  it("carries the engagement's pinned agency, not the expert profile's current one", async () => {
+    const expert = await expertDraftFactory();
+    const pinned = await agencyFactory();
+    const current = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const seeded = await caseEngagementFactory({
+      expertProfileId: expert.id,
+      values: { status: 'completed' },
+      caseValues: { closedAt: ANCHOR, closeReason: 'auto_inactive' },
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: current.id,
+      })
+    ).toBe(true);
+
+    const candidates = await caseEngagementsRepository.listClosedBetween(AFTER, ANCHOR);
+    const found = candidates.find((c) => c.engagementId === seeded.engagement.id);
+    expect(found?.deliveringAgencyId).toBe(pinned.id);
   });
 
   /**

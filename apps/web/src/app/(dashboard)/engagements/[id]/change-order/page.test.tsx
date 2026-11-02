@@ -93,11 +93,9 @@ function engagement(
     ],
     expertProfile: {
       id: EXPERT_PROFILE_ID,
-      agencyId: null,
       type: 'independent',
       headline: null,
       user: { id: 'user-expert', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-      agency: null,
     },
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
@@ -194,7 +192,10 @@ describe('change-order composer page · access', () => {
     expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-agency-admin' }),
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      EXPERT_PROFILE_ID,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(screen.getByTestId('composer')).toBeInTheDocument();
@@ -215,7 +216,10 @@ describe('change-order composer page · access', () => {
     expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-expert' }),
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      EXPERT_PROFILE_ID,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(mockLogWarn).toHaveBeenCalled();

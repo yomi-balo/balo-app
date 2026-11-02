@@ -4,6 +4,7 @@ import { cache } from 'react';
 import {
   caseEngagementsRepository,
   companiesRepository,
+  engagementsRepository,
   expertsRepository,
   transcriptsRepository,
   usersRepository,
@@ -15,6 +16,7 @@ import {
   type CaseClosureNames,
 } from '@balo/shared/credit';
 import { log } from '@/lib/logging';
+import { counterpartyAgencySource } from '@/lib/meetings/expert-counterparty';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { meetingAllowsPostCallActions } from '@/lib/meetings/post-call-eligibility';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
@@ -26,7 +28,11 @@ import type {
   RecapContextType,
 } from '@/lib/meetings/end-of-call-view-types';
 import { formatRequesterLabel, resolveCounterparty } from '../../_lib/resolve-counterparty';
-import { contextIsCase, resolveCaseHref } from '../../_lib/resolve-eyebrow';
+import {
+  contextIsCase,
+  contextIsEngagementGrain,
+  resolveCaseHref,
+} from '../../_lib/resolve-eyebrow';
 import type { TranscriptStatusLike } from '../../_lib/resolve-recap-state';
 import { contextIsRateable, resolveEndOfCallRecapReadiness } from './resolve-end-of-call-state';
 
@@ -103,6 +109,7 @@ export const loadEndOfCall = cache(
     const { meeting, subject, companyId, expertProfileId, lens } = access;
     const contextType: RecapContextType = subject.contextType;
     const isCase = contextIsCase(contextType);
+    const isEngagementGrain = contextIsEngagementGrain(contextType);
     const isClient = lens === 'client';
 
     /**
@@ -112,7 +119,11 @@ export const loadEndOfCall = cache(
      */
     const postCallActionsAllowed = meetingAllowsPostCallActions(meeting, now);
 
-    const [transcript, company, profile, reviewRead, caseRow] = await Promise.all([
+    // The case row (with its resolution fields) is read for the client arm's resolve prompt
+    // only; every other lens reads just the engagement's agency pin.
+    const readsCaseRow = isClient && postCallActionsAllowed && isCase;
+
+    const [transcript, company, profile, reviewRead, caseRow, pinRow] = await Promise.all([
       transcriptsRepository.findByMeetingId(meetingId),
       companiesRepository.findNameById(companyId),
       expertProfileId === null
@@ -125,8 +136,12 @@ export const loadEndOfCall = cache(
         ? readEngagementReview(subject.contextId, userId)
         : Promise.resolve(undefined),
       // ⚠ CLIENT LENS ONLY. Only a case has something to resolve.
-      isClient && postCallActionsAllowed && isCase
+      readsCaseRow
         ? caseEngagementsRepository.findByEngagementId(subject.contextId)
+        : Promise.resolve(undefined),
+      // Where the case row is not read, the pin alone names the delivering agency.
+      isEngagementGrain && !readsCaseRow
+        ? engagementsRepository.findById(subject.contextId)
         : Promise.resolve(undefined),
     ]);
 
@@ -162,7 +177,13 @@ export const loadEndOfCall = cache(
       // ⚠ `null` ORDINAL, DELIBERATELY. The design reference carries NO "consultation N of M"
       // line on this screen — the ticket flagged it as worth CONSIDERING and the design pass did
       // not adopt it. The end screen reads only `expertShortName` / `agencyLabel`, never `party`.
-      resolveCounterparty(lens, profile, clientCompanyName, null),
+      resolveCounterparty(
+        lens,
+        profile,
+        clientCompanyName,
+        null,
+        counterpartyAgencySource(isEngagementGrain, caseRow ?? pinRow)
+      ),
       requestedByUserId === null
         ? Promise.resolve([])
         : usersRepository.findNamesByIds([requestedByUserId]),

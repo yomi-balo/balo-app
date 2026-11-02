@@ -276,7 +276,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockListContexts.mockResolvedValue([
       { meetingId: MEETING_ID, contextType: 'case', contextId: 'ctx-1' },
     ]);
-    mockResolveOwner.mockResolvedValue({ companyId: 'company-1', expertProfileId: 'expert-1' });
+    mockResolveOwner.mockResolvedValue({
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+      deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+    });
     mockEndMeeting.mockResolvedValue({ meeting: meeting({ status: 'ended' }), closedIntervals: 1 });
     mockDeleteRoom.mockResolvedValue('deleted');
     mockApplyPresenceEffect.mockResolvedValue('closed');
@@ -1519,7 +1523,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
 
     await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
 
-    expect(mockDeliveringPartyName).toHaveBeenCalledWith('expert-1');
+    expect(mockDeliveringPartyName).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+      deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+    });
     expect(mockScheduleClientAbsent).toHaveBeenCalledWith(
       expect.objectContaining({ waitingPartyName: 'CloudPeak' })
     );

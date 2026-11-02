@@ -2032,7 +2032,7 @@ describe('engagement transitions — missing engagement (advanceProjectDelivery 
 });
 
 describe('projectEngagementsRepository.findWithMilestones', () => {
-  it('returns live milestones ordered (soft-deleted excluded) + freelancer agency=null', async () => {
+  it('returns live milestones ordered (soft-deleted excluded) + unlinked expert deliveringAgency=null', async () => {
     const { engagementId } = await seedActiveEngagement();
     await engagementMilestoneFactory({ engagementId, values: { title: 'B', sortOrder: 1 } });
     await engagementMilestoneFactory({ engagementId, values: { title: 'A', sortOrder: 0 } });
@@ -2044,12 +2044,13 @@ describe('projectEngagementsRepository.findWithMilestones', () => {
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagementId);
     expect(hydrated).toBeDefined();
     expect(hydrated?.milestones.map((m) => m.title)).toEqual(['A', 'B']); // sort_order asc, soft-deleted gone
-    // The engagementFactory expert is a freelancer → agency is null; user present.
+    // The engagementFactory expert has no agency link → a NULL pin → no agency; user present.
     expect(hydrated?.expertProfile.user).toBeDefined();
-    expect(hydrated?.expertProfile.agency).toBeNull();
+    expect(hydrated?.deliveringAgencyId).toBeNull();
+    expect(hydrated?.deliveringAgency).toBeNull();
   });
 
-  it('agency expert → expertProfile.agency name is present', async () => {
+  it('agency expert → the pinned deliveringAgency name is present', async () => {
     const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
     if (agency === undefined) throw new Error('agency insert failed');
     const expert = await expertDraftFactory({ type: 'agency' });
@@ -2060,11 +2061,15 @@ describe('projectEngagementsRepository.findWithMilestones', () => {
 
     const { engagement } = await engagementFactory({ expertProfileId: expert.id });
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
-    expect(hydrated?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
-    expect(hydrated?.expertProfile.agency?.logoUrl).toBeDefined(); // null is fine — key present, projected
+    expect(hydrated?.deliveringAgencyId).toBe(agency.id);
+    expect(hydrated?.deliveringAgency?.name).toBe('Cloud Consulting Co');
+    expect(hydrated?.deliveringAgency?.logoUrl).toBeDefined(); // null is fine — key present, projected
     // SECURITY (BAL-330 review): the projected shape must NOT leak secrets/PII.
     expect(hydrated?.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(hydrated?.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(hydrated?.deliveringAgency).not.toHaveProperty('stripeConnectId');
+    // The profile carries no agency of its own: only the pin names one.
+    expect(hydrated?.expertProfile).not.toHaveProperty('agency');
+    expect(hydrated?.expertProfile).not.toHaveProperty('agencyId');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('workosId');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('email');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('phone');
@@ -2262,7 +2267,7 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     expect(rows.map((r) => r.id)).toEqual([mine.engagement.id]);
   });
 
-  it('agency scope returns engagements of every linked profile, never another agency or a case', async () => {
+  it('agency scope returns engagements pinned to the agency, never another agency or a case', async () => {
     const companyId = await seedCompanyId();
     const agency = await agencyFactory();
     const otherAgency = await agencyFactory();
@@ -2314,6 +2319,39 @@ describe('projectEngagementsRepository.listPortfolio', () => {
 
     const rows = await projectEngagementsRepository.listPortfolio({ agencyId: agency.id });
     expect(rows.map((r) => r.id)).toEqual([engagement.id]);
+  });
+
+  it('agency scope follows the pin: a project pinned to A stays with A after the expert moves to B', async () => {
+    const companyId = await seedCompanyId();
+    const pinned = await agencyFactory();
+    const moved = await agencyFactory();
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const pinnedRows = await projectEngagementsRepository.listPortfolio({ agencyId: pinned.id });
+    const movedRows = await projectEngagementsRepository.listPortfolio({ agencyId: moved.id });
+    expect(pinnedRows.map((r) => r.id)).toEqual([engagement.id]);
+    expect(movedRows).toEqual([]);
+
+    const counts = await projectEngagementsRepository.countLiveByAgency([pinned.id, moved.id]);
+    expect(counts.get(pinned.id)).toBe(1);
+    expect(counts.has(moved.id)).toBe(false);
+
+    const workspace = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(workspace?.deliveringAgency?.name).toBe(pinned.name);
+    expect(workspace?.expertProfile).not.toHaveProperty('agency');
+
+    const adminRow = (await projectEngagementsRepository.listAllWithProgress()).find(
+      (r) => r.id === engagement.id
+    );
+    expect(adminRow?.deliveringAgency?.name).toBe(pinned.name);
   });
 
   it('platform scope returns engagements spanning ≥2 companies', async () => {
@@ -2371,19 +2409,19 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     expect(row?.lastActivityAt?.getTime()).toBe(activatedAt.getTime());
   });
 
-  it('hydrates a freelancer counterpart (agency null, person + company names present)', async () => {
+  it('hydrates a freelancer counterpart (deliveringAgency null, person + company names present)', async () => {
     const companyId = await seedCompanyId();
     const { engagement } = await engagementFactory({ companyId });
 
     const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.expertProfile.type).toBe('freelancer');
-    expect(row?.expertProfile.agency).toBeNull();
+    expect(row?.deliveringAgency).toBeNull();
     expect(typeof row?.expertProfile.user.firstName).toBe('string');
     expect(row?.company.name).toBeDefined();
   });
 
-  it('hydrates an agency counterpart (agency name present)', async () => {
+  it('hydrates an agency counterpart (pinned deliveringAgency name present)', async () => {
     const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
     if (agency === undefined) throw new Error('agency insert failed');
     const expert = await expertDraftFactory({ type: 'agency' });
@@ -2396,7 +2434,8 @@ describe('projectEngagementsRepository.listPortfolio', () => {
 
     const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
-    expect(row?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
+    expect(row?.deliveringAgencyId).toBe(agency.id);
+    expect(row?.deliveringAgency?.name).toBe('Cloud Consulting Co');
   });
 
   it('hydrates the projectRequest title (source proposal) and null for a retainer', async () => {
@@ -2428,14 +2467,15 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     if (row === undefined) throw new Error('expected the seeded engagement row');
 
     // The expertProfile graph carries ONLY the allow-listed keys.
-    expect(new Set(Object.keys(row.expertProfile))).toEqual(
-      new Set(['id', 'agencyId', 'type', 'user', 'agency'])
+    expect(new Set(Object.keys(row.expertProfile))).toEqual(new Set(['id', 'type', 'user']));
+    expect(new Set(Object.keys(row.deliveringAgency ?? {}))).toEqual(
+      new Set(['id', 'name', 'logoUrl'])
     );
     expect(row.expertProfile.user).not.toHaveProperty('workosId');
     expect(row.expertProfile.user).not.toHaveProperty('email');
     expect(row.expertProfile.user).not.toHaveProperty('phone');
     expect(row.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(row.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(row.deliveringAgency).not.toHaveProperty('stripeConnectId');
     expect(row.company).not.toHaveProperty('stripeConnectId');
   });
 
@@ -2565,16 +2605,16 @@ describe('projectEngagementsRepository.listAllWithProgress', () => {
     // Company + expert person display fields are hydrated.
     expect(solo?.company.name).toBe('Freelance Client Co');
     expect(solo?.expertProfile.user?.firstName).toBe('Test');
-    // Independent expert → agency is null (the caller falls back to the person).
-    expect(solo?.expertProfile.agency).toBeNull();
-    // Agency expert → agency object present (name + projected logoUrl key).
-    expect(withAgency?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
-    expect(withAgency?.expertProfile.agency).toHaveProperty('logoUrl');
+    // Unlinked expert → NULL pin → no agency (the caller falls back to the person).
+    expect(solo?.deliveringAgency).toBeNull();
+    // Agency expert → the pinned agency object present (name + projected logoUrl key).
+    expect(withAgency?.deliveringAgency?.name).toBe('Cloud Consulting Co');
+    expect(withAgency?.deliveringAgency).toHaveProperty('logoUrl');
 
     // SECURITY (mirrors findEngagementWithMilestones): the projected shape must NOT
     // leak secrets/PII.
     expect(withAgency?.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(withAgency?.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(withAgency?.deliveringAgency).not.toHaveProperty('stripeConnectId');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('workosId');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('email');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('phone');
@@ -3008,6 +3048,8 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
         'completedMilestones',
         'completionRequestedAt',
         'createdAt',
+        'deliveringAgency',
+        'deliveringAgencyId',
         'expertProfile',
         'expertProfileId',
         'id',
@@ -3021,9 +3063,7 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
       ].sort()
     );
     expect(Object.keys(row.company).sort()).toEqual(['id', 'name'].sort());
-    expect(Object.keys(row.expertProfile).sort()).toEqual(
-      ['agency', 'agencyId', 'id', 'type', 'user'].sort()
-    );
+    expect(Object.keys(row.expertProfile).sort()).toEqual(['id', 'type', 'user'].sort());
     expect(Object.keys(row.expertProfile.user).sort()).toEqual(
       ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
     );
@@ -3053,6 +3093,8 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
         'completionRequestedAt',
         'createdAt',
         'currency',
+        'deliveringAgency',
+        'deliveringAgencyId',
         'effectivePriceCents',
         'expertProfile',
         'expertProfileId',
@@ -3071,7 +3113,7 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
     );
     expect(row).not.toHaveProperty('baloFeeBps');
     expect(Object.keys(row.expertProfile).sort()).toEqual(
-      ['agency', 'agencyId', 'headline', 'id', 'type', 'user'].sort()
+      ['headline', 'id', 'type', 'user'].sort()
     );
     expect(Object.keys(row.expertProfile.user).sort()).toEqual(
       ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
@@ -3219,9 +3261,11 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     expect(found.companyId).toBe(seeded.companyId);
     expect(found.expertProfileId).toBe(seeded.expertProfileId);
     expect(found.anchorAt.toISOString()).toBe(ANCHOR.toISOString());
+    expect(found.deliveringAgencyId).toBeNull();
     expect(Object.keys(found).sort()).toEqual([
       'anchorAt',
       'companyId',
+      'deliveringAgencyId',
       'engagementId',
       'engagementKind',
       'expertProfileId',
@@ -3230,6 +3274,27 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     // `closeReason` is the CASE arm's field alone — a project has no close reason, and
     // inventing one would put a specific claim in the +7d nudge on no evidence.
     expect(found.closeReason).toBeUndefined();
+  });
+
+  it("carries the engagement's pinned agency, not the expert profile's current one", async () => {
+    const expert = await expertDraftFactory();
+    const pinned = await agencyFactory();
+    const current = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const seeded = await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'completed', acceptedAt: ANCHOR, acceptanceMethod: 'auto' },
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: current.id,
+      })
+    ).toBe(true);
+
+    const candidates = await projectEngagementsRepository.listAcceptedBetween(AFTER, ANCHOR);
+    const found = candidates.find((c) => c.engagementId === seeded.engagement.id);
+    expect(found?.deliveringAgencyId).toBe(pinned.id);
   });
 
   it('is HALF-OPEN: an anchor exactly at `until` is INCLUDED, one exactly at `after` is EXCLUDED', async () => {

@@ -23,6 +23,7 @@ import {
 } from '../test/factories';
 import { actionItemsRepository, InvalidActionItemTransitionError } from './action-items';
 import { EngagementNotActiveError } from './engagement-milestones';
+import { expertsRepository } from './experts';
 
 /**
  * Read action-item audit rows for one polymorphic entity from main's generic
@@ -820,6 +821,24 @@ describe('actionItemsRepository.listOpenAssignedToClient', () => {
       expertLastName: null,
       agencyName: 'Brightline Advisory',
     });
+  });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const { engagement, companyId } = await caseEngagementFactory({ expertProfileId: expert.id });
+    await actionItemFactory({ engagementId: engagement.id, values: { assigneeParty: 'client' } });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const rows = await actionItemsRepository.listOpenAssignedToClient(companyId);
+    expect(rows[0]?.agencyName).toBe('Pinned Partners');
   });
 
   it('titles a project item with its originating request’s title', async () => {

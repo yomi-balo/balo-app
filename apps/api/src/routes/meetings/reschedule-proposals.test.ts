@@ -134,7 +134,11 @@ describe('POST /meetings/:meetingId/reschedule-proposals (BAL-411)', () => {
     vi.clearAllMocks();
     mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 9, ttlSeconds: 3600 });
     mockAuthorizeMeetingRescheduleProposal.mockResolvedValue(authOk());
-    mockFindByEngagementId.mockResolvedValue({ title: 'Salesforce cleanup', closedAt: null });
+    mockFindByEngagementId.mockResolvedValue({
+      title: 'Salesforce cleanup',
+      closedAt: null,
+      deliveringAgencyId: null,
+    });
     mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
     mockFindProfileById.mockResolvedValue({
       userId: 'expert-user-1',
@@ -339,14 +343,23 @@ describe('POST /meetings/:meetingId/reschedule-proposals (BAL-411)', () => {
       );
     });
 
-    it('resolves an agency-based expert label from the profile chain', async () => {
+    it('resolves an agency-based expert label from the engagement pin, not the profile', async () => {
+      mockFindByEngagementId.mockResolvedValue({
+        title: 'Salesforce cleanup',
+        closedAt: null,
+        deliveringAgencyId: 'agency-pin',
+      });
       mockFindProfileById.mockResolvedValue({
         userId: 'expert-user-1',
-        agencyId: 'agency-1',
+        agencyId: 'agency-other',
         type: 'agency',
       });
-      mockGetSummaryById.mockResolvedValue({ name: 'CloudPeak' });
+      mockGetSummaryById.mockImplementation(async (id: string) => ({
+        name: id === 'agency-pin' ? 'CloudPeak' : 'Elsewhere',
+      }));
       await call({ method: 'POST', url: URL, headers: AUTH, payload: proposeBody() });
+      expect(mockGetSummaryById).toHaveBeenCalledWith('agency-pin');
+      expect(mockGetSummaryById).not.toHaveBeenCalledWith('agency-other');
       expect(mockProposeReschedule).toHaveBeenCalledWith(
         expect.objectContaining({ expertPartyLabel: expect.stringContaining('CloudPeak') }),
         expect.anything()

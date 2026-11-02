@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 7
 published: true
-updated: 2026-10-29
+updated: 2026-11-03
 related: [rate-and-payouts, weekly-schedule]
 ---
 
@@ -69,7 +69,8 @@ under **Completed and cancelled**.
 ## When a teammate has moved on
 
 If an expert is no longer a member of your agency, their projects stay on the list so nothing
-goes missing, and you can still open and run them. A short line under their name reads **No
+goes missing, and you can still open and run them. Projects an expert delivered with your agency
+stay here even if they later move to another agency. A short line under their name reads **No
 longer at** followed by your agency's name, so you know who the project originally came from.
 
 ## If you own more than one agency

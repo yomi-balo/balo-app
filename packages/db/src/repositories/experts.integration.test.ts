@@ -37,7 +37,7 @@ import {
   UNCOUNTED_CONSULTATION_LABELS,
   seedConsultationCountMatrix,
 } from '../test/helpers/consultation-count-matrix';
-import { expertsRepository, isUniqueViolation } from './experts';
+import { ExpertAgencyAlreadyLinkedError, expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { reviewsRepository } from './reviews';
 import { usersRepository } from './users';
@@ -359,6 +359,97 @@ describe('expertsRepository.linkAgency', () => {
     await expect(expertsRepository.linkAgency(randomUUID(), agency.id)).rejects.toThrow(
       /not found/i
     );
+  });
+
+  it('is write-once: linking a second agency throws and leaves the first link', async () => {
+    const draft = await expertDraftFactory();
+    const first = await agencyFactory();
+    const second = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, first.id);
+
+    const attempt = expertsRepository.linkAgency(draft.id, second.id);
+    await expect(attempt).rejects.toBeInstanceOf(ExpertAgencyAlreadyLinkedError);
+    await expect(attempt).rejects.toMatchObject({
+      expertProfileId: draft.id,
+      existingAgencyId: first.id,
+    });
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(first.id);
+  });
+
+  it('relinking the same agency is an idempotent no-op', async () => {
+    const draft = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, agency.id);
+
+    await expect(expertsRepository.linkAgency(draft.id, agency.id)).resolves.toBeUndefined();
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(agency.id);
+  });
+});
+
+describe('expertsRepository.repointAgency', () => {
+  it('moves the link when it still points at fromAgencyId', async () => {
+    const draft = await expertDraftFactory();
+    const from = await agencyFactory();
+    const to = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, from.id);
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: from.id, toAgencyId: to.id })
+    ).resolves.toBe(true);
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(to.id);
+  });
+
+  it('returns false and changes nothing when the link points elsewhere', async () => {
+    const draft = await expertDraftFactory();
+    const linked = await agencyFactory();
+    const stale = await agencyFactory();
+    const to = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, linked.id);
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: stale.id, toAgencyId: to.id })
+    ).resolves.toBe(false);
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(linked.id);
+  });
+
+  it('returns false for an unlinked profile', async () => {
+    const draft = await expertDraftFactory();
+    const from = await agencyFactory();
+    const to = await agencyFactory();
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: from.id, toAgencyId: to.id })
+    ).resolves.toBe(false);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBeNull();
+  });
+});
+
+describe('expertsRepository.findProfileIdLinkedToAgencyForUpdate', () => {
+  it("returns the user's profile id only while it links the given agency", async () => {
+    const draft = await expertDraftFactory();
+    const linked = await agencyFactory();
+    const other = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, linked.id);
+
+    await db.transaction(async (tx) => {
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(draft.userId, linked.id, tx)
+      ).resolves.toBe(draft.id);
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(draft.userId, other.id, tx)
+      ).resolves.toBeUndefined();
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(randomUUID(), linked.id, tx)
+      ).resolves.toBeUndefined();
+    });
   });
 });
 
@@ -2745,33 +2836,84 @@ describe('expertsRepository.saveSettingsCertifications — §settings-lock', () 
   });
 });
 
-describe('expertsRepository.countOtherLinkedProfiles (BAL-631)', () => {
-  it('returns an empty Map for no ids', async () => {
-    await expect(expertsRepository.countOtherLinkedProfiles([], randomUUID())).resolves.toEqual(
-      new Map()
-    );
+describe('expertsRepository.findAgenciesWithOtherDelivery', () => {
+  it('returns an empty Set for no ids', async () => {
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([], randomUUID())
+    ).resolves.toEqual(new Set());
   });
 
-  it('gives no entry for a solo agency and excludes the viewer’s own profile', async () => {
+  it('arm 1: includes an agency another user’s profile links, never the viewer’s own link', async () => {
     const solo = await agencyFactory();
     const team = await agencyFactory();
     const lone = await expertDraftFactory();
     const viewer = await expertDraftFactory();
-    const mateA = await expertDraftFactory();
-    const mateB = await expertDraftFactory();
+    const mate = await expertDraftFactory();
     await expertsRepository.linkAgency(lone.id, solo.id);
     await expertsRepository.linkAgency(viewer.id, team.id);
-    await expertsRepository.linkAgency(mateA.id, team.id);
-    await expertsRepository.linkAgency(mateB.id, team.id);
+    await expertsRepository.linkAgency(mate.id, team.id);
 
-    const loneView = await expertsRepository.countOtherLinkedProfiles([solo.id], lone.userId);
-    expect(loneView.has(solo.id)).toBe(false);
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id], lone.userId)
+    ).resolves.toEqual(new Set());
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id, team.id], viewer.userId)
+    ).resolves.toEqual(new Set([solo.id, team.id]));
+  });
 
-    const teamView = await expertsRepository.countOtherLinkedProfiles(
-      [solo.id, team.id],
-      viewer.userId
-    );
-    expect(teamView.get(team.id)).toBe(2);
-    expect(teamView.get(solo.id)).toBe(1);
+  it('arm 2: keeps an agency whose departed teammate delivered a project pinned to it', async () => {
+    const team = await agencyFactory();
+    const elsewhere = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    const departed = await expertDraftFactory();
+    await expertsRepository.linkAgency(viewer.id, team.id);
+    await expertsRepository.linkAgency(departed.id, team.id);
+    await engagementFactory({ expertProfileId: departed.id });
+    await expertsRepository.repointAgency(departed.id, {
+      fromAgencyId: team.id,
+      toAgencyId: elsewhere.id,
+    });
+
+    // No other profile links `team` any more; only the pinned project keeps it.
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([team.id], viewer.userId)
+    ).resolves.toEqual(new Set([team.id]));
+  });
+
+  it('excludes an agency-of-one whose pinned work is all the viewer’s', async () => {
+    const solo = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    await expertsRepository.linkAgency(viewer.id, solo.id);
+    await engagementFactory({ expertProfileId: viewer.id });
+    await caseEngagementFactory({ expertProfileId: viewer.id });
+
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id], viewer.userId)
+    ).resolves.toEqual(new Set());
+  });
+
+  it('excludes a soft-deleted pinned project and a case-only pin', async () => {
+    const deletedOnly = await agencyFactory();
+    const caseOnly = await agencyFactory();
+    const elsewhere = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    const departedA = await expertDraftFactory();
+    const departedB = await expertDraftFactory();
+    await expertsRepository.linkAgency(departedA.id, deletedOnly.id);
+    await expertsRepository.linkAgency(departedB.id, caseOnly.id);
+    await engagementFactory({ expertProfileId: departedA.id, values: { deletedAt: new Date() } });
+    await caseEngagementFactory({ expertProfileId: departedB.id });
+    await expertsRepository.repointAgency(departedA.id, {
+      fromAgencyId: deletedOnly.id,
+      toAgencyId: elsewhere.id,
+    });
+    await expertsRepository.repointAgency(departedB.id, {
+      fromAgencyId: caseOnly.id,
+      toAgencyId: elsewhere.id,
+    });
+
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([deletedOnly.id, caseOnly.id], viewer.userId)
+    ).resolves.toEqual(new Set());
   });
 });

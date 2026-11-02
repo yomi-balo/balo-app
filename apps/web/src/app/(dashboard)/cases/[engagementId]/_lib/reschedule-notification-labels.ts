@@ -31,7 +31,8 @@ import {
  */
 export async function resolveNotificationLabels(
   companyId: string,
-  expertProfileId: string
+  expertProfileId: string,
+  deliveringAgencyId: string | null
 ): Promise<{ clientCompanyName: string; expertPartyLabel: string; expertPersonLabel: string }> {
   const [company, profile] = await Promise.all([
     companiesRepository.findNameById(companyId),
@@ -41,9 +42,9 @@ export async function resolveNotificationLabels(
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(deliveringAgencyId),
   ]);
   const agencyName = agency?.name ?? null;
   const firstName = expertUser?.firstName ?? null;

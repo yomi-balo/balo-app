@@ -156,9 +156,9 @@ async function resolveDisplayFields(
 
   const expertUser = await usersRepository.findById(profile.userId);
   const agency =
-    profile.agencyId === null
+    candidate.deliveringAgencyId === null
       ? undefined
-      : await agenciesRepository.getSummaryById(profile.agencyId);
+      : await agenciesRepository.getSummaryById(candidate.deliveringAgencyId);
 
   return {
     clientCompanyName: company.name,

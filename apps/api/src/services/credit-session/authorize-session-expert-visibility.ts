@@ -26,6 +26,7 @@
  */
 import {
   creditSessionsRepository,
+  engagementsRepository,
   expertsRepository,
   partyMembershipsRepository,
   type CreditSession,
@@ -63,6 +64,22 @@ export async function authorizeSessionExpertVisibility(input: {
     return { ok: false, code: 'forbidden' };
   }
 
+  // The agency is the one the session's engagement is pinned to, so a later change to the
+  // profile's agency link cannot move who sees the session. A session with no engagement is
+  // request-grain (no pin to read) and uses the profile's current agency. An engagement that
+  // cannot be read leaves no agency: the expert still passes, colleagues are denied.
+  let agencyId = profile.agencyId;
+  if (session.engagementId !== null) {
+    const engagement = await engagementsRepository.findById(session.engagementId);
+    if (engagement === undefined) {
+      log.warn(
+        { sessionId, userId, engagementId: session.engagementId },
+        'Session engagement not found — agency-side visibility withheld'
+      );
+    }
+    agencyId = engagement?.deliveringAgencyId ?? null;
+  }
+
   // The delivering expert ∪ ANY live member of their agency — the SHARED visibility rule, not a
   // local one. The delivering expert and an INDEPENDENT expert both resolve with NO agency
   // lookup at all (the callback is never invoked); that short-circuit is asserted by call-count
@@ -71,8 +88,10 @@ export async function authorizeSessionExpertVisibility(input: {
   // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
   // can never answer for an actor other than the one being authorized (the confused-deputy
   // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
-  const onExpertSide = await actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
-    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  const onExpertSide = await actorHasExpertSideVisibility(
+    { userId: profile.userId, agencyId },
+    userId,
+    (agencyId, actorId) => partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
   );
   if (onExpertSide) {
     return { ok: true, session, expertProfileId: session.expertProfileId };

@@ -102,7 +102,9 @@ export const engagements = pgTable(
      * (repositories/_shared/engagement-supertype.ts), which reads the profile inside
      * the caller's transaction; the value never follows a later change to the
      * profile's `agency_id`. `invariants/the-delivering-agency-pin-is-write-once.test.ts`
-     * fails CI on any other write.
+     * fails CI on any other write. Migrations 0123 (backfill) and 0124 (bounded re-backfill
+     * and correction of pins written after the expert's agency membership had ended) are
+     * one-off data fixes outside that rule.
      *
      * The FK is NO ACTION on purpose, like `expert_profiles.agency_id` and
      * `agency_members.agency_id`: SET NULL would silently erase delivery history.

@@ -137,7 +137,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
       user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },
@@ -231,7 +230,10 @@ describe('createActionItemAction — gate + validation', () => {
     expect(mockHasExpertDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1' }),
       'manage_engagement',
-      EXPERT_PROFILE_ID,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(mockCreateManual).not.toHaveBeenCalled();
@@ -256,9 +258,9 @@ describe('createActionItemAction — gate + validation', () => {
     mockResolveLens.mockReturnValue(null);
     mockFindEngagement.mockResolvedValue(
       engagement({
+        deliveringAgency: { name: 'CloudPeak' },
         expertProfile: {
           user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-          agency: { name: 'CloudPeak' },
           headline: null,
           type: 'agency',
         },

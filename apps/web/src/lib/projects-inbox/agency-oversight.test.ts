@@ -12,7 +12,7 @@ vi.mock('@balo/db', () => ({
     listCapabilityEligibleAgencies: (...args: unknown[]) => mockEligible(...args),
   },
   expertsRepository: {
-    countOtherLinkedProfiles: (...args: unknown[]) => mockOthers(...args),
+    findAgenciesWithOtherDelivery: (...args: unknown[]) => mockOthers(...args),
   },
 }));
 
@@ -32,19 +32,19 @@ describe('loadOversightAgencies', () => {
     expect(mockEligible).toHaveBeenCalledWith('user-1', 'manage_members');
   });
 
-  it('skips the count query when the viewer holds no agency', async () => {
+  it('skips the delivery query when the viewer holds no agency', async () => {
     mockEligible.mockResolvedValue([]);
     await expect(loadOversightAgencies(USER)).resolves.toEqual([]);
     expect(mockOthers).not.toHaveBeenCalled();
   });
 
-  it('drops a solo agency and keeps the others in name order', async () => {
+  it('drops an agency with no other delivery and keeps the others in name order', async () => {
     mockEligible.mockResolvedValue([
       { id: 'a1', name: 'Alpha' },
       { id: 'a2', name: 'Solo Co' },
       { id: 'a3', name: 'Zeta' },
     ]);
-    mockOthers.mockResolvedValue(new Map([['a1', 2]]).set('a3', 1));
+    mockOthers.mockResolvedValue(new Set(['a1', 'a3']));
     const result = await loadOversightAgencies(USER);
     expect(result.map((a) => a.id)).toEqual(['a1', 'a3']);
     expect(mockOthers).toHaveBeenCalledWith(['a1', 'a2', 'a3'], 'user-1');

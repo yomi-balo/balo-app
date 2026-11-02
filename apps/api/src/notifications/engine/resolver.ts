@@ -5,6 +5,7 @@ import {
   proposalsRepository,
   partyMembershipsRepository,
   agenciesRepository,
+  engagementsRepository,
 } from '@balo/db';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import type { RuleContext } from './rules.js';
@@ -283,10 +284,11 @@ const DELIVERING_AGENCY_FANOUT_EVENTS: ReadonlySet<string> = new Set([
 
 /**
  * BAL-631: hydrate `data.deliveringAgencyAdminUserIds` (+ `data.deliveringAgencyName`) for the
- * agency-oversight notices. The agency is derived from the delivering profile's `agencyId`; the
- * recipients are `listAdminUserIds('agency', ...)` (the MANAGE_MEMBERS holder set, never a role
- * list written here) minus the delivering expert (who already gets their own notice) and minus the
- * actor. Independent experts (null `agencyId`) and publishers that omit `expertProfileId` get `[]`.
+ * agency-oversight notices. The agency is the engagement's pin (`delivering_agency_id`), read from
+ * `payload.engagementId`, so a later change to the delivering profile's agency link cannot move the
+ * notice. The recipients are `listAdminUserIds('agency', ...)` (the MANAGE_MEMBERS holder set, never
+ * a role list written here) minus the delivering expert (who already gets their own notice) and
+ * minus the actor. A missing engagement or a NULL pin gets `[]`.
  */
 async function hydrateDeliveringAgencyAdmins(
   event: string,
@@ -294,18 +296,21 @@ async function hydrateDeliveringAgencyAdmins(
   data: Record<string, unknown>
 ): Promise<void> {
   if (!DELIVERING_AGENCY_FANOUT_EVENTS.has(event)) return;
-  const expertProfileId = payload.expertProfileId;
-  if (typeof expertProfileId !== 'string') return;
-  const profile = await expertsRepository.findDisplayProfileById(expertProfileId);
-  if (profile?.agencyId == null) {
+  const engagementId = payload.engagementId;
+  if (typeof engagementId !== 'string') return;
+  const engagement = await engagementsRepository.findById(engagementId);
+  if (engagement?.deliveringAgencyId == null) {
     data.deliveringAgencyAdminUserIds = [];
     return;
   }
-  const [adminIds, agency] = await Promise.all([
-    partyMembershipsRepository.listAdminUserIds('agency', profile.agencyId),
-    agenciesRepository.getSummaryById(profile.agencyId),
+  const agencyId = engagement.deliveringAgencyId;
+  const [adminIds, agency, profile] = await Promise.all([
+    partyMembershipsRepository.listAdminUserIds('agency', agencyId),
+    agenciesRepository.getSummaryById(agencyId),
+    expertsRepository.findDisplayProfileById(engagement.expertProfileId),
   ]);
-  const excluded = new Set<string>([profile.userId]);
+  const excluded = new Set<string>();
+  if (profile !== undefined) excluded.add(profile.userId);
   if (typeof payload.actorUserId === 'string') excluded.add(payload.actorUserId);
   data.deliveringAgencyAdminUserIds = adminIds.filter((id) => !excluded.has(id));
   if (agency !== undefined) data.deliveringAgencyName = agency.name;

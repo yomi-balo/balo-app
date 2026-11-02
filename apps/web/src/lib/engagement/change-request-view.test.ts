@@ -50,7 +50,6 @@ function engagement(over: Partial<Engagement> & { latest?: Round | null } = {}):
     expertProfile: {
       type: 'freelancer',
       headline: null,
-      agency: null,
       user: { firstName: 'Priya', lastName: 'Sharma' },
     },
     ...rest,
@@ -61,10 +60,10 @@ function agencyEngagement(over: Parameters<typeof engagement>[0] = {}): Engageme
   const base = engagement(over);
   return {
     ...base,
+    deliveringAgency: { id: 'ag-1', name: 'CloudPeak Consulting' },
     expertProfile: {
       ...base.expertProfile,
       type: 'agency',
-      agency: { id: 'ag-1', name: 'CloudPeak Consulting' },
     },
   } as unknown as Engagement;
 }

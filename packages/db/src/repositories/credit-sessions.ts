@@ -52,6 +52,7 @@ import {
   creditReceivables,
   creditSessions,
   creditWallets,
+  engagements,
   expertPayoutRecords,
   expertProfiles,
   meetingContexts,
@@ -2341,9 +2342,13 @@ export const creditSessionsRepository = {
    * column map, never `with:` relational hydration (memory
    * `reference_drizzle_with_hydration_leaks_secrets`) — `rate_cents` (the un-marked-up consultant
    * rate) must not be in the row at all. Every optional relation (`caseEngagements`, `agencies`)
-   * is a LEFT join: `engagement_id` and `agency_id` are legitimately NULL (independent experts
-   * have no agency; a non-Case session has no case title). `companies` has NO `deleted_at`
+   * is a LEFT join: `engagement_id` and the agency are legitimately NULL (an expert with no
+   * agency; a non-Case session has no case title). `companies` has NO `deleted_at`
    * (memory `reference_companies_table_no_deleted_at`) — no guard for it, by design.
+   *
+   * THE AGENCY. A session on an engagement names the agency pinned on that engagement at
+   * creation, never the expert profile's current link; a soft-deleted engagement names none. A
+   * session with no engagement (a request-grain meeting) names the profile's agency.
    *
    * Soft-delete predicate matches every sibling money view. Returns `undefined` for a missing or
    * soft-deleted session — the caller (`resolveSessionStatement`) treats that identically to a
@@ -2379,7 +2384,17 @@ export const creditSessionsRepository = {
       // case's title keep rendering on the receipt AND inside the downloadable PDF, so personal
       // data survives a deletion signal in a file that can be forwarded outside the company.
       .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(
+        engagements,
+        and(eq(engagements.id, creditSessions.engagementId), isNull(engagements.deletedAt))
+      )
+      .leftJoin(
+        agencies,
+        eq(
+          agencies.id,
+          sql`CASE WHEN ${creditSessions.engagementId} IS NULL THEN ${expertProfiles.agencyId} ELSE ${engagements.deliveringAgencyId} END`
+        )
+      )
       .leftJoin(
         caseEngagements,
         and(

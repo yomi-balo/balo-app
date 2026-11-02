@@ -328,6 +328,8 @@ export interface RatingNudgeCandidate {
   engagementKind: 'project' | 'case';
   companyId: string;
   expertProfileId: string;
+  /** The agency pinned on the engagement at creation; NULL ⇒ no agency. */
+  deliveringAgencyId: string | null;
   /** `accepted_at` (project) | `closed_at` (case). */
   anchorAt: Date;
   title: string;
@@ -690,7 +692,7 @@ export const reviewsRepository = {
       .from(engagements)
       .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
       .innerJoin(users, eq(users.id, expertProfiles.userId))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(agencies, eq(agencies.id, engagements.deliveringAgencyId))
       .leftJoin(
         projectEngagements,
         and(

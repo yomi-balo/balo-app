@@ -1269,6 +1269,70 @@ describe('creditSessionsRepository.findStatementContext (BAL-441)', () => {
     expect(row!.expertFirstName).not.toBeNull();
   });
 
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: pinned.id, type: 'agency' })
+      .where(eq(expertProfiles.id, ctx.expertProfileId));
+    const { engagement } = await caseEngagementFactory({
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+    });
+    expect(
+      await expertsRepository.repointAgency(ctx.expertProfileId, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+    const id = await openOk(ctx, 10);
+    await db
+      .update(creditSessions)
+      .set({ engagementId: engagement.id })
+      .where(eq(creditSessions.id, id));
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row?.agencyName).toBe('Pinned Partners');
+  });
+
+  it("a session with no engagement names the expert profile's agency", async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const agency = await agencyFactory({ name: 'Profile Partners' });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id, type: 'agency' })
+      .where(eq(expertProfiles.id, ctx.expertProfileId));
+    const id = await openOk(ctx, 10);
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row?.agencyName).toBe('Profile Partners');
+  });
+
+  it('a session on a soft-deleted engagement names no agency', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const agency = await agencyFactory();
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id, type: 'agency' })
+      .where(eq(expertProfiles.id, ctx.expertProfileId));
+    const { engagement } = await caseEngagementFactory({
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      values: { deletedAt: new Date() },
+    });
+    const id = await openOk(ctx, 10);
+    await db
+      .update(creditSessions)
+      .set({ engagementId: engagement.id })
+      .where(eq(creditSessions.id, id));
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row).toBeDefined();
+    expect(row?.agencyName).toBeNull();
+  });
+
   it('NULL engagement_id -> caseTitle: null; NULL agency_id -> agencyName: null', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const id = await openOk(ctx, 10);

@@ -626,7 +626,7 @@ export const actionItemsRepository = {
       )
       .leftJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
       .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(agencies, eq(agencies.id, engagements.deliveringAgencyId))
       .leftJoin(
         caseEngagements,
         and(eq(caseEngagements.engagementId, engagements.id), isNull(caseEngagements.deletedAt))

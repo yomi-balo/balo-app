@@ -39,7 +39,6 @@ function fakeItem(
     company: { id: 'c-1', name: 'Northwind' },
     expertProfile: {
       id: 'ep-1',
-      agencyId: null,
       // `'freelancer'`, not the previous `'independent'` — that label is not in the
       // `expert_profile_type` pgEnum and only survived because this fixture was
       // DOUBLE-cast (`as unknown as`), which type-checks nothing. Surfaced by the
@@ -47,8 +46,9 @@ function fakeItem(
       type: 'freelancer',
       headline: null,
       user: { id: 'u-1', firstName: 'Sam', lastName: 'Expert', avatarUrl: null },
-      agency: null,
     },
+    deliveringAgencyId: null,
+    deliveringAgency: null,
     projectRequest: { id: 'r-1', title: 'Rollout' },
     acceptedBy: null,
     cancelledBy: null,

@@ -237,7 +237,10 @@ export interface CasesIndexCounterparty {
   readonly expertUsername: string | null;
   readonly expertHeadline: string | null;
   readonly expertType: ExpertProfile['type'];
-  /** `null` ⇒ an INDEPENDENT expert. Also the input to `actorHasExpertSideVisibility`. */
+  /**
+   * The agency pinned on the engagement when it was created (not the expert profile's current
+   * link). `null` ⇒ no agency. Also the input to `actorHasExpertSideVisibility`.
+   */
   readonly agencyId: string | null;
   readonly agencyName: string | null;
 }
@@ -550,7 +553,7 @@ const COUNTERPARTY_COLUMNS = {
   expertUsername: expertProfiles.username,
   expertHeadline: expertProfiles.headline,
   expertType: expertProfiles.type,
-  agencyId: expertProfiles.agencyId,
+  agencyId: engagements.deliveringAgencyId,
   agencyName: agencies.name,
 } as const;
 
@@ -607,7 +610,7 @@ function selectCaseSection(
       .innerJoin(companies, eq(companies.id, engagements.companyId))
       .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
       .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(agencies, eq(agencies.id, engagements.deliveringAgencyId))
       .leftJoin(agg, eq(agg.engagementId, engagements.id))
       .where(and(...scopedLiveCases(scope), input.keyset))
       .orderBy(...input.orderBy)

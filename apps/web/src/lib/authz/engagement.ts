@@ -9,6 +9,7 @@ import {
   type EngagementCapability,
   type HostContextReads,
 } from '@balo/shared/authz';
+import type { DeliveringAgencySource } from '@balo/shared/parties';
 import { log } from '@/lib/logging';
 
 /**
@@ -125,7 +126,10 @@ export async function hasEngagementCapability(
     capability,
     // `engagements.expert_profile_id` is NOT NULL on the supertype for ALL engagement types
     // (BAL-417), so the five labels share one path and there is nothing to defend here.
-    engagement.expertProfileId,
+    {
+      expertProfileId: engagement.expertProfileId,
+      agency: { from: 'engagement', deliveringAgencyId: engagement.deliveringAgencyId },
+    },
     { contextType: subject.contextType, contextId: subject.contextId }
   );
 }
@@ -144,9 +148,44 @@ const hostContextReads: HostContextReads = {
  * they share one build. Keyed on the two primitive strings; `actorId` stays an explicit
  * argument and is never captured, so a result is only ever reused for the same actor.
  */
-const buildHostContext = cache((expertProfileId: string, actorId: string) =>
-  buildHostContextForExpertProfile(expertProfileId, actorId, hostContextReads)
+const buildHostContext = cache(
+  (
+    expertProfileId: string,
+    actorId: string,
+    sourceKind: DeliveringAgencySource['from'],
+    deliveringAgencyId: string | null
+  ) =>
+    buildHostContextForExpertProfile(
+      expertProfileId,
+      actorId,
+      hostContextReads,
+      sourceKind === 'engagement'
+        ? { from: 'engagement', deliveringAgencyId }
+        : { from: 'expert_profile' }
+    )
 );
+
+/**
+ * The delivery a capability question is asked of: the delivering expert profile plus where the
+ * delivering agency comes from. An engagement-grain subject carries the engagement's pin; a
+ * request-grain subject (no engagement row yet) reads the profile's current agency.
+ */
+export interface ExpertDelivery {
+  readonly expertProfileId: string;
+  readonly agency: DeliveringAgencySource;
+}
+
+function buildHostContextFor(
+  delivery: ExpertDelivery,
+  actorId: string
+): ReturnType<typeof buildHostContext> {
+  return buildHostContext(
+    delivery.expertProfileId,
+    actorId,
+    delivery.agency.from,
+    delivery.agency.from === 'engagement' ? delivery.agency.deliveringAgencyId : null
+  );
+}
 
 /**
  * BAL-283 — the SAME rule, asked of an ALREADY-RESOLVED delivering `expert_profiles.id`.
@@ -178,10 +217,11 @@ const buildHostContext = cache((expertProfileId: string, actorId: string) =>
 export async function hasExpertDeliveryCapability(
   actor: { id: string },
   capability: EngagementCapability,
-  expertProfileId: string,
+  delivery: ExpertDelivery,
   logContext: { contextType: string; contextId: string }
 ): Promise<boolean> {
-  const resolution = await buildHostContext(expertProfileId, actor.id);
+  const { expertProfileId } = delivery;
+  const resolution = await buildHostContextFor(delivery, actor.id);
 
   if (!resolution.ok) {
     log.warn('Engagement host context denied — the delivering expert profile is missing', {
@@ -204,9 +244,10 @@ export async function hasExpertDeliveryCapability(
  */
 export async function administersDeliveringAgency(
   actor: { id: string },
-  expertProfileId: string
+  delivery: ExpertDelivery
 ): Promise<boolean> {
-  const resolution = await buildHostContext(expertProfileId, actor.id);
+  const { expertProfileId } = delivery;
+  const resolution = await buildHostContextFor(delivery, actor.id);
 
   if (!resolution.ok) {
     log.warn('Agency administration check denied — the delivering expert profile is missing', {

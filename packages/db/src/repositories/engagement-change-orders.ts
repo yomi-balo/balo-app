@@ -1130,7 +1130,7 @@ export const engagementChangeOrdersRepository = {
       .innerJoin(companies, eq(companies.id, engagements.companyId))
       .leftJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
       .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(agencies, eq(agencies.id, engagements.deliveringAgencyId))
       .leftJoin(
         projectRequests,
         and(

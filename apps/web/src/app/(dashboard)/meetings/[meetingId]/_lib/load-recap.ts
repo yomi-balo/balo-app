@@ -4,6 +4,7 @@ import { cache } from 'react';
 import {
   actionItemsRepository,
   caseEngagementsRepository,
+  engagementsRepository,
   companiesRepository,
   creditSessionsRepository,
   expertsRepository,
@@ -27,6 +28,7 @@ import { fetchSessionMoneyBlock } from '@/lib/api/session-money-block';
 import { mayToggleCaseActionItems } from '@/lib/cases/may-toggle-case-action-items';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { readRatingCard } from '@/lib/reviews/read-rating-card';
+import { counterpartyAgencySource } from '@/lib/meetings/expert-counterparty';
 import { durationMinutesOf } from '@/lib/meetings/meeting-duration';
 import { resolveRecapAccess, type RecapAccess } from '@/lib/meetings/resolve-recap-access';
 import type {
@@ -44,7 +46,12 @@ import {
   resolveRequesterLabel,
   type CounterpartyLabels,
 } from './resolve-counterparty';
-import { contextIsCase, resolveCaseHref, resolveEyebrow } from './resolve-eyebrow';
+import {
+  contextIsCase,
+  contextIsEngagementGrain,
+  resolveCaseHref,
+  resolveEyebrow,
+} from './resolve-eyebrow';
 import {
   resolveArtifacts,
   resolveMoneyView,
@@ -105,15 +112,6 @@ import { mapRecapRecordings } from './map-recap-recordings';
  * typed constant is what configurable means today.
  */
 const PIPELINE_GRACE_MS = 30 * 60 * 1000;
-
-/** Engagement-grain contexts — the ones whose `contextId` IS an `engagements.id`. */
-const ENGAGEMENT_GRAIN: ReadonlySet<RecapContextType> = new Set([
-  'case',
-  'project_kickoff',
-  'project_call',
-  'package_session',
-  'retainer_checkin',
-]);
 
 /** Humane fallback titles for contexts whose own title has no cheap single read. */
 const FALLBACK_TITLE: Record<RecapContextType, string> = {
@@ -439,7 +437,7 @@ export const loadRecap = cache(
 
     const contextType: RecapContextType = subject.contextType;
     const isCase = contextIsCase(contextType);
-    const isEngagementGrain = ENGAGEMENT_GRAIN.has(contextType);
+    const isEngagementGrain = contextIsEngagementGrain(contextType);
 
     const [
       files,
@@ -450,6 +448,7 @@ export const loadRecap = cache(
       company,
       profile,
       caseRow,
+      pinRow,
       siblings,
       existingReview,
       clientSideEverPresent,
@@ -465,6 +464,9 @@ export const loadRecap = cache(
         : expertsRepository.findDisplayProfileById(expertProfileId),
       isCase
         ? caseEngagementsRepository.findByEngagementId(subject.contextId)
+        : Promise.resolve(undefined),
+      isEngagementGrain && !isCase
+        ? engagementsRepository.findById(subject.contextId)
         : Promise.resolve(undefined),
       isCase
         ? meetingContextsRepository.listMeetingsForContext('case', subject.contextId)
@@ -506,7 +508,8 @@ export const loadRecap = cache(
           lens,
           profile,
           clientCompanyName,
-          isCase ? formatOrdinalLine(ordinal) : null
+          isCase ? formatOrdinalLine(ordinal) : null,
+          counterpartyAgencySource(isEngagementGrain, caseRow ?? pinRow)
         ),
         session === undefined
           ? Promise.resolve(null)

@@ -230,14 +230,14 @@ describe('updateTimeEntryAction', () => {
       makeProject({
         pricingMethod: 'tm',
         milestones: [makeMilestone({ id: MILESTONE_ID, status: 'in_progress' })],
+        deliveringAgencyId: 'agency-1',
+        deliveringAgency: { name: 'CloudPeak' },
         expertProfile: {
           id: 'expert-1',
-          agencyId: 'agency-1',
           type: 'agency',
           headline: null,
           timezone: 'UTC',
           user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
-          agency: { name: 'CloudPeak' },
         },
       } as never)
     );

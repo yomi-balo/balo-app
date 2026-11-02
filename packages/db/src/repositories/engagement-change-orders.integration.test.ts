@@ -12,10 +12,12 @@ import {
   type EngagementMilestone,
 } from '../schema';
 import {
+  agencyFactory,
   engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
   engagementTimeEntryFactory,
+  expertDraftFactory,
   proposalFactory,
   proposalPaymentInstallmentFactory,
   userFactory,
@@ -31,6 +33,7 @@ import {
 import { ChangeOrderCoherenceError } from './change-order-coherence';
 import { EngagementNotActiveError } from './_shared/engagement-lock';
 import { engagementMilestonesRepository } from './engagement-milestones';
+import { expertsRepository } from './experts';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 
 async function auditFor(entityId: string): Promise<AuditEvent[]> {
@@ -1065,6 +1068,31 @@ describe('engagementChangeOrdersRepository.listStaleSentForAlerts', () => {
       projectTitle: null,
       agencyName: null,
     });
+  });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const { engagement } = await engagementFactory({ expertProfileId: expert.id });
+    const old = new Date('2026-05-01T00:00:00Z');
+    await engagementChangeOrderFactory({
+      engagementId: engagement.id,
+      status: 'sent',
+      values: { sentAt: old },
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const row = (await repo.listStaleSentForAlerts(new Date('2026-05-08T00:00:00Z'), 50)).find(
+      (r) => r.engagementId === engagement.id
+    );
+    expect(row?.agencyName).toBe('Pinned Partners');
   });
 });
 

@@ -12,6 +12,7 @@ const {
   mockListBillingUserIds,
   mockGetAgencySummaryById,
   mockFindDisplayProfileById,
+  mockFindEngagementById,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockListBillingUserIds: vi.fn(),
   mockGetAgencySummaryById: vi.fn(),
   mockFindDisplayProfileById: vi.fn(),
+  mockFindEngagementById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -43,6 +45,7 @@ vi.mock('@balo/db', () => ({
     listBillingUserIds: mockListBillingUserIds,
   },
   agenciesRepository: { getSummaryById: mockGetAgencySummaryById },
+  engagementsRepository: { findById: mockFindEngagementById },
 }));
 
 import { resolveContext } from './resolver.js';
@@ -511,6 +514,12 @@ describe('resolveContext', () => {
 
     beforeEach(() => {
       mockGetAgencySummaryById.mockResolvedValue({ id: AGENCY_ID, name: 'Cloudline Partners' });
+      mockFindEngagementById.mockResolvedValue({
+        id: payload.engagementId,
+        expertProfileId: PROFILE_ID,
+        deliveringAgencyId: AGENCY_ID,
+      });
+      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: AGENCY_ID });
     });
 
     it.each([
@@ -518,16 +527,29 @@ describe('resolveContext', () => {
       'engagement.milestone_estimate_exceeded',
       'engagement.cancelled',
     ])('lists the agency owner and admin for %s, plus the agency name', async (event) => {
-      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: AGENCY_ID });
       mockListAdminUserIds.mockResolvedValue(['owner-1', 'admin-2']);
 
       const context = await resolveContext(event, payload);
 
+      expect(mockFindEngagementById).toHaveBeenCalledWith(payload.engagementId);
       expect(mockFindDisplayProfileById).toHaveBeenCalledWith(PROFILE_ID);
       expect(mockListAdminUserIds).toHaveBeenCalledWith('agency', AGENCY_ID);
       expect(mockGetAgencySummaryById).toHaveBeenCalledWith(AGENCY_ID);
       expect(context.data.deliveringAgencyAdminUserIds).toEqual(['owner-1', 'admin-2']);
       expect(context.data.deliveringAgencyName).toBe('Cloudline Partners');
+    });
+
+    it("notifies the engagement's pinned agency, not the profile's current agency", async () => {
+      mockFindDisplayProfileById.mockResolvedValue({
+        userId: 'expert-user',
+        agencyId: 'agency-other',
+      });
+      mockListAdminUserIds.mockResolvedValue(['owner-1']);
+
+      await resolveContext('engagement.cancelled', payload);
+
+      expect(mockListAdminUserIds).toHaveBeenCalledWith('agency', AGENCY_ID);
+      expect(mockListAdminUserIds).not.toHaveBeenCalledWith('agency', 'agency-other');
     });
 
     it('excludes the delivering expert when they are also an owner or admin', async () => {
@@ -540,7 +562,6 @@ describe('resolveContext', () => {
     });
 
     it('excludes the actor', async () => {
-      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: AGENCY_ID });
       mockListAdminUserIds.mockResolvedValue(['owner-1', 'admin-2']);
 
       const context = await resolveContext('engagement.changes_requested', {
@@ -560,8 +581,12 @@ describe('resolveContext', () => {
       expect(context.data.deliveringAgencyAdminUserIds).toEqual([]);
     });
 
-    it('gives an empty list, with no admin lookup, for an independent expert (null agencyId)', async () => {
-      mockFindDisplayProfileById.mockResolvedValue({ userId: 'expert-user', agencyId: null });
+    it('gives an empty list, with no admin lookup, for a NULL pin even when the profile has an agency', async () => {
+      mockFindEngagementById.mockResolvedValue({
+        id: payload.engagementId,
+        expertProfileId: PROFILE_ID,
+        deliveringAgencyId: null,
+      });
 
       const context = await resolveContext('engagement.cancelled', payload);
 
@@ -569,30 +594,31 @@ describe('resolveContext', () => {
       expect(mockListAdminUserIds).not.toHaveBeenCalled();
     });
 
-    it('gives an empty list when the profile no longer exists', async () => {
-      mockFindDisplayProfileById.mockResolvedValue(undefined);
+    it('gives an empty list when the engagement no longer exists', async () => {
+      mockFindEngagementById.mockResolvedValue(undefined);
 
       const context = await resolveContext('engagement.cancelled', payload);
 
       expect(context.data.deliveringAgencyAdminUserIds).toEqual([]);
+      expect(mockListAdminUserIds).not.toHaveBeenCalled();
     });
 
-    it('skips hydration when the payload carries no expertProfileId (old producer)', async () => {
-      const { expertProfileId: _omit, ...withoutProfile } = payload;
+    it('skips hydration when the payload carries no engagementId', async () => {
+      const { engagementId: _omit, ...withoutEngagement } = payload;
 
       const context = await resolveContext(
         'engagement.milestone_estimate_exceeded',
-        withoutProfile
+        withoutEngagement
       );
 
-      expect(mockFindDisplayProfileById).not.toHaveBeenCalled();
+      expect(mockFindEngagementById).not.toHaveBeenCalled();
       expect(context.data.deliveringAgencyAdminUserIds).toBeUndefined();
     });
 
     it('does not call listAdminUserIds for unrelated events', async () => {
       const context = await resolveContext('project.request_submitted', payload);
 
-      expect(mockFindDisplayProfileById).not.toHaveBeenCalled();
+      expect(mockFindEngagementById).not.toHaveBeenCalled();
       expect(mockListAdminUserIds).not.toHaveBeenCalled();
       expect(context.data.deliveringAgencyAdminUserIds).toBeUndefined();
     });

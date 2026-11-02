@@ -127,7 +127,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
       user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },
@@ -232,10 +231,18 @@ describe('expert-side gate (manage_engagement capability)', () => {
 
   it('asks the capability with the engagement profile and project context', async () => {
     await authorizeExpertMilestone(USER, ENGAGEMENT_ID, MILESTONE_ID, 'pending');
-    expect(mockHasExpertCapability).toHaveBeenCalledWith(USER, 'manage_engagement', 'ep-1', {
-      contextType: 'project',
-      contextId: ENGAGEMENT_ID,
-    });
+    expect(mockHasExpertCapability).toHaveBeenCalledWith(
+      USER,
+      'manage_engagement',
+      expect.objectContaining({
+        expertProfileId: 'ep-1',
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
+      {
+        contextType: 'project',
+        contextId: ENGAGEMENT_ID,
+      }
+    );
   });
 
   it('admits an agency owner/admin who is not a lens party, as agency_admin', async () => {
@@ -265,9 +272,9 @@ describe('expert-side gate (manage_engagement capability)', () => {
 
   it('labels a scope-change notice with the acting agency admin', async () => {
     const agencyEngagement = engagement({
+      deliveringAgency: { name: 'CloudPeak' },
       expertProfile: {
         user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-        agency: { name: 'CloudPeak' },
         headline: null,
         type: 'agency',
       },

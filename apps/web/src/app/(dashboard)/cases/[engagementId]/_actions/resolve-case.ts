@@ -130,6 +130,7 @@ export async function resolveCaseAction(input: {
       meetingId: anchorMeetingId,
       companyId,
       expertProfileId,
+      deliveringAgencyId: caseRow.deliveringAgencyId,
       caseTitle: capCaseTitle(caseRow.title),
       closedAt,
       recipientId: user.id,

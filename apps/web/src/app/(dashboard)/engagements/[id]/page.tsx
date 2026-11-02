@@ -265,7 +265,7 @@ export default async function EngagementWorkspacePage({
     ...mappedView,
     header: {
       ...mappedView.header,
-      backHref: resolveWorkspaceBackHref(from, engagement.expertProfile.agencyId),
+      backHref: resolveWorkspaceBackHref(from, engagement.deliveringAgencyId),
     },
   };
   const time = mapTimeToView({

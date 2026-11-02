@@ -106,7 +106,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     expertProfile: {
       id: 'expert-1',
       user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },
@@ -227,10 +226,10 @@ describe('requestCompletionAction', () => {
     });
     mockFindEngagement.mockResolvedValue(
       engagement({
+        deliveringAgency: { name: 'CloudPeak' },
         expertProfile: {
           id: 'expert-1',
           user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-          agency: { name: 'CloudPeak' },
           headline: null,
           type: 'agency',
         },
@@ -240,7 +239,10 @@ describe('requestCompletionAction', () => {
     expect(mockHasExpertCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'admin-1' }),
       'manage_engagement',
-      'expert-1',
+      expect.objectContaining({
+        expertProfileId: 'expert-1',
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(mockPublish).toHaveBeenCalledWith(

@@ -111,7 +111,8 @@ interface DisplayFields {
 async function deriveDisplayFields(
   engagement: ProjectEngagementWithMilestones
 ): Promise<DisplayFields> {
-  const { user, agency, type } = engagement.expertProfile;
+  const { user, type } = engagement.expertProfile;
+  const agency = engagement.deliveringAgency;
   const expertPartyLabel = expertPartyDisplayName({
     type,
     agencyName: agency?.name ?? null,

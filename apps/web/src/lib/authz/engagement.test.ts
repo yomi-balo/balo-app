@@ -45,9 +45,29 @@ import { log } from '@/lib/logging';
 const SUBJECT = { contextType: 'case', contextId: ENGAGEMENT_ID } as const;
 const { MANAGE_ENGAGEMENT, HOST_MEETINGS, LOG_TIME } = ENGAGEMENT_CAPABILITIES;
 
+/** A request-grain delivery: no engagement, so the profile's current agency applies. */
+const PROFILE_DELIVERY = {
+  expertProfileId: PROFILE_ID,
+  agency: { from: 'expert_profile' },
+} as const;
+/** An engagement-grain delivery pinned to `AGENCY_ID`. */
+const PINNED_DELIVERY = {
+  expertProfileId: PROFILE_ID,
+  agency: { from: 'engagement', deliveringAgencyId: AGENCY_ID },
+} as const;
+/** An engagement-grain delivery whose pin is NULL. */
+const UNPINNED_DELIVERY = {
+  expertProfileId: PROFILE_ID,
+  agency: { from: 'engagement', deliveringAgencyId: null },
+} as const;
+
 /** An agency-backed profile, so the agency-role arm is reached. */
 function seedAgencyBacked(agencyRole: string | undefined): void {
-  mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, expertProfileId: PROFILE_ID });
+  mockFindEngagement.mockResolvedValue({
+    id: ENGAGEMENT_ID,
+    expertProfileId: PROFILE_ID,
+    deliveringAgencyId: AGENCY_ID,
+  });
   mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
   mockGetMemberRole.mockResolvedValue(agencyRole);
 }
@@ -66,7 +86,11 @@ describe('hasEngagementCapability — who holds it', () => {
   });
 
   it('GRANTS an INDEPENDENT delivering expert with NO agency lookup at all', async () => {
-    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, expertProfileId: PROFILE_ID });
+    mockFindEngagement.mockResolvedValue({
+      id: ENGAGEMENT_ID,
+      expertProfileId: PROFILE_ID,
+      deliveringAgencyId: null,
+    });
     mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
 
     expect(await hasEngagementCapability({ id: EXPERT_USER_ID }, MANAGE_ENGAGEMENT, SUBJECT)).toBe(
@@ -121,6 +145,40 @@ describe('hasEngagementCapability — who holds it', () => {
     seedAgencyBacked('owner');
     await hasEngagementCapability({ id: COLLEAGUE_ID }, MANAGE_ENGAGEMENT, SUBJECT);
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
+  });
+});
+
+/**
+ * The agency is the ENGAGEMENT'S PIN, never the profile's current link: after the expert moves
+ * agencies, the agency that delivered the work keeps the rights and the new one gets none.
+ */
+describe('hasEngagementCapability — the engagement pin decides the agency', () => {
+  const NEW_AGENCY_ID = 'a0000000-0000-4000-8000-000000000099';
+
+  it('looks the actor up in the PINNED agency when the profile has since moved to another', async () => {
+    seedAgencyBacked('admin');
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: NEW_AGENCY_ID });
+
+    expect(await hasEngagementCapability({ id: COLLEAGUE_ID }, MANAGE_ENGAGEMENT, SUBJECT)).toBe(
+      true
+    );
+    expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
+    expect(mockGetMemberRole).not.toHaveBeenCalledWith('agency', NEW_AGENCY_ID, COLLEAGUE_ID);
+  });
+
+  it('makes NO agency lookup for a NULL pin even though the profile now has an agency', async () => {
+    mockFindEngagement.mockResolvedValue({
+      id: ENGAGEMENT_ID,
+      expertProfileId: PROFILE_ID,
+      deliveringAgencyId: null,
+    });
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: NEW_AGENCY_ID });
+    mockGetMemberRole.mockResolvedValue('owner');
+
+    expect(await hasEngagementCapability({ id: COLLEAGUE_ID }, MANAGE_ENGAGEMENT, SUBJECT)).toBe(
+      false
+    );
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
   });
 });
 
@@ -179,8 +237,7 @@ describe('hasEngagementCapability — a repository REJECTION propagates, never a
   });
 
   it('propagates a failure of the AGENCY-ROLE read', async () => {
-    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, expertProfileId: PROFILE_ID });
-    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
+    seedAgencyBacked('owner');
     mockGetMemberRole.mockRejectedValue(new Error('statement timeout'));
     await expect(
       hasEngagementCapability({ id: COLLEAGUE_ID }, MANAGE_ENGAGEMENT, SUBJECT)
@@ -235,7 +292,7 @@ describe('hasExpertDeliveryCapability — log_time is the delivering expert’s 
     mockGetMemberRole.mockResolvedValue(agencyRole);
 
     expect(
-      await hasExpertDeliveryCapability({ id: actorId }, LOG_TIME, PROFILE_ID, LOG_CONTEXT)
+      await hasExpertDeliveryCapability({ id: actorId }, LOG_TIME, PROFILE_DELIVERY, LOG_CONTEXT)
     ).toBe(expected);
   });
 
@@ -243,7 +300,12 @@ describe('hasExpertDeliveryCapability — log_time is the delivering expert’s 
     mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
 
     expect(
-      await hasExpertDeliveryCapability({ id: EXPERT_USER_ID }, LOG_TIME, PROFILE_ID, LOG_CONTEXT)
+      await hasExpertDeliveryCapability(
+        { id: EXPERT_USER_ID },
+        LOG_TIME,
+        PROFILE_DELIVERY,
+        LOG_CONTEXT
+      )
     ).toBe(true);
   });
 });
@@ -277,7 +339,7 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
       await hasExpertDeliveryCapability(
         { id: actorId as string },
         MANAGE_ENGAGEMENT,
-        PROFILE_ID,
+        PROFILE_DELIVERY,
         LOG_CONTEXT
       )
     ).toBe(expected);
@@ -290,7 +352,7 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
       await hasExpertDeliveryCapability(
         { id: EXPERT_USER_ID },
         MANAGE_ENGAGEMENT,
-        PROFILE_ID,
+        PROFILE_DELIVERY,
         LOG_CONTEXT
       )
     ).toBe(true);
@@ -302,7 +364,7 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
     await hasExpertDeliveryCapability(
       { id: EXPERT_USER_ID },
       MANAGE_ENGAGEMENT,
-      PROFILE_ID,
+      PROFILE_DELIVERY,
       LOG_CONTEXT
     );
     expect(mockFindEngagement).not.toHaveBeenCalled();
@@ -315,7 +377,7 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
       await hasExpertDeliveryCapability(
         { id: EXPERT_USER_ID },
         MANAGE_ENGAGEMENT,
-        PROFILE_ID,
+        PROFILE_DELIVERY,
         LOG_CONTEXT
       )
     ).toBe(false);
@@ -333,7 +395,7 @@ describe('hasExpertDeliveryCapability — the identical holder set, one hop earl
     await hasExpertDeliveryCapability(
       { id: COLLEAGUE_ID },
       MANAGE_ENGAGEMENT,
-      PROFILE_ID,
+      PROFILE_DELIVERY,
       LOG_CONTEXT
     );
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
@@ -348,24 +410,26 @@ describe('administersDeliveringAgency', () => {
     [undefined, false],
   ])('agency role %s -> %s', async (role, expected) => {
     seedAgencyBacked(role);
-    expect(await administersDeliveringAgency({ id: COLLEAGUE_ID }, PROFILE_ID)).toBe(expected);
+    expect(await administersDeliveringAgency({ id: COLLEAGUE_ID }, PINNED_DELIVERY)).toBe(expected);
   });
 
   it('is true for the delivering expert who owns the agency (no delivering-expert short-circuit)', async () => {
     seedAgencyBacked('owner');
-    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(true);
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PINNED_DELIVERY)).toBe(true);
     expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, EXPERT_USER_ID);
   });
 
   it('is false for an independent expert', async () => {
     mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
-    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(false);
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, UNPINNED_DELIVERY)).toBe(
+      false
+    );
     expect(mockGetMemberRole).not.toHaveBeenCalled();
   });
 
   it('fails closed and warns when the profile is missing', async () => {
     mockFindProfile.mockResolvedValue(undefined);
-    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PROFILE_ID)).toBe(false);
+    expect(await administersDeliveringAgency({ id: EXPERT_USER_ID }, PINNED_DELIVERY)).toBe(false);
     expect(log.warn).toHaveBeenCalledWith(expect.any(String), {
       actorId: EXPERT_USER_ID,
       expertProfileId: PROFILE_ID,

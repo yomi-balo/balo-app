@@ -6,6 +6,7 @@ import {
   personDisplayName,
   personWithOrgLabel,
 } from '@balo/shared/parties';
+import { deliveringAgencyIdFor, type DeliveringAgencySource } from '@balo/shared/parties';
 import { expertCounterpartyLabels } from '@/lib/meetings/expert-counterparty';
 import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types';
 
@@ -108,15 +109,15 @@ export async function resolveCounterparty(
   lens: RecapLens,
   profile: RecapExpertProfile | undefined,
   clientCompanyName: string,
-  ordinalLine: string | null
+  ordinalLine: string | null,
+  agencySource: DeliveringAgencySource
 ): Promise<CounterpartyLabels> {
+  const agencyId = deliveringAgencyIdFor(agencySource, profile?.agencyId ?? null);
   const [expertUser, agency] = await Promise.all([
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
-      ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+    agencyId === null ? Promise.resolve(undefined) : agenciesRepository.getSummaryById(agencyId),
   ]);
   const firstName = expertUser?.firstName ?? null;
   const lastName = expertUser?.lastName ?? null;

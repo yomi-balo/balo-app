@@ -13,7 +13,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 7,
-    "updated": "2026-10-29",
+    "updated": "2026-11-03",
     "related": [
       "rate-and-payouts",
       "weekly-schedule"
@@ -68,7 +68,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>If an expert is no longer a member of your agency, their projects stay on the list so nothing\ngoes missing, and you can still open and run them. A short line under their name reads <strong>No\nlonger at</strong> followed by your agency's name, so you know who the project originally came from.</p>",
+            "html": "<p>If an expert is no longer a member of your agency, their projects stay on the list so nothing\ngoes missing, and you can still open and run them. Projects an expert delivered with your agency\nstay here even if they later move to another agency. A short line under their name reads <strong>No\nlonger at</strong> followed by your agency's name, so you know who the project originally came from.</p>",
             "id": "s4-b0"
           }
         ],

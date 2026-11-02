@@ -3,7 +3,11 @@ import 'server-only';
 import type { TimeEntryAuthorScope } from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
-import { administersDeliveringAgency, hasExpertDeliveryCapability } from '@/lib/authz/engagement';
+import {
+  administersDeliveringAgency,
+  hasExpertDeliveryCapability,
+  type ExpertDelivery,
+} from '@/lib/authz/engagement';
 import { resolveEngagementLens, type EngagementViewerContext } from './resolve-engagement-lens';
 
 /**
@@ -17,6 +21,20 @@ export interface ExpertSideActor {
   actingAs: 'delivering_expert' | 'agency_admin';
 }
 
+/** The engagement fields the expert-side capability questions read: the expert and the agency pin. */
+export interface EngagementDeliveryRef {
+  id: string;
+  expertProfileId: string;
+  deliveringAgencyId: string | null;
+}
+
+function engagementDelivery(engagement: Omit<EngagementDeliveryRef, 'id'>): ExpertDelivery {
+  return {
+    expertProfileId: engagement.expertProfileId,
+    agency: { from: 'engagement', deliveringAgencyId: engagement.deliveringAgencyId },
+  };
+}
+
 /**
  * Whether `user` may perform expert-side acts on this engagement, and in which capacity.
  * The ONE place the `manage_engagement` capability is asked for an engagement act (ADR-1046:
@@ -24,12 +42,12 @@ export interface ExpertSideActor {
  */
 export async function resolveExpertSideActor(
   user: SessionUser,
-  engagement: { id: string; expertProfileId: string }
+  engagement: EngagementDeliveryRef
 ): Promise<ExpertSideActor | null> {
   const holds = await hasExpertDeliveryCapability(
     user,
     ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-    engagement.expertProfileId,
+    engagementDelivery(engagement),
     { contextType: 'project', contextId: engagement.id }
   );
   if (!holds) {
@@ -57,7 +75,7 @@ const AGENCY_HOLDER_VIEWER: EngagementViewerContext = {
  */
 export async function resolveEngagementViewer(
   user: SessionUser,
-  engagement: { id: string; companyId: string; expertProfileId: string }
+  engagement: EngagementDeliveryRef & { companyId: string }
 ): Promise<EngagementViewerContext | null> {
   const lensContext = resolveEngagementLens(user, engagement);
   if (lensContext !== null) {
@@ -93,6 +111,7 @@ export async function resolveWorkspaceAccess(
     id: string;
     companyId: string;
     expertProfileId: string;
+    deliveringAgencyId: string | null;
     pricingMethod: string;
     status: string;
   }
@@ -137,12 +156,12 @@ function viewerActingAs(
  */
 export async function mayLogTime(
   user: SessionUser,
-  engagement: { id: string; expertProfileId: string }
+  engagement: EngagementDeliveryRef
 ): Promise<boolean> {
   return hasExpertDeliveryCapability(
     user,
     ENGAGEMENT_CAPABILITIES.LOG_TIME,
-    engagement.expertProfileId,
+    engagementDelivery(engagement),
     { contextType: 'project', contextId: engagement.id }
   );
 }
@@ -156,7 +175,7 @@ export async function mayLogTime(
  */
 export async function timeEntryAuthorScope(
   user: SessionUser,
-  engagement: { expertProfileId: string }
+  engagement: Omit<EngagementDeliveryRef, 'id'>
 ): Promise<TimeEntryAuthorScope> {
-  return (await administersDeliveringAgency(user, engagement.expertProfileId)) ? 'any' : 'own';
+  return (await administersDeliveringAgency(user, engagementDelivery(engagement))) ? 'any' : 'own';
 }

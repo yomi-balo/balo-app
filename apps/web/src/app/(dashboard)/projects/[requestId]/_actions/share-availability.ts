@@ -105,7 +105,7 @@ export async function shareAvailabilityAction(
     const mayManage = await hasExpertDeliveryCapability(
       user,
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      expertProfileId,
+      { expertProfileId, agency: { from: 'expert_profile' } },
       { contextType: 'request_interaction', contextId: relationshipId }
     );
     if (!mayManage) {
