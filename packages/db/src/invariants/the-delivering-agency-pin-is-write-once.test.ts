@@ -8,7 +8,7 @@ import { listSourceFiles, stripComments, toDisplayPath } from '@balo/shared/test
  * WRITTEN ONCE, BY `insertEngagementRowTx`, AND NEVER UPDATED.
  *
  * The column records which agency delivered an engagement. Agency-scoped rights read it instead of
- * the expert profile's live `agency_id`, so an expert who later moves agency (or goes independent)
+ * the expert profile's live `agency_id`, so an expert whose profile later links a different agency
  * neither takes the engagement with them nor hands it to the new agency. That only holds while the
  * value cannot be rewritten: one `.set({ deliveringAgencyId })` would turn the stamp back into a
  * live derivation.
@@ -23,6 +23,9 @@ import { listSourceFiles, stripComments, toDisplayPath } from '@balo/shared/test
  *      must still be there.
  *   2. No source contains the raw column name `delivering_agency_id`, which is how a raw-SQL write
  *      would have to spell it.
+ *   3. The only `.insert(engagements)` is the one in `insertEngagementRowTx`, and no source inserts
+ *      into `engagements` in raw SQL. Rules 1 and 2 bound the writers of the pin; this rule makes
+ *      every new engagement pass through the one writer, so none is created with its pin unset.
  *
  * ⚠ COVERAGE BOUNDARY. The matcher sees INLINE object literals only. A payload built in a
  * variable (`.values(row)`, `.set(patch)`, `.values([{ … }])`, `{ ...patch }`) escapes it. No such
@@ -149,6 +152,23 @@ describe('INVARIANT: engagements.delivering_agency_id is write-once — only ins
         ? ''
         : `payloads naming deliveringAgencyId: ${writers.map(locate).join(', ') || 'none'}`;
     expect(kindAndFile, message).toEqual(expected);
+  });
+
+  it('every engagement insert goes through insertEngagementRowTx, so every new row is stamped', () => {
+    const inserts = sources.flatMap((s) =>
+      [...s.stripped.matchAll(/\.insert\(\s*(?:\w+\.)?engagements\s*\)/g)].map(
+        (m) => `${s.file}:${rawLineOf(s, m.index ?? 0)}`
+      )
+    );
+    expect(
+      inserts.map((at) => at.slice(0, at.lastIndexOf(':'))),
+      inserts.join(', ')
+    ).toEqual([STAMP_FILE]);
+
+    const rawInserts = sources
+      .filter((s) => /insert\s+into\s+"?engagements"?[\s(]/i.test(s.stripped))
+      .map((s) => s.file);
+    expect(rawInserts).toEqual([]);
   });
 
   it('no repository source spells the raw column name delivering_agency_id', () => {

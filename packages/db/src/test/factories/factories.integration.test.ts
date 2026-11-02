@@ -61,9 +61,9 @@ describe('Test factories', () => {
     expect(kase.engagement.deliveringAgencyId).toBe(agency.id);
   });
 
-  it('an independent expert gets a NULL pin, and values.deliveringAgencyId: null overrides an agency', async () => {
-    const independent = await engagementFactory();
-    expect(independent.engagement.deliveringAgencyId).toBeNull();
+  it('an expert with no agency link gets a NULL pin, and values.deliveringAgencyId: null overrides an agency', async () => {
+    const unlinked = await engagementFactory();
+    expect(unlinked.engagement.deliveringAgencyId).toBeNull();
 
     const expert = await expertDraftFactory();
     const agency = await agencyFactory();

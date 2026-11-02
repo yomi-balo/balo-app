@@ -360,7 +360,7 @@ describe('projectEngagementsRepository.create — the seam proof', () => {
     expect(parent?.deliveringAgencyId).toBe(agency.id);
   });
 
-  it('BAL-632 — create() gives an independent expert a NULL pin', async () => {
+  it('BAL-632 — create() gives an expert with no agency link a NULL pin', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 

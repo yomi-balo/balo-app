@@ -82,14 +82,14 @@ export function projectDeliveryToEngagementStatus(s: ProjectDeliveryStatus): Eng
 
 /**
  * The delivering agency for a new engagement: the expert profile's `agency_id` as it
- * stands inside `tx`, or NULL for an independent expert and for a profile id that does
- * not exist (the insert then fails on the `expert_profile_id` FK).
+ * stands inside `tx`, or NULL for a profile with no agency link (a solo expert's
+ * profile links an agency-of-one, so it is not NULL) and for a profile id that does not
+ * exist (the insert then fails on the `expert_profile_id` FK).
  *
- * No lock is taken. `expert_profiles.agency_id` only ever moves from NULL to an agency:
- * the link flow returns `already_linked` without writing when the profile already has
- * one (`apps/web/src/lib/expert-agency/link-expert-agency.ts`). A read racing a link
- * therefore sees either NULL or the newly linked agency, and both are a correct value
- * for the moment of insert.
+ * No lock is taken. Whatever committed value this read sees inside `tx` is the
+ * profile's agency at the moment of insert, which is exactly what the pin records; a
+ * link committing a moment later belongs to engagements created after it. That holds
+ * however `agency_id` moves: `expertsRepository.linkAgency` writes it unconditionally.
  */
 export async function resolveDeliveringAgencyIdTx(
   tx: DbTx,

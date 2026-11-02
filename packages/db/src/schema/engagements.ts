@@ -93,8 +93,10 @@ export const engagements = pgTable(
       .references(() => expertProfiles.id, { onDelete: 'cascade' }),
     /**
      * The agency delivering this engagement, fixed when the row is created from the
-     * expert profile's `agency_id`. NULL means an independent expert; readers treat
-     * NULL as "no agency" and grant nothing agency-scoped from it (fail closed).
+     * expert profile's `agency_id`. NULL means the profile had no agency link when the
+     * engagement was created; it does NOT mean a solo expert, whose profile links an
+     * agency-of-one. Readers treat NULL as "no agency" and grant nothing agency-scoped
+     * from it (fail closed).
      *
      * WRITE-ONCE. The only writer is `insertEngagementRowTx`
      * (repositories/_shared/engagement-supertype.ts), which reads the profile inside

@@ -59,14 +59,14 @@ async function seed() {
   const agencyA = await agencyFactory();
   const agencyB = await agencyFactory();
   const agencyExpertId = await agencyLinkedExpertId(agencyA.id);
-  const independentExpertId = (await expertDraftFactory()).id;
+  const unlinkedExpertId = (await expertDraftFactory()).id;
   const movedExpertId = await agencyLinkedExpertId(agencyB.id);
 
   const unpinned = { deliveringAgencyId: null };
   const project = await engagementFactory({ expertProfileId: agencyExpertId, values: unpinned });
   const kase = await caseEngagementFactory({ expertProfileId: agencyExpertId, values: unpinned });
-  const independent = await engagementFactory({
-    expertProfileId: independentExpertId,
+  const unlinked = await engagementFactory({
+    expertProfileId: unlinkedExpertId,
     values: unpinned,
   });
   const softDeleted = await engagementFactory({
@@ -83,7 +83,7 @@ async function seed() {
     ids: {
       project: project.engagement.id,
       kase: kase.engagement.id,
-      independent: independent.engagement.id,
+      unlinked: unlinked.engagement.id,
       softDeleted: softDeleted.engagement.id,
       alreadyPinned: alreadyPinned.engagement.id,
     },
@@ -105,7 +105,7 @@ describe('migration 0123 — engagements.delivering_agency_id backfill', () => {
 
     expect(after.get(ids.project)?.deliveringAgencyId).toBe(agencyA.id);
     expect(after.get(ids.kase)?.deliveringAgencyId).toBe(agencyA.id);
-    expect(after.get(ids.independent)?.deliveringAgencyId).toBeNull();
+    expect(after.get(ids.unlinked)?.deliveringAgencyId).toBeNull();
     expect(after.get(ids.softDeleted)?.deliveringAgencyId).toBe(agencyA.id);
     // Pinned to A while the profile now says B: the backfill never overwrites a pin.
     expect(after.get(ids.alreadyPinned)?.deliveringAgencyId).toBe(agencyA.id);

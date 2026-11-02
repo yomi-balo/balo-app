@@ -117,7 +117,7 @@ describe('caseEngagementsRepository.create', () => {
     expect(parent?.deliveringAgencyId).toBe(agency.id);
   });
 
-  it('BAL-632 — an independent expert gets a NULL pin', async () => {
+  it('BAL-632 — an expert with no agency link gets a NULL pin', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 

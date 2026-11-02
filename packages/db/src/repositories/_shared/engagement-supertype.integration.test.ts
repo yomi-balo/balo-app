@@ -122,7 +122,7 @@ describe('insertEngagementRowTx', () => {
     expect(persisted?.deliveringAgencyId).toBe(original.id);
   });
 
-  it('an independent expert gets a NULL pin', async () => {
+  it('an expert with no agency link gets a NULL pin', async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
 
@@ -160,19 +160,19 @@ describe('insertEngagementRowTx', () => {
 });
 
 describe('resolveDeliveringAgencyIdTx', () => {
-  it("returns the profile's agency, or NULL for an independent expert or an unknown profile", async () => {
-    const independent = await expertDraftFactory();
+  it("returns the profile's agency, or NULL for an unlinked profile or an unknown one", async () => {
+    const unlinked = await expertDraftFactory();
     const linked = await expertDraftFactory();
     const agency = await agencyFactory();
     await expertsRepository.linkAgency(linked.id, agency.id);
 
     const resolved = await db.transaction(async (tx) => ({
       linked: await resolveDeliveringAgencyIdTx(tx, linked.id),
-      independent: await resolveDeliveringAgencyIdTx(tx, independent.id),
+      unlinked: await resolveDeliveringAgencyIdTx(tx, unlinked.id),
       unknown: await resolveDeliveringAgencyIdTx(tx, randomUUID()),
     }));
 
-    expect(resolved).toEqual({ linked: agency.id, independent: null, unknown: null });
+    expect(resolved).toEqual({ linked: agency.id, unlinked: null, unknown: null });
   });
 });
 

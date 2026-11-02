@@ -1,5 +1,6 @@
 -- `engagements.delivering_agency_id`: the agency delivering the engagement, pinned when the row
--- is created. NULL means an independent expert.
+-- is created. NULL means the profile had no agency link at that moment (a solo expert's profile
+-- links an agency-of-one, so a solo expert gets a non-NULL pin).
 --
 -- THIS FILE WAS HAND-EDITED after `drizzle-kit generate`: exactly ONE statement was added — the
 -- backfill UPDATE between the column and the FK. Nothing was reordered or removed.
