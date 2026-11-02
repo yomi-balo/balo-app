@@ -592,7 +592,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Sometimes a sign-in doesn't finish. You'll then see \"That sign-in didn't finish — nothing\nchanged\", with a <strong>Try again</strong> button.</p>\n<p>Other times the account connects but we can't read its calendars yet. You'll see \"We're still\nsetting up this calendar\" and a <strong>Fix permissions</strong> button, which runs the sign-in again without\ncreating a new account. This often clears on its own within a few minutes.</p>\n<p>If we lose access to a calendar — usually after a password change, or when calendar access is\nturned off — you'll see a <strong>Reconnect</strong> button. If that calendar is checked for busy time, bookings\nwith you are paused until you reconnect.</p>\n<p>If the permission boxes don't come back for Google, remove Balo in your Google account's\npermissions and connect again.</p>",
+            "html": "<p>Sometimes a sign-in doesn't finish. You'll then see \"That sign-in didn't finish — nothing\nchanged\", with a <strong>Try again</strong> button.</p>\n<p>Other times the account connects but we can't read its calendars yet. You'll see \"We're still\nsetting up this calendar\" and a <strong>Fix permissions</strong> button, which runs the sign-in again without\ncreating a new account. This often clears on its own within a few minutes.</p>\n<p>If we lose access to a calendar — usually after a password change, or when calendar access is\nturned off — you'll see a <strong>Reconnect</strong> button. If it's your only connected account, you won't\nappear in search until you reconnect. If another account is still connected, you stay listed, but\nif the lost calendar is checked for busy time, bookings with you are paused until you reconnect.</p>\n<p>If the permission boxes don't come back for Google, remove Balo in your Google account's\npermissions and connect again.</p>",
             "id": "s3-b0"
           }
         ],
@@ -719,7 +719,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           },
           {
             "kind": "html",
-            "html": "<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
+            "html": "<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to <strong>Expert Settings</strong> to reconnect it. While your calendar is disconnected,\nyou won't appear in expert search.</p>",
             "id": "s2-b1"
           }
         ],
@@ -2019,7 +2019,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
   {
     "slug": "understanding-the-hours-on-your-project",
     "title": "Understanding the hours on your project",
-    "summary": "Read the hours bar, the time log and the totals card on a time and materials project.",
+    "summary": "Read the hours bar, the time log and the project totals on a time and materials project.",
     "audience": [
       "client"
     ],
@@ -2027,7 +2027,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "cases-projects"
     },
     "order": 6,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "approving-a-change-to-your-project",
       "reviewing-a-finished-project"
@@ -2060,11 +2060,11 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       },
       {
         "n": 2,
-        "title": "The totals card",
+        "title": "The project totals",
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The totals card adds up the project. It shows the hours logged on milestones that have an estimate\nagainst their total estimate, the hours in the current billing period and the date of the next\ninvoice. Billing periods follow the cadence agreed for the project, either monthly or every two\nweeks, and run by the expert's calendar.</p>",
+            "html": "<p>The foot of the <strong>Delivery plan</strong> card, under the last milestone, adds up the project. It shows the\nhours logged on milestones that have an estimate against their total estimate, the hours in the\ncurrent billing period and the date of the next invoice. Billing periods follow the cadence agreed\nfor the project, either monthly or every two weeks, and run by the expert's calendar.</p>",
             "id": "s2-b0"
           }
         ],
@@ -2291,7 +2291,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>You'll get an email letting you know you're in. The next step is finishing your expert setup in\n<strong>Expert Settings</strong>. There are six steps:</p>\n<ul>\n<li><strong>Complete your profile</strong></li>\n<li><strong>Verify your phone</strong></li>\n<li><strong>Set your rate</strong></li>\n<li><strong>Connect calendar</strong></li>\n<li><strong>Set your availability</strong></li>\n<li><strong>Set up payouts</strong></li>\n</ul>\n<p>Until all six are done, Settings tells you that you're not visible to clients yet and shows which\nstep is next, with a <strong>Continue setup</strong> button that takes you straight to it. Once everything is\ndone, it changes to \"You're appearing in search.\" It only takes a few minutes. The guides below\nwalk through the longer steps.</p>",
+            "html": "<p>You'll get an email letting you know you're in. The next step is finishing your expert setup in\n<strong>Expert Settings</strong>. There are six steps:</p>\n<ul>\n<li><strong>Complete your profile</strong></li>\n<li><strong>Verify your phone</strong></li>\n<li><strong>Set your rate</strong></li>\n<li><strong>Connect calendar</strong></li>\n<li><strong>Set your availability</strong></li>\n<li><strong>Set up payouts</strong></li>\n</ul>\n<p>Until all six are done, <strong>Expert Settings</strong> tells you that you're not visible to clients yet and\nshows which step is next, with a <strong>Continue setup</strong> button that takes you straight to it. Once\neverything is done, it changes to \"You're appearing in search.\" It only takes a few minutes. The\nguides below walk through the longer steps.</p>",
             "id": "s3-b0"
           },
           {
@@ -2339,7 +2339,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 2,
-    "updated": "2026-10-31",
+    "updated": "2026-11-02",
     "related": [
       "project-requests-for-experts"
     ],
@@ -2482,7 +2482,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>If the client asks for changes, you'll see their note beside the section it's about, with a\nsummary at the top of the page and a <strong>Go to note</strong> link. Update the proposal as needed, then\nchoose <strong>Mark as addressed</strong> on the note. You can bring the note back any time with <strong>Show note</strong>.</p>\n<p>A revision isn't saved as you go: the page says \"Not saved until you resend\". Your changes go to\nthe client when you choose <strong>Preview and resend</strong>, then <strong>Resend</strong>. If you leave before that, the\nversion the client last saw stays as it was. You can't add or remove documents while revising: the\nones already attached carry over to the version you resend.</p>",
+            "html": "<p>If the client asks for changes, you'll see their note beside the section it's about, or above the\n<strong>Overview</strong> if it's about the proposal as a whole, with a summary at the top of the page and a\n<strong>Go to note</strong> link. Update the proposal as needed, then choose <strong>Mark as addressed</strong> on the note.\nYou can bring the note back any time with <strong>Show note</strong>.</p>\n<p>A revision isn't saved as you go: the page says \"Not saved until you resend\". Your changes go to\nthe client when you choose <strong>Preview and resend</strong>, then <strong>Resend</strong>. If you leave before that, the\nversion the client last saw stays as it was. You can't add or remove documents while revising: the\nones already attached carry over to the version you resend.</p>",
             "id": "s8-b0"
           }
         ],

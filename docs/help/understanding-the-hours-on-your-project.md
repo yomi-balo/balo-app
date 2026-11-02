@@ -1,12 +1,12 @@
 ---
 title: 'Understanding the hours on your project'
-summary: 'Read the hours bar, the time log and the totals card on a time and materials project.'
+summary: 'Read the hours bar, the time log and the project totals on a time and materials project.'
 audience: [client]
 category:
   client: cases-projects
 order: 6
 published: true
-updated: 2026-10-31
+updated: 2026-11-02
 related: [approving-a-change-to-your-project, reviewing-a-finished-project]
 ---
 
@@ -28,12 +28,12 @@ naming them.
 
 ![A milestone on the project page showing 15 of 16 hrs logged and 1 hr left of estimate, with its open time log highlighted.](01)
 
-## The totals card
+## The project totals
 
-The totals card adds up the project. It shows the hours logged on milestones that have an estimate
-against their total estimate, the hours in the current billing period and the date of the next
-invoice. Billing periods follow the cadence agreed for the project, either monthly or every two
-weeks, and run by the expert's calendar.
+The foot of the **Delivery plan** card, under the last milestone, adds up the project. It shows the
+hours logged on milestones that have an estimate against their total estimate, the hours in the
+current billing period and the date of the next invoice. Billing periods follow the cadence agreed
+for the project, either monthly or every two weeks, and run by the expert's calendar.
 
 ![The foot of the delivery plan, with the hours logged against the estimate, the hours this billing period and the next invoice date highlighted.](02)
 

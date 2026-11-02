@@ -45,8 +45,9 @@ setting up this calendar" and a **Fix permissions** button, which runs the sign-
 creating a new account. This often clears on its own within a few minutes.
 
 If we lose access to a calendar — usually after a password change, or when calendar access is
-turned off — you'll see a **Reconnect** button. If that calendar is checked for busy time, bookings
-with you are paused until you reconnect.
+turned off — you'll see a **Reconnect** button. If it's your only connected account, you won't
+appear in search until you reconnect. If another account is still connected, you stay listed, but
+if the lost calendar is checked for busy time, bookings with you are paused until you reconnect.
 
 If the permission boxes don't come back for Google, remove Balo in your Google account's
 permissions and connect again.

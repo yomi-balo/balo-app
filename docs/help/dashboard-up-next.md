@@ -48,5 +48,5 @@ While your setup is incomplete and nothing is booked yet, a setup preview shows 
 instead.
 
 If your calendar connection stops working, a Calendar card appears in Your move on your
-dashboard, linking to Settings to reconnect it. While your calendar is disconnected, you
-won't appear in expert search.
+dashboard, linking to **Expert Settings** to reconnect it. While your calendar is disconnected,
+you won't appear in expert search.

@@ -43,10 +43,10 @@ You'll get an email letting you know you're in. The next step is finishing your 
 - **Set your availability**
 - **Set up payouts**
 
-Until all six are done, Settings tells you that you're not visible to clients yet and shows which
-step is next, with a **Continue setup** button that takes you straight to it. Once everything is
-done, it changes to "You're appearing in search." It only takes a few minutes. The guides below
-walk through the longer steps.
+Until all six are done, **Expert Settings** tells you that you're not visible to clients yet and
+shows which step is next, with a **Continue setup** button that takes you straight to it. Once
+everything is done, it changes to "You're appearing in search." It only takes a few minutes. The
+guides below walk through the longer steps.
 
 ![The setup banner on Expert Settings, with the not-visible-yet message and the Continue setup button highlighted.](03)
 

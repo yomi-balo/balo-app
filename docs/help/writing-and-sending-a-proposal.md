@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 2
 published: true
-updated: 2026-10-31
+updated: 2026-11-02
 related: [project-requests-for-experts]
 ---
 
@@ -133,9 +133,10 @@ there it's their call.
 
 ## Revising after feedback
 
-If the client asks for changes, you'll see their note beside the section it's about, with a
-summary at the top of the page and a **Go to note** link. Update the proposal as needed, then
-choose **Mark as addressed** on the note. You can bring the note back any time with **Show note**.
+If the client asks for changes, you'll see their note beside the section it's about, or above the
+**Overview** if it's about the proposal as a whole, with a summary at the top of the page and a
+**Go to note** link. Update the proposal as needed, then choose **Mark as addressed** on the note.
+You can bring the note back any time with **Show note**.
 
 A revision isn't saved as you go: the page says "Not saved until you resend". Your changes go to
 the client when you choose **Preview and resend**, then **Resend**. If you leave before that, the
