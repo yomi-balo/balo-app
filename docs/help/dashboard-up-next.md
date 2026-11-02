@@ -30,6 +30,8 @@ room isn't ready yet, "Setting up room" shows in place of **Join**.
 "New times suggested" means the expert has proposed new times for that meeting. Open the
 case to choose one.
 
+![The Up next card on a client's dashboard, with a consultation booked with Priya Raman and marked New times suggested highlighted.](01)
+
 Nothing booked in the next 14 days? Use **Find an expert** to start a project or book a
 consultation.
 
@@ -39,6 +41,8 @@ The card lists your own upcoming meetings — the same bookings you'll see in Ca
 the same way as for clients, and **Open calendar** at the bottom of the card takes you to Calendar.
 
 "Waiting on their reply" means a reschedule you proposed is still with the client.
+
+![The Up next card on an expert's dashboard, with a consultation marked Waiting on their reply highlighted.](02)
 
 While your setup is incomplete and nothing is booked yet, a setup preview shows here
 instead.

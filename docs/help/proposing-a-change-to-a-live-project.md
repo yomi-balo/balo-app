@@ -25,6 +25,8 @@ open at a time. While you have a draft, **Propose a change** reads **Continue dr
 while a change is waiting on the client, **Propose a change** is unavailable and says "A change is
 already waiting on {client}".
 
+![The project page, with Northwind's change request and its Propose a change and Answer without a change order buttons highlighted.](01)
+
 ## Building the change
 
 The composer lists every milestone. For each one you can leave it unchanged, edit it, remove it,
@@ -45,10 +47,14 @@ to the price box.
   below the value of time already logged, a milestone's estimate can't be set below the hours
   already logged on it, and a milestone with logged time can't be removed.
 
+![The Propose a change page, with Unchanged and Edited milestones beside the summary of the change, and the prompt to raise the cap highlighted.](02)
+
 ## Draft or send
 
 Save a draft as often as you like. The client sees nothing until you send it. Discarding a draft
 that began from a request puts the request back, so it's still waiting for you.
+
+![The project page, with the banner about an unsent draft change and its Continue editing and Discard buttons highlighted.](03)
 
 ## After you send
 
@@ -57,11 +63,15 @@ are marked **Change pending** and can't be edited, though you can still start, c
 them. Choose **Withdraw** if you want to take the change back. If the client declines, you see
 their reason.
 
+![The project page after a change is sent, with the Change sent banner and its Withdraw button highlighted, and Change pending on the milestone it touches.](04)
+
 ## Approval
 
 When the client approves, the milestones and the price update right away and you're told. On a
 time and materials project the estimates update and, if you raised it, the cap. Any price
 difference on a fixed-price project is settled on the final invoice.
+
+![The project page after Northwind approves a change, with the banner saying the plan, estimates and cap are updated highlighted, and Updated by approved change on the milestone it changed.](05)
 
 ## Working as an agency owner or admin
 
@@ -71,8 +81,12 @@ Your agency's projects are listed under **Agency** on your Projects page.
 The notices the client receives name the person who acted. The summary of what changed since the
 proposal names your agency.
 
+![The Projects page viewed as CloudPeak Consulting, with the Agency view highlighted.](06)
+
 ## Marking the project ready
 
 You can't mark the project ready for review while a change is open: a client request, a draft made
 from one, or a change waiting for the client. Choose **Answer without a change order**, discard the
 draft, choose **Withdraw**, or wait for a decision first.
+
+![The Finish the project card, with Mark project ready turned off and a note to answer Northwind's change request first highlighted.](07)

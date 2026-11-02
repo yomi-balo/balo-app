@@ -26,12 +26,16 @@ milestone has one "Logged by …" line naming who logged the time. If an owner o
 expert's agency changes an entry they didn't log, that entry also shows an "Edited by …" line
 naming them.
 
+![A milestone on the project page showing 15 of 16 hrs logged and 1 hr left of estimate, with its open time log highlighted.](01)
+
 ## The totals card
 
 The totals card adds up the project. It shows the hours logged on milestones that have an estimate
 against their total estimate, the hours in the current billing period and the date of the next
 invoice. Billing periods follow the cadence agreed for the project, either monthly or every two
 weeks, and run by the expert's calendar.
+
+![The foot of the delivery plan, with the hours logged against the estimate, the hours this billing period and the next invoice date highlighted.](02)
 
 ## When a milestone goes over its estimate
 
@@ -45,6 +49,8 @@ work, and a project can need more time than planned. You won't be told again abo
 estimate, but you will be if the estimate is raised and the milestone passes the new figure,
 including when the hours pass it before you approve the raise.
 
+![The project page, with the banner saying Discovery and data model has gone over estimate highlighted.](03)
+
 ## Asking for a change
 
 If you want the plan to change, for example because you'd like to adjust scope or you expect the
@@ -53,3 +59,5 @@ Your expert replies with a proposal, which can set new estimates, or with an ans
 decline a proposal, and nothing changes until you approve. The
 change card shows the hours already logged on each milestone whose estimate changes. See
 **Approving or declining a change to your project** for the steps.
+
+![The Need something different from the plan? card on the project page, with the Request a change button highlighted.](04)

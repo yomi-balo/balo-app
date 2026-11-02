@@ -21,10 +21,16 @@ defineGuide('pausing-new-work', [
     as: 'visitor',
     state: 'paused',
     route: '/experts/priya-raman',
+    // `visible: true` skips the copy React keeps in its hidden streaming container until the
+    // Suspense boundary swaps in.
     target: (page) =>
-      page.locator('.bg-paused-hatch').filter({ hasText: "isn't taking on new work right now" }),
+      page
+        .locator('.bg-paused-hatch')
+        .filter({ hasText: "isn't taking on new work right now", visible: true }),
     crop: (page) =>
-      page.locator('[data-slot="card"]').filter({ hasText: 'Not taking on new work right now' }),
+      page
+        .locator('[data-slot="card"]')
+        .filter({ hasText: 'Not taking on new work right now', visible: true }),
   },
   {
     section: 3,

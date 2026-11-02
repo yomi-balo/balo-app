@@ -26,6 +26,8 @@ rather we find someone else, choose **Get matched with someone else instead**. I
 taking on new work right now, you'll see a note saying so and can't send it to them — choose **Get
 matched instead** and we'll find someone with similar experience.
 
+![A case header, with the Convert to project button highlighted under its Open status.](01)
+
 ## The AI draft
 
 As soon as the form opens, we read through the case's messages and consultation transcripts and
@@ -42,10 +44,14 @@ description blank for you to write yourself.
 If you close the form and come back to it, you'll pick up where you left off — we only draft
 automatically while the description is still blank and no files are attached.
 
+![The Start a project form, with the AI-drafted description under What do you need? highlighted.](02)
+
 ## Editing and redrafting
 
 Everything the draft writes is yours to edit. If you'd rather start over, choose **Redraft from
 case** — we'll ask you to confirm before replacing your edits with a fresh draft.
+
+![The Redraft from case? window, with the Redraft button highlighted next to Keep my edits.](03)
 
 ## Adding case files
 
@@ -54,7 +60,11 @@ copied into your request, so the original stays where it is. A file can't be add
 5 MB or isn't a PDF, PNG, JPEG or WEBP; the picker marks those as unavailable and says why. Case
 files count toward the same four-file limit as anything you upload directly.
 
+![The Attach documents section, with the From this case list highlighted: one file attached and two marked as unavailable, one for size and one for file type.](04)
+
 ## The link back
 
 The request records the case it came from. You'll see "Linked to case" on the review step
 before you send it, and again on the confirmation screen once it's sent.
+
+![The review step of a request started from a case, with the Linked to case line highlighted below its documents.](05)

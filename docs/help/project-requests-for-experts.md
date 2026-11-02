@@ -19,9 +19,13 @@ A request a client sends straight to you opens with a choice: **Propose times** 
 **Pass on this project**. Once you've proposed times or sent the client a message, the request
 carries on like any other.
 
+![A request Northwind Industrial sent you directly, with the card asking you to take it on or pass, and its Propose times and Pass on this project buttons, highlighted.](01)
+
 ## Sharing files in the conversation
 
 A file you attach in the conversation goes to the client only. It isn't shared with other experts.
+
+![A project request with the conversation's message box on the left and the Files card on the right, with the note that a file shared from the conversation goes to the client only highlighted.](02)
 
 ## Passing on a project
 
@@ -41,3 +45,5 @@ Here's what happens when you pass:
 
 Passing can't be undone, and you can't rejoin the project yourself. If you change your mind, get in
 touch with the Balo team.
+
+![The right-hand column of a request whose proposal was asked for, with Pass on this project highlighted below Build proposal and your expression of interest, above the request's name.](03)

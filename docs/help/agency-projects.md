@@ -27,6 +27,8 @@ out of the way.
 
 If you lose the owner or admin role, the tab disappears the next time you open Projects.
 
+![The Projects page header, with the Agency tab highlighted next to Client and Expert.](01)
+
 ## What you see
 
 Four tiles sit at the top. Each one counts the live projects in that state, and you can select
@@ -52,6 +54,8 @@ When your agency doesn't have any projects yet, the page says "{Agency name}'s p
 here", with your agency's name in place, and fills in as soon as a client kicks off a project with one of
 your experts.
 
+![The Agency view of Projects, with the Changes requested tile highlighted beside the other three tiles and above the list of live projects.](02)
+
 ## Finding one expert's projects
 
 Use **Delivered by** above the list to narrow it to one person. It starts on **Everyone**, lists
@@ -66,11 +70,15 @@ If everything your agency has delivered is finished, the list says "Nothing is i
 now — new projects with {Agency name} experts will show up here." and the finished projects wait
 under **Completed and cancelled**.
 
+![The Delivered by filter open on the Agency view, listing Everyone, You and each teammate with their project counts.](03)
+
 ## When a teammate has moved on
 
 If an expert is no longer a member of your agency, their projects stay on the list so nothing
 goes missing, and you can still open and run them. A short line under their name reads **No
 longer at** followed by your agency's name, so you know who the project originally came from.
+
+![A project on the Agency view delivered by Tom Becker, a former teammate, with their name and the No longer at CloudPeak line highlighted.](04)
 
 ## If you own more than one agency
 
@@ -79,6 +87,8 @@ an **Agency** picker appears above the tiles. An agency with no other experts ye
 It lists your agencies by name with each one's live project count. Pick one and the whole view,
 from the tiles to the list, shows that agency alone. Your choice is saved in the page
 address, so you can bookmark or share it.
+
+![The Agency picker open above the tiles, listing CloudPeak Consulting and Summit Ridge Partners with each one's live project count.](05)
 
 ## Hearing about it as it happens
 
@@ -98,3 +108,5 @@ Agency view.
 You aren't notified about your own work: if you're the one delivering the project, or the
 person who made the change, you won't get a second notice. Agency members who aren't owners or
 admins don't receive these notifications.
+
+![The Notifications panel, with a Changes requested notice about a project a teammate is delivering highlighted above the over-estimate and cancelled notices.](06)

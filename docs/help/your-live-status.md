@@ -25,6 +25,8 @@ open **More** to find it. Select the pill to see what it means and what to do ne
   **Reconnect calendar**. If another setup step needs attention, the pill points you to it. If
   nothing is missing, this usually clears up within a few minutes; if it doesn't, get in touch.
 
+![The sidebar under your name, with the Not taking work panel highlighted, showing Change availability and View public profile.](01)
+
 ## Good to know
 
 - **Not taking work** is something you choose, and you stay visible in search while it's on. See
@@ -32,3 +34,5 @@ open **More** to find it. Select the pill to see what it means and what to do ne
 - Select **View public profile** in the pill to see your profile the way clients do. It isn't
   offered while you're **Not listed**.
 - Before you've gone live, your setup checklist on the dashboard is where to look instead.
+
+![The Live status panel opened from under your name in the sidebar, with the View public profile button highlighted.](02)

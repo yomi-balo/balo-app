@@ -31,9 +31,13 @@ cards, most pressing first. Scroll sideways to see them all.
 
 When more than one kind is waiting, filter chips above the row narrow it down.
 
+![The Your move row on the dashboard, with the filter chips above the cards highlighted.](01)
+
 ## Opening a card
 
 Select a card, or its button, to go straight to the project, case or page it belongs to.
+
+![A Proposal to review card in Your move, with the Review proposal button highlighted.](02)
 
 A card stays until the thing it points to is done: the balance is settled, a time is chosen, the
 work is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear
@@ -46,3 +50,5 @@ When nothing is waiting on you, the row shows a single line instead.
 Below Your move, every live project sits under its stage (matching, interest, proposals, kickoff or delivery), marked your move, waiting on others, or in progress; select one to open it.
 
 Hover over or select a stage, or a legend item, to see what it means; on a phone, tap it.
+
+![Where your projects stand on the dashboard, with the explanation of the Proposals stage highlighted.](03)

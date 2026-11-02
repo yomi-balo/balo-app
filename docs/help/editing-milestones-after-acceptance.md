@@ -25,6 +25,8 @@ The exception is a milestone that's part of a change waiting on the client. It's
 **Change pending**, and you can't edit or remove it until the client decides or you withdraw the
 change.
 
+![A milestone on the delivery plan, with its Changed since proposal label highlighted and What changed open to show the old and new Done when wording.](01)
+
 ## What needs a change
 
 - **Time and materials.** New milestones need a change the client approves. On these projects
@@ -44,3 +46,5 @@ another: **Propose a change** is greyed out, or replaced by "A change is already
 
 Milestones you added yourself on a fixed-price project, and that the client hasn't approved
 through a change, can still be removed directly.
+
+![The Needs approval first window for removing an agreed milestone, with the Propose a change button highlighted.](02)

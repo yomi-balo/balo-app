@@ -22,6 +22,8 @@ to **/redeem**.
 Type your code (codes aren't case-sensitive) and choose **Redeem**. You only need to be an
 owner or admin of your company to redeem — if you aren't, ask a teammate who is.
 
+![The Redeem a promo code screen with a code typed in, with the Redeem button highlighted.](01)
+
 ## What "A$X added" means
 
 When a code is redeemed, we add that amount of **prepaid Balo credit** to your company's
@@ -42,3 +44,5 @@ Adding a card to your company charges nothing. A card on file is used for time b
 and for Auto top-up if you turn it on. Right after you redeem, the redeem screen offers this too:
 under "Keep going when your credit runs out", choose **Add a card** — it's optional. See [Buying
 credit](/help/buying-credit) for how to top up.
+
+![The Payment method section of Credits & billing, with the saved card highlighted.](03)

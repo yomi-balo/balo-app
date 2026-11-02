@@ -36,7 +36,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Projects page header, with the Agency tab highlighted next to Client and Expert.",
+          "lightSrc": "/help/agency-projects/01-light.png",
+          "darkSrc": "/help/agency-projects/01-dark.png",
+          "width": 1984,
+          "height": 296
+        }
       },
       {
         "n": 2,
@@ -48,7 +54,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Agency view of Projects, with the Changes requested tile highlighted beside the other three tiles and above the list of live projects.",
+          "lightSrc": "/help/agency-projects/02-light.png",
+          "darkSrc": "/help/agency-projects/02-dark.png",
+          "width": 2016,
+          "height": 1252
+        }
       },
       {
         "n": 3,
@@ -60,7 +72,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Delivered by filter open on the Agency view, listing Everyone, You and each teammate with their project counts.",
+          "lightSrc": "/help/agency-projects/03-light.png",
+          "darkSrc": "/help/agency-projects/03-dark.png",
+          "width": 2030,
+          "height": 658
+        }
       },
       {
         "n": 4,
@@ -72,7 +90,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A project on the Agency view delivered by Tom Becker, a former teammate, with their name and the No longer at CloudPeak line highlighted.",
+          "lightSrc": "/help/agency-projects/04-light.png",
+          "darkSrc": "/help/agency-projects/04-dark.png",
+          "width": 1980,
+          "height": 212
+        }
       },
       {
         "n": 5,
@@ -84,7 +108,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Agency picker open above the tiles, listing CloudPeak Consulting and Summit Ridge Partners with each one's live project count.",
+          "lightSrc": "/help/agency-projects/05-light.png",
+          "darkSrc": "/help/agency-projects/05-dark.png",
+          "width": 2016,
+          "height": 666
+        }
       },
       {
         "n": 6,
@@ -96,7 +126,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s6-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Notifications panel, with a Changes requested notice about a project a teammate is delivering highlighted above the over-estimate and cancelled notices.",
+          "lightSrc": "/help/agency-projects/06-light.png",
+          "darkSrc": "/help/agency-projects/06-dark.png",
+          "width": 1116,
+          "height": 876
+        }
       }
     ]
   },
@@ -133,7 +169,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page's Request a change box, with the What would you like to change? field highlighted above the Send request button.",
+          "lightSrc": "/help/approving-a-change-to-your-project/01-light.png",
+          "darkSrc": "/help/approving-a-change-to-your-project/01-dark.png",
+          "width": 1984,
+          "height": 482
+        }
       },
       {
         "n": 2,
@@ -145,7 +187,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A proposed change on a project, with the new, edited and removed milestones highlighted above the new project price.",
+          "lightSrc": "/help/approving-a-change-to-your-project/02-light.png",
+          "darkSrc": "/help/approving-a-change-to-your-project/02-dark.png",
+          "width": 1968,
+          "height": 1250
+        }
       },
       {
         "n": 3,
@@ -157,7 +205,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A proposed change waiting on you, with the Approve change button highlighted below the new project price.",
+          "lightSrc": "/help/approving-a-change-to-your-project/03-light.png",
+          "darkSrc": "/help/approving-a-change-to-your-project/03-dark.png",
+          "width": 1984,
+          "height": 356
+        }
       },
       {
         "n": 4,
@@ -169,7 +223,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A proposed change being declined, with the Why are you declining? field highlighted above the Decline change button.",
+          "lightSrc": "/help/approving-a-change-to-your-project/04-light.png",
+          "darkSrc": "/help/approving-a-change-to-your-project/04-dark.png",
+          "width": 1984,
+          "height": 570
+        }
       },
       {
         "n": 5,
@@ -181,7 +241,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Changes to this project list, with a request marked Answered and the expert's reply highlighted.",
+          "lightSrc": "/help/approving-a-change-to-your-project/05-light.png",
+          "darkSrc": "/help/approving-a-change-to-your-project/05-dark.png",
+          "width": 1968,
+          "height": 418
+        }
       },
       {
         "n": 6,
@@ -625,11 +691,22 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The list is company-wide: it shows every upcoming meeting on your company's cases,\nprojects and project requests, not just meetings you were personally invited to.</p>\n<p>Selecting a row opens the case or project it belongs to.</p>\n<p><strong>Join</strong> appears 3 minutes before a meeting starts and takes you straight into the call — you're\nalready signed in, so there's no name or email step. It stays available until 30 minutes after\nthe meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call\nroom isn't ready yet, \"Setting up room\" shows in place of <strong>Join</strong>.</p>\n<p>\"New times suggested\" means the expert has proposed new times for that meeting. Open the\ncase to choose one.</p>\n<p>Nothing booked in the next 14 days? Use <strong>Find an expert</strong> to start a project or book a\nconsultation.</p>",
+            "html": "<p>The list is company-wide: it shows every upcoming meeting on your company's cases,\nprojects and project requests, not just meetings you were personally invited to.</p>\n<p>Selecting a row opens the case or project it belongs to.</p>\n<p><strong>Join</strong> appears 3 minutes before a meeting starts and takes you straight into the call — you're\nalready signed in, so there's no name or email step. It stays available until 30 minutes after\nthe meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call\nroom isn't ready yet, \"Setting up room\" shows in place of <strong>Join</strong>.</p>\n<p>\"New times suggested\" means the expert has proposed new times for that meeting. Open the\ncase to choose one.</p>",
             "id": "s1-b0"
+          },
+          {
+            "kind": "html",
+            "html": "<p>Nothing booked in the next 14 days? Use <strong>Find an expert</strong> to start a project or book a\nconsultation.</p>",
+            "id": "s1-b1"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Up next card on a client's dashboard, with a consultation booked with Priya Raman and marked New times suggested highlighted.",
+          "lightSrc": "/help/dashboard-up-next/01-light.png",
+          "darkSrc": "/help/dashboard-up-next/01-dark.png",
+          "width": 1292,
+          "height": 560
+        }
       },
       {
         "n": 2,
@@ -637,11 +714,22 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The card lists your own upcoming meetings — the same bookings you'll see in Calendar. <strong>Join</strong> works\nthe same way as for clients, and <strong>Open calendar</strong> at the bottom of the card takes you to Calendar.</p>\n<p>\"Waiting on their reply\" means a reschedule you proposed is still with the client.</p>\n<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
+            "html": "<p>The card lists your own upcoming meetings — the same bookings you'll see in Calendar. <strong>Join</strong> works\nthe same way as for clients, and <strong>Open calendar</strong> at the bottom of the card takes you to Calendar.</p>\n<p>\"Waiting on their reply\" means a reschedule you proposed is still with the client.</p>",
             "id": "s2-b0"
+          },
+          {
+            "kind": "html",
+            "html": "<p>While your setup is incomplete and nothing is booked yet, a setup preview shows here\ninstead.</p>\n<p>If your calendar connection stops working, a Calendar card appears in Your move on your\ndashboard, linking to Settings to reconnect it. While your calendar is disconnected, you\nwon't appear in expert search.</p>",
+            "id": "s2-b1"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Up next card on an expert's dashboard, with a consultation marked Waiting on their reply highlighted.",
+          "lightSrc": "/help/dashboard-up-next/02-light.png",
+          "darkSrc": "/help/dashboard-up-next/02-dark.png",
+          "width": 1292,
+          "height": 382
+        }
       }
     ]
   },
@@ -679,7 +767,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "Your move on the expert dashboard, with the filter chips for invitations, interest, delivery, proposals, action items and messages highlighted above the row of cards.",
+          "lightSrc": "/help/dashboard-your-move/01-light.png",
+          "darkSrc": "/help/dashboard-your-move/01-dark.png",
+          "width": 1952,
+          "height": 1000
+        }
       },
       {
         "n": 2,
@@ -687,11 +781,22 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Select a card's title, or its button, to go straight to the case, project or page it belongs to.</p>\n<p>A card stays until the thing it points to is done: the invitation is answered, the proposal is\nsent, the action item is completed. Opening a card or reading a\nnotification doesn't clear it. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "html": "<p>Select a card's title, or its button, to go straight to the case, project or page it belongs to.</p>",
             "id": "s2-b0"
+          },
+          {
+            "kind": "html",
+            "html": "<p>A card stays until the thing it points to is done: the invitation is answered, the proposal is\nsent, the action item is completed. Opening a card or reading a\nnotification doesn't clear it. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "id": "s2-b1"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The first card in Your move, a project invitation from Kestrel Logistics, with its Review invitation button highlighted.",
+          "lightSrc": "/help/dashboard-your-move/02-light.png",
+          "darkSrc": "/help/dashboard-your-move/02-dark.png",
+          "width": 800,
+          "height": 676
+        }
       },
       {
         "n": 3,
@@ -703,7 +808,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "Where your projects stand on the expert dashboard, with projects under their stages and the explanation of the Delivery stage open and highlighted.",
+          "lightSrc": "/help/dashboard-your-move/03-light.png",
+          "darkSrc": "/help/dashboard-your-move/03-dark.png",
+          "width": 2010,
+          "height": 552
+        }
       }
     ]
   },
@@ -741,7 +852,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Your move row on the dashboard, with the filter chips above the cards highlighted.",
+          "lightSrc": "/help/dashboard-your-move-for-clients/01-light.png",
+          "darkSrc": "/help/dashboard-your-move-for-clients/01-dark.png",
+          "width": 1952,
+          "height": 1110
+        }
       },
       {
         "n": 2,
@@ -749,11 +866,22 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Select a card, or its button, to go straight to the project, case or page it belongs to.</p>\n<p>A card stays until the thing it points to is done: the balance is settled, a time is chosen, the\nwork is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear\nit. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "html": "<p>Select a card, or its button, to go straight to the project, case or page it belongs to.</p>",
             "id": "s2-b0"
+          },
+          {
+            "kind": "html",
+            "html": "<p>A card stays until the thing it points to is done: the balance is settled, a time is chosen, the\nwork is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear\nit. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "id": "s2-b1"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A Proposal to review card in Your move, with the Review proposal button highlighted.",
+          "lightSrc": "/help/dashboard-your-move-for-clients/02-light.png",
+          "darkSrc": "/help/dashboard-your-move-for-clients/02-dark.png",
+          "width": 632,
+          "height": 786
+        }
       },
       {
         "n": 3,
@@ -765,7 +893,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "Where your projects stand on the dashboard, with the explanation of the Proposals stage highlighted.",
+          "lightSrc": "/help/dashboard-your-move-for-clients/03-light.png",
+          "darkSrc": "/help/dashboard-your-move-for-clients/03-dark.png",
+          "width": 1984,
+          "height": 532
+        }
       }
     ]
   },
@@ -802,7 +936,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A milestone on the delivery plan, with its Changed since proposal label highlighted and What changed open to show the old and new Done when wording.",
+          "lightSrc": "/help/editing-milestones-after-acceptance/01-light.png",
+          "darkSrc": "/help/editing-milestones-after-acceptance/01-dark.png",
+          "width": 1884,
+          "height": 550
+        }
       },
       {
         "n": 2,
@@ -814,7 +954,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Needs approval first window for removing an agreed milestone, with the Propose a change button highlighted.",
+          "lightSrc": "/help/editing-milestones-after-acceptance/02-light.png",
+          "darkSrc": "/help/editing-milestones-after-acceptance/02-dark.png",
+          "width": 1024,
+          "height": 400
+        }
       }
     ]
   },
@@ -852,7 +998,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page, with the change request banner highlighted, showing who asked for changes, their note word for word and the milestone that is back in progress.",
+          "lightSrc": "/help/handling-a-change-request/01-light.png",
+          "darkSrc": "/help/handling-a-change-request/01-dark.png",
+          "width": 2000,
+          "height": 472
+        }
       },
       {
         "n": 2,
@@ -864,7 +1016,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The delivery plan, with the client's note on the reopened Build and configure milestone highlighted, while the milestones they didn't pick stay completed.",
+          "lightSrc": "/help/handling-a-change-request/02-light.png",
+          "darkSrc": "/help/handling-a-change-request/02-dark.png",
+          "width": 1952,
+          "height": 1302
+        }
       },
       {
         "n": 3,
@@ -876,7 +1034,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A completed milestone on the delivery plan, with its Move back to in progress button highlighted.",
+          "lightSrc": "/help/handling-a-change-request/03-light.png",
+          "darkSrc": "/help/handling-a-change-request/03-dark.png",
+          "width": 1884,
+          "height": 378
+        }
       },
       {
         "n": 4,
@@ -888,7 +1052,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page, with the Changes made banner highlighted, showing the client's original note and the Mark project ready again button.",
+          "lightSrc": "/help/handling-a-change-request/04-light.png",
+          "darkSrc": "/help/handling-a-change-request/04-dark.png",
+          "width": 2000,
+          "height": 466
+        }
       },
       {
         "n": 5,
@@ -900,7 +1070,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Mark project ready again window, with the Send for Northwind Industrial's review button highlighted.",
+          "lightSrc": "/help/handling-a-change-request/05-light.png",
+          "darkSrc": "/help/handling-a-change-request/05-dark.png",
+          "width": 1024,
+          "height": 416
+        }
       },
       {
         "n": 6,
@@ -1195,7 +1371,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A request Northwind Industrial sent you directly, with the card asking you to take it on or pass, and its Propose times and Pass on this project buttons, highlighted.",
+          "lightSrc": "/help/project-requests-for-experts/01-light.png",
+          "darkSrc": "/help/project-requests-for-experts/01-dark.png",
+          "width": 1988,
+          "height": 404
+        }
       },
       {
         "n": 2,
@@ -1207,7 +1389,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A project request with the conversation's message box on the left and the Files card on the right, with the note that a file shared from the conversation goes to the client only highlighted.",
+          "lightSrc": "/help/project-requests-for-experts/02-light.png",
+          "darkSrc": "/help/project-requests-for-experts/02-dark.png",
+          "width": 1968,
+          "height": 748
+        }
       },
       {
         "n": 3,
@@ -1219,7 +1407,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The right-hand column of a request whose proposal was asked for, with Pass on this project highlighted below Build proposal and your expression of interest, above the request's name.",
+          "lightSrc": "/help/project-requests-for-experts/03-light.png",
+          "darkSrc": "/help/project-requests-for-experts/03-dark.png",
+          "width": 764,
+          "height": 906
+        }
       }
     ]
   },
@@ -1257,7 +1451,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page, with Northwind's change request and its Propose a change and Answer without a change order buttons highlighted.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/01-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/01-dark.png",
+          "width": 1988,
+          "height": 414
+        }
       },
       {
         "n": 2,
@@ -1269,7 +1469,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Propose a change page, with Unchanged and Edited milestones beside the summary of the change, and the prompt to raise the cap highlighted.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/02-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/02-dark.png",
+          "width": 1968,
+          "height": 1488
+        }
       },
       {
         "n": 3,
@@ -1281,7 +1487,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page, with the banner about an unsent draft change and its Continue editing and Discard buttons highlighted.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/03-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/03-dark.png",
+          "width": 1988,
+          "height": 186
+        }
       },
       {
         "n": 4,
@@ -1293,7 +1505,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page after a change is sent, with the Change sent banner and its Withdraw button highlighted, and Change pending on the milestone it touches.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/04-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/04-dark.png",
+          "width": 1988,
+          "height": 1232
+        }
       },
       {
         "n": 5,
@@ -1305,7 +1523,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page after Northwind approves a change, with the banner saying the plan, estimates and cap are updated highlighted, and Updated by approved change on the milestone it changed.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/05-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/05-dark.png",
+          "width": 1988,
+          "height": 1196
+        }
       },
       {
         "n": 6,
@@ -1317,7 +1541,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s6-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Projects page viewed as CloudPeak Consulting, with the Agency view highlighted.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/06-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/06-dark.png",
+          "width": 1984,
+          "height": 916
+        }
       },
       {
         "n": 7,
@@ -1329,7 +1559,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s7-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Finish the project card, with Mark project ready turned off and a note to answer Northwind's change request first highlighted.",
+          "lightSrc": "/help/proposing-a-change-to-a-live-project/07-light.png",
+          "darkSrc": "/help/proposing-a-change-to-a-live-project/07-dark.png",
+          "width": 1988,
+          "height": 232
+        }
       }
     ]
   },
@@ -1447,7 +1683,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Redeem a promo code screen with a code typed in, with the Redeem button highlighted.",
+          "lightSrc": "/help/redeeming-a-promo-code/01-light.png",
+          "darkSrc": "/help/redeeming-a-promo-code/01-dark.png",
+          "width": 1088,
+          "height": 604
+        }
       },
       {
         "n": 2,
@@ -1471,7 +1713,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Payment method section of Credits & billing, with the saved card highlighted.",
+          "lightSrc": "/help/redeeming-a-promo-code/03-light.png",
+          "darkSrc": "/help/redeeming-a-promo-code/03-dark.png",
+          "width": 1568,
+          "height": 484
+        }
       }
     ]
   },
@@ -1509,7 +1757,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Start a project panel on the Describe step, with Find me an expert under Send request to highlighted.",
+          "lightSrc": "/help/requesting-a-project/01-light.png",
+          "darkSrc": "/help/requesting-a-project/01-dark.png",
+          "width": 1120,
+          "height": 620
+        }
       },
       {
         "n": 2,
@@ -1521,7 +1775,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Start a project panel opened from Priya Raman's profile, with Get matched with someone else instead highlighted under Priya's card.",
+          "lightSrc": "/help/requesting-a-project/02-light.png",
+          "darkSrc": "/help/requesting-a-project/02-dark.png",
+          "width": 1120,
+          "height": 668
+        }
       },
       {
         "n": 3,
@@ -1533,7 +1793,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Start a project panel for an expert who has paused new work, with the note saying Priya isn't taking on new work right now and the Get matched instead button highlighted.",
+          "lightSrc": "/help/requesting-a-project/03-light.png",
+          "darkSrc": "/help/requesting-a-project/03-dark.png",
+          "width": 1120,
+          "height": 794
+        }
       },
       {
         "n": 4,
@@ -1545,7 +1811,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A project request's conversation with Priya Raman, with Book a call in the conversation header highlighted.",
+          "lightSrc": "/help/requesting-a-project/04-light.png",
+          "darkSrc": "/help/requesting-a-project/04-dark.png",
+          "width": 1228,
+          "height": 480
+        }
       }
     ]
   },
@@ -1582,7 +1854,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A conversation with Priya Raman, with a shared screenshot, its note and its Priya Raman only label in the thread, and the paperclip button for sharing a file highlighted.",
+          "lightSrc": "/help/sharing-files-with-invited-experts/01-light.png",
+          "darkSrc": "/help/sharing-files-with-invited-experts/01-dark.png",
+          "width": 1186,
+          "height": 618
+        }
       },
       {
         "n": 2,
@@ -1594,7 +1872,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Share a file window, with the Who can see it choices highlighted: Priya only, All interested experts and Only specific experts.",
+          "lightSrc": "/help/sharing-files-with-invited-experts/02-light.png",
+          "darkSrc": "/help/sharing-files-with-invited-experts/02-dark.png",
+          "width": 920,
+          "height": 1044
+        }
       },
       {
         "n": 3,
@@ -1606,7 +1890,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The All files panel listing the files on the request and who can see each one you shared, with the Marcus Chen only and Priya Raman only labels on one file highlighted, each with its own remove button.",
+          "lightSrc": "/help/sharing-files-with-invited-experts/03-light.png",
+          "darkSrc": "/help/sharing-files-with-invited-experts/03-dark.png",
+          "width": 840,
+          "height": 1600
+        }
       }
     ]
   },
@@ -1644,7 +1934,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A case header, with the Convert to project button highlighted under its Open status.",
+          "lightSrc": "/help/turning-a-case-into-a-project/01-light.png",
+          "darkSrc": "/help/turning-a-case-into-a-project/01-dark.png",
+          "width": 1856,
+          "height": 354
+        }
       },
       {
         "n": 2,
@@ -1656,7 +1952,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Start a project form, with the AI-drafted description under What do you need? highlighted.",
+          "lightSrc": "/help/turning-a-case-into-a-project/02-light.png",
+          "darkSrc": "/help/turning-a-case-into-a-project/02-dark.png",
+          "width": 1090,
+          "height": 806
+        }
       },
       {
         "n": 3,
@@ -1668,7 +1970,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Redraft from case? window, with the Redraft button highlighted next to Keep my edits.",
+          "lightSrc": "/help/turning-a-case-into-a-project/03-light.png",
+          "darkSrc": "/help/turning-a-case-into-a-project/03-dark.png",
+          "width": 840,
+          "height": 296
+        }
       },
       {
         "n": 4,
@@ -1680,7 +1988,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Attach documents section, with the From this case list highlighted: one file attached and two marked as unavailable, one for size and one for file type.",
+          "lightSrc": "/help/turning-a-case-into-a-project/04-light.png",
+          "darkSrc": "/help/turning-a-case-into-a-project/04-dark.png",
+          "width": 1120,
+          "height": 576
+        }
       },
       {
         "n": 5,
@@ -1692,7 +2006,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The review step of a request started from a case, with the Linked to case line highlighted below its documents.",
+          "lightSrc": "/help/turning-a-case-into-a-project/05-light.png",
+          "darkSrc": "/help/turning-a-case-into-a-project/05-dark.png",
+          "width": 1120,
+          "height": 262
+        }
       }
     ]
   },
@@ -1730,7 +2050,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A milestone on the project page showing 15 of 16 hrs logged and 1 hr left of estimate, with its open time log highlighted.",
+          "lightSrc": "/help/understanding-the-hours-on-your-project/01-light.png",
+          "darkSrc": "/help/understanding-the-hours-on-your-project/01-dark.png",
+          "width": 1878,
+          "height": 760
+        }
       },
       {
         "n": 2,
@@ -1742,7 +2068,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The foot of the delivery plan, with the hours logged against the estimate, the hours this billing period and the next invoice date highlighted.",
+          "lightSrc": "/help/understanding-the-hours-on-your-project/02-light.png",
+          "darkSrc": "/help/understanding-the-hours-on-your-project/02-dark.png",
+          "width": 1952,
+          "height": 454
+        }
       },
       {
         "n": 3,
@@ -1754,7 +2086,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The project page, with the banner saying Discovery and data model has gone over estimate highlighted.",
+          "lightSrc": "/help/understanding-the-hours-on-your-project/03-light.png",
+          "darkSrc": "/help/understanding-the-hours-on-your-project/03-dark.png",
+          "width": 1988,
+          "height": 228
+        }
       },
       {
         "n": 4,
@@ -1766,7 +2104,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Need something different from the plan? card on the project page, with the Request a change button highlighted.",
+          "lightSrc": "/help/understanding-the-hours-on-your-project/04-light.png",
+          "darkSrc": "/help/understanding-the-hours-on-your-project/04-dark.png",
+          "width": 1984,
+          "height": 214
+        }
       }
     ]
   },
@@ -2013,11 +2357,22 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The sections always appear in the same order:</p>\n<ol>\n<li><strong>Overview</strong> — what you'll do and how you'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work.</li>\n<li><strong>Price and payments</strong> — one price for the project and how it's paid. For <strong>Time &amp; materials</strong>\nthis section is called <strong>Rates and billing</strong>.</li>\n<li><strong>Not included</strong> — anything out of scope, so there are no surprises later. This one is optional.</li>\n<li><strong>Attachments</strong> — reference documents you want the client to see. This one is optional too.</li>\n</ol>\n<p>Above the first section, the client's request is summarised for you. Choose <strong>Show brief</strong> to read\nthe full request while you write, and <strong>Hide brief</strong> to tuck it away again.</p>\n<p>The first time you open a new proposal, Balo drafts the <strong>Overview</strong> and the <strong>Milestones</strong> from the\nclient's request, so you start with something to edit instead of a blank page. A moment of\n<strong>Drafting from {name}'s request…</strong> shows while it works, then the draft appears with a\n<strong>Drafted from {name}'s request</strong> label on the Overview and <strong>Suggested from the brief</strong> on the\nMilestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and\ndrafted text never includes links. Edit anything you like, or choose <strong>Clear</strong> to empty a section\nand start from scratch. You'll see <strong>Overview cleared.</strong> (or <strong>Suggested milestones cleared.</strong>)\nwith <strong>Undo</strong>, which puts the drafted section back. If you start typing in the <strong>Overview</strong> before\nthe draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made\nonce per request, so it won't change if you come back to the page later.</p>\n<p>If Balo can't put a draft together, you'll see <strong>Couldn't draft this one. Start from scratch.</strong>\nat the top of the <strong>Overview</strong>. Nothing is wrong with your proposal: the sections are simply empty,\nand you write it yourself just as you would without a draft.</p>",
+            "html": "<p>The sections always appear in the same order:</p>\n<ol>\n<li><strong>Overview</strong> — what you'll do and how you'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work.</li>\n<li><strong>Price and payments</strong> — one price for the project and how it's paid. For <strong>Time &amp; materials</strong>\nthis section is called <strong>Rates and billing</strong>.</li>\n<li><strong>Not included</strong> — anything out of scope, so there are no surprises later. This one is optional.</li>\n<li><strong>Attachments</strong> — reference documents you want the client to see. This one is optional too.</li>\n</ol>\n<p>Above the first section, the client's request is summarised for you. Choose <strong>Show brief</strong> to read\nthe full request while you write, and <strong>Hide brief</strong> to tuck it away again.</p>\n<p>The first time you open a new proposal, Balo drafts the <strong>Overview</strong> and the <strong>Milestones</strong> from the\nclient's request, so you start with something to edit instead of a blank page. A moment of\n<strong>Drafting from {name}'s request…</strong> shows while it works, then the draft appears with a\n<strong>Drafted from {name}'s request</strong> label on the Overview and <strong>Suggested from the brief</strong> on the\nMilestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and\ndrafted text never includes links. Edit anything you like, or choose <strong>Clear</strong> to empty a section\nand start from scratch. You'll see <strong>Overview cleared.</strong> (or <strong>Suggested milestones cleared.</strong>)\nwith <strong>Undo</strong>, which puts the drafted section back. If you start typing in the <strong>Overview</strong> before\nthe draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made\nonce per request, so it won't change if you come back to the page later.</p>",
             "id": "s1-b0"
+          },
+          {
+            "kind": "html",
+            "html": "<p>If Balo can't put a draft together, you'll see <strong>Couldn't draft this one. Start from scratch.</strong>\nat the top of the <strong>Overview</strong>. Nothing is wrong with your proposal: the sections are simply empty,\nand you write it yourself just as you would without a draft.</p>",
+            "id": "s1-b1"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The top of a new proposal, with Dana's request summarised above the Overview and the Drafted from Dana's request label highlighted.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/01-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/01-dark.png",
+          "width": 1304,
+          "height": 1196
+        }
       },
       {
         "n": 2,
@@ -2029,7 +2384,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The top of a proposal, with the Fixed price, Add timeframe and Balo standard terms chips highlighted.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/02-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/02-dark.png",
+          "width": 1270,
+          "height": 304
+        }
       },
       {
         "n": 3,
@@ -2041,7 +2402,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Price and payments section with a project price of A$15,000, with the payment schedule presets highlighted and 30 / 40 / 30 chosen.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/03-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/03-dark.png",
+          "width": 1304,
+          "height": 1034
+        }
       },
       {
         "n": 4,
@@ -2053,7 +2420,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Milestones section with Price each milestone turned on, with the A$1,500 still to assign and the Set price to A$13,500 button highlighted.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/04-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/04-dark.png",
+          "width": 1304,
+          "height": 916
+        }
       },
       {
         "n": 5,
@@ -2065,7 +2438,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s5-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Rates and billing section with an hourly rate, a deposit and fortnightly invoices, with the estimated total highlighted.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/05-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/05-dark.png",
+          "width": 1304,
+          "height": 734
+        }
       },
       {
         "n": 6,
@@ -2077,7 +2456,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s6-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/06-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/06-dark.png",
+          "width": 600,
+          "height": 770
+        }
       },
       {
         "n": 7,
@@ -2101,7 +2486,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s8-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "A proposal being revised, with the summary of Dana's change request and its Go to note link, and Dana's note with its Mark as addressed link highlighted.",
+          "lightSrc": "/help/writing-and-sending-a-proposal/08-light.png",
+          "darkSrc": "/help/writing-and-sending-a-proposal/08-dark.png",
+          "width": 1304,
+          "height": 992
+        }
       }
     ]
   },
@@ -2222,7 +2613,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The sidebar under your name, with the Not taking work panel highlighted, showing Change availability and View public profile.",
+          "lightSrc": "/help/your-live-status/01-light.png",
+          "darkSrc": "/help/your-live-status/01-dark.png",
+          "width": 694,
+          "height": 712
+        }
       },
       {
         "n": 2,
@@ -2234,7 +2631,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Live status panel opened from under your name in the sidebar, with the View public profile button highlighted.",
+          "lightSrc": "/help/your-live-status/02-light.png",
+          "darkSrc": "/help/your-live-status/02-dark.png",
+          "width": 692,
+          "height": 592
+        }
       }
     ]
   }
