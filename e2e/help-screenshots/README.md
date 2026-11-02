@@ -41,7 +41,7 @@ pnpm --filter @balo/db help:reset          # remove the fixture when you are don
 The runner's global teardown runs `help:reset` automatically, so a finished run leaves no fixture
 behind. Set `HELP_KEEP_FIXTURE=1` to skip it and inspect the seeded data; run `help:reset` yourself
 afterwards. Reset removes everything the fixture added
-(Priya's expert profile, availability rules, calendar connection, payout row, Northwind and its wallet, the case, consultation, meeting and guest) and hands both
+(Priya's expert profile, availability rules, calendar connection, payout row, Northwind and its wallet, the case, consultation, meeting and guest, and every project-world row: the extra companies, agencies, teammate users, requests, projects and the threads the app opened on them) and hands both
 shared test-login users (`onboarded-e2e@balo.test` and `dana-help@balo.test`) back as test-login
 creates them (`E2E` `Test`, no active company), so the default e2e suite's member is not left an
 expert. It also deletes any money rows the running API wrote against the fixture wallet.
@@ -70,18 +70,74 @@ Each section declares `state`; the runner applies it with `help:state <state> --
 before navigating, so sections do not depend on run order. Every state first restores every column
 a state can change to its base value, then applies its own change, in one transaction.
 
-| State              | Change from the base                                                                   |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `available`        | none (the base)                                                                        |
-| `paused`           | Priya is not available for work                                                        |
-| `proposal`         | a pending reschedule proposal with three options                                       |
-| `held`             | the consultation ended a quarter of an hour ago (real clock)                           |
-| `calendar-pending` | the calendar connection is `SYNC_PENDING`                                              |
-| `overnight`        | Friday availability runs 18:00 to 02:00                                                |
-| `setup-incomplete` | the payout row is removed                                                              |
-| `rejected`         | the application was rejected seven days ago (inside the cooldown)                      |
-| `client-member`    | Dana is a Northwind `member`, not the owner                                            |
-| `auto-closed`      | a second Northwind case with Priya was closed automatically ten days before the anchor |
+| State              | Change from the base                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| `available`        | none (the base)                                                                            |
+| `paused`           | Priya is not available for work                                                            |
+| `proposal`         | a pending reschedule proposal with three options                                           |
+| `held`             | the consultation ended a quarter of an hour ago (real clock)                               |
+| `calendar-pending` | the calendar connection is `SYNC_PENDING`                                                  |
+| `overnight`        | Friday availability runs 18:00 to 02:00                                                    |
+| `setup-incomplete` | the payout row is removed                                                                  |
+| `rejected`         | the application was rejected seven days ago (inside the cooldown)                          |
+| `client-member`    | Dana is a Northwind `member`, not the owner                                                |
+| `auto-closed`      | a second Northwind case with Priya was closed automatically ten days before the anchor     |
+| `projects`         | three live Northwind projects with Priya (see "The project world" below), no open change   |
+| `change-requested` | `projects`, plus Dana's open change request on the T&M project                             |
+| `change-draft`     | `projects`, plus Priya's unsent draft answering that request (its estimate passes the cap) |
+| `change-sent`      | sent changes: T&M edit + add, territory planning add + edit + remove                       |
+| `change-approved`  | `projects`, with the T&M change approved and applied to the plan                           |
+| `change-round`     | the fixed-price project reopened by a review round tagging "Build and configure"           |
+| `changes-made`     | `change-round`, with "Build and configure" completed again                                 |
+| `requests`         | Northwind's open requests to Priya, three proposal drafts and a matched request            |
+| `dashboards`       | `proposal`, plus both dashboards' Your move rails and project tracks                       |
+| `agency`           | Priya owns CloudPeak Consulting: seven projects, a former teammate, three notices          |
+| `agency-multi`     | `agency`, plus Priya as an admin of Summit Ridge Partners                                  |
+| `case-files`       | four files on the Northwind case thread (two attachable, one too big, one wrong type)      |
+
+### The project world
+
+The states from `projects` down live in `packages/db/src/help-seed/world.ts`. None of their rows is
+in the base: each state inserts what it needs and every state first deletes all of them, so the
+earlier states render exactly as before. Ids are in `HELP_WORLD_IDS` (`constants.ts`).
+
+- **Sales Cloud rollout**: a fixed-price Northwind project from an accepted proposal (A$10,000 to
+  Priya), milestones "Discovery and design" (done), "Build and configure" (in progress) and "Data
+  migration" (pending, its "done when" edited since the proposal), plus one change request Priya
+  answered without a change order.
+- **Sales Cloud territory planning** (`projects` and `change-sent` only): a second fixed-price
+  Northwind project (A$6,400 to Priya, so A$8,000 to Northwind) that only client-side guides open,
+  with an answered request and, in `change-sent`, Priya's sent change (a milestone added, one edited,
+  one removed, A$800 more to Priya). Help pages are public, so no project, rate or amount may show
+  on both sides: client screens show prices with Balo's fee added, and a reader holding both figures
+  for one subject could work the fee out. Expert-side guides keep to Sales Cloud rollout and the T&M
+  project; client-side guides show no amount from either. For the same reason, shots of Priya's
+  public profile leave its price band out of frame: `rate-and-payouts` shows her own rate.
+- **Service Cloud case routing**: a T&M Northwind project (A$180/hr, A$7,200 cap, fortnightly from
+  four weeks before the anchor) with seven time entries: "Discovery and data model" is two hours
+  over its estimate and "Case routing rules" has one hour left.
+- **`requests`**: a direct request waiting on Priya's choice ("Field Service scheduling setup"), three
+  proposal requests (an AI-drafted one with no proposal yet, a fixed-price draft, a T&M draft ready
+  to send), a submitted proposal Dana asked to change, and a matched request ("Streamline our quote
+  approvals") open with Priya, Marcus Chen and Aisha Okafor, with client files shared three ways.
+- **`dashboards`**: Kestrel Logistics, Brightwater Foods and Larkspur Health join as clients, with
+  requests and deliveries at every stage of Priya's track, two action items and an unread message
+  on the case, and on Dana's side a call to book, a proposal to review and a request with Balo.
+  It also marks Priya's go-live celebration as seen (as her first dashboard visit does), so the
+  celebration card does not sit above the rail. Every other state resets that flag to unseen, as
+  a fresh `help:seed` leaves it.
+- **`agency`**: Marcus, Aisha and Tom Becker (who has left) are CloudPeak experts; Lena Fischer owns
+  Summit Ridge in `agency-multi`. The state clears the notices the engine wrote to Priya on earlier
+  runs, so her panel holds exactly the three agency notices. It sets her "seen" cursor to 09:00
+  on the anchor (the frozen browser clock), after all three, so they stay unread but no arrival
+  toast opens under the bell. A null cursor would not work: the first page load moves it to the
+  server's real clock, which is earlier than the anchor-dated notices.
+
+Clocks: anything the server prints relatively ("Invited 3 days ago", the agency Updated column) or
+a sweep reads (auto-accept, review nudges) is seeded from the real clock when the state is applied;
+dated rows are anchor-relative and at least eight days before the anchor, so they are in the past
+whatever weekday the run is. The matched request's files are stamped seconds before 09:00 on the
+anchor, so the server-rendered Files card and the frozen browser both print "just now".
 
 ## Personas
 
@@ -122,6 +178,9 @@ images to Git LFS.
 4. Prefer role and text locators for `target` and `crop`. Keep the clip inside 1280x800; the runner
    throws rather than shooting the full page.
 5. Run `pnpm help:screenshots <slug>` and check both the light and dark PNGs.
+6. Check that no shot shows a project, rate or amount that a guide for the other side also shows.
+   Client screens include Balo's fee, so the pair would reveal it (see Sales Cloud territory
+   planning above). Crop prices out where they're incidental.
 
 ## Reproducibility
 

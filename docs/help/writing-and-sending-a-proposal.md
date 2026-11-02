@@ -5,8 +5,8 @@ audience: [expert]
 category:
   expert: projects
 order: 2
-published: false
-updated: 2026-10-26
+published: true
+updated: 2026-11-02
 related: [project-requests-for-experts]
 ---
 
@@ -23,7 +23,7 @@ The sections always appear in the same order:
 3. **Price and payments** — one price for the project and how it's paid. For **Time & materials**
    this section is called **Rates and billing**.
 4. **Not included** — anything out of scope, so there are no surprises later. This one is optional.
-5. **Attachments** — reference documents you want the client to see.
+5. **Attachments** — reference documents you want the client to see. This one is optional too.
 
 Above the first section, the client's request is summarised for you. Choose **Show brief** to read
 the full request while you write, and **Hide brief** to tuck it away again.
@@ -38,6 +38,8 @@ and start from scratch. You'll see **Overview cleared.** (or **Suggested milesto
 with **Undo**, which puts the drafted section back. If you start typing in the **Overview** before
 the draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made
 once per request, so it won't change if you come back to the page later.
+
+![The top of a new proposal, with Dana's request summarised above the Overview and the Drafted from Dana's request label highlighted.](01)
 
 If Balo can't put a draft together, you'll see **Couldn't draft this one. Start from scratch.**
 at the top of the **Overview**. Nothing is wrong with your proposal: the sections are simply empty,
@@ -56,6 +58,8 @@ Three choices sit at the top of the page, because they shape everything below th
 - **Terms** — Balo standard terms apply to every proposal. Choose **Attach your terms** to add
   your own alongside them. The chip changes to "Balo standard and your terms" once they're attached.
 
+![The top of a proposal, with the Fixed price, Add timeframe and Balo standard terms chips highlighted.](02)
+
 ## Fixed price: price first
 
 Under **Fixed price**, start with **Project price**: the full amount you'll receive for the whole
@@ -70,6 +74,8 @@ highlighted until you edit a payment by hand.
 
 You can edit the name and percentage of any payment, and choose **Add payment** to add another; it
 starts with whatever percentage is left to assign. The payments need to add up to 100%.
+
+![The Price and payments section with a project price of A$15,000, with the payment schedule presets highlighted and 30 / 40 / 30 chosen.](03)
 
 ## Pricing each milestone is optional
 
@@ -86,12 +92,16 @@ If you want amounts, turn on **Price each milestone** beneath the milestone list
 Turning **Price each milestone** off clears the amounts, and your project price stays the same.
 A message offers **Undo** if you change your mind.
 
+![The Milestones section with Price each milestone turned on, with the A$1,500 still to assign and the Set price to A$13,500 button highlighted.](04)
+
 ## Time & materials
 
 Under **Time & materials**, you set an hourly rate and a deposit in **Rates and billing**, and
 choose whether invoices go out **Fortnightly** or **Monthly**. Each milestone needs an hour
 estimate, and the page shows the total hours and the estimated cost. Milestones are a guide, not a
 cap.
+
+![The Rates and billing section with an hourly rate, a deposit and fortnightly invoices, with the estimated total highlighted.](05)
 
 ## The checklist and Preview and send
 
@@ -108,6 +118,8 @@ You can also press **Cmd+Enter** (Mac) or **Ctrl+Enter** to preview.
 The preview shows the proposal the way the client will read it. Nothing is sent until you choose
 **Send** there, or **Back to editing** to keep working.
 
+![The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.](06)
+
 ## What the client sees
 
 In the preview, the amounts are the figures you typed, and the preview says so: "Amounts are what
@@ -121,11 +133,14 @@ there it's their call.
 
 ## Revising after feedback
 
-If the client asks for changes, you'll see their note beside the section it's about, with a
-summary at the top of the page and a **Go to note** link. Update the proposal as needed, then
-choose **Mark as addressed** on the note. You can bring the note back any time with **Show note**.
+If the client asks for changes, you'll see their note beside the section it's about, or above the
+**Overview** if it's about the proposal as a whole, with a summary at the top of the page and a
+**Go to note** link. Update the proposal as needed, then choose **Mark as addressed** on the note.
+You can bring the note back any time with **Show note**.
 
 A revision isn't saved as you go: the page says "Not saved until you resend". Your changes go to
 the client when you choose **Preview and resend**, then **Resend**. If you leave before that, the
-version the client last saw stays as it was. Documents you upload while revising are the exception:
-they attach to the current proposal straight away.
+version the client last saw stays as it was. You can't add or remove documents while revising: the
+ones already attached carry over to the version you resend.
+
+![A proposal being revised, with the summary of Dana's change request and its Go to note link, and Dana's note with its Mark as addressed link highlighted.](08)
