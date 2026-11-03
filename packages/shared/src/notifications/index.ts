@@ -211,7 +211,7 @@ export interface EngagementMilestoneEstimateExceededPayload {
   loggedHoursLabel: string; // e.g. "8.5 hrs"
   estimatedHoursLabel: string; // e.g. "8 hrs"
   // Optional so a Vercel-ahead or Railway-ahead deploy still validates.
-  expertProfileId?: string; // delivering expert profile → delivering_agency_admins fan-out
+  expertProfileId?: string; // delivering expert profile; no rule reads it (agency admins resolve from the engagement's pin)
   actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
   deliveringExpertName?: string; // full person name
 }

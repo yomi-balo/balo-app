@@ -102,7 +102,7 @@ const FALLBACK_EXPERT_DISPLAY: BookingExpertDisplay = {
  */
 export async function resolveBookingExpertDisplay(
   expertProfileId: string,
-  agencySource: DeliveringAgencySource = { from: 'expert_profile' }
+  agencySource: DeliveringAgencySource
 ): Promise<BookingExpertDisplay> {
   try {
     const [profile, eligibility] = await Promise.all([
@@ -185,7 +185,7 @@ export async function loadBookingContext(
         return undefined;
       }
     })(),
-    resolveBookingExpertDisplay(expertProfileId),
+    resolveBookingExpertDisplay(expertProfileId, { from: 'expert_profile' }),
   ]);
 
   if (companies === undefined) {

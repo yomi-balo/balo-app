@@ -271,7 +271,9 @@ async function publishFundingBlocked(
 ): Promise<void> {
   try {
     const hourBucket = Math.floor(Date.now() / FUNDING_NOTICE_WINDOW_MS);
-    const expertDisplay = await resolveBookingExpertDisplay(input.expertProfileId);
+    const expertDisplay = await resolveBookingExpertDisplay(input.expertProfileId, {
+      from: 'expert_profile',
+    });
 
     void publishNotificationEvent('booking.funding_blocked', {
       correlationId: `booking-funding:${input.companyId}:${input.actorUserId}:${notice.blockKind}:${hourBucket}`,

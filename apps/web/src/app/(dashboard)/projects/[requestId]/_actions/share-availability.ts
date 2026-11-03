@@ -149,7 +149,7 @@ export async function shareAvailabilityAction(
     });
 
     const [expertDisplay, calendarConnected] = await Promise.all([
-      resolveBookingExpertDisplay(expertProfileId),
+      resolveBookingExpertDisplay(expertProfileId, { from: 'expert_profile' }),
       resolveCalendarConnected(expertProfileId),
     ]);
     /**
