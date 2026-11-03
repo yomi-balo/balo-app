@@ -113,7 +113,10 @@ export default async function DashboardLayout({
         <div className="bg-background min-h-dvh">
           <div className="flex">
             <Sidebar />
-            <div className="flex min-h-dvh flex-1 flex-col">
+            {/* `min-w-0` lets the column shrink below its content's min-content width, so a
+                horizontal rail (dashboard Your move) scrolls inside itself instead of widening
+                the page past the viewport. */}
+            <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
               <TopNav creditsChip={creditsChip} />
               <main className="flex-1 p-6 lg:p-8">
                 <div className="mx-auto max-w-7xl">{children}</div>

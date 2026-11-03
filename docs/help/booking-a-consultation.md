@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-10-22
+updated: 2026-11-03
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -37,8 +37,10 @@ right there, with that case already chosen.
 ## If your balance is low when you book
 
 Your company's funding is checked as **Review & confirm** opens, before anything is booked. It
-passes when your company has an active card on file. Without a card, your available balance needs
-to cover this call plus your company's other booked calls.
+passes when your company has an active card on file and nothing left unpaid from an earlier call.
+Without a card, your available balance needs to cover this call plus your company's other booked
+calls. While an earlier call is left unpaid, a top-up is needed before booking, even with a card on
+file.
 
 If it doesn't and you manage billing for the company you're booking for, a top-up appears right
 under the form, with the smallest amount that covers the call already selected. Pay with a saved
@@ -115,11 +117,10 @@ right now" instead of open times, and you can't start a new case with them. You 
 
 - **Find a similar expert**, which searches for experts with similar experience who are available.
 - **Get matched for a project**, and our team introduces a matched expert.
-- **Send them a message**, which still reaches them.
 
-If you already have an open case with that expert, you can still book follow-up consultations on
-it. Book it from that case's page, using **Book with {name} again** or **Book a consultation**,
-which opens their calendar right there, already attached to the case. You can switch to another
-of your open cases with them, but not start a new one.
+If you already have an open case with that expert, you can still message them on it and book
+follow-up consultations. Book from that case's page, using **Book with {name} again** or **Book a
+consultation**, which opens their calendar right there, already attached to the case. You can
+switch to another of your open cases with them, but not start a new one.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](07)

@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 4
 published: false
-updated: 2026-10-29
+updated: 2026-11-02
 related: [your-live-status]
 ---
 
@@ -17,12 +17,13 @@ work with you.
 ## What clients see on your profile
 
 Your profile shows your average rating, how many engagements it comes from and a list of reviews,
-starting with the most recent. Each review shows the stars, the client's note and who wrote it.
+starting with the most recent. Each review shows the stars, a **Project** or **Consultation**
+label, the month, the products it covered, the client's note and who wrote it.
 
 - **The reviewer.** A first name and the first letter of the surname, for example **Sam K.** If we
   don't have a first name, the review shows as **Verified client**.
-- **Role and company.** If the client added a role, it appears next to their name. When they
-  chose to show their company, it follows the role, for example **RevOps Lead @Northwind
+- **Role and company.** If the client added a role, it appears on the line under their name. When
+  they chose to show their company, it follows the role, for example **RevOps Lead @Northwind
   Logistics**, or appears alone if there's no role. Otherwise the review shows the role and the
   company's industry. Balo can also hide a company's name from reviews entirely, in which case it
   never shows.
@@ -37,6 +38,10 @@ on your profile refers to.
 Each case or project counts once toward your average, however many people at the client's company
 rated it. If two people rate the same project, their ratings are combined into one entry, so a
 single busy engagement can't outweigh the rest.
+
+That entry's stars are the average of their ratings, and it reads, for example, **Rated by 2 people
+at Northwind Logistics**, or **Rated by 2 people on the client's team** if not everyone chose to
+show the company. Each person then appears on their own row with their own stars and note.
 
 ## Clients choose what's public
 

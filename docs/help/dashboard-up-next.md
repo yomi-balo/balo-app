@@ -6,14 +6,14 @@ category:
   client: getting-started
   expert: getting-started
 order: 4
-published: false
-updated: 2026-10-23
+published: true
+updated: 2026-11-02
 related: [your-cases]
 ---
 
-The Up next card on your dashboard lists up to four of your upcoming meetings, soonest
-first — across consultations, project kickoffs, project calls, discovery calls and intro calls. Times show
-in your device's timezone.
+The Up next card on your dashboard lists up to four of your meetings in the next 14 days, soonest
+first — across consultations, project kickoffs, project calls, discovery calls and intro calls.
+Times show in your device's timezone.
 
 ## For clients
 
@@ -24,22 +24,29 @@ Selecting a row opens the case or project it belongs to.
 
 **Join** appears 3 minutes before a meeting starts and takes you straight into the call — you're
 already signed in, so there's no name or email step. It stays available until 30 minutes after
-the meeting's scheduled end, or until the meeting itself ends, whichever comes first.
+the meeting's scheduled end, or until the meeting itself ends, whichever comes first. If the call
+room isn't ready yet, "Setting up room" shows in place of **Join**.
 
 "New times suggested" means the expert has proposed new times for that meeting. Open the
 case to choose one.
 
-Nothing booked yet? Use **Find an expert** to start a project or book a consultation.
+![The Up next card on a client's dashboard, with a consultation booked with Priya Raman and marked New times suggested highlighted.](01)
+
+Nothing booked in the next 14 days? Use **Find an expert** to start a project or book a
+consultation.
 
 ## For experts
 
-The card lists your own upcoming meetings — the same bookings you'll see in Calendar.
+The card lists your own upcoming meetings — the same bookings you'll see in Calendar. **Join** works
+the same way as for clients, and **Open calendar** at the bottom of the card takes you to Calendar.
 
 "Waiting on their reply" means a reschedule you proposed is still with the client.
+
+![The Up next card on an expert's dashboard, with a consultation marked Waiting on their reply highlighted.](02)
 
 While your setup is incomplete and nothing is booked yet, a setup preview shows here
 instead.
 
 If your calendar connection stops working, a Calendar card appears in Your move on your
-dashboard, linking to Settings to reconnect it. While your calendar is disconnected, you
-won't appear in expert search.
+dashboard, linking to **Expert Settings** to reconnect it. While your calendar is disconnected,
+you won't appear in expert search.

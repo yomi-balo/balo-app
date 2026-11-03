@@ -5,8 +5,8 @@ audience: [expert]
 category:
   expert: getting-started
 order: 5
-published: false
-updated: 2026-10-21
+published: true
+updated: 2026-10-31
 related: [dashboard-up-next, project-requests-for-experts]
 ---
 
@@ -27,9 +27,13 @@ one row of cards, most pressing first. Scroll sideways to see them all.
 
 When more than one kind is waiting, filter chips above the row narrow it down.
 
+![Your move on the expert dashboard, with the filter chips for invitations, interest, delivery, proposals, action items and messages highlighted above the row of cards.](01)
+
 ## Opening a card
 
-Select a card, or its button, to go straight to the case, project or page it belongs to.
+Select a card's title, or its button, to go straight to the case, project or page it belongs to.
+
+![The first card in Your move, a project invitation from Kestrel Logistics, with its Review invitation button highlighted.](02)
 
 A card stays until the thing it points to is done: the invitation is answered, the proposal is
 sent, the action item is completed. Opening a card or reading a
@@ -42,3 +46,5 @@ When nothing is waiting on you, the row shows a single line instead.
 Below Your move, every live project sits under its stage (invited, interest sent, proposal, kickoff or delivery), marked your move, waiting on the client, or in progress; select one to open it.
 
 Hover over or select a stage, or a legend item, to see what it means; on a phone, tap it.
+
+![Where your projects stand on the expert dashboard, with projects under their stages and the explanation of the Delivery stage open and highlighted.](03)

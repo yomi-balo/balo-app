@@ -1,6 +1,7 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { HELP_IDS } from '../../../packages/db/src/help-seed/constants';
 import { defineGuide } from '../guide';
+import type { Box } from '../ring';
 
 /** Pages fade their content in; wait for the entrance to finish before measuring. */
 const SETTLE_MS = 1500;
@@ -14,6 +15,34 @@ const PROFILE_ROUTE = '/experts/priya-raman';
 const PICKER_ABOVE_PX = 40;
 const PICKER_BELOW_PX = 260;
 const CASE_ROUTE = `/cases/${HELP_IDS.engagement}`;
+/** Room above the paused card's status line; it stays below the price band's lower border. */
+const STATUS_ABOVE_PX = 16;
+/** Space kept beside and below the paused card; the next card starts 15px under it. */
+const CARD_GUTTER_PX = 12;
+
+const pausedCard = (page: Page): Locator =>
+  page.locator('[data-slot="card"]').filter({ hasText: 'Not taking on new work right now' });
+
+/**
+ * The paused booking card from its status line down. The price band above the line is left out of
+ * frame: it is the client price with Balo's fee, and expert-side guides show Priya's own rate.
+ */
+async function pausedCardBelowPrice(page: Page): Promise<Box> {
+  const card = await pausedCard(page).boundingBox();
+  const status = await pausedCard(page)
+    .getByText('Not taking on new work right now', { exact: true })
+    .boundingBox();
+  if (!card || !status) {
+    throw new Error('Paused booking card or its status line has no box');
+  }
+  const y = status.y - STATUS_ABOVE_PX;
+  return {
+    x: card.x - CARD_GUTTER_PX,
+    y,
+    width: card.width + CARD_GUTTER_PX * 2,
+    height: card.y + card.height + CARD_GUTTER_PX - y,
+  };
+}
 
 /** Opens the booking dialog from the expert profile and continues with the first 60-minute time. */
 async function pickFirstTime(page: Page): Promise<void> {
@@ -130,7 +159,8 @@ defineGuide('booking-a-consultation', [
     setup: settle,
     target: (page) =>
       page.locator('.bg-paused-hatch').filter({ hasText: "isn't taking on new work right now" }),
-    crop: (page) =>
-      page.locator('[data-slot="card"]').filter({ hasText: 'Not taking on new work right now' }),
+    crop: pausedCard,
+    cropArea: pausedCardBelowPrice,
+    cropPadding: 0,
   },
 ]);

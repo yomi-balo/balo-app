@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 2
 published: true
-updated: 2026-10-17
+updated: 2026-11-02
 related: [weekly-schedule, connecting-your-calendar, project-requests-for-experts]
 ---
 
@@ -15,10 +15,10 @@ anything you've already set up.
 
 ## How to pause
 
-Go to **Settings → Schedule** and turn off **Available for new work**. We'll show you what pausing
-changes, including how many upcoming consultations and active projects you have, before anything
-happens. Choose **Pause new work** to confirm, or **Keep me available** to leave things as they
-are.
+Go to **Expert Settings → Schedule** and turn off **Available for new work**. We'll show you what
+pausing changes, including how many upcoming consultations and active projects you have, before
+anything happens. Choose **Pause new work** to confirm, or **Keep me available** to leave things as
+they are.
 
 To come back, turn **Available for new work** on again. It takes effect straight away, no
 confirmation needed.
@@ -33,7 +33,7 @@ confirmation needed.
   to match them with someone similar.
 - **Project invites.** You won't be invited to new project requests.
 
-Your profile stays visible and clients can still message you. While you're paused, search won't show you as available.
+Your profile stays visible. While you're paused, search won't show you as available.
 
 ![Your public profile while paused, with the card saying you aren't taking on new work highlighted.](02)
 
@@ -45,7 +45,7 @@ Your profile stays visible and clients can still message you. While you're pause
   that's still open, booked from that case's page.
 - **Requests already sent to you.** Intro and discovery calls on a project request you've already
   received can still be booked.
-- **Messages.** Clients can still send you a message.
+- **Messages.** Clients on an open case or project can still message you.
 - **Your calendar connection.** It keeps syncing, so existing bookings and conflict checks stay
   correct.
 
@@ -53,9 +53,9 @@ Your profile stays visible and clients can still message you. While you're pause
 
 ## Your settings are kept
 
-While you're paused, your weekly hours, booking rules and time off are greyed out but never
-cleared. When you turn **Available for new work** back on, everything is exactly as you left it
-and your open times return straight away.
+While you're paused, your weekly hours and booking rules are greyed out but never cleared, and you
+can still add or remove time off. When you turn **Available for new work** back on, everything is
+exactly as you left it and your open times return straight away.
 
 ![The Availability card while paused, with the note that your hours are kept highlighted and your weekly hours greyed out.](04)
 

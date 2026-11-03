@@ -43,15 +43,30 @@ const EXPECTED_FILES = [
 /** Publishing is a reviewed decision: flipping a guide means adding it here too. */
 const PUBLISHED_FILES = [
   'agency-projects.md',
+  'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
   'connecting-your-calendar.md',
+  'dashboard-up-next.md',
+  'dashboard-your-move-for-clients.md',
+  'dashboard-your-move.md',
+  'editing-milestones-after-acceptance.md',
+  'handling-a-change-request.md',
   'joining-a-call.md',
   'pausing-new-work.md',
+  'project-requests-for-experts.md',
+  'proposing-a-change-to-a-live-project.md',
   'rate-and-payouts.md',
+  'redeeming-a-promo-code.md',
+  'requesting-a-project.md',
+  'sharing-files-with-invited-experts.md',
+  'turning-a-case-into-a-project.md',
+  'understanding-the-hours-on-your-project.md',
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',
+  'writing-and-sending-a-proposal.md',
   'your-cases.md',
+  'your-live-status.md',
 ];
 
 describe('docs/help', () => {

@@ -1,12 +1,12 @@
 ---
 title: 'Understanding the hours on your project'
-summary: 'Read the hours bar, the time log and the totals card on a time and materials project.'
+summary: 'Read the hours bar, the time log and the project totals on a time and materials project.'
 audience: [client]
 category:
   client: cases-projects
 order: 6
-published: false
-updated: 2026-10-29
+published: true
+updated: 2026-11-02
 related: [approving-a-change-to-your-project, reviewing-a-finished-project]
 ---
 
@@ -16,7 +16,9 @@ This guide explains what the project page shows and what to do if the hours are 
 ## The hours bar and the time log
 
 Each milestone has an hours bar. It compares the hours logged so far with the expert's estimate
-for that milestone. A milestone with no estimate shows only the hours logged.
+for that milestone. A milestone with no estimate shows only the hours logged. From 80% of the
+estimate the bar shows the hours left, for example "1 hr left of estimate", and once the milestone
+is over it shows "2 hrs over estimate".
 
 Open a milestone's time log to see each entry: the date it was worked, the hours
 and a note saying what the time went on. Entries are listed with the most recent first, and each
@@ -24,28 +26,38 @@ milestone has one "Logged by …" line naming who logged the time. If an owner o
 expert's agency changes an entry they didn't log, that entry also shows an "Edited by …" line
 naming them.
 
-## The totals card
+![A milestone on the project page showing 15 of 16 hrs logged and 1 hr left of estimate, with its open time log highlighted.](01)
 
-The totals card adds up the project. It shows the hours logged on milestones that have an estimate
-against their total estimate, the hours in the current billing period and the date of the next
-invoice. Billing periods follow the cadence agreed for the project, either monthly or every two
-weeks, and run by the expert's calendar.
+## The project totals
+
+The foot of the **Delivery plan** card, under the last milestone, adds up the project. It shows the
+hours logged on milestones that have an estimate against their total estimate, the hours in the
+current billing period and the date of the next invoice. Billing periods follow the cadence agreed
+for the project, either monthly or every two weeks, and run by the expert's calendar.
+
+![The foot of the delivery plan, with the hours logged against the estimate, the hours this billing period and the next invoice date highlighted.](02)
 
 ## When a milestone goes over its estimate
 
-The first time a milestone goes past its estimate, your company's owner gets an email, and a notification appears, that names
-the milestone and compares the hours logged with the estimate. Open the time log to see what the
-hours went on.
+The first time a milestone goes past its estimate, your company's owner gets an email, and a
+notification appears, that names the milestone and compares the hours logged with the estimate.
+While a milestone is over, the project page also shows a banner saying it "has gone over estimate".
+Open the time log to see what the hours went on.
 
 Going over an estimate isn't a problem in itself. The estimate is the expert's best view of the
 work, and a project can need more time than planned. You won't be told again about the same
 estimate, but you will be if the estimate is raised and the milestone passes the new figure,
 including when the hours pass it before you approve the raise.
 
+![The project page, with the banner saying Discovery and data model has gone over estimate highlighted.](03)
+
 ## Asking for a change
 
 If you want the plan to change, for example because you'd like to adjust scope or you expect the
 hours to keep growing, choose **Request a change** on the project page and describe what you'd like.
-Your expert replies with a proposal that sets new estimates, and you approve or decline it. The
+Your expert replies with a proposal, which can set new estimates, or with an answer. You approve or
+decline a proposal, and nothing changes until you approve. The
 change card shows the hours already logged on each milestone whose estimate changes. See
 **Approving or declining a change to your project** for the steps.
+
+![The Need something different from the plan? card on the project page, with the Request a change button highlighted.](04)
