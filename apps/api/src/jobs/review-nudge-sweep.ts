@@ -394,7 +394,7 @@ export function startReviewNudgeSweepWorker(): Worker {
     REVIEW_NUDGE_SWEEP_QUEUE,
     async (job: Job) => {
       const { sent } = await runReviewNudgeSweep(new Date(), (m) => job.log(m));
-      job.log(`review nudge sweep: ${sent} nudges published`);
+      await job.log(`review nudge sweep: ${sent} nudges published`);
     },
     {
       connection: createRedisConnection(),

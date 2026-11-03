@@ -184,6 +184,8 @@ export async function shareAvailabilityAction(
       expertPartyLabel: expertDisplay.partyLabel,
       sharedAtIso,
       previousSharedAtIso: previousSharedAt === null ? null : previousSharedAt.toISOString(),
+    }).catch(() => {
+      // publishNotificationEvent logs internally
     });
 
     return { ok: true, isReshare, calendarConnected, sharedAtIso };

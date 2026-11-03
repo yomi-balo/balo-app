@@ -112,6 +112,7 @@ const DECLINE_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPublishNotificationEvent.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue({ id: USER_ID });
   mockAuthorizeCaseMutation.mockResolvedValue(gateOk());
   mockHasCapability.mockResolvedValue(true);

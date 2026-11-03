@@ -96,7 +96,7 @@ export async function publishBookingRescheduled(
   }
 
   // Fire-and-forget by contract — `publishNotificationEvent` never throws (see its own
-  // docblock); nothing here needs a `.catch()`.
+  // docblock), so the `.catch()` only marks the promise as handled.
   publishNotificationEvent('booking.rescheduled', {
     // ⚠ THE AUDIT ROW ID, NOT THE TARGET WINDOW — see this module's own docblock.
     correlationId: `${meetingId}:${rescheduleAuditId ?? scheduledStart}`,
@@ -111,5 +111,7 @@ export async function publishBookingRescheduled(
     scheduledStartIso: scheduledStart,
     durationMinutes,
     initiatedBy,
+  }).catch(() => {
+    // publishNotificationEvent logs internally
   });
 }

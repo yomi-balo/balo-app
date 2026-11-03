@@ -100,6 +100,7 @@ const EXPECTED_PAYLOAD = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPublishNotificationEvent.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(USER);
   mockResolveConversationAccess.mockResolvedValue(ACCESS_OK);
   mockHasExpertDeliveryCapability.mockResolvedValue(true);

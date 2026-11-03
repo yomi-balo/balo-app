@@ -119,11 +119,7 @@ export const loadEndOfCall = cache(
      */
     const postCallActionsAllowed = meetingAllowsPostCallActions(meeting, now);
 
-    // The case row (with its resolution fields) is read for the client arm's resolve prompt
-    // only; every other lens reads just the engagement's agency pin.
-    const readsCaseRow = isClient && postCallActionsAllowed && isCase;
-
-    const [transcript, company, profile, reviewRead, caseRow, pinRow] = await Promise.all([
+    const [transcript, company, profile, reviewRead, { caseRow, pinRow }] = await Promise.all([
       transcriptsRepository.findByMeetingId(meetingId),
       companiesRepository.findNameById(companyId),
       expertProfileId === null
@@ -135,14 +131,11 @@ export const loadEndOfCall = cache(
       isClient && postCallActionsAllowed && contextIsRateable(contextType)
         ? readEngagementReview(subject.contextId, userId)
         : Promise.resolve(undefined),
-      // ⚠ CLIENT LENS ONLY. Only a case has something to resolve.
-      readsCaseRow
-        ? caseEngagementsRepository.findByEngagementId(subject.contextId)
-        : Promise.resolve(undefined),
-      // Where the case row is not read, the pin alone names the delivering agency.
-      isEngagementGrain && !readsCaseRow
-        ? engagementsRepository.findById(subject.contextId)
-        : Promise.resolve(undefined),
+      readEngagementRows(subject.contextId, {
+        // ⚠ CLIENT LENS ONLY. Only a case has something to resolve.
+        readsCaseRow: isClient && postCallActionsAllowed && isCase,
+        isEngagementGrain,
+      }),
     ]);
 
     const clientCompanyName = company?.name ?? 'the client';
@@ -279,6 +272,30 @@ export const loadEndOfCall = cache(
     };
   }
 );
+
+/**
+ * The engagement-side read: the case row (with its resolution fields) for the client arm's
+ * resolve prompt, else the engagement row, whose pin alone names the delivering agency. A
+ * request-grain context's `contextId` is not an engagement id, so it reads neither.
+ */
+async function readEngagementRows(
+  contextId: string,
+  gate: { readonly readsCaseRow: boolean; readonly isEngagementGrain: boolean }
+): Promise<{
+  caseRow: Awaited<ReturnType<typeof caseEngagementsRepository.findByEngagementId>>;
+  pinRow: Awaited<ReturnType<typeof engagementsRepository.findById>>;
+}> {
+  if (gate.readsCaseRow) {
+    return {
+      caseRow: await caseEngagementsRepository.findByEngagementId(contextId),
+      pinRow: undefined,
+    };
+  }
+  if (gate.isEngagementGrain) {
+    return { caseRow: undefined, pinRow: await engagementsRepository.findById(contextId) };
+  }
+  return { caseRow: undefined, pinRow: undefined };
+}
 
 /**
  * BAL-474 (R6F-2, D15.4) — the two names of the closed-case arm, or `null`: the meeting ended as a client

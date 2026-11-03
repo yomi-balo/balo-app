@@ -319,6 +319,8 @@ export async function declineRescheduleProposalAction(
       declinedByLabel: personWithOrgLabel(declinerPerson, clientCompanyName),
       originalScheduledStartIso: meeting.scheduledStart.toISOString(),
       durationMinutes,
+    }).catch(() => {
+      // publishNotificationEvent logs internally
     });
 
     return { success: true, proposalId: result.data.proposalId };
