@@ -36,6 +36,7 @@
     "lint-staged": "^16.2.7",
     "prettier": "^3.7.4",
     "prettier-plugin-tailwindcss": "^0.7.2",
+    "railway": "3.16.0",
     "sharp": "0.34.5",
     "turbo": "^2.7.5",
     "typescript": "5.9.2",

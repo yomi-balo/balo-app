@@ -81,9 +81,9 @@ export interface LogGate {
 /**
  * A pure "admit at most one event per `intervalMs`" gate. `apps/web`'s fail-open log
  * (`shared-counter.ts`, one gate per serverless instance) and `apps/api`'s Redis-down log
- * (`routes/rate-limit/index.ts`, one gate per process — `railway.toml` runs a single replica)
- * both build one of these, so the suppression logic has exactly one definition instead of two
- * copies that could drift.
+ * (`routes/rate-limit/index.ts`, one gate per process — `.railway/railway.ts` runs a single
+ * replica) both build one of these, so the suppression logic has exactly one definition instead of
+ * two copies that could drift.
  *
  * Never throws, holds no timers, and does nothing at creation time — `admit` is the only
  * effectful call, and it never reads the wall clock itself, so a caller can drive it with a
