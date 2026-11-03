@@ -3,7 +3,7 @@ import type { HelpBlock } from '@/lib/help/types';
 import { HELP_PROSE_CLASS } from './help-prose';
 import { HelpScreenshot } from './help-screenshot';
 
-function Block({ block }: Readonly<{ block: HelpBlock }>): React.JSX.Element {
+function Block({ slug, block }: Readonly<{ slug: string; block: HelpBlock }>): React.JSX.Element {
   switch (block.kind) {
     case 'html':
       return (
@@ -25,18 +25,19 @@ function Block({ block }: Readonly<{ block: HelpBlock }>): React.JSX.Element {
         </aside>
       );
     case 'image':
-      return <HelpScreenshot image={block.image} />;
+      return <HelpScreenshot slug={slug} image={block.image} />;
   }
 }
 
 /** Renders a guide's ordered content blocks: prose, callouts and screenshots. */
 export function HelpBlocks({
+  slug,
   blocks,
-}: Readonly<{ blocks: readonly HelpBlock[] }>): React.JSX.Element {
+}: Readonly<{ slug: string; blocks: readonly HelpBlock[] }>): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3">
       {blocks.map((block) => (
-        <Block key={block.id} block={block} />
+        <Block key={block.id} slug={slug} block={block} />
       ))}
     </div>
   );

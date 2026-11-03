@@ -33,6 +33,8 @@ export const HELP_EVENTS = {
   SECTION_JUMPED: 'help_section_jumped',
   /** The reader finished the "was this helpful" flow. Emitted once, on Yes, Send or Skip. */
   FEEDBACK_SUBMITTED: 'help_feedback_submitted',
+  /** The reader opened a guide screenshot's enlarged view. Emitted on each open. */
+  SCREENSHOT_ENLARGED: 'help_screenshot_enlarged',
 } as const;
 
 export interface HelpEventMap {
@@ -49,5 +51,14 @@ export interface HelpEventMap {
     helpful: boolean;
     has_comment: boolean;
     comment?: string;
+  };
+  [HELP_EVENTS.SCREENSHOT_ENLARGED]: {
+    slug: string;
+    /**
+     * The light capture's public path, `/help/{slug}/NN-light.png` (e.g.
+     * `/help/booking-a-consultation/01-light.png`): one stable id per screenshot, whichever theme
+     * the reader had on.
+     */
+    image: string;
   };
 }
