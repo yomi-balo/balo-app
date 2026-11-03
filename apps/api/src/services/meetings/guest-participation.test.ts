@@ -17,7 +17,8 @@ const {
   mockListAdminUserIds,
   mockUserFindById,
   mockCompanyFindById,
-  mockExpertFindProfileById,
+  mockResolveMeetingContextOwner,
+  mockDeliveringAgencyIdForOwner,
   mockAgencyGetSummaryById,
   mockCaseFindByEngagementId,
   mockProjectRequestFindById,
@@ -46,7 +47,8 @@ const {
   mockListAdminUserIds: vi.fn(),
   mockUserFindById: vi.fn(),
   mockCompanyFindById: vi.fn(),
-  mockExpertFindProfileById: vi.fn(),
+  mockResolveMeetingContextOwner: vi.fn(),
+  mockDeliveringAgencyIdForOwner: vi.fn(),
   mockAgencyGetSummaryById: vi.fn(),
   mockCaseFindByEngagementId: vi.fn(),
   mockProjectRequestFindById: vi.fn(),
@@ -68,7 +70,6 @@ vi.mock('@balo/db', () => ({
   agenciesRepository: { getSummaryById: mockAgencyGetSummaryById },
   caseEngagementsRepository: { findByEngagementId: mockCaseFindByEngagementId },
   companiesRepository: { findById: mockCompanyFindById },
-  expertsRepository: { findProfileById: mockExpertFindProfileById },
   meetingGuestsRepository: {
     createMany: mockCreateMany,
     countLiveByMeeting: mockCountLiveByMeeting,
@@ -84,6 +85,7 @@ vi.mock('@balo/db', () => ({
   partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
   projectRequestsRepository: { findById: mockProjectRequestFindById },
   requestExpertRelationshipsRepository: { findById: mockRelationshipFindById },
+  resolveMeetingContextOwner: mockResolveMeetingContextOwner,
   usersRepository: { findById: mockUserFindById },
 }));
 vi.mock('@balo/analytics/server', () => ({
@@ -104,6 +106,7 @@ vi.mock('@balo/analytics/server', () => ({
 }));
 vi.mock('./delivering-party.js', () => ({
   deliveringExpertUserId: mockDeliveringExpertUserId,
+  deliveringAgencyIdForOwner: mockDeliveringAgencyIdForOwner,
 }));
 vi.mock('./presence-writer.js', () => ({
   presenceWindowFor: () => ({ notAfter: new Date('2026-09-08T11:00:00.000Z') }),
@@ -202,6 +205,12 @@ function meetingRow(overrides: Record<string, unknown> = {}): Record<string, unk
     ...overrides,
   };
 }
+
+const OWNER = {
+  companyId: COMPANY_ID,
+  expertProfileId: EXPERT_PROFILE_ID,
+  deliveringAgency: { from: 'engagement', deliveringAgencyId: AGENCY_ID },
+};
 
 function gateOk(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -302,7 +311,8 @@ beforeEach(() => {
   mockListAdminUserIds.mockResolvedValue([]);
   mockUserFindById.mockResolvedValue({ firstName: 'Priya', lastName: 'Nair' });
   mockCompanyFindById.mockResolvedValue({ name: 'Northwind Industrial' });
-  mockExpertFindProfileById.mockResolvedValue({ agencyId: AGENCY_ID });
+  mockResolveMeetingContextOwner.mockResolvedValue(OWNER);
+  mockDeliveringAgencyIdForOwner.mockResolvedValue(AGENCY_ID);
   mockAgencyGetSummaryById.mockResolvedValue({ name: 'CloudPeak' });
   mockCaseFindByEngagementId.mockResolvedValue({ title: 'CPQ implementation' });
   mockProjectRequestFindById.mockResolvedValue({ title: 'Field service rollout' });
@@ -1037,9 +1047,30 @@ describe('inviteGuests — the guest invite payload', () => {
     expect(payload).toMatchObject({ inviterName: 'Priya Nair', inviterOrgLabel: 'CloudPeak' });
   });
 
+  it('names the agency the meeting’s owner resolves to, from the gate’s own subject', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+
+    await inviteGuests(invite([{ email: 'sam@cloudpeak.example' }]));
+
+    expect(mockResolveMeetingContextOwner).toHaveBeenCalledWith(CLIENT_SUBJECT);
+    expect(mockDeliveringAgencyIdForOwner).toHaveBeenCalledWith(OWNER);
+    expect(mockAgencyGetSummaryById).toHaveBeenCalledWith(AGENCY_ID);
+  });
+
+  it('falls back to the person when the owner cannot be resolved', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+    mockResolveMeetingContextOwner.mockResolvedValue(undefined);
+
+    await inviteGuests(invite([{ email: 'sam@cloudpeak.example' }]));
+
+    const [payload] = publishedPayloads('meeting.guest_invited');
+    expect(payload).toMatchObject({ inviterOrgLabel: 'Priya Nair' });
+    expect(mockAgencyGetSummaryById).not.toHaveBeenCalled();
+  });
+
   it('⚠ an INDEPENDENT expert keeps their OWN name — never a bare "the expert"', async () => {
     mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
-    mockExpertFindProfileById.mockResolvedValue({ agencyId: null });
+    mockDeliveringAgencyIdForOwner.mockResolvedValue(null);
 
     await inviteGuests(invite([{ email: 'sam@cloudpeak.example' }]));
 

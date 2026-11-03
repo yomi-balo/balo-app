@@ -18,6 +18,7 @@ const m = {
   findCompany: vi.fn(),
   findProfile: vi.fn(),
   findCase: vi.fn(),
+  findEngagement: vi.fn(),
   listSiblings: vi.fn(),
   findArtifact: vi.fn(),
   findUser: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('@balo/db', () => ({
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a) },
   reviewsRepository: { findLive: (...a: unknown[]) => m.findLiveReview(...a) },
   caseEngagementsRepository: { findByEngagementId: (...a: unknown[]) => m.findCase(...a) },
+  engagementsRepository: { findById: (...a: unknown[]) => m.findEngagement(...a) },
   meetingContextsRepository: { listMeetingsForContext: (...a: unknown[]) => m.listSiblings(...a) },
   transcriptArtifactsRepository: {
     findByTranscriptAndKind: (...a: unknown[]) => m.findArtifact(...a),
@@ -138,6 +140,7 @@ const FAT_USER = {
 
 const OPEN_CASE = {
   engagementId: ENGAGEMENT_ID,
+  deliveringAgencyId: 'agency-1',
   title: 'Flow interview loop',
   closedAt: null,
   closeReason: null,
@@ -186,6 +189,7 @@ function seedRecapMocks(seed: RecapMockSeed = {}): void {
   m.findCompany.mockResolvedValue({ id: COMPANY_ID, name: 'Northwind Industrial' });
   m.findProfile.mockResolvedValue(seed.profile ?? FAT_PROFILE);
   m.findCase.mockResolvedValue(OPEN_CASE);
+  m.findEngagement.mockResolvedValue(undefined);
   m.listSiblings.mockResolvedValue([MEETING]);
   m.findArtifact.mockResolvedValue(undefined);
   m.findUser.mockResolvedValue(seed.user ?? FAT_USER);
@@ -384,6 +388,39 @@ describe('loadRecap', () => {
     expect(m.findSession).not.toHaveBeenCalled();
   });
 
+  it('names the engagement pin, not the expert profile, on an engagement-grain non-case meeting', async () => {
+    m.findProfile.mockResolvedValue({ ...AGENCY_PROFILE, agencyId: 'agency-profile-b' });
+    m.findEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, deliveringAgencyId: 'agency-pin-a' });
+    for (const contextType of [
+      'project_kickoff',
+      'project_call',
+      'package_session',
+      'retainer_checkin',
+    ]) {
+      m.findAgency.mockClear();
+      mockResolveAccess.mockResolvedValue({
+        ...CASE_ACCESS,
+        subject: { contextType, contextId: ENGAGEMENT_ID },
+      });
+      await loadRecap(MEETING_ID, USER_ID, NOW);
+      expect(m.findEngagement, contextType).toHaveBeenCalledWith(ENGAGEMENT_ID);
+      expect(m.findAgency, contextType).toHaveBeenCalledWith('agency-pin-a');
+      expect(m.findAgency, contextType).not.toHaveBeenCalledWith('agency-profile-b');
+    }
+  });
+
+  it('keeps the expert profile agency on a request-grain meeting and reads no engagement', async () => {
+    m.findProfile.mockResolvedValue({ ...AGENCY_PROFILE, agencyId: 'agency-profile-b' });
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      subject: { contextType: 'project_discovery', contextId: 'req-1' },
+    });
+    m.findRequest.mockResolvedValue({ title: 'Migrate the CPQ stack' });
+    await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(m.findEngagement).not.toHaveBeenCalled();
+    expect(m.findAgency).toHaveBeenCalledWith('agency-profile-b');
+  });
+
   it('renders the ordinal line only for a case', async () => {
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.party.ordinalLine).toBe('1st consultation on this case');
@@ -442,6 +479,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('switches to the REQUESTED variant, attributing the person @ agency', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: null,
       closeReason: null,
@@ -456,6 +494,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('keeps the wrap-up slot alive once the case is CLOSED, as the success state', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -469,6 +508,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('promises NO review email for a CLOSED resolved case with no held consultation', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -487,6 +527,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('sends the review link for a CONSULTED, not-yet-reviewed resolved case', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -507,6 +548,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     m.findLiveReview.mockResolvedValue({ id: 'rev-1' });
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -525,6 +567,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('promises NO review email for an AUTO-INACTIVE close - no token is minted at all', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'auto_inactive',
@@ -546,6 +589,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('offers NOTHING once the case is closed, and states the closed note', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -561,6 +605,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('states the auto-inactive close differently, and never as resolved', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'auto_inactive',
@@ -577,6 +622,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('gives NO rating card for a CLOSED resolved case with no held consultation', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -597,6 +643,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('gives NO rating card for an AUTO-INACTIVE close with no held consultation', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'auto_inactive',
@@ -623,6 +670,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     };
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',
@@ -643,6 +691,7 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
   it('never calls readRatingCard on the EXPERT lens', async () => {
     m.findCase.mockResolvedValue({
       engagementId: ENGAGEMENT_ID,
+      deliveringAgencyId: 'agency-1',
       title: 'Flow interview loop',
       closedAt: new Date('2026-07-30T00:00:00Z'),
       closeReason: 'resolved',

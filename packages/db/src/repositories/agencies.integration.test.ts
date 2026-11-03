@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { agencyMembers, partyDomains, auditEvents } from '../schema';
+import { agencies, agencyMembers, partyDomains, auditEvents } from '../schema';
 import {
   userFactory,
   agencyFactory,
@@ -10,7 +10,7 @@ import {
   expertDraftFactory,
 } from '../test/factories';
 import { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
-import { expertsRepository } from './experts';
+import { ExpertAgencyAlreadyLinkedError, expertsRepository } from './experts';
 import { partyDomainsRepository } from './party-domains';
 
 /**
@@ -260,6 +260,96 @@ describe('agenciesRepository.provisionSolo', () => {
 
     const audits = await auditRowsForEntity(result.agencyId);
     expect(audits.map((a) => a.action)).toContain('agency.created');
+  });
+
+  it('refuses a profile that already links another agency and creates nothing', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    const existing = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, existing.id);
+    const before = await db.select({ id: agencies.id }).from(agencies);
+
+    await expect(
+      agenciesRepository.provisionSolo({
+        name: 'Independent Expert',
+        userId: user.id,
+        expertProfileId: draft.id,
+        actorUserId: user.id,
+      })
+    ).rejects.toBeInstanceOf(ExpertAgencyAlreadyLinkedError);
+
+    expect(await db.select({ id: agencies.id }).from(agencies)).toHaveLength(before.length);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBe(existing.id);
+  });
+
+  it('replacesAgencyId repoints the profile off the replaced agency', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    const left = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, left.id);
+
+    const result = await agenciesRepository.provisionSolo({
+      name: 'Independent Expert',
+      userId: user.id,
+      expertProfileId: draft.id,
+      actorUserId: user.id,
+      replacesAgencyId: left.id,
+    });
+
+    expect(result.agencyId).not.toBe(left.id);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBe(result.agencyId);
+    expect(await liveOwnerRows(result.agencyId)).toHaveLength(1);
+  });
+
+  it('replacesAgencyId throws and rolls back when the profile no longer links that agency', async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    const linked = await agencyFactory();
+    const stale = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, linked.id);
+    const before = await db.select({ id: agencies.id }).from(agencies);
+
+    await expect(
+      agenciesRepository.provisionSolo({
+        name: 'Independent Expert',
+        userId: user.id,
+        expertProfileId: draft.id,
+        actorUserId: user.id,
+        replacesAgencyId: stale.id,
+      })
+    ).rejects.toThrow(/no longer links agency/);
+
+    expect(await db.select({ id: agencies.id }).from(agencies)).toHaveLength(before.length);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBe(linked.id);
+  });
+
+  it("with exec it runs on the caller's transaction and rolls back with it", async () => {
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+    const left = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, left.id);
+    let createdId: string | undefined;
+
+    await expect(
+      db.transaction(async (tx) => {
+        const created = await agenciesRepository.provisionSolo(
+          {
+            name: 'Independent Expert',
+            userId: user.id,
+            expertProfileId: draft.id,
+            actorUserId: user.id,
+            replacesAgencyId: left.id,
+          },
+          tx
+        );
+        createdId = created.agencyId;
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    if (createdId === undefined) throw new Error('expected provisionSolo to run');
+    expect(await db.select().from(agencies).where(eq(agencies.id, createdId))).toEqual([]);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBe(left.id);
   });
 });
 

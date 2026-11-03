@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockListByMeeting,
   mockResolveExpertCalendarFacts,
-  mockDeliveringExpertProfileIdForMeeting,
+  mockDeliveringContextOwnerForMeeting,
   mockDeliveringPartyName,
 } = vi.hoisted(() => ({
   mockListByMeeting: vi.fn(),
   mockResolveExpertCalendarFacts: vi.fn(),
-  mockDeliveringExpertProfileIdForMeeting: vi.fn(),
+  mockDeliveringContextOwnerForMeeting: vi.fn(),
   mockDeliveringPartyName: vi.fn(),
 }));
 
@@ -19,7 +19,7 @@ vi.mock('../consultation-events/resolve-calendar-facts.js', () => ({
   resolveExpertCalendarFacts: mockResolveExpertCalendarFacts,
 }));
 vi.mock('../meetings/delivering-party.js', () => ({
-  deliveringExpertProfileIdForMeeting: mockDeliveringExpertProfileIdForMeeting,
+  deliveringContextOwnerForMeeting: mockDeliveringContextOwnerForMeeting,
   deliveringPartyName: mockDeliveringPartyName,
 }));
 
@@ -43,7 +43,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockListByMeeting.mockResolvedValue(CASE_CONTEXT);
   mockResolveExpertCalendarFacts.mockResolvedValue(FACTS);
-  mockDeliveringExpertProfileIdForMeeting.mockResolvedValue('expert-profile-1');
+  mockDeliveringContextOwnerForMeeting.mockResolvedValue({
+    companyId: 'company-1',
+    expertProfileId: 'expert-profile-1',
+    deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+  });
   mockDeliveringPartyName.mockResolvedValue('CloudPeak');
 });
 
@@ -71,6 +75,11 @@ describe('resolveCalendarInviteFacts', () => {
     );
 
     expect(facts?.summary).toBe('Consultation with CloudPeak');
+    expect(mockDeliveringPartyName).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      expertProfileId: 'expert-profile-1',
+      deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+    });
   });
 
   it('client party: an independent expert (deliveringPartyName resolves the person) is named directly', async () => {

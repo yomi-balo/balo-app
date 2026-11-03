@@ -82,11 +82,9 @@ function makeEngagement(
     milestones: [],
     expertProfile: {
       id: 'expert-priya',
-      agencyId: null,
       type: 'freelancer',
       headline: 'CPQ Specialist',
       user: { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-      agency: null,
     },
     company: { id: 'company-northwind', name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation to replace legacy quoting tool' },
@@ -435,18 +433,15 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
   });
 
   describe('milestone completion attribution', () => {
-    const AGENCY_PROFILE = {
-      ...makeEngagement().expertProfile,
-      agencyId: 'ag-1',
-      type: 'agency' as const,
-      agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
-    };
+    const AGENCY_PROFILE = { ...makeEngagement().expertProfile, type: 'agency' as const };
     const completedBy = (
       by: Milestone['completedBy'],
       lens: EngagementLens = 'client'
     ): string | null | undefined =>
       mapEngagementToWorkspaceView(
         makeEngagement({
+          deliveringAgencyId: 'ag-1',
+          deliveringAgency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
           expertProfile: AGENCY_PROFILE,
           milestones: [
             makeMilestone({
@@ -567,10 +562,10 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
     const base = {
       status: 'pending_acceptance' as const,
       completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
+      deliveringAgency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
       expertProfile: {
         ...makeEngagement().expertProfile,
         type: 'agency' as const,
-        agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
       },
     };
     const named = makeEngagement({
@@ -1100,14 +1095,14 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
   it('names the agency party for an agency expert', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({
+        deliveringAgencyId: 'agency-cloudpeak',
+        deliveringAgency: { id: 'agency-cloudpeak', name: 'CloudPeak Consulting', logoUrl: null },
         expertProfile: {
           id: 'expert-priya',
-          agencyId: 'agency-cloudpeak',
           type: 'agency',
           headline: 'CPQ Specialist',
           timezone: 'UTC',
           user: { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-          agency: { id: 'agency-cloudpeak', name: 'CloudPeak Consulting', logoUrl: null },
         },
       }),
       ctxFor('admin'),
@@ -1520,12 +1515,9 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
         status: 'pending_acceptance',
         completionRequestedAt: NOW,
         milestones: [reworded],
-        expertProfile: {
-          ...makeEngagement().expertProfile,
-          agencyId: 'ag-1',
-          type: 'agency',
-          agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
-        },
+        deliveringAgencyId: 'ag-1',
+        deliveringAgency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+        expertProfile: { ...makeEngagement().expertProfile, type: 'agency' },
       }),
       ctxFor('client'),
       NOW,

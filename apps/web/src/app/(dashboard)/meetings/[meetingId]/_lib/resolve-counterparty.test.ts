@@ -38,6 +38,8 @@ import {
  * pure and has to be redone.
  */
 
+const FROM_PROFILE = { from: 'expert_profile' } as const;
+
 const AGENCY_PROFILE = {
   id: 'p1',
   userId: EXPERT_USER_ID,
@@ -97,7 +99,8 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
       'client',
       AGENCY_PROFILE,
       'Northwind Industrial',
-      '3rd consultation on this case'
+      '3rd consultation on this case',
+      FROM_PROFILE
     );
 
     expect(labels.party.name).toBe('Amara Okafor');
@@ -119,33 +122,76 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
    * ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. This resolver
    * also feeds the BAL-389 end-of-call screen, so this assertion covers that surface too.
    */
+  it('names the PINNED agency when the case is pinned, not the profile current one', async () => {
+    mockGetAgency.mockResolvedValue({ id: 'ag-pinned', name: 'Pinned Partners' });
+    const labels = await resolveCounterparty('client', AGENCY_PROFILE, 'Northwind', null, {
+      from: 'engagement',
+      deliveringAgencyId: 'ag-pinned',
+    });
+    expect(mockGetAgency).toHaveBeenCalledWith('ag-pinned');
+    expect(labels.agencyLabel).toBe('Pinned Partners');
+  });
+
+  it('names no agency for a NULL pin even though the profile has one', async () => {
+    const labels = await resolveCounterparty('client', AGENCY_PROFILE, 'Northwind', null, {
+      from: 'engagement',
+      deliveringAgencyId: null,
+    });
+    expect(mockGetAgency).not.toHaveBeenCalled();
+    expect(labels.agencyLabel).toBeNull();
+  });
+
   it('carries the expert rating aggregate on the CLIENT lens', async () => {
-    const labels = await resolveCounterparty('client', AGENCY_PROFILE, 'Northwind', null);
+    const labels = await resolveCounterparty(
+      'client',
+      AGENCY_PROFILE,
+      'Northwind',
+      null,
+      FROM_PROFILE
+    );
     expect(labels.party.ratingAverage).toBe(4.3);
     expect(labels.party.ratingCount).toBe(2);
   });
 
   /** ⚠ NULL MEANS NO REVIEWS — never coalesced to 0, which would fabricate a bad score. */
   it('passes a null rating through as null for an unrated expert', async () => {
-    const labels = await resolveCounterparty('client', FREELANCE_PROFILE, 'Northwind', null);
+    const labels = await resolveCounterparty(
+      'client',
+      FREELANCE_PROFILE,
+      'Northwind',
+      null,
+      FROM_PROFILE
+    );
     expect(labels.party.ratingAverage).toBeNull();
     expect(labels.party.ratingCount).toBe(0);
   });
 
   it('degrades to no rating when the profile is missing entirely', async () => {
-    const labels = await resolveCounterparty('client', undefined, 'Northwind', null);
+    const labels = await resolveCounterparty('client', undefined, 'Northwind', null, FROM_PROFILE);
     expect(labels.party.ratingAverage).toBeNull();
     expect(labels.party.ratingCount).toBe(0);
   });
 
   it('omits the Book again href entirely when the username is null', async () => {
     // ⚠ NEVER `/experts/null`, and never a disabled CTA.
-    const labels = await resolveCounterparty('client', FREELANCE_PROFILE, 'Northwind', null);
+    const labels = await resolveCounterparty(
+      'client',
+      FREELANCE_PROFILE,
+      'Northwind',
+      null,
+      FROM_PROFILE
+    );
     expect(labels.party.bookAgainHref).toBeNull();
   });
 
   it('keeps an INDEPENDENT expert bare — no agency read, no @ clause', async () => {
-    const labels = await resolveCounterparty('client', FREELANCE_PROFILE, 'Northwind', null);
+    const labels = await resolveCounterparty(
+      'client',
+      FREELANCE_PROFILE,
+      'Northwind',
+      null,
+      FROM_PROFILE
+    );
     expect(mockGetAgency).not.toHaveBeenCalled();
     expect(labels.agencyLabel).toBeNull();
     expect(labels.expertPersonLabel).toBe('Amara Okafor');
@@ -153,7 +199,7 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
   });
 
   it('degrades to a neutral party name when the profile is missing entirely', async () => {
-    const labels = await resolveCounterparty('client', undefined, 'Northwind', null);
+    const labels = await resolveCounterparty('client', undefined, 'Northwind', null, FROM_PROFILE);
     expect(mockFindDisplayById).not.toHaveBeenCalled();
     expect(labels.party.name).toBe('An expert');
     expect(labels.party.avatarUrl).toBeNull();
@@ -181,7 +227,8 @@ describe('resolveCounterparty — EXPERT lens names the client COMPANY, never a 
       'expert',
       AGENCY_PROFILE,
       'Northwind Industrial',
-      null
+      null,
+      FROM_PROFILE
     );
     expect(labels.party.name).toBe('Northwind Industrial');
     expect(labels.party.headline).toBeNull();
@@ -197,7 +244,13 @@ describe('resolveCounterparty — EXPERT lens names the client COMPANY, never a 
   });
 
   it('still resolves the expert labels — both lenses share that half', async () => {
-    const labels = await resolveCounterparty('expert', AGENCY_PROFILE, 'Northwind', null);
+    const labels = await resolveCounterparty(
+      'expert',
+      AGENCY_PROFILE,
+      'Northwind',
+      null,
+      FROM_PROFILE
+    );
     expect(labels.expertShortName).toBe('Amara');
     expect(labels.agencyLabel).toBe('CloudPeak');
   });

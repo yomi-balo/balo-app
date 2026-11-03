@@ -169,3 +169,5 @@ export function engagementActorAttribution(
   }
   return personWithOrgLabel(name, companyName);
 }
+
+export { deliveringAgencyIdFor, type DeliveringAgencySource } from './delivering-agency';

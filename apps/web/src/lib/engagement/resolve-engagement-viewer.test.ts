@@ -24,7 +24,18 @@ import {
 
 const CLIENT_COMPANY = 'company-northwind';
 const EXPERT_PROFILE = 'expert-priya';
-const engagement = { id: 'eng-1', companyId: CLIENT_COMPANY, expertProfileId: EXPERT_PROFILE };
+const PINNED_AGENCY = 'agency-cloudpeak';
+const engagement = {
+  id: 'eng-1',
+  companyId: CLIENT_COMPANY,
+  expertProfileId: EXPERT_PROFILE,
+  deliveringAgencyId: PINNED_AGENCY,
+};
+/** What the capability seam receives: the expert plus the engagement's pinned agency. */
+const DELIVERY = {
+  expertProfileId: EXPERT_PROFILE,
+  agency: { from: 'engagement', deliveringAgencyId: PINNED_AGENCY },
+} as const;
 
 function makeUser(over: Partial<SessionUser> = {}): SessionUser {
   return {
@@ -59,7 +70,7 @@ describe('resolveExpertSideActor', () => {
     expect(hasExpertDeliveryCapability).toHaveBeenCalledWith(
       user,
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      EXPERT_PROFILE,
+      DELIVERY,
       { contextType: 'project', contextId: 'eng-1' }
     );
   });
@@ -252,7 +263,7 @@ describe('mayLogTime', () => {
     expect(hasExpertDeliveryCapability).toHaveBeenCalledWith(
       user,
       ENGAGEMENT_CAPABILITIES.LOG_TIME,
-      EXPERT_PROFILE,
+      DELIVERY,
       { contextType: 'project', contextId: 'eng-1' }
     );
   });
@@ -277,5 +288,6 @@ describe('timeEntryAuthorScope', () => {
 
     expect(await timeEntryAuthorScope(makeUser(), engagement)).toBe(expected);
     expect(administersDeliveringAgency).toHaveBeenCalledTimes(1);
+    expect(administersDeliveringAgency).toHaveBeenCalledWith(expect.anything(), DELIVERY);
   });
 });

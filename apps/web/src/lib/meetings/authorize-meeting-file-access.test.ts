@@ -122,6 +122,7 @@ describe('authorizeMeetingFileAccess', () => {
     mockResolveOwner.mockResolvedValue({
       companyId: COMPANY_ID,
       expertProfileId: EXPERT_PROFILE_ID,
+      deliveringAgency: { from: 'expert_profile' },
     });
     mockGetMemberRole.mockResolvedValue(undefined);
     mockFindProfileById.mockResolvedValue(undefined);
@@ -173,6 +174,51 @@ describe('authorizeMeetingFileAccess', () => {
   });
 
   describe('expert arm — the ADR-1046 §7 VISIBILITY rule', () => {
+    it('looks the actor up in the engagement PIN, not the profile current agency', async () => {
+      const PINNED_AGENCY_ID = 'a0000000-0000-4000-8000-0000000000aa';
+      mockResolveOwner.mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'engagement', deliveringAgencyId: PINNED_AGENCY_ID },
+      });
+      mockFindProfileById.mockResolvedValue(profile({ agencyId: AGENCY_ID }));
+      mockGetMemberRole.mockImplementation(async (partyType: string, partyId: string) =>
+        partyType === 'agency' && partyId === PINNED_AGENCY_ID ? 'expert' : undefined
+      );
+
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: member(STRANGER_USER_ID),
+      });
+
+      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(mockGetMemberRole).not.toHaveBeenCalledWith('agency', AGENCY_ID, STRANGER_USER_ID);
+    });
+
+    it('denies a member of the profile current agency when the engagement pin is NULL', async () => {
+      mockResolveOwner.mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'engagement', deliveringAgencyId: null },
+      });
+      mockFindProfileById.mockResolvedValue(profile({ agencyId: AGENCY_ID }));
+      mockGetMemberRole.mockImplementation(async (partyType: string) =>
+        partyType === 'agency' ? 'owner' : undefined
+      );
+
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: member(STRANGER_USER_ID),
+      });
+
+      expect(result).toEqual(NOT_FOUND);
+      expect(mockGetMemberRole).not.toHaveBeenCalledWith(
+        'agency',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it('resolves an INDEPENDENT expert with NO agency lookup at all', async () => {
       mockFindProfileById.mockResolvedValue(profile({ agencyId: null }));
       const result = await authorizeMeetingFileAccess({
@@ -259,7 +305,11 @@ describe('authorizeMeetingFileAccess', () => {
      * rather than querying it.
      */
     it('short-circuits the expert arm for a match-routed discovery (expertProfileId === null)', async () => {
-      mockResolveOwner.mockResolvedValue({ companyId: COMPANY_ID, expertProfileId: null });
+      mockResolveOwner.mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: null,
+        deliveringAgency: { from: 'expert_profile' },
+      });
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
         actor: member(STRANGER_USER_ID),
@@ -269,7 +319,11 @@ describe('authorizeMeetingFileAccess', () => {
     });
 
     it('still resolves the CLIENT arm for a match-routed discovery', async () => {
-      mockResolveOwner.mockResolvedValue({ companyId: COMPANY_ID, expertProfileId: null });
+      mockResolveOwner.mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: null,
+        deliveringAgency: { from: 'expert_profile' },
+      });
       mockGetMemberRole.mockResolvedValue('member');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
@@ -713,6 +767,7 @@ describe('authorizeMeetingFileAccess', () => {
           mockResolveOwner.mockResolvedValue({
             companyId: COMPANY_ID,
             expertProfileId: EXPERT_PROFILE_ID,
+            deliveringAgency: { from: 'expert_profile' },
           });
         });
 
@@ -762,7 +817,11 @@ describe('authorizeMeetingFileAccess', () => {
         mockListContexts.mockResolvedValue([
           { contextType: 'project_discovery', contextId: REQUEST_ID },
         ]);
-        mockResolveOwner.mockResolvedValue({ companyId: COMPANY_ID, expertProfileId: null });
+        mockResolveOwner.mockResolvedValue({
+          companyId: COMPANY_ID,
+          expertProfileId: null,
+          deliveringAgency: { from: 'expert_profile' },
+        });
 
         const result = await authorizeMeetingFileAccess({
           meetingId: GUEST_MEETING_ID,
@@ -886,6 +945,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockResolveOwner.mockResolvedValue({
         companyId: COMPANY_ID,
         expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'expert_profile' },
       });
       mockFindProfileById.mockResolvedValue(profile());
       results.push(

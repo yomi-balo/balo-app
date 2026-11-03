@@ -43,7 +43,12 @@ function meetingRow(overrides: Partial<FakeMeeting> = {}): FakeMeeting {
 }
 
 function owner(overrides: Partial<MeetingContextOwner> = {}): MeetingContextOwner {
-  return { companyId: COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID, ...overrides };
+  return {
+    companyId: COMPANY_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgency: { from: 'expert_profile' },
+    ...overrides,
+  };
 }
 
 beforeEach(() => {

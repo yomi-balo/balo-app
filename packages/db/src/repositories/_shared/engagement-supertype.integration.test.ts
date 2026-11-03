@@ -97,7 +97,7 @@ describe('insertEngagementRowTx', () => {
     ).rejects.toMatchObject({ code: '23502' });
   });
 
-  it("pins the expert profile's agency at insert, and the pin does not follow a later re-link", async () => {
+  it("pins the expert profile's agency at insert, and the pin does not follow a later repoint", async () => {
     const companyId = await seedCompanyId();
     const expert = await expertDraftFactory();
     const original = await agencyFactory();
@@ -113,7 +113,12 @@ describe('insertEngagementRowTx', () => {
     );
     expect(row.deliveringAgencyId).toBe(original.id);
 
-    await expertsRepository.linkAgency(expert.id, later.id);
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: original.id,
+        toAgencyId: later.id,
+      })
+    ).toBe(true);
 
     const [persisted] = await db
       .select({ deliveringAgencyId: engagements.deliveringAgencyId })

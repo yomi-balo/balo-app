@@ -154,6 +154,7 @@ function armDefaultRepos(role?: string): void {
   mockEngagementFindById.mockResolvedValue({
     id: ENGAGEMENT_ID,
     expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: AGENCY_ID,
   });
   mockProjectRequestFindById.mockResolvedValue({
     id: REQUEST_ID,
@@ -164,6 +165,15 @@ function armDefaultRepos(role?: string): void {
   mockRelationshipListByRequest.mockResolvedValue([relationship()]);
   mockFindProfileById.mockResolvedValue(EXPERT);
   mockGetMemberRole.mockResolvedValue(role);
+}
+
+/** The engagement carries a NULL pin: the profile had no agency link when it was created. */
+function armNullPin(): void {
+  mockEngagementFindById.mockResolvedValue({
+    id: ENGAGEMENT_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: null,
+  });
 }
 
 /** Every repository the resolver can reach, so "no other repo was touched" is assertable. */
@@ -295,8 +305,56 @@ describe('hasEngagementCapability — the holder set', () => {
     ).resolves.toBe(false);
   });
 
+  describe('the engagement pin, not the profile’s current agency, names the agency', () => {
+    const PIN_A = 'agency_A';
+    const PROFILE_B = { id: EXPERT_PROFILE_ID, userId: EXPERT_USER_ID, agencyId: 'agency_B' };
+
+    beforeEach(() => {
+      mockFindProfileById.mockResolvedValue(PROFILE_B);
+      mockEngagementFindById.mockResolvedValue({
+        id: ENGAGEMENT_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgencyId: PIN_A,
+      });
+      mockGetMemberRole.mockImplementation((_party: string, agencyId: string, actorId: string) =>
+        Promise.resolve(
+          (agencyId === PIN_A && actorId === 'admin_A') ||
+            (agencyId === 'agency_B' && actorId === 'admin_B')
+            ? 'admin'
+            : undefined
+        )
+      );
+    });
+
+    it.each(SHARED_TOKENS)(
+      'pinned agency admin holds %s; profile agency admin does not',
+      async (token) => {
+        await expect(hasEngagementCapability({ id: 'admin_A' }, token, CASE_SUBJECT)).resolves.toBe(
+          true
+        );
+        await expect(hasEngagementCapability({ id: 'admin_B' }, token, CASE_SUBJECT)).resolves.toBe(
+          false
+        );
+      }
+    );
+
+    it('a NULL pin makes zero agency lookups even though the profile has an agency', async () => {
+      armNullPin();
+
+      await expect(
+        hasEngagementCapability(
+          { id: 'admin_B' },
+          ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+          CASE_SUBJECT
+        )
+      ).resolves.toBe(false);
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+    });
+  });
+
   it('grants an INDEPENDENT expert (null agencyId) WITHOUT any agency lookup (AC #6)', async () => {
     mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
+    armNullPin();
     await expect(
       hasEngagementCapability(host, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, CASE_SUBJECT)
     ).resolves.toBe(true);
@@ -305,6 +363,7 @@ describe('hasEngagementCapability — the holder set', () => {
 
   it('DENIES a non-expert actor on an INDEPENDENT expert’s context, still without a lookup (AC #6)', async () => {
     mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
+    armNullPin();
     await expect(
       hasEngagementCapability(
         { id: 'user_stranger' },
@@ -1041,6 +1100,7 @@ describe('resolveHostContext', () => {
 
   it('reports an independent expert as agency null — the context never lies about the world', async () => {
     mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
+    armNullPin();
     await expect(resolveHostContext(CASE_SUBJECT, EXPERT_USER_ID)).resolves.toEqual({
       resolvedForActorId: EXPERT_USER_ID,
       expertUserId: EXPERT_USER_ID,
@@ -1089,6 +1149,7 @@ describe('resolveHostContext brands the context with the actor it was resolved F
 
   it('stamps the actor on the INDEPENDENT-expert path too (no agency lookup happens)', async () => {
     mockFindProfileById.mockResolvedValue(INDEPENDENT_EXPERT);
+    armNullPin();
     const context = await resolveHostContext(CASE_SUBJECT, 'user_stranger');
     expect(context).toEqual({
       resolvedForActorId: 'user_stranger',

@@ -44,7 +44,8 @@ import {
   usersRepository,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
+import { selectPrimaryMeetingContext, type MeetingContextOwner } from '@balo/shared/meetings';
+import { deliveringAgencyIdFor } from '@balo/shared/parties';
 
 const log = createLogger('meeting-delivering-party');
 
@@ -72,48 +73,77 @@ export async function deliveringExpertUserId(
 }
 
 /**
- * The expert profile the MEETING resolves to, through its own primary context.
+ * The owning party of the MEETING, through its own primary context.
  *
  * ⚠ SAME PRECEDENCE RULE AS EVERY OTHER READER (`selectPrimaryMeetingContext`), so a meeting
  * carrying two context rows resolves to the same one here as it does at the participation gate.
  * A second precedence rule would be a second answer to "what is this meeting about".
+ *
+ * `null` when the meeting has no resolvable primary context or its owner cannot be resolved.
  */
-export async function deliveringExpertProfileIdForMeeting(
+export async function deliveringContextOwnerForMeeting(
   meetingId: string
-): Promise<string | null> {
+): Promise<MeetingContextOwner | null> {
   const primary = selectPrimaryMeetingContext(
     await meetingContextsRepository.listByMeeting(meetingId)
   );
   if (!primary.ok) {
     return null;
   }
-  const owner = await resolveMeetingContextOwner(primary.context);
+  return (await resolveMeetingContextOwner(primary.context)) ?? null;
+}
+
+/** The expert profile the MEETING resolves to, through its own primary context. */
+export async function deliveringExpertProfileIdForMeeting(
+  meetingId: string
+): Promise<string | null> {
+  const owner = await deliveringContextOwnerForMeeting(meetingId);
   return owner?.expertProfileId ?? null;
 }
 
+type DeliveringOwner = Pick<MeetingContextOwner, 'expertProfileId' | 'deliveringAgency'>;
+
 /**
- * The PARTY a client should be told is waiting for them — the expert's AGENCY, or an independent
- * expert's own name.
+ * The agency the meeting is delivered under. An engagement-grain context carries the
+ * engagement's pin and reads no profile; a request-grain context has no pin yet, so it reads
+ * the expert profile's current agency. `null` for no agency (including a NULL pin, which never
+ * falls back to the profile).
+ */
+export async function deliveringAgencyIdForOwner(owner: DeliveringOwner): Promise<string | null> {
+  if (owner.deliveringAgency.from === 'engagement') {
+    return deliveringAgencyIdFor(owner.deliveringAgency, null);
+  }
+  if (owner.expertProfileId === null) {
+    return null;
+  }
+  const profile = await expertsRepository.findDisplayProfileById(owner.expertProfileId);
+  return deliveringAgencyIdFor(owner.deliveringAgency, profile?.agencyId ?? null);
+}
+
+/**
+ * The PARTY a client should be told is waiting for them — the delivering AGENCY, or an
+ * independent expert's own name.
  *
  * ⚠ CLAUDE.md'S PROSPECTIVE-ATTRIBUTION RULE, APPLIED LITERALLY. Copy about who is waiting is
  * prospective, so it names the PARTY: "CloudPeak is in the room", never "Sam is in the room" for
- * an agency-based expert. An INDEPENDENT expert (null `agencyId`) is their own party and keeps
- * their own name — the same split `expert_profiles.agencyId` already draws everywhere else.
+ * an agency-based expert. An expert with no delivering agency is their own party and keeps
+ * their own name.
  *
  * ⚠ `null` IS A FIRST-CLASS ANSWER AND THE TEMPLATES RENDER PARTY-NEUTRAL COPY FOR IT. Inventing
  * a name on a delivery surface would be a lie; "Your expert is in the room" is true regardless.
  */
-export async function deliveringPartyName(expertProfileId: string | null): Promise<string | null> {
-  if (expertProfileId === null) {
+export async function deliveringPartyName(owner: DeliveringOwner | null): Promise<string | null> {
+  if (owner === null || owner.expertProfileId === null) {
     return null;
   }
-  const profile = await expertsRepository.findDisplayProfileById(expertProfileId);
+  const profile = await expertsRepository.findDisplayProfileById(owner.expertProfileId);
   if (profile === undefined) {
     return null;
   }
 
-  if (profile.agencyId !== null) {
-    const agency = await agenciesRepository.getSummaryById(profile.agencyId);
+  const agencyId = deliveringAgencyIdFor(owner.deliveringAgency, profile.agencyId);
+  if (agencyId !== null) {
+    const agency = await agenciesRepository.getSummaryById(agencyId);
     return nonEmpty(agency?.name);
   }
 

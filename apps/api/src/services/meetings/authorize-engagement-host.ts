@@ -98,6 +98,7 @@ import {
   type ResolvedHostContext,
 } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
+import type { DeliveringAgencySource } from '@balo/shared/parties';
 
 const log = createLogger('engagement-authz');
 
@@ -206,15 +207,21 @@ function denyMissingRow(
 async function hostContextForExpertProfile(
   expertProfileId: string,
   actorId: string,
-  subject: EngagementHostSubject
+  subject: EngagementHostSubject,
+  agencySource: DeliveringAgencySource
 ): Promise<ResolvedHostContext> {
-  const resolution = await buildHostContextForExpertProfile(expertProfileId, actorId, {
-    findExpertProfile: (id) => expertsRepository.findProfileById(id),
-    // ⚠ `actor` is the callback's PARAMETER, never a captured `actorId` — the
-    // confused-deputy defence documented on `HostContextReads`. Do not collapse it.
-    findAgencyRole: (agencyId, actor) =>
-      partyMembershipsRepository.getMemberRole('agency', agencyId, actor),
-  });
+  const resolution = await buildHostContextForExpertProfile(
+    expertProfileId,
+    actorId,
+    {
+      findExpertProfile: (id) => expertsRepository.findProfileById(id),
+      // ⚠ `actor` is the callback's PARAMETER, never a captured `actorId` — the
+      // confused-deputy defence documented on `HostContextReads`. Do not collapse it.
+      findAgencyRole: (agencyId, actor) =>
+        partyMembershipsRepository.getMemberRole('agency', agencyId, actor),
+    },
+    agencySource
+  );
 
   if (!resolution.ok) {
     return denyMissingRow(subject, actorId, 'expert_profile', expertProfileId);
@@ -313,7 +320,7 @@ async function hostContextForDiscoveryRequest(
     return null;
   }
 
-  return hostContextForExpertProfile(expertProfileId, actorId, subject);
+  return hostContextForExpertProfile(expertProfileId, actorId, subject, { from: 'expert_profile' });
 }
 
 /**
@@ -379,7 +386,10 @@ export async function resolveHostContext(
       if (engagement === undefined) {
         return denyMissingRow(subject, actorId, 'engagement');
       }
-      return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject);
+      return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject, {
+        from: 'engagement',
+        deliveringAgencyId: engagement.deliveringAgencyId,
+      });
     }
 
     // ── Arm 6: request grain — the EXPLORATORY call, split by route. Extracted whole
@@ -425,7 +435,9 @@ export async function resolveHostContext(
         return denyMissingRow(subject, actorId, 'request_expert_relationship');
       }
       if (relationshipDeniesHosting(relationship)) return null;
-      return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject);
+      return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject, {
+        from: 'expert_profile',
+      });
     }
 
     // ── Arm 8: NOT THIS AXIS. An admin meeting has no engagement and no delivering

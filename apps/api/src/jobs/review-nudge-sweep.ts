@@ -156,9 +156,9 @@ async function resolveDisplayFields(
 
   const expertUser = await usersRepository.findById(profile.userId);
   const agency =
-    profile.agencyId === null
+    candidate.deliveringAgencyId === null
       ? undefined
-      : await agenciesRepository.getSummaryById(profile.agencyId);
+      : await agenciesRepository.getSummaryById(candidate.deliveringAgencyId);
 
   return {
     clientCompanyName: company.name,
@@ -394,7 +394,7 @@ export function startReviewNudgeSweepWorker(): Worker {
     REVIEW_NUDGE_SWEEP_QUEUE,
     async (job: Job) => {
       const { sent } = await runReviewNudgeSweep(new Date(), (m) => job.log(m));
-      job.log(`review nudge sweep: ${sent} nudges published`);
+      await job.log(`review nudge sweep: ${sent} nudges published`);
     },
     {
       connection: createRedisConnection(),

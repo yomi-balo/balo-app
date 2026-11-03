@@ -130,7 +130,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
       user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },

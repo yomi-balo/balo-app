@@ -39,6 +39,7 @@
  * outside `./index.ts` — would break HARD CONSTRAINT B (a membership role string is
  * interpreted in exactly ONE place), which is a worse defect than a benign cycle.
  */
+import { deliveringAgencyIdFor, type DeliveringAgencySource } from '../parties/delivering-agency';
 import { CAPABILITIES, roleHasCapability } from './index';
 
 /**
@@ -321,7 +322,8 @@ export function actorAdministersDeliveringAgency(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two `expert_profiles` columns the holder rule reads. STRUCTURAL — `@balo/db`'s row
+ * The two `expert_profiles` columns the holder rule reads (`agencyId` only for a
+ * request-grain subject; an engagement-grain one reads the engagement's pin instead). STRUCTURAL — `@balo/db`'s row
  * satisfies it, and nothing here imports `@balo/db`. Deliberately the SAME shape
  * `ExpertSideVisibilityProfile` (`./expert-side-visibility`) declares, because both rules
  * turn on exactly these two facts; they are separate declarations because the two axes
@@ -330,7 +332,10 @@ export function actorAdministersDeliveringAgency(
 export interface HostExpertProfile {
   /** `expert_profiles.userId` — the DELIVERING expert. NOT NULL in the database. */
   readonly userId: string;
-  /** `expert_profiles.agencyId`. `null` ⇒ INDEPENDENT expert — no agency lookup is made. */
+  /**
+   * `expert_profiles.agencyId` — the profile's CURRENT agency. Consulted only through an
+   * `expert_profile` agency source; `null` ⇒ no agency lookup is made.
+   */
   readonly agencyId: string | null;
 }
 
@@ -369,7 +374,7 @@ export type HostContextResolution =
  * Three facts this turns on, carried verbatim from the `apps/api` original:
  *   · `expert_profiles` has NO `deleted_at`, so there is no soft-delete predicate to add.
  *   · `expert_profiles.userId` is NOT NULL; `agencyId` is NULLABLE. A null `agencyId` is
- *     the INDEPENDENT expert, and it SHORT-CIRCUITS: `findAgencyRole` is NEVER CALLED,
+ *     the INDEPENDENT expert (for an engagement: a NULL pin), and it SHORT-CIRCUITS: `findAgencyRole` is NEVER CALLED,
  *     because there is no agency for anyone to be an admin of (ADR-1046 §2). Modelling it
  *     as `agency: null` is what makes that guarantee observable by call-count in a test.
  *   · a live-membership read that comes back `undefined` (a removed agency admin) becomes
@@ -384,18 +389,25 @@ export type HostContextResolution =
  * ⚠ `resolvedForActorId` IS STAMPED ON BOTH RETURN PATHS — see `HostContext`'s docblock.
  * It binds the context to the actor it was resolved for, so a caller cannot resolve once
  * as a privileged actor and then check many.
+ *
+ * ⚠ THE AGENCY COMES FROM `agencySource`, NOT FROM `profile.agencyId` ALONE. An
+ * engagement-grain subject passes `{ from: 'engagement', deliveringAgencyId }` so the agency is
+ * the engagement's pin; a request-grain subject passes `{ from: 'expert_profile' }` and gets the
+ * profile's current agency. The profile is still read for `userId` and for the missing-profile
+ * result. A NULL pin yields `agency: null` with no lookup, even if the profile now has an agency.
  */
 export async function buildHostContextForExpertProfile(
   expertProfileId: string,
   actorId: string,
-  reads: HostContextReads
+  reads: HostContextReads,
+  agencySource: DeliveringAgencySource
 ): Promise<HostContextResolution> {
   const profile = await reads.findExpertProfile(expertProfileId);
   if (profile === undefined) {
     return { ok: false, reason: 'expert_profile_missing' };
   }
 
-  const { agencyId } = profile;
+  const agencyId = deliveringAgencyIdFor(agencySource, profile.agencyId);
   if (agencyId === null) {
     return {
       ok: true,

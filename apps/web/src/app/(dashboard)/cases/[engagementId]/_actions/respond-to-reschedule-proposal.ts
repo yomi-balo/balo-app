@@ -187,6 +187,7 @@ export async function acceptRescheduleProposalAction(
       engagementId,
       companyId,
       expertProfileId,
+      deliveringAgencyId: caseRow.deliveringAgencyId,
       caseTitle: caseRow.title,
       recipientId: user.id,
       previousScheduledStart: result.data.previousScheduledStart,
@@ -318,6 +319,8 @@ export async function declineRescheduleProposalAction(
       declinedByLabel: personWithOrgLabel(declinerPerson, clientCompanyName),
       originalScheduledStartIso: meeting.scheduledStart.toISOString(),
       durationMinutes,
+    }).catch(() => {
+      // publishNotificationEvent logs internally
     });
 
     return { success: true, proposalId: result.data.proposalId };

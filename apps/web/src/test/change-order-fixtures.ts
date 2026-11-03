@@ -116,12 +116,10 @@ export function makeProject(
     milestones: [makeMilestone()],
     expertProfile: {
       id: 'expert-1',
-      agencyId: null,
       type: 'freelancer',
       headline: null,
       timezone: 'UTC',
       user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
-      agency: null,
     },
     company: { id: FIXTURE_COMPANY_ID, name: 'Northwind' },
     projectRequest: { id: 'req-1', title: 'CPQ rollout' },

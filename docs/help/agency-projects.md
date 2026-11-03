@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 7
 published: true
-updated: 2026-11-02
+updated: 2026-11-03
 related: [rate-and-payouts, weekly-schedule]
 ---
 
@@ -17,8 +17,8 @@ how each project is going, who is delivering it, and step in whenever you'd like
 ## Who sees the Agency tab
 
 The Agency tab appears on the Projects page for agency owners and admins, once your agency has
-at least one other expert besides you. Until then there's nothing to oversee, so the tab stays
-out of the way.
+at least one other expert besides you, or projects another expert delivered with your agency.
+Until then there's nothing to oversee, so the tab stays out of the way.
 
 - Experts who are members of the agency don't see the tab. Their own work stays under the
   Expert view.
@@ -75,7 +75,8 @@ under **Completed and cancelled**.
 ## When a teammate has moved on
 
 If an expert is no longer a member of your agency, their projects stay on the list so nothing
-goes missing, and you can still open and run them. A short line under their name reads **No
+goes missing, and you can still open and run them. Projects an expert delivered with your agency
+stay here even if they later move to another agency. A short line under their name reads **No
 longer at** followed by your agency's name, so you know who the project originally came from.
 
 ![A project on the Agency view delivered by Tom Becker, a former teammate, with their name and the No longer at CloudPeak line highlighted.](04)
@@ -83,7 +84,8 @@ longer at** followed by your agency's name, so you know who the project original
 ## If you own more than one agency
 
 When you're an owner or admin of two or more agencies that each have another expert on the team,
-an **Agency** picker appears above the tiles. An agency with no other experts yet isn't offered.
+or projects another expert delivered with them, an **Agency** picker appears above the tiles. An
+agency with neither isn't offered.
 It lists your agencies by name with each one's live project count. Pick one and the whole view,
 from the tiles to the list, shows that agency alone. Your choice is saved in the page
 address, so you can bookmark or share it.

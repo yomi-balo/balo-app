@@ -228,10 +228,10 @@ describe('mapTimeToView', () => {
       const base = project();
       const engagement = {
         ...base,
+        deliveringAgency: { id: 'agency-1', name: 'CloudPeak' },
         expertProfile: {
           ...base.expertProfile,
           type: 'agency',
-          agency: { id: 'agency-1', name: 'CloudPeak' },
         },
       } as unknown as ProjectEngagementWithMilestones;
       const [e] = milestone(
@@ -406,12 +406,9 @@ describe('mapTimeToView', () => {
       const agencyProject = project(
         {},
         {
-          expertProfile: {
-            ...base,
-            agencyId: 'ag-1',
-            type: 'agency',
-            agency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
-          },
+          deliveringAgencyId: 'ag-1',
+          deliveringAgency: { id: 'ag-1', name: 'CloudPeak', logoUrl: null },
+          expertProfile: { ...base, type: 'agency' },
         }
       );
       expect(view(agencyProject, { lens: 'client', canLogTime: false }).totals.period?.detail).toBe(

@@ -87,7 +87,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     latestChangeRequest: null,
     expertProfile: {
       user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },
@@ -153,9 +152,9 @@ describe('revertMilestoneAction', () => {
     });
     mockFindEngagement.mockResolvedValue(
       engagement({
+        deliveringAgency: { name: 'CloudPeak' },
         expertProfile: {
           user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
-          agency: { name: 'CloudPeak' },
           headline: null,
           type: 'agency',
         },

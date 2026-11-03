@@ -478,15 +478,16 @@ interface CounterpartyLabels {
 async function resolveCounterparty(
   lens: 'client' | 'expert',
   profile: Awaited<ReturnType<typeof expertsRepository.findDisplayProfileById>>,
+  deliveringAgencyId: string | null,
   clientCompanyName: string
 ): Promise<CounterpartyLabels> {
   const [expertUser, agency, resolverSettings] = await Promise.all([
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(deliveringAgencyId),
     // CLIENT LENS ONLY: the expert's own pause switch is never read for the expert lens.
     lens === 'client' && profile !== undefined
       ? expertsRepository.findResolverSettings(profile.id)
@@ -707,7 +708,7 @@ export const loadCase = cache(
       liveProposals,
       clientSideEverPresentByMeetingId,
     ] = await Promise.all([
-      resolveCounterparty(lens, profile, clientCompanyName),
+      resolveCounterparty(lens, profile, caseRow.deliveringAgencyId, clientCompanyName),
       loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
       readTranscriptMeetingIds(meetings),
       // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.

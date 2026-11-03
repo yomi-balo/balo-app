@@ -11,7 +11,7 @@ import {
 } from './engagement-parties';
 
 type ExpertProfile = ProjectEngagementWithMilestones['expertProfile'];
-type Agency = ExpertProfile['agency'];
+type Agency = ProjectEngagementWithMilestones['deliveringAgency'];
 
 function makeAgency(over: Partial<NonNullable<Agency>> = {}): NonNullable<Agency> {
   return { id: 'agency-1', name: 'CloudPeak Consulting', logoUrl: null, ...over };
@@ -27,7 +27,6 @@ function makeEngagement(opts: {
 }): ProjectEngagementWithMilestones {
   const expertProfile: ExpertProfile = {
     id: 'expert-1',
-    agencyId: opts.agency ? opts.agency.id : null,
     type: opts.type ?? (opts.agency ? 'agency' : 'freelancer'),
     headline: 'headline' in opts ? (opts.headline ?? null) : 'CPQ Specialist',
     timezone: 'UTC',
@@ -37,10 +36,11 @@ function makeEngagement(opts: {
       lastName: 'lastName' in opts ? (opts.lastName ?? null) : 'Sharma',
       avatarUrl: null,
     },
-    agency: opts.agency ?? null,
   };
   return {
     expertProfile,
+    deliveringAgencyId: opts.agency ? opts.agency.id : null,
+    deliveringAgency: opts.agency ?? null,
     company: { id: 'company-1', name: opts.companyName ?? 'Northwind Industrial' },
   } as ProjectEngagementWithMilestones;
 }
@@ -271,7 +271,7 @@ describe('deriveExpertPartyLabels (BAL-566 D8)', () => {
     const full = deriveEngagementParties(engagement);
     const extracted = deriveExpertPartyLabels({
       type: engagement.expertProfile.type,
-      agencyName: engagement.expertProfile.agency?.name ?? null,
+      agencyName: engagement.deliveringAgency?.name ?? null,
       firstName: engagement.expertProfile.user.firstName,
       lastName: engagement.expertProfile.user.lastName,
     });

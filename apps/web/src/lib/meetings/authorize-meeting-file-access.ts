@@ -23,6 +23,7 @@ import {
   type MeetingGuestSide,
   type PrimaryMeetingContext,
 } from '@balo/shared/meetings';
+import { deliveringAgencyIdFor, type DeliveringAgencySource } from '@balo/shared/parties';
 import { conversationSubjectForMeetingContext } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
 import type { MeetingGuestSubject } from './resolve-meeting-guest';
@@ -277,8 +278,11 @@ function deny(
  * DENIED with its own log reason, rather than silently degrading into `cross_tenant` and
  * losing the shape in the log.
  */
-async function actorIsOnExpertSide(expertProfileId: string, userId: string): Promise<boolean> {
-  const profile = await expertsRepository.findProfileById(expertProfileId);
+async function actorIsOnExpertSide(
+  owner: { expertProfileId: string; deliveringAgency: DeliveringAgencySource },
+  userId: string
+): Promise<boolean> {
+  const profile = await expertsRepository.findProfileById(owner.expertProfileId);
   if (profile === undefined) return false;
 
   // ⚠ THE SHARED VISIBILITY RULE, CONSUMED — never re-derived. `actorHasExpertSideVisibility`
@@ -289,8 +293,16 @@ async function actorIsOnExpertSide(expertProfileId: string, userId: string): Pro
   // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
   // can never answer for an actor other than the one being authorized (the confused-deputy
   // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
-  return actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
-    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  //
+  // The agency is `deliveringAgencyIdFor(owner.deliveringAgency, …)`: an engagement-grain
+  // meeting reads the engagement's pin, a request-grain one the profile's current agency.
+  return actorHasExpertSideVisibility(
+    {
+      userId: profile.userId,
+      agencyId: deliveringAgencyIdFor(owner.deliveringAgency, profile.agencyId),
+    },
+    userId,
+    (agencyId, actorId) => partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
   );
 }
 
@@ -585,7 +597,10 @@ export async function authorizeMeetingFileAccess(
   //
   // A `match`-routed `project_discovery` names nobody, so there is no profile to load and the
   // arm short-circuits (`&&`) rather than querying a null id.
-  if (expertProfileId !== null && (await actorIsOnExpertSide(expertProfileId, userId))) {
+  if (
+    expertProfileId !== null &&
+    (await actorIsOnExpertSide({ ...owner, expertProfileId }, userId))
+  ) {
     // ⚠ (c) — THE DECLINE GATE, on the two REQUEST-GRAIN arms only. It runs AFTER the side
     // is proven, so the log keeps the shape ("this expert declined") instead of collapsing
     // it into `cross_tenant`. It gates the WHOLE arm: the declined expert AND their agency.

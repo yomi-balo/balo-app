@@ -136,9 +136,9 @@ async function resolveLabels(
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    caseRow?.deliveringAgencyId == null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(caseRow.deliveringAgencyId),
   ]);
 
   const actorName = personDisplayName(

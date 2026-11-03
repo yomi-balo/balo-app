@@ -3,24 +3,33 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripComments } from '@balo/shared/testing';
 
-const { mockFindById, mockFindProfileById, mockGetMemberRole } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
-  mockFindProfileById: vi.fn(),
-  mockGetMemberRole: vi.fn(),
-}));
+const { mockFindById, mockFindProfileById, mockGetMemberRole, mockFindEngagementById } = vi.hoisted(
+  () => ({
+    mockFindById: vi.fn(),
+    mockFindProfileById: vi.fn(),
+    mockGetMemberRole: vi.fn(),
+    mockFindEngagementById: vi.fn(),
+  })
+);
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: { findById: mockFindById },
+  engagementsRepository: { findById: mockFindEngagementById },
   expertsRepository: { findProfileById: mockFindProfileById },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
 }));
 
 import { authorizeSessionExpertVisibility } from './authorize-session-expert-visibility.js';
 
-const SESSION = { id: 'session_1', companyId: 'company_1', expertProfileId: 'expert_1' };
+const SESSION = {
+  id: 'session_1',
+  companyId: 'company_1',
+  expertProfileId: 'expert_1',
+  engagementId: null,
+};
 
 describe('authorizeSessionExpertVisibility', () => {
   beforeEach(() => {
@@ -104,6 +113,96 @@ describe('authorizeSessionExpertVisibility', () => {
     });
     expect(res).toEqual({ ok: false, code: 'forbidden' });
     expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  describe('a session on an engagement reads the engagement pin', () => {
+    const ENGAGEMENT_SESSION = { ...SESSION, engagementId: 'eng_1' };
+
+    beforeEach(() => {
+      mockFindById.mockResolvedValue(ENGAGEMENT_SESSION);
+    });
+
+    it("checks membership of the pinned agency, not the profile's current agency", async () => {
+      mockFindProfileById.mockResolvedValue({ userId: 'someone_else', agencyId: 'agency_B' });
+      mockFindEngagementById.mockResolvedValue({ id: 'eng_1', deliveringAgencyId: 'agency_A' });
+      mockGetMemberRole.mockImplementation(async (_party: string, agencyId: string) =>
+        agencyId === 'agency_A' ? 'admin' : undefined
+      );
+
+      const res = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'agency_a_admin',
+      });
+
+      expect(res).toEqual({ ok: true, session: ENGAGEMENT_SESSION, expertProfileId: 'expert_1' });
+      expect(mockGetMemberRole).toHaveBeenCalledWith('agency', 'agency_A', 'agency_a_admin');
+      expect(mockGetMemberRole).not.toHaveBeenCalledWith('agency', 'agency_B', expect.anything());
+    });
+
+    it('denies a member of the profile current agency when the pin names another', async () => {
+      mockFindProfileById.mockResolvedValue({ userId: 'someone_else', agencyId: 'agency_B' });
+      mockFindEngagementById.mockResolvedValue({ id: 'eng_1', deliveringAgencyId: 'agency_A' });
+      mockGetMemberRole.mockImplementation(async (_party: string, agencyId: string) =>
+        agencyId === 'agency_B' ? 'owner' : undefined
+      );
+
+      const res = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'agency_b_owner',
+      });
+
+      expect(res).toEqual({ ok: false, code: 'forbidden' });
+    });
+
+    it('a NULL pin grants the expert but no agency colleague, with no agency lookup', async () => {
+      mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1', agencyId: 'agency_B' });
+      mockFindEngagementById.mockResolvedValue({ id: 'eng_1', deliveringAgencyId: null });
+
+      const expert = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'expert_user_1',
+      });
+      const colleague = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'colleague',
+      });
+
+      expect(expert.ok).toBe(true);
+      expect(colleague).toEqual({ ok: false, code: 'forbidden' });
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+    });
+
+    it('a missing engagement keeps the expert and denies colleagues', async () => {
+      mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1', agencyId: 'agency_B' });
+      mockFindEngagementById.mockResolvedValue(undefined);
+
+      const expert = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'expert_user_1',
+      });
+      const colleague = await authorizeSessionExpertVisibility({
+        sessionId: 'session_1',
+        userId: 'colleague',
+      });
+
+      expect(expert.ok).toBe(true);
+      expect(colleague).toEqual({ ok: false, code: 'forbidden' });
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a request-grain session (no engagement) uses the profile agency and reads no engagement', async () => {
+    mockFindProfileById.mockResolvedValue({ userId: 'someone_else', agencyId: 'agency_9' });
+    mockGetMemberRole.mockResolvedValue('admin');
+
+    const res = await authorizeSessionExpertVisibility({
+      sessionId: 'session_1',
+      userId: 'agency_user',
+    });
+
+    expect(res.ok).toBe(true);
+    expect(mockFindEngagementById).not.toHaveBeenCalled();
+    expect(mockGetMemberRole).toHaveBeenCalledWith('agency', 'agency_9', 'agency_user');
   });
 
   it('denies when the expert profile is missing', async () => {

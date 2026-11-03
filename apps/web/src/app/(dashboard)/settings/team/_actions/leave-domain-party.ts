@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { partyJoinRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { soloAgencyName } from '@/lib/expert-agency/solo-agency-name';
 import { emitDomainJoinOptedOut } from '@/lib/analytics/party-join';
 import type { ActionResult } from './join-request-shared';
 
@@ -25,6 +26,8 @@ const inputSchema = z.object({
  * The orchestrator atomically withdraws a live pending request OR soft-removes the
  * live domain_match membership, plus the opt-out. `DOMAIN_JOIN_OPTED_OUT` is
  * emitted ONLY when something actually changed (idempotent no-op on double-submit).
+ * Leaving the agency the expert's profile links also repoints the profile to a fresh
+ * agency-of-one in the same transaction, named from the session user.
  */
 export async function leaveDomainParty(input: {
   partyType: 'company' | 'agency';
@@ -44,11 +47,20 @@ export async function leaveDomainParty(input: {
   const { partyType, partyId } = parsed.data;
 
   try {
-    const { path, changed } = await partyJoinRepository.leaveDomainParty({
+    const { path, changed, soloAgencyId } = await partyJoinRepository.leaveDomainParty({
       partyType,
       partyId,
       userId: session.id,
+      soloAgencyName: soloAgencyName(session.firstName, session.lastName),
     });
+
+    if (soloAgencyId !== null) {
+      log.info('Expert left agency; profile repointed to a new agency-of-one', {
+        partyId,
+        soloAgencyId,
+        actorUserId: session.id,
+      });
+    }
 
     if (changed) {
       emitDomainJoinOptedOut(path, session.id);

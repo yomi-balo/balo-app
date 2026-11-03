@@ -228,6 +228,7 @@ const FAT_PROFILE = {
 
 const OPEN_CASE = {
   engagementId: ENGAGEMENT_ID,
+  deliveringAgencyId: null,
   title: 'Flow interview loop',
   description: '<p>We need the approval flow reviewed.</p>',
   createdAt: new Date('2026-07-01T09:00:00Z'),
@@ -705,6 +706,7 @@ describe('loadCase — the counterparty, per lens', () => {
 
   it('shows the AGENCY as the org label when the expert delivers through one', async () => {
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
     const view = await loadOrThrow();
     expect(view.party.orgLabel).toBe('CloudPeak');
@@ -722,6 +724,7 @@ describe('loadCase — the counterparty, per lens', () => {
    */
   it('⚠ names the AGENCY as the prospective party label for an agency-delivered case', async () => {
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
 
     const view = await loadOrThrow();
@@ -786,6 +789,18 @@ describe('loadCase — the counterparty, per lens', () => {
     const view = await loadOrThrow();
     expect(view.party.name).toBe('An expert');
     expect(view.party.initials).toBe('AE');
+  });
+
+  it('names the agency the case is PINNED to, not the one the profile links now', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-new', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-pinned' });
+    m.findAgency.mockResolvedValue({ id: 'agency-pinned', name: 'Pinned Partners' });
+
+    const view = await loadOrThrow();
+
+    expect(m.findAgency).toHaveBeenCalledWith('agency-pinned');
+    expect(m.findAgency).not.toHaveBeenCalledWith('agency-new');
+    expect(view.party.orgLabel).toBe('Pinned Partners');
   });
 
   it('resolves no agency at all for an INDEPENDENT expert', async () => {
@@ -2085,6 +2100,7 @@ describe('loadCase — actor attribution (BAL-567)', () => {
   function seedAgencyDelivery(): void {
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
   }
 
   it('CLIENT lens — the DELIVERING expert is named by first name alone', async () => {

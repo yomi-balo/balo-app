@@ -122,6 +122,8 @@ function engagement(
     id: ENGAGEMENT_ID,
     companyId: COMPANY_ID,
     expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: null,
+    deliveringAgency: null,
     projectRequestId: 'req-1',
     status: 'active',
     pricingMethod: 'fixed',
@@ -149,7 +151,6 @@ function engagement(
     milestones: [],
     expertProfile: {
       id: EXPERT_PROFILE_ID,
-      agencyId: null,
       type: 'independent',
       headline: 'Salesforce CPQ specialist',
       user: {
@@ -158,7 +159,6 @@ function engagement(
         lastName: 'Sharma',
         avatarUrl: null,
       },
-      agency: null,
     },
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: ENGAGEMENT_TITLE },
@@ -262,7 +262,10 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
     expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-agency-admin' }),
       'manage_engagement',
-      EXPERT_PROFILE_ID,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(mockNotFound).not.toHaveBeenCalled();
@@ -381,11 +384,7 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
 
   it('?from=agency records the agency entry and sends the back link to the agency lens', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
-    mockFindWithMilestones.mockResolvedValue(
-      engagement({
-        expertProfile: { ...engagement().expertProfile, agencyId: 'agency-1' },
-      })
-    );
+    mockFindWithMilestones.mockResolvedValue(engagement({ deliveringAgencyId: 'agency-1' }));
 
     await renderPage('agency');
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith(

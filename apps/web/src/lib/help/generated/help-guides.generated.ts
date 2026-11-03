@@ -13,7 +13,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 7,
-    "updated": "2026-11-02",
+    "updated": "2026-11-03",
     "related": [
       "rate-and-payouts",
       "weekly-schedule"
@@ -32,7 +32,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The Agency tab appears on the Projects page for agency owners and admins, once your agency has\nat least one other expert besides you. Until then there's nothing to oversee, so the tab stays\nout of the way.</p>\n<ul>\n<li>Experts who are members of the agency don't see the tab. Their own work stays under the\nExpert view.</li>\n<li>The Agency tab is never the view you land on. Select <strong>Agency</strong> next to Client and Expert to\nswitch to it.</li>\n</ul>\n<p>If you lose the owner or admin role, the tab disappears the next time you open Projects.</p>",
+            "html": "<p>The Agency tab appears on the Projects page for agency owners and admins, once your agency has\nat least one other expert besides you, or projects another expert delivered with your agency.\nUntil then there's nothing to oversee, so the tab stays out of the way.</p>\n<ul>\n<li>Experts who are members of the agency don't see the tab. Their own work stays under the\nExpert view.</li>\n<li>The Agency tab is never the view you land on. Select <strong>Agency</strong> next to Client and Expert to\nswitch to it.</li>\n</ul>\n<p>If you lose the owner or admin role, the tab disappears the next time you open Projects.</p>",
             "id": "s1-b0"
           }
         ],
@@ -86,7 +86,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>If an expert is no longer a member of your agency, their projects stay on the list so nothing\ngoes missing, and you can still open and run them. A short line under their name reads <strong>No\nlonger at</strong> followed by your agency's name, so you know who the project originally came from.</p>",
+            "html": "<p>If an expert is no longer a member of your agency, their projects stay on the list so nothing\ngoes missing, and you can still open and run them. Projects an expert delivered with your agency\nstay here even if they later move to another agency. A short line under their name reads <strong>No\nlonger at</strong> followed by your agency's name, so you know who the project originally came from.</p>",
             "id": "s4-b0"
           }
         ],
@@ -104,7 +104,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>When you're an owner or admin of two or more agencies that each have another expert on the team,\nan <strong>Agency</strong> picker appears above the tiles. An agency with no other experts yet isn't offered.\nIt lists your agencies by name with each one's live project count. Pick one and the whole view,\nfrom the tiles to the list, shows that agency alone. Your choice is saved in the page\naddress, so you can bookmark or share it.</p>",
+            "html": "<p>When you're an owner or admin of two or more agencies that each have another expert on the team,\nor projects another expert delivered with them, an <strong>Agency</strong> picker appears above the tiles. An\nagency with neither isn't offered.\nIt lists your agencies by name with each one's live project count. Pick one and the whole view,\nfrom the tiles to the list, shows that agency alone. Your choice is saved in the page\naddress, so you can bookmark or share it.</p>",
             "id": "s5-b0"
           }
         ],

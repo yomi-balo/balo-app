@@ -1221,7 +1221,7 @@ async function armAbsenceReminders(
       // resolves NOTHING, so every nudge shipped party-neutral copy. `null` is still a real
       // answer (a `match`-routed discovery names nobody) and still renders "Your expert is in
       // the room" — but it is now the exception rather than the only outcome.
-      waitingPartyName: await deliveringPartyName(owner.expertProfileId),
+      waitingPartyName: await deliveringPartyName(owner),
       timers,
     });
   }

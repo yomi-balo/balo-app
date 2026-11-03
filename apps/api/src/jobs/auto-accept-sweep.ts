@@ -111,7 +111,8 @@ interface DisplayFields {
 async function deriveDisplayFields(
   engagement: ProjectEngagementWithMilestones
 ): Promise<DisplayFields> {
-  const { user, agency, type } = engagement.expertProfile;
+  const { user, type } = engagement.expertProfile;
+  const agency = engagement.deliveringAgency;
   const expertPartyLabel = expertPartyDisplayName({
     type,
     agencyName: agency?.name ?? null,
@@ -350,7 +351,7 @@ export function startDeliveryReviewSweepWorker(): Worker {
     DELIVERY_REVIEW_SWEEP_QUEUE,
     async (job: Job) => {
       const { accepted, reminded } = await runDeliveryReviewSweep(new Date(), (m) => job.log(m));
-      job.log(`delivery review sweep: ${accepted} auto-accepted, ${reminded} reminded`);
+      await job.log(`delivery review sweep: ${accepted} auto-accepted, ${reminded} reminded`);
     },
     {
       connection: createRedisConnection(),

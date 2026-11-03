@@ -52,6 +52,7 @@ function engagement(overrides: Record<string, unknown> = {}): Record<string, unk
     id: ENGAGEMENT_ID,
     companyId: COMPANY_ID,
     expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: AGENCY_ID,
     status: 'active',
     ...overrides,
   };
@@ -116,12 +117,43 @@ describe('authorizeEngagementConversation', () => {
 
   // ── The expert arm: the SHIPPED VISIBILITY rule ─────────────────────
   describe('expert side', () => {
+    it('looks the actor up in the engagement PIN, not the profile current agency', async () => {
+      const MOVED_TO_AGENCY_ID = 'd0000000-0000-4000-8000-0000000000ff';
+      mockFindProfileById.mockResolvedValue(profile({ agencyId: MOVED_TO_AGENCY_ID }));
+      mockGetMemberRole.mockImplementation(async (partyType: string, partyId: string) =>
+        partyType === 'agency' && partyId === AGENCY_ID ? 'expert' : undefined
+      );
+      const result = await authorizeEngagementConversation({
+        engagementId: ENGAGEMENT_ID,
+        userId: COLLEAGUE_USER_ID,
+      });
+      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(mockGetMemberRole).not.toHaveBeenCalledWith(
+        'agency',
+        MOVED_TO_AGENCY_ID,
+        COLLEAGUE_USER_ID
+      );
+    });
+
+    it('denies a member of the profile current agency when the engagement pin is NULL', async () => {
+      mockEngagementFindById.mockResolvedValue(engagement({ deliveringAgencyId: null }));
+      mockGetMemberRole.mockImplementation(async (partyType: string) =>
+        partyType === 'agency' ? 'owner' : undefined
+      );
+      const result = await authorizeEngagementConversation({
+        engagementId: ENGAGEMENT_ID,
+        userId: COLLEAGUE_USER_ID,
+      });
+      expect(result).toEqual(NOT_FOUND);
+    });
+
     /**
      * ⚠ THE INDEPENDENT-EXPERT SHORT-CIRCUIT. `agencyId === null` must resolve on
      * `profile.userId === userId` alone — asserting the agency lookup was NOT performed is
      * what pins that (a `getMemberRole('agency', null, …)` would be a bug).
      */
     it('grants an INDEPENDENT delivering expert with no agency lookup', async () => {
+      mockEngagementFindById.mockResolvedValue(engagement({ deliveringAgencyId: null }));
       mockFindProfileById.mockResolvedValue(profile({ agencyId: null }));
       const result = await authorizeEngagementConversation({
         engagementId: ENGAGEMENT_ID,

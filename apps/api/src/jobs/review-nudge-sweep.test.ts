@@ -93,6 +93,7 @@ function candidate(over: Partial<RatingNudgeCandidate> = {}): RatingNudgeCandida
     engagementKind: 'project',
     companyId: COMPANY_ID,
     expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: 'ag-1',
     anchorAt: new Date(NOW.getTime() - 24 * HOUR_MS),
     title: 'CPQ implementation',
     ...over,
@@ -500,7 +501,29 @@ describe('review-nudge sweep — publish payload', () => {
     });
   });
 
+  it('names the agency the engagement is pinned to, not the profile’s current agency', async () => {
+    mockListAccepted.mockImplementation(
+      bandFiltered([candidate({ deliveringAgencyId: 'ag-pin' })])
+    );
+    mockFindProfile.mockResolvedValue({
+      id: EXPERT_PROFILE_ID,
+      type: 'agency',
+      userId: 'u-ex',
+      agencyId: 'ag-other',
+    });
+    mockGetAgencySummary.mockResolvedValue({ id: 'ag-pin', name: 'Pinned Agency' });
+
+    await runReviewNudgeSweep(NOW);
+
+    expect(mockGetAgencySummary).toHaveBeenCalledWith('ag-pin');
+    expect(mockPublish).toHaveBeenCalledWith(
+      'review.reminder',
+      expect.objectContaining({ expertPartyLabel: 'Pinned Agency' })
+    );
+  });
+
   it('names the INDEPENDENT expert by their own name (BAL-329 party rule)', async () => {
+    mockListAccepted.mockImplementation(bandFiltered([candidate({ deliveringAgencyId: null })]));
     mockFindProfile.mockResolvedValue({
       id: EXPERT_PROFILE_ID,
       type: 'freelancer',

@@ -22,6 +22,7 @@ import {
   type HostRole,
   type RelationshipHostingStatus,
 } from './engagement';
+import type { DeliveringAgencySource } from '../parties/delivering-agency';
 
 /**
  * This module's own source, comment-free. Read ONCE at module scope because two
@@ -433,6 +434,7 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
   const EXPERT_USER = 'user-expert';
   const ACTOR = 'user-actor';
   const AGENCY = 'agency-1';
+  const PROFILE_SOURCE: DeliveringAgencySource = { from: 'expert_profile' };
 
   /** Records every injected read so the short-circuit is provable by CALL COUNT. */
   function makeReads(profile: HostExpertProfile | undefined, agencyRole?: string) {
@@ -452,7 +454,9 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
 
   it('reports a MISSING profile as its own reason, never as a bare non-holder', async () => {
     const { reads } = makeReads(undefined);
-    await expect(buildHostContextForExpertProfile('missing', ACTOR, reads)).resolves.toEqual({
+    await expect(
+      buildHostContextForExpertProfile('missing', ACTOR, reads, PROFILE_SOURCE)
+    ).resolves.toEqual({
       ok: false,
       reason: 'expert_profile_missing',
     });
@@ -466,7 +470,7 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
   it('SHORT-CIRCUITS an independent expert with ZERO agency lookups', async () => {
     const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: null });
 
-    const resolution = await buildHostContextForExpertProfile('p1', ACTOR, reads);
+    const resolution = await buildHostContextForExpertProfile('p1', ACTOR, reads, PROFILE_SOURCE);
 
     expect(resolution).toEqual({
       ok: true,
@@ -482,7 +486,12 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
   it('still resolves the agency when the actor IS the delivering agency expert', async () => {
     const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'expert');
 
-    const resolution = await buildHostContextForExpertProfile('p1', EXPERT_USER, reads);
+    const resolution = await buildHostContextForExpertProfile(
+      'p1',
+      EXPERT_USER,
+      reads,
+      PROFILE_SOURCE
+    );
 
     expect(resolution).toMatchObject({
       ok: true,
@@ -493,19 +502,65 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
 
   it('passes the ACTOR to the lookup per call — never a captured id', async () => {
     const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'owner');
-    await buildHostContextForExpertProfile('p1', ACTOR, reads);
+    await buildHostContextForExpertProfile('p1', ACTOR, reads, PROFILE_SOURCE);
     expect(calls.findAgencyRole).toEqual([[AGENCY, ACTOR]]);
   });
 
   it('maps a non-member (undefined role) to actorRole null', async () => {
     const { reads } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, undefined);
-    await expect(buildHostContextForExpertProfile('p1', ACTOR, reads)).resolves.toEqual({
+    await expect(
+      buildHostContextForExpertProfile('p1', ACTOR, reads, PROFILE_SOURCE)
+    ).resolves.toEqual({
       ok: true,
       hostContext: {
         resolvedForActorId: ACTOR,
         expertUserId: EXPERT_USER,
         agency: { agencyId: AGENCY, actorRole: null },
       },
+    });
+  });
+
+  describe('agency source', () => {
+    it('resolves the PIN agency when the profile now links a different agency', async () => {
+      const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: 'agency-b' }, 'admin');
+
+      const resolution = await buildHostContextForExpertProfile('p1', ACTOR, reads, {
+        from: 'engagement',
+        deliveringAgencyId: AGENCY,
+      });
+
+      expect(resolution).toEqual({
+        ok: true,
+        hostContext: {
+          resolvedForActorId: ACTOR,
+          expertUserId: EXPERT_USER,
+          agency: { agencyId: AGENCY, actorRole: 'admin' },
+        },
+      });
+      expect(calls.findAgencyRole).toEqual([[AGENCY, ACTOR]]);
+    });
+
+    it('a NULL pin yields agency null with NO lookup, even when the profile has an agency', async () => {
+      const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'owner');
+
+      const resolution = await buildHostContextForExpertProfile('p1', ACTOR, reads, {
+        from: 'engagement',
+        deliveringAgencyId: null,
+      });
+
+      expect(resolution).toEqual({
+        ok: true,
+        hostContext: { resolvedForActorId: ACTOR, expertUserId: EXPERT_USER, agency: null },
+      });
+      expect(calls.findAgencyRole).toHaveLength(0);
+    });
+
+    it('an expert_profile source uses the profile agency', async () => {
+      const { reads, calls } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, 'owner');
+
+      await buildHostContextForExpertProfile('p1', ACTOR, reads, PROFILE_SOURCE);
+
+      expect(calls.findAgencyRole).toEqual([[AGENCY, ACTOR]]);
     });
   });
 
@@ -520,7 +575,12 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
       { name: 'a non-member', actorId: ACTOR, role: undefined, grants: false },
     ])('$name → grants manage_engagement: $grants', async ({ actorId, role, grants }) => {
       const { reads } = makeReads({ userId: EXPERT_USER, agencyId: AGENCY }, role);
-      const resolution = await buildHostContextForExpertProfile('p1', actorId, reads);
+      const resolution = await buildHostContextForExpertProfile(
+        'p1',
+        actorId,
+        reads,
+        PROFILE_SOURCE
+      );
       const hostContext = resolution.ok ? resolution.hostContext : null;
 
       expect(
@@ -532,7 +592,12 @@ describe('buildHostContextForExpertProfile (BAL-421 — one assembly, two apps)'
   /** A missing profile denies every actor on both tokens — fail closed. */
   it('denies BOTH tokens when the profile is missing', async () => {
     const { reads } = makeReads(undefined);
-    const resolution = await buildHostContextForExpertProfile('gone', EXPERT_USER, reads);
+    const resolution = await buildHostContextForExpertProfile(
+      'gone',
+      EXPERT_USER,
+      reads,
+      PROFILE_SOURCE
+    );
     const hostContext = resolution.ok ? resolution.hostContext : null;
 
     for (const capability of Object.values(ENGAGEMENT_CAPABILITIES)) {

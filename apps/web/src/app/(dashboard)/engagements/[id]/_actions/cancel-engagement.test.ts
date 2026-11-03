@@ -89,7 +89,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     expertProfile: {
       id: 'expert-1',
       user: { firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },

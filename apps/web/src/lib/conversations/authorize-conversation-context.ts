@@ -143,7 +143,12 @@ export async function authorizeEngagementConversation(input: {
     return deny('no_engagement', { engagementId, userId });
   }
 
-  const side = await resolveSide(engagement.companyId, engagement.expertProfileId, userId);
+  const side = await resolveSide(
+    engagement.companyId,
+    engagement.expertProfileId,
+    engagement.deliveringAgencyId,
+    userId
+  );
   if (side.ok === false) {
     return side.denial;
   }
@@ -182,6 +187,7 @@ type SideResolution =
 async function resolveSide(
   companyId: string,
   expertProfileId: string,
+  deliveringAgencyId: string | null,
   userId: string
 ): Promise<SideResolution> {
   const participation = await resolveCompanyParticipation(companyId, userId, (partyId, actorId) =>
@@ -208,8 +214,13 @@ async function resolveSide(
   // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
   // can never answer for an actor other than the one being authorized (the confused-deputy
   // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
-  const onExpertSide = await actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
-    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  //
+  // ⚠ The agency is the ENGAGEMENT'S PIN, not the profile's current link: who sees a thread is
+  // fixed by who delivered it, and survives the expert moving agencies.
+  const onExpertSide = await actorHasExpertSideVisibility(
+    { userId: profile.userId, agencyId: deliveringAgencyId },
+    userId,
+    (agencyId, actorId) => partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
   );
   if (onExpertSide) {
     return { ok: true, side: 'expert' };

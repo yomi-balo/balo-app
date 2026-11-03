@@ -8,7 +8,11 @@ import {
   usersRepository,
 } from '@balo/db';
 import type { EligibleCompany } from '@balo/shared/credit';
-import { expertPartyDisplayName } from '@balo/shared/parties';
+import {
+  deliveringAgencyIdFor,
+  expertPartyDisplayName,
+  type DeliveringAgencySource,
+} from '@balo/shared/parties';
 import { CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 
@@ -97,7 +101,8 @@ const FALLBACK_EXPERT_DISPLAY: BookingExpertDisplay = {
  * resolution (the `resolve-counterparty.ts` "extracted, not copied" precedent).
  */
 export async function resolveBookingExpertDisplay(
-  expertProfileId: string
+  expertProfileId: string,
+  agencySource: DeliveringAgencySource
 ): Promise<BookingExpertDisplay> {
   try {
     const [profile, eligibility] = await Promise.all([
@@ -113,11 +118,12 @@ export async function resolveBookingExpertDisplay(
     ) {
       return FALLBACK_EXPERT_DISPLAY;
     }
+    const deliveringAgencyId = deliveringAgencyIdFor(agencySource, profile.agencyId);
     const [expertUser, agency] = await Promise.all([
       usersRepository.findDisplayById(profile.userId),
-      profile.agencyId === null
+      deliveringAgencyId === null
         ? Promise.resolve(undefined)
-        : agenciesRepository.getSummaryById(profile.agencyId),
+        : agenciesRepository.getSummaryById(deliveringAgencyId),
     ]);
     const agencyLabel = agency?.name ?? null;
     const firstName = expertUser?.firstName ?? null;
@@ -179,7 +185,7 @@ export async function loadBookingContext(
         return undefined;
       }
     })(),
-    resolveBookingExpertDisplay(expertProfileId),
+    resolveBookingExpertDisplay(expertProfileId, { from: 'expert_profile' }),
   ]);
 
   if (companies === undefined) {

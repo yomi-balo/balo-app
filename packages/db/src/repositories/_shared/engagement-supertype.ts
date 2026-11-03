@@ -88,8 +88,10 @@ export function projectDeliveryToEngagementStatus(s: ProjectDeliveryStatus): Eng
  *
  * No lock is taken. Whatever committed value this read sees inside `tx` is the
  * profile's agency at the moment of insert, which is exactly what the pin records; a
- * link committing a moment later belongs to engagements created after it. That holds
- * however `agency_id` moves: `expertsRepository.linkAgency` writes it unconditionally.
+ * link committing a moment later belongs to engagements created after it. `agency_id`
+ * moves only through `expertsRepository.linkAgency` (NULL → agency, onboarding) and
+ * `expertsRepository.repointAgency` (the leave-agency flow), and either way the pin reads
+ * the committed value.
  */
 export async function resolveDeliveringAgencyIdTx(
   tx: DbTx,

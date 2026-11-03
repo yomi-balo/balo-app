@@ -16,6 +16,7 @@ import {
 } from '../schema';
 import type { AuditEvent, NewCompany, NewReview, NewUser } from '../schema';
 import {
+  agencyFactory,
   caseEngagementFactory,
   companyFactory,
   companyMemberFactory,
@@ -26,6 +27,7 @@ import {
   type EngagementFactoryResult,
 } from '../test/factories';
 import { companiesRepository } from './companies';
+import { expertsRepository } from './experts';
 import { reviewsRepository, type UpsertReviewInput } from './reviews';
 
 /** A fresh engagement plus a member of its client company — the canonical reviewer shape. */
@@ -1086,6 +1088,28 @@ describe('reviewsRepository.findLandingContext — THE LEAK REGRESSION TEST', ()
     expect(context?.title).toBe('Broken approval flow');
     expect(context?.concludedOnIso).toBe(closedAt.toISOString());
     expect(Object.keys(context ?? {}).sort()).toEqual(EXPECTED_KEYS);
+  });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await expertDraftFactory({ type: 'agency' });
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const engagement = await engagementFactory({ expertProfileId: expert.id });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+    const reviewer = await userFactory();
+    await companyMemberFactory({ companyId: engagement.companyId, userId: reviewer.id });
+
+    const context = await reviewsRepository.findLandingContext(
+      engagement.engagement.id,
+      reviewer.id
+    );
+    expect(context?.expertPartyLabel).toBe('Pinned Partners');
   });
 
   it('carries the reviewer’s first name, surname INITIAL and job title — never the surname or email', async () => {

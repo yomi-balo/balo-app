@@ -110,7 +110,10 @@ export default async function ChangeOrderComposerPage({
   const mayPropose = await hasExpertDeliveryCapability(
     user,
     ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-    engagement.expertProfileId,
+    {
+      expertProfileId: engagement.expertProfileId,
+      agency: { from: 'engagement', deliveringAgencyId: engagement.deliveringAgencyId },
+    },
     { contextType: 'project', contextId: id }
   );
   if (!mayPropose) {

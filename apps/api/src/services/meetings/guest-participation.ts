@@ -23,13 +23,13 @@ import {
   agenciesRepository,
   caseEngagementsRepository,
   companiesRepository,
-  expertsRepository,
   meetingCalendarEventsRepository,
   meetingGuestsRepository,
   partyDomainsRepository,
   partyMembershipsRepository,
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
+  resolveMeetingContextOwner,
   usersRepository,
   type Meeting,
   type MeetingCalendarEvent,
@@ -68,7 +68,7 @@ import {
 import { dailyParticipantEjector } from '../daily/rooms.js';
 import { mintGuestInviteToken } from '../../lib/guest-token.js';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
-import { deliveringExpertUserId } from './delivering-party.js';
+import { deliveringAgencyIdForOwner, deliveringExpertUserId } from './delivering-party.js';
 import { presenceWindowFor, reconcileMeetingStatus } from './presence-writer.js';
 import {
   authorizeMeetingParticipation,
@@ -657,7 +657,7 @@ async function resolveInviterAttribution(
   actorUserId: string,
   side: MeetingGuestSide,
   companyId: string,
-  expertProfileId: string | null
+  subject: PrimaryMeetingContext
 ): Promise<InviterAttribution> {
   const user = await usersRepository.findById(actorUserId);
   const inviterName =
@@ -669,10 +669,11 @@ async function resolveInviterAttribution(
     return { inviterName, inviterOrgLabel: company?.name ?? inviterName };
   }
 
-  if (expertProfileId !== null) {
-    const profile = await expertsRepository.findProfileById(expertProfileId);
-    if (profile?.agencyId != null) {
-      const agency = await agenciesRepository.getSummaryById(profile.agencyId);
+  const owner = await resolveMeetingContextOwner(subject);
+  if (owner !== undefined) {
+    const agencyId = await deliveringAgencyIdForOwner(owner);
+    if (agencyId !== null) {
+      const agency = await agenciesRepository.getSummaryById(agencyId);
       if (agency !== undefined) {
         return { inviterName, inviterOrgLabel: agency.name };
       }
@@ -819,7 +820,7 @@ export async function inviteGuests(input: InviteGuestsInput): Promise<InviteGues
   // latency rather than three (the async-waterfall rule).
   const [meetingTitle, attribution, samePartyUserIds] = await Promise.all([
     resolveMeetingTitle(subject),
-    resolveInviterAttribution(input.actorUserId, side, companyId, authorized.expertProfileId),
+    resolveInviterAttribution(input.actorUserId, side, companyId, subject),
     resolveSamePartyRecipients(side, companyId, input.actorUserId),
   ]);
 

@@ -16,18 +16,19 @@ vi.mock('@/lib/analytics/party-join', () => ({
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/logging', () => ({ log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 
+import { log } from '@/lib/logging';
 import { leaveDomainParty } from './leave-domain-party';
 
 const PARTY_ID = '22222222-2222-4222-8222-222222222222';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRequireUser.mockResolvedValue({ id: 'me-1' });
+  mockRequireUser.mockResolvedValue({ id: 'me-1', firstName: 'Dana', lastName: 'Whitfield' });
 });
 
 describe('leaveDomainParty (escape hatch)', () => {
   it('passes the SESSION user id (never a client-supplied one) to the orchestrator', async () => {
-    mockLeaveDomainParty.mockResolvedValue({ path: 'auto', changed: true });
+    mockLeaveDomainParty.mockResolvedValue({ path: 'auto', changed: true, soloAgencyId: null });
 
     const result = await leaveDomainParty({ partyType: 'company', partyId: PARTY_ID });
 
@@ -36,7 +37,22 @@ describe('leaveDomainParty (escape hatch)', () => {
       partyType: 'company',
       partyId: PARTY_ID,
       userId: 'me-1',
+      soloAgencyName: 'Dana Whitfield',
     });
+  });
+
+  it('logs the repoint only when an agency-of-one was created', async () => {
+    mockLeaveDomainParty.mockResolvedValue({ path: 'auto', changed: true, soloAgencyId: 'solo-1' });
+    await leaveDomainParty({ partyType: 'agency', partyId: PARTY_ID });
+    expect(log.info).toHaveBeenCalledWith(
+      'Expert left agency; profile repointed to a new agency-of-one',
+      { partyId: PARTY_ID, soloAgencyId: 'solo-1', actorUserId: 'me-1' }
+    );
+
+    vi.mocked(log.info).mockClear();
+    mockLeaveDomainParty.mockResolvedValue({ path: 'auto', changed: true, soloAgencyId: null });
+    await leaveDomainParty({ partyType: 'agency', partyId: PARTY_ID });
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it('emits DOMAIN_JOIN_OPTED_OUT with the resolved path ONLY when changed', async () => {

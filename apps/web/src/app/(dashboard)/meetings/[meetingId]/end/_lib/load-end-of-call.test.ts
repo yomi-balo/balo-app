@@ -18,6 +18,7 @@ const mockFindTranscript = vi.fn();
 const mockFindCompany = vi.fn();
 const mockFindProfile = vi.fn();
 const mockFindCase = vi.fn();
+const mockFindEngagement = vi.fn();
 const mockCreditSessions = vi.fn();
 const mockFindNames = vi.fn();
 const mockFindClosureSubject = vi.fn();
@@ -26,6 +27,7 @@ vi.mock('@balo/db', () => ({
   transcriptsRepository: { findByMeetingId: (...a: unknown[]) => mockFindTranscript(...a) },
   companiesRepository: { findNameById: (...a: unknown[]) => mockFindCompany(...a) },
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => mockFindProfile(...a) },
+  engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   caseEngagementsRepository: {
     findByEngagementId: (...a: unknown[]) => mockFindCase(...a),
     findClosureSubject: (...a: unknown[]) => mockFindClosureSubject(...a),
@@ -111,7 +113,9 @@ function seed(): void {
     closeReason: null,
     resolutionRequestedAt: null,
     resolutionRequestedByUserId: null,
+    deliveringAgencyId: 'ag-pinned',
   });
+  mockFindEngagement.mockResolvedValue(undefined);
   mockReadReview.mockResolvedValue({
     review: null,
     state: { kind: 'none' },
@@ -578,7 +582,67 @@ describe('loadEndOfCall — the CLIENT arm', () => {
       'client',
       expect.anything(),
       'Northwind Industrial',
-      null
+      null,
+      { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+    );
+  });
+
+  it('names the agency from the engagement pin where the case row is not read (expert lens)', async () => {
+    mockResolveAccess.mockResolvedValue(access({ lens: 'expert' }));
+    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, deliveringAgencyId: 'ag-pinned' });
+
+    await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+
+    expect(mockFindEngagement).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(mockCounterparty).toHaveBeenCalledWith(
+      'expert',
+      expect.anything(),
+      'Northwind Industrial',
+      null,
+      { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+    );
+  });
+
+  it('names the engagement pin on an engagement-grain non-case meeting, not the profile', async () => {
+    mockFindProfile.mockResolvedValue({
+      id: PROFILE_ID,
+      userId: 'u-expert',
+      agencyId: 'ag-profile',
+    });
+    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, deliveringAgencyId: 'ag-pinned' });
+    for (const contextType of [
+      'project_kickoff',
+      'project_call',
+      'package_session',
+      'retainer_checkin',
+    ]) {
+      mockCounterparty.mockClear();
+      mockResolveAccess.mockResolvedValue(
+        access({ subject: { contextType, contextId: ENGAGEMENT_ID } })
+      );
+      await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+      expect(mockCounterparty, contextType).toHaveBeenCalledWith(
+        'client',
+        expect.anything(),
+        'Northwind Industrial',
+        null,
+        { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+      );
+    }
+  });
+
+  it('keeps the expert profile source on a request-grain meeting and reads no engagement', async () => {
+    mockResolveAccess.mockResolvedValue(
+      access({ subject: { contextType: 'project_discovery', contextId: 'req-1' } })
+    );
+    await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(mockFindEngagement).not.toHaveBeenCalled();
+    expect(mockCounterparty).toHaveBeenCalledWith(
+      'client',
+      expect.anything(),
+      'Northwind Industrial',
+      null,
+      { from: 'expert_profile' }
     );
   });
 

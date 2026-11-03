@@ -26,12 +26,14 @@ beforeEach(() => {
 describe('resolveNotificationLabels', () => {
   it('resolves an AGENCY expert with the agency name on both party and person labels', async () => {
     mockFindCompany.mockResolvedValue({ name: 'Northwind Industrial' });
-    mockFindProfile.mockResolvedValue({ userId: 'u-1', type: 'agency', agencyId: 'ag-1' });
+    // The profile has since moved to ag-2; the case is pinned to ag-1 and names that agency.
+    mockFindProfile.mockResolvedValue({ userId: 'u-1', type: 'agency', agencyId: 'ag-2' });
     mockFindUser.mockResolvedValue({ firstName: 'Dana', lastName: 'Reyes' });
     mockFindAgency.mockResolvedValue({ name: 'CloudPeak' });
 
-    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID);
+    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID, 'ag-1');
 
+    expect(mockFindAgency).toHaveBeenCalledWith('ag-1');
     expect(result).toEqual({
       clientCompanyName: 'Northwind Industrial',
       expertPartyLabel: 'CloudPeak',
@@ -44,7 +46,7 @@ describe('resolveNotificationLabels', () => {
     mockFindProfile.mockResolvedValue({ userId: 'u-1', type: 'freelancer', agencyId: null });
     mockFindUser.mockResolvedValue({ firstName: 'Amara', lastName: 'Okafor' });
 
-    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID);
+    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID, null);
 
     expect(result.expertPartyLabel).toBe('Amara Okafor');
     expect(result.expertPersonLabel).toBe('Amara Okafor');
@@ -55,7 +57,7 @@ describe('resolveNotificationLabels', () => {
     mockFindCompany.mockResolvedValue(undefined);
     mockFindProfile.mockResolvedValue(undefined);
 
-    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID);
+    const result = await resolveNotificationLabels(COMPANY_ID, EXPERT_PROFILE_ID, null);
 
     expect(result.clientCompanyName).toBe('your company');
     expect(result.expertPartyLabel).toBeTruthy();

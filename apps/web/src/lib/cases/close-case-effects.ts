@@ -205,6 +205,8 @@ export interface PublishCaseClosedInput {
   meetingId: string | undefined;
   companyId: string;
   expertProfileId: string;
+  /** `engagements.delivering_agency_id` of the case: the agency the notice names. */
+  deliveringAgencyId: string | null;
   caseTitle: string;
   closedAt: Date;
   recipientId: string;
@@ -242,9 +244,9 @@ export async function publishCaseClosed(input: PublishCaseClosedInput): Promise<
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    input.deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(input.deliveringAgencyId),
   ]);
 
   const payload = buildCaseClosedPayload({

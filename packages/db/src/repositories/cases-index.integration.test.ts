@@ -64,6 +64,7 @@ import {
   meetingFactory,
   userFactory,
 } from '../test/factories';
+import { expertsRepository } from './experts';
 import { partyMembershipsRepository } from './party-memberships';
 import { referenceDataRepository } from './reference-data';
 import {
@@ -1261,5 +1262,33 @@ describe('casesIndexRepository — column hygiene', () => {
     expect(agencyRow.agencyName).not.toBeNull();
     expect(independentRow.agencyId).toBeNull();
     expect(independentRow.agencyName).toBeNull();
+  });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const company = await companyFactory();
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await seedAgencyExpert(pinned.id);
+    const caseId = await seedCase({
+      companyId: company.id,
+      expertProfileId: expert.profileId,
+      title: 'Pinned case',
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.profileId, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const rows = (
+      await casesIndexRepository.listOpenCases(
+        { side: 'company', companyId: company.id },
+        { limit: 24 }
+      )
+    ).rows;
+    const row = rows.find((candidate) => candidate.engagementId === caseId);
+    expect(row?.agencyId).toBe(pinned.id);
+    expect(row?.agencyName).toBe('Pinned Partners');
   });
 });

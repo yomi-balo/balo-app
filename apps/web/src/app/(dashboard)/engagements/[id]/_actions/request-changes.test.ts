@@ -103,10 +103,10 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     createdAt: new Date('2026-06-01T00:00:00Z'),
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
+    deliveringAgency: { id: 'ag-1', name: 'CloudPeak Consulting' },
     expertProfile: {
       id: 'expert-1',
       user: { firstName: 'Priya', lastName: 'Sharma' },
-      agency: { id: 'ag-1', name: 'CloudPeak Consulting' },
       headline: null,
       type: 'agency',
     },

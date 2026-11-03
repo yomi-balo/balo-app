@@ -130,10 +130,8 @@ function engagementView(overrides: Record<string, unknown> = {}): Record<string,
     projectRequest: null,
     expertProfile: {
       id: 'expert-1',
-      agencyId: null,
       type: 'freelancer',
       user: { id: 'u-e', firstName: 'Priya', lastName: 'N', avatarUrl: null },
-      agency: null,
     },
     totalMilestones: 0,
     completedMilestones: 0,
@@ -389,22 +387,20 @@ describe('loadClientPortfolio', () => {
     mockListPortfolioEngagements.mockResolvedValue([
       engagementView({
         id: 'eng-agency',
+        deliveringAgencyId: 'ag-1',
+        deliveringAgency: { id: 'ag-1', name: 'Cloudreach', logoUrl: null },
         expertProfile: {
           id: 'x-a',
-          agencyId: 'ag-1',
           type: 'agency',
           user: { id: 'u-a', firstName: 'Sam', lastName: 'Okafor', avatarUrl: null },
-          agency: { id: 'ag-1', name: 'Cloudreach', logoUrl: null },
         },
       }),
       engagementView({
         id: 'eng-free',
         expertProfile: {
           id: 'x-f',
-          agencyId: null,
           type: 'freelancer',
           user: { id: 'u-f', firstName: 'Priya', lastName: 'N', avatarUrl: null },
-          agency: null,
         },
       }),
     ]);
