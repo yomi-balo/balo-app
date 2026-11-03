@@ -57,10 +57,10 @@ export default async function HelpGuidePage({
             <MobileSectionJump key={`jump-${slug}`} slug={slug} steps={steps} />
           ) : null}
           <div className="mt-9 md:mt-12">
-            {guide.intro.length > 0 ? <HelpBlocks blocks={guide.intro} /> : null}
+            {guide.intro.length > 0 ? <HelpBlocks slug={slug} blocks={guide.intro} /> : null}
             <div className={guide.intro.length > 0 ? 'mt-12' : undefined}>
               {guide.sections.map((section) => (
-                <GuideSection key={section.n} section={section} />
+                <GuideSection key={section.n} slug={slug} section={section} />
               ))}
             </div>
           </div>

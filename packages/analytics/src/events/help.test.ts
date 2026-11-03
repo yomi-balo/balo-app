@@ -14,6 +14,7 @@ describe('HELP_EVENTS', () => {
       'ARTICLE_VIEWED',
       'SECTION_JUMPED',
       'FEEDBACK_SUBMITTED',
+      'SCREENSHOT_ENLARGED',
     ]);
   });
 
@@ -23,6 +24,7 @@ describe('HELP_EVENTS', () => {
     expect(HELP_EVENTS.ARTICLE_VIEWED).toBe('help_article_viewed');
     expect(HELP_EVENTS.SECTION_JUMPED).toBe('help_section_jumped');
     expect(HELP_EVENTS.FEEDBACK_SUBMITTED).toBe('help_feedback_submitted');
+    expect(HELP_EVENTS.SCREENSHOT_ENLARGED).toBe('help_screenshot_enlarged');
   });
 
   it('values follow the help_ prefix convention', () => {

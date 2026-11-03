@@ -3,7 +3,10 @@ import { HelpBlocks } from './help-blocks';
 import { HelpScreenshot } from './help-screenshot';
 
 /** One numbered section of a guide. `#step-N` is the deep-link anchor the product links to. */
-export function GuideSection({ section }: Readonly<{ section: HelpSection }>): React.JSX.Element {
+export function GuideSection({
+  slug,
+  section,
+}: Readonly<{ slug: string; section: HelpSection }>): React.JSX.Element {
   const { n, title, blocks, screenshot } = section;
   return (
     <section
@@ -29,9 +32,9 @@ export function GuideSection({ section }: Readonly<{ section: HelpSection }>): R
         </h2>
       </div>
       <div className="mt-3">
-        <HelpBlocks blocks={blocks} />
+        <HelpBlocks slug={slug} blocks={blocks} />
       </div>
-      {screenshot === null ? null : <HelpScreenshot image={screenshot} />}
+      {screenshot === null ? null : <HelpScreenshot slug={slug} image={screenshot} />}
     </section>
   );
 }
