@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  desc,
   eq,
   gt,
   gte,
@@ -21,6 +22,7 @@ import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import {
   assertMeetingTransition,
   DAILY_ROOM_NAME_PREFIX,
+  isDailyDomainLabel,
   RESCHEDULABLE_MEETING_STATUSES,
   GUEST_TOKEN_TTL_AFTER_END_MS,
   selectPrimaryMeetingContext,
@@ -92,8 +94,14 @@ const logger = createLogger('meetings-repository');
  */
 export const WAITING_FOR_PARTICIPANTS_FROM = ['scheduled'] as const;
 export const IN_PROGRESS_FROM = ['scheduled', 'waiting_for_participants'] as const;
+/** Every non-terminal status: a meeting in one of these has not ended or been cancelled. */
+export const LIVE_MEETING_STATUSES = [
+  'scheduled',
+  'waiting_for_participants',
+  'in_progress',
+] as const;
 /** The complement of `endMeeting`'s exclusion CAS (`NOT IN ('ended','cancelled')`). */
-export const END_MEETING_FROM = ['scheduled', 'waiting_for_participants', 'in_progress'] as const;
+export const END_MEETING_FROM = LIVE_MEETING_STATUSES;
 
 /** Throw unless EVERY declared `from` may legally reach `to`. See the block above. */
 function assertEveryEdgeLegal(
@@ -248,8 +256,8 @@ export interface UnprovisionedScheduledMeeting {
   readonly roomNameStamped: boolean;
 }
 
-/** BAL-518 — the statuses {@link meetingsRepository.listLiveVenuesOnDomain} reads. */
-export type LiveMeetingStatus = (typeof END_MEETING_FROM)[number];
+/** BAL-518 — a non-terminal meeting status. */
+export type LiveMeetingStatus = (typeof LIVE_MEETING_STATUSES)[number];
 
 const DAILY_JOIN_URL_SCHEME = 'https://';
 const DAILY_JOIN_URL_SUFFIX = '.daily.co/';
@@ -271,32 +279,48 @@ function assertDailyJoinUrlPrefix(prefix: string): void {
   }
 }
 
-function isDailyDomainLabel(label: string): boolean {
-  if (label.length === 0) return false;
-  for (const char of label) {
-    const isLower = char >= 'a' && char <= 'z';
-    const isDigit = char >= '0' && char <= '9';
-    if (!isLower && !isDigit && char !== '-') return false;
-  }
-  return true;
-}
-
-/** BAL-518 — {@link meetingsRepository.listLiveVenuesOnDomain}'s input. */
-export interface ListLiveVenuesOnDomainInput {
+/** BAL-518 — {@link meetingsRepository.listScheduledVenueTargetsOnDomain}'s input. */
+export interface ListScheduledVenueTargetsInput {
   /**
    * The Daily domain's URL prefix, trailing slash included (e.g. `https://old.daily.co/`).
    * Anything but `https://<label>.daily.co/` throws.
    */
   joinUrlPrefix: string;
+  /** Exclusive. Only a meeting starting after this is a target. */
+  scheduledStartAfter: Date;
   /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
   limit: number;
 }
 
-/** BAL-518 — one live meeting whose stamped join url is on a given Daily domain. No venue column. */
-export interface LiveVenueOnDomain {
+/** BAL-518 — one `scheduled`, not-yet-started meeting whose join url is on a given Daily domain. */
+export interface ScheduledVenueTarget {
+  readonly meetingId: string;
+  readonly scheduledStart: Date;
+}
+
+/** BAL-518 — {@link meetingsRepository.listNonTargetLiveVenuesOnDomain}'s input. */
+export interface ListNonTargetLiveVenuesInput {
+  /** `https://<label>.daily.co/`; anything else throws. */
+  joinUrlPrefix: string;
+  /**
+   * A `scheduled` meeting starting AFTER this is a target, not a non-target. Pass the same
+   * instant as the target read's `scheduledStartAfter`.
+   */
+  scheduledStartAtOrBefore: Date;
+  /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
+  limit: number;
+}
+
+/**
+ * BAL-518 — one live meeting on a given Daily domain that is NOT a clear target. No venue column.
+ * The status and both clocks are what a caller needs to tell "can still legitimately start or
+ * run" from "stranded".
+ */
+export interface NonTargetLiveVenue {
   readonly meetingId: string;
   readonly status: LiveMeetingStatus;
   readonly scheduledStart: Date;
+  readonly scheduledEnd: Date;
 }
 
 /** BAL-518 — {@link meetingsRepository.clearScheduledVenuesOnDomain}'s input. */
@@ -324,7 +348,7 @@ export interface ListStrandedLiveInput {
 /** BAL-586 — one live meeting past its scheduled end, with its open presence interval summary. */
 export interface StrandedLiveMeeting {
   readonly meetingId: string;
-  readonly status: 'scheduled' | 'waiting_for_participants' | 'in_progress';
+  readonly status: LiveMeetingStatus;
   readonly scheduledStart: Date;
   readonly scheduledEnd: Date;
   /** Presence intervals with `left_at IS NULL` and not soft-deleted. */
@@ -1844,18 +1868,58 @@ export const meetingsRepository = {
   },
 
   /**
-   * BAL-518 — live meetings (`scheduled`, `waiting_for_participants`, `in_progress`) whose stamped
-   * `join_url` starts with `joinUrlPrefix`, soonest first: the Daily domain cutover's read of what
-   * still sits on the old domain. `starts_with` needs no LIKE escaping, and a NULL url never
-   * matches; a prefix that is not `https://<label>.daily.co/` throws. Rides
-   * `meeting_status_scheduled_start_idx`; the prefix is a residual filter. Returns NO room name or
-   * join url (the rule at {@link meetingVenueReadySql}).
+   * BAL-518 — `scheduled` meetings starting after `scheduledStartAfter` whose stamped `join_url`
+   * starts with `joinUrlPrefix`, soonest first: the Daily domain cutover's clear targets.
+   * `starts_with` needs no LIKE escaping, and a NULL url never matches; a prefix that is not
+   * `https://<label>.daily.co/` throws. Rides `meeting_status_scheduled_start_idx`; the prefix is a
+   * residual filter. Returns NO room name or join url (the rule at {@link meetingVenueReadySql}).
+   *
+   * Targets only: meetings that block the cutover are read separately by
+   * {@link meetingsRepository.listNonTargetLiveVenuesOnDomain}, so they can never take a slot in
+   * this batch.
    *
    * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the same no-silent-caps
    * rule as {@link meetingsRepository.listUnprovisionedScheduled}. A `limit <= 0` returns `[]`
    * without a query.
    */
-  async listLiveVenuesOnDomain(input: ListLiveVenuesOnDomainInput): Promise<LiveVenueOnDomain[]> {
+  async listScheduledVenueTargetsOnDomain(
+    input: ListScheduledVenueTargetsInput
+  ): Promise<ScheduledVenueTarget[]> {
+    assertDailyJoinUrlPrefix(input.joinUrlPrefix);
+    if (input.limit <= 0) return [];
+    return db
+      .select({ meetingId: meetings.id, scheduledStart: meetings.scheduledStart })
+      .from(meetings)
+      .where(
+        and(
+          eq(meetings.status, 'scheduled'),
+          gt(meetings.scheduledStart, input.scheduledStartAfter),
+          isNull(meetings.deletedAt),
+          sql`starts_with(${meetings.joinUrl}, ${input.joinUrlPrefix})`
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+  },
+
+  /**
+   * BAL-518 — live meetings (`scheduled`, `waiting_for_participants`, `in_progress`) on the domain
+   * that {@link meetingsRepository.listScheduledVenueTargetsOnDomain} does NOT return: every
+   * `waiting_for_participants` / `in_progress` row, and every `scheduled` row starting at or before
+   * `scheduledStartAtOrBefore`. The two reads partition the live rows on the domain.
+   *
+   * ORDERED BY THE CLASSIFICATION CLOCK, NEWEST FIRST: a `scheduled` row is judged on its
+   * `scheduled_start`, every other live row on its `scheduled_end` (the instant it stops being a
+   * blocker). Sorting on that same instant, descending, puts every row that can still block ahead
+   * of every stranded row, so a truncated result never drops a blocker in favour of a stranded
+   * row. Same prefix guard and no-venue-column rule as the target read.
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`.** A `limit <= 0` returns
+   * `[]` without a query.
+   */
+  async listNonTargetLiveVenuesOnDomain(
+    input: ListNonTargetLiveVenuesInput
+  ): Promise<NonTargetLiveVenue[]> {
     assertDailyJoinUrlPrefix(input.joinUrlPrefix);
     if (input.limit <= 0) return [];
     return db
@@ -1863,16 +1927,26 @@ export const meetingsRepository = {
         meetingId: meetings.id,
         status: sql<LiveMeetingStatus>`${meetings.status}`,
         scheduledStart: meetings.scheduledStart,
+        scheduledEnd: meetings.scheduledEnd,
       })
       .from(meetings)
       .where(
         and(
-          inArray(meetings.status, [...END_MEETING_FROM]),
+          inArray(meetings.status, [...LIVE_MEETING_STATUSES]),
+          or(
+            ne(meetings.status, 'scheduled'),
+            lte(meetings.scheduledStart, input.scheduledStartAtOrBefore)
+          ),
           isNull(meetings.deletedAt),
           sql`starts_with(${meetings.joinUrl}, ${input.joinUrlPrefix})`
         )
       )
-      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .orderBy(
+        desc(
+          sql`CASE WHEN ${meetings.status} = 'scheduled' THEN ${meetings.scheduledStart} ELSE ${meetings.scheduledEnd} END`
+        ),
+        asc(meetings.id)
+      )
       .limit(input.limit);
   },
 
@@ -1955,7 +2029,7 @@ export const meetingsRepository = {
       .from(meetings)
       .where(
         and(
-          inArray(meetings.status, [...END_MEETING_FROM]),
+          inArray(meetings.status, [...LIVE_MEETING_STATUSES]),
           lte(meetings.scheduledEnd, input.scheduledEndBefore),
           lt(meetings.scheduledStart, input.scheduledEndBefore),
           isNull(meetings.deletedAt),

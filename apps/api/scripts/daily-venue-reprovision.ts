@@ -7,11 +7,13 @@
  * `meeting.unprovisioned` admin alert fires for those meetings; that is expected.
  *
  * DB only: no Daily call, so it needs `DATABASE_URL` and nothing else. Dry-run by default.
- * Prints the database HOST (never credentials) so the operator can confirm the target, then
- * counts and meeting ids, never join urls.
+ * Prints the database HOST and Supabase PROJECT REF (never credentials) so the operator can
+ * confirm the target, then counts and meeting ids, never join urls.
  *
- * Meetings on the old domain that cannot be cleared (a live call, or a past-start meeting still
- * joinable) are listed as BLOCKERS and left alone. The script exits 1 when any exist.
+ * Other live meetings on the old domain are left alone and split in two (cutoff = now minus the
+ * missed-call window): BLOCKERS can still start or run, and the script exits 1 while any exist;
+ * STRANDED meetings can no longer start or run, are listed as a warning only, and are owned by
+ * the `meeting.stranded` alert (BAL-586).
  * Idempotent: cleared rows no longer match the domain prefix. When the batch is full, run again.
  *
  * ── HOW TO RUN ──────────────────────────────────────────────────────────────────────────
@@ -25,13 +27,17 @@
  *   ... --from-domain getbalo --apply  # clear
  *   ... --limit 200                    # smaller batch (default 500)
  *
- * Scripts sit outside `typecheck` and lint. To type-check this one by hand:
+ * ── ⚠ THIS FILE IS OUTSIDE THE APP'S TYPECHECK AND LINT SCOPE ───────────────────────────
  *
- *   pnpm --filter api exec tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler \
- *     --target es2022 --strict --noUncheckedIndexedAccess --types node scripts/daily-venue-reprovision.ts
+ * `scripts/` is covered by neither `pnpm typecheck` nor lint. Verify by hand after editing, from
+ * the repo root:
+ *
+ *   npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler \
+ *     --strict --noUncheckedIndexedAccess --skipLibCheck --esModuleInterop --types node \
+ *     apps/api/scripts/daily-venue-reprovision.ts
  */
 import { parseArgs } from 'node:util';
-import { db } from '@balo/db';
+import { db, type NonTargetLiveVenue } from '@balo/db';
 import {
   DEFAULT_LIMIT,
   describeDatabaseHost,
@@ -76,24 +82,37 @@ function printIds(label: string, ids: readonly string[]): void {
   }
 }
 
+function printLive(label: string, rows: readonly NonTargetLiveVenue[]): void {
+  console.log(`${label}: ${rows.length}`);
+  for (const row of rows) {
+    console.log(
+      `  ${row.meetingId}  ${row.status}  start ${row.scheduledStart.toISOString()}  end ${row.scheduledEnd.toISOString()}`
+    );
+  }
+}
+
 function printReport(report: VenueReprovisionReport, apply: boolean): void {
   console.log(`\nDaily domain prefix: ${report.joinUrlPrefix}`);
   printIds(
     apply ? 'Targets (scheduled, not yet started)' : 'Would clear (scheduled, not yet started)',
     report.targets.map((target) => target.meetingId)
   );
-  console.log(`Blockers (live call or already started): ${report.blockers.length}`);
-  for (const blocker of report.blockers) {
-    console.log(
-      `  ${blocker.meetingId}  ${blocker.status}  ${blocker.scheduledStart.toISOString()}`
-    );
-  }
+  printLive('Blockers (can still start or run; gate the cutover)', report.blockers);
+  printLive(
+    'Stranded (can no longer start or run; warning only, see the meeting.stranded alert, BAL-586)',
+    report.stranded
+  );
   if (report.cleared !== null) {
     printIds('Cleared', report.cleared);
     printIds('Skipped (changed since the read)', report.skipped);
   }
-  if (report.batchFilled) {
-    console.log('\nThe batch was full: more meetings may remain. Re-run.');
+  if (report.targetsBatchFilled) {
+    console.log('\nThe target batch was full: more meetings may remain. Re-run.');
+  }
+  if (report.nonTargetsBatchFilled) {
+    console.log(
+      '\nThe blocker/stranded batch was full: it keeps the rows closest to now first, so the oldest stranded meetings may not be listed.'
+    );
   }
 }
 
@@ -128,6 +147,11 @@ async function main(): Promise<void> {
 
     if (!apply) {
       console.log('\nDry run. Re-run with --apply to clear the targets.');
+    }
+    if (report.stranded.length > 0) {
+      console.warn(
+        '\nWarning: stranded meetings remain on the old domain. They do not block the cutover.'
+      );
     }
     if (report.blockers.length > 0) {
       console.error(

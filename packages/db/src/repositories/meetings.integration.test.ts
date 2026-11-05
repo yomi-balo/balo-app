@@ -3734,31 +3734,43 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
     return row;
   }
 
-  describe('listLiveVenuesOnDomain', () => {
-    it('returns only live-status rows whose join url is on the domain', async () => {
+  describe('listScheduledVenueTargetsOnDomain', () => {
+    function listTargets(
+      overrides: Partial<{ scheduledStartAfter: Date; limit: number }> = {}
+    ): Promise<{ meetingId: string; scheduledStart: Date }[]> {
+      return meetingsRepository.listScheduledVenueTargetsOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+        limit: 50,
+        ...overrides,
+      });
+    }
+
+    it('returns only future scheduled rows whose join url is on the domain', async () => {
       const start = startIn(0);
-      const scheduled = await seedOnDomain(start);
-      const waiting = await seedOnDomain(start + MINUTE_MS, { status: 'waiting_for_participants' });
-      const inProgress = await seedOnDomain(start + 2 * MINUTE_MS, { status: 'in_progress' });
+      const target = await seedOnDomain(start);
+      await seedOnDomain(start + MINUTE_MS, { status: 'waiting_for_participants' });
+      await seedOnDomain(start + 2 * MINUTE_MS, { status: 'in_progress' });
       await seedOnDomain(start + 3 * MINUTE_MS, { status: 'ended', endedAt: new Date() });
       await seedOnDomain(start + 4 * MINUTE_MS, { status: 'cancelled' });
       await seedOnDomain(start + 5 * MINUTE_MS, { deletedAt: new Date() });
       await seedOnDomain(start + 6 * MINUTE_MS, { dailyRoomName: null, joinUrl: null });
       await seedOnDomain(start + 7 * MINUTE_MS, {}, 'https://new.daily.co/');
       await seedOnDomain(start + 8 * MINUTE_MS, {}, 'https://getbalo.daily.co.evil/');
+      await seedOnDomain(Date.now() - 5 * MINUTE_MS);
 
-      const rows = await meetingsRepository.listLiveVenuesOnDomain({
-        joinUrlPrefix: OLD_PREFIX,
-        limit: 50,
-      });
+      const rows = await listTargets();
 
-      expect(rows.map((row) => [row.meetingId, row.status])).toEqual([
-        [scheduled.id, 'scheduled'],
-        [waiting.id, 'waiting_for_participants'],
-        [inProgress.id, 'in_progress'],
-      ]);
+      expect(rows.map((row) => row.meetingId)).toEqual([target.id]);
       expect(rows[0]?.scheduledStart).toEqual(new Date(start));
-      expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['meetingId', 'scheduledStart', 'status']);
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['meetingId', 'scheduledStart']);
+    });
+
+    it('excludes a meeting starting exactly at the boundary', async () => {
+      const boundary = new Date(startIn(0));
+      await seedOnDomain(boundary.getTime());
+
+      await expect(listTargets({ scheduledStartAfter: boundary })).resolves.toEqual([]);
     });
 
     it('orders scheduled_start ASC, then id ASC', async () => {
@@ -3770,10 +3782,7 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
       await seedOnDomain(start + 2 * MINUTE_MS, { id: lowId });
       const earliest = await seedOnDomain(start);
 
-      const rows = await meetingsRepository.listLiveVenuesOnDomain({
-        joinUrlPrefix: OLD_PREFIX,
-        limit: 50,
-      });
+      const rows = await listTargets();
 
       expect(rows.map((row) => row.meetingId)).toEqual([earliest.id, later.id, lowId, highId]);
     });
@@ -3784,20 +3793,138 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
       const second = await seedOnDomain(start + MINUTE_MS);
       await seedOnDomain(start + 2 * MINUTE_MS);
 
-      const rows = await meetingsRepository.listLiveVenuesOnDomain({
-        joinUrlPrefix: OLD_PREFIX,
-        limit: 2,
-      });
+      const rows = await listTargets({ limit: 2 });
       expect(rows.map((row) => row.meetingId)).toEqual([first.id, second.id]);
 
       const spy = vi.spyOn(db, 'select');
       try {
-        await expect(
-          meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: 0 })
-        ).resolves.toEqual([]);
-        await expect(
-          meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: -1 })
-        ).resolves.toEqual([]);
+        await expect(listTargets({ limit: 0 })).resolves.toEqual([]);
+        await expect(listTargets({ limit: -1 })).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('is never starved by blockers ahead of it in scheduled_start order', async () => {
+      const now = Date.now();
+      for (let i = 1; i <= 3; i++) {
+        await seedOnDomain(now - i * MINUTE_MS, { status: 'in_progress' });
+      }
+      const target = await seedOnDomain(startIn(0));
+
+      const rows = await listTargets({ limit: 1 });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([target.id]);
+    });
+  });
+
+  describe('listNonTargetLiveVenuesOnDomain', () => {
+    function listNonTargets(
+      overrides: Partial<{ scheduledStartAtOrBefore: Date; limit: number }> = {}
+    ): Promise<{ meetingId: string; status: string; scheduledStart: Date; scheduledEnd: Date }[]> {
+      return meetingsRepository.listNonTargetLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAtOrBefore: new Date(),
+        limit: 50,
+        ...overrides,
+      });
+    }
+
+    it('returns live rows that are not future-scheduled, newest first, and nothing else', async () => {
+      const now = Date.now();
+      const pastScheduled = await seedOnDomain(now - 3 * MINUTE_MS);
+      const waiting = await seedOnDomain(now - 2 * MINUTE_MS, {
+        status: 'waiting_for_participants',
+      });
+      const futureInProgress = await seedOnDomain(startIn(0), { status: 'in_progress' });
+      await seedOnDomain(startIn(1));
+      await seedOnDomain(now - 4 * MINUTE_MS, { status: 'ended', endedAt: new Date() });
+      await seedOnDomain(now - 5 * MINUTE_MS, { status: 'cancelled' });
+      await seedOnDomain(now - 6 * MINUTE_MS, { deletedAt: new Date() });
+      await seedOnDomain(now - 7 * MINUTE_MS, { dailyRoomName: null, joinUrl: null });
+      await seedOnDomain(now - 8 * MINUTE_MS, {}, 'https://new.daily.co/');
+      await seedOnDomain(now - 9 * MINUTE_MS, {}, 'https://getbalo.daily.co.evil/');
+
+      const rows = await listNonTargets();
+
+      expect(rows.map((row) => [row.meetingId, row.status])).toEqual([
+        [futureInProgress.id, 'in_progress'],
+        [waiting.id, 'waiting_for_participants'],
+        [pastScheduled.id, 'scheduled'],
+      ]);
+      expect(rows[2]?.scheduledStart).toEqual(pastScheduled.scheduledStart);
+      expect(rows[2]?.scheduledEnd).toEqual(pastScheduled.scheduledEnd);
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
+        'meetingId',
+        'scheduledEnd',
+        'scheduledStart',
+        'status',
+      ]);
+    });
+
+    it('partitions the live rows on the domain with the target read, with no overlap', async () => {
+      const now = new Date();
+      const nowMs = now.getTime();
+      await seedOnDomain(nowMs - MINUTE_MS);
+      await seedOnDomain(nowMs - 2 * MINUTE_MS, { status: 'in_progress' });
+      await seedOnDomain(nowMs + MINUTE_MS);
+      await seedOnDomain(nowMs + 2 * MINUTE_MS, { status: 'waiting_for_participants' });
+
+      const targets = await meetingsRepository.listScheduledVenueTargetsOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: now,
+        limit: 50,
+      });
+      const nonTargets = await listNonTargets({ scheduledStartAtOrBefore: now });
+
+      const targetIds = targets.map((row) => row.meetingId);
+      const nonTargetIds = nonTargets.map((row) => row.meetingId);
+      expect(targetIds).toHaveLength(1);
+      expect(nonTargetIds).toHaveLength(3);
+      expect(nonTargetIds.filter((id) => targetIds.includes(id))).toEqual([]);
+    });
+
+    it('includes a scheduled row starting exactly at the boundary', async () => {
+      const boundary = new Date(Date.now() - MINUTE_MS);
+      const atBoundary = await seedOnDomain(boundary.getTime());
+
+      const rows = await listNonTargets({ scheduledStartAtOrBefore: boundary });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([atBoundary.id]);
+    });
+
+    it('keeps the newest rows when the limit truncates, so stranded rows cannot hide a blocker', async () => {
+      const now = Date.now();
+      for (let i = 1; i <= 3; i++) {
+        await seedOnDomain(now - (100 + i) * MINUTE_MS);
+      }
+      const recent = await seedOnDomain(now - MINUTE_MS, { status: 'in_progress' });
+
+      const rows = await listNonTargets({ limit: 2 });
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.meetingId).toBe(recent.id);
+    });
+
+    it('orders by the classification clock, so a live call ending now outranks a scheduled row that started later', async () => {
+      const now = Date.now();
+      const blocker = await seedOnDomain(now - HOUR_MS, { status: 'in_progress' });
+      const stranded = await seedOnDomain(now - 30 * MINUTE_MS);
+
+      const rows = await listNonTargets({ limit: 1 });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([blocker.id]);
+      const both = await listNonTargets({ limit: 2 });
+      expect(both.map((row) => row.meetingId)).toEqual([blocker.id, stranded.id]);
+    });
+
+    it('returns [] without querying for a non-positive limit', async () => {
+      await seedOnDomain(Date.now() - MINUTE_MS, { status: 'in_progress' });
+      const spy = vi.spyOn(db, 'select');
+      try {
+        await expect(listNonTargets({ limit: 0 })).resolves.toEqual([]);
+        await expect(listNonTargets({ limit: -1 })).resolves.toEqual([]);
         expect(spy).not.toHaveBeenCalled();
       } finally {
         spy.mockRestore();
@@ -3817,11 +3944,22 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
       ['nested label', 'https://a.b.daily.co/'],
       ['uppercase', 'https://GetBalo.daily.co/'],
       ['path', 'https://getbalo.daily.co/room/'],
-    ])('both methods throw for a %s prefix and touch nothing', async (_label, prefix) => {
+    ])('all three methods throw for a %s prefix and touch nothing', async (_label, prefix) => {
       const target = await seedOnDomain(startIn(0));
 
       await expect(
-        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: prefix, limit: 50 })
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: prefix,
+          scheduledStartAfter: new Date(),
+          limit: 50,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.listNonTargetLiveVenuesOnDomain({
+          joinUrlPrefix: prefix,
+          scheduledStartAtOrBefore: new Date(),
+          limit: 50,
+        })
       ).rejects.toThrow(/joinUrlPrefix/);
       await expect(
         meetingsRepository.clearScheduledVenuesOnDomain({
@@ -3836,7 +3974,18 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
 
     it('throws before the empty-ids and non-positive-limit short-circuits', async () => {
       await expect(
-        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: '', limit: 0 })
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: '',
+          scheduledStartAfter: new Date(),
+          limit: 0,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.listNonTargetLiveVenuesOnDomain({
+          joinUrlPrefix: '',
+          scheduledStartAtOrBefore: new Date(),
+          limit: 0,
+        })
       ).rejects.toThrow(/joinUrlPrefix/);
       await expect(
         meetingsRepository.clearScheduledVenuesOnDomain({
@@ -3937,7 +4086,11 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
         expect.objectContaining({ meetingId: target.id, roomNameStamped: false }),
       ]);
       await expect(
-        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: 50 })
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: OLD_PREFIX,
+          scheduledStartAfter: new Date(),
+          limit: 50,
+        })
       ).resolves.toEqual([]);
     });
   });

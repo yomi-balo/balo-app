@@ -4,7 +4,7 @@
  *
  * `.claude/skills/daily-co/SKILL.md` ("Registration is a one-off per-environment OPS step")
  * still holds: nothing at runtime imports this module, and
- * `invariants/daily-webhook-subscription-is-script-only.test.ts` fails if anything does.
+ * `invariants/daily-ops-modules-are-script-only.test.ts` fails if anything does.
  *
  * ── VENDOR SHAPES (verified against docs.daily.co) ───────────────────────────────────────
  *

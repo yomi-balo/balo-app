@@ -249,10 +249,16 @@ The new platform runs on its own Daily account, with one domain per database:
 
 | Environment                  | Daily domain    | Database | Status                   |
 | ---------------------------- | --------------- | -------- | ------------------------ |
-| Railway `production` (api)   | new prod domain | balo-dev | verified 2026-09-27 (DB) |
+| Railway `production` (api)   | non-prod domain | balo-dev | verified 2026-09-27 (DB) |
 | Vercel Production (web)      | same as the api | balo-dev | confirm before cutover   |
+| Launch database (not built)  | prod domain     | —        | stays empty until then   |
 | Vercel Preview / Development | follows its DB  | confirm  | confirm before cutover   |
 | Local dev                    | non-prod domain | local    | —                        |
+
+**balo-dev is a non-production database** (decided 2026-11-06): it pairs with the non-prod
+domain, even though Railway calls its environment `production`. The prod domain gets no rooms and
+no webhook until the real launch database exists, so test calls never record on the prod plan and
+launch needs no second cutover. The webhook rule follows the database, not the environment name.
 
 - **One domain per database.** `meetings.join_url` persists the room's host, and the web pins
   grants to one host, so a database whose meetings point at two domains is stranded half-way.

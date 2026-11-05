@@ -60,10 +60,24 @@ Do not start until all of these hold.
   **non-production** domain.
 - **Confirm the env→DB map.** Only Railway "production" → balo-dev is verified. Write down which
   database each Vercel environment (Production, Preview, Development) and each Railway environment
-  uses, and which Daily domain each should pair with. One Daily domain per database.
-- **Confirm no un-ingested recordings or transcripts remain on `getbalo`** for new-platform rooms.
-  Railway never held a key, so the expected answer is none. A recording on `getbalo` cannot be
-  fetched with the new key.
+  uses, and which Daily domain each should pair with. One Daily domain per database. **balo-dev
+  pairs with the non-production domain**; the production domain stays empty until the launch
+  database exists.
+- **Find every API that has written to this database with a `getbalo` key.** balo-dev already
+  holds meetings with `getbalo` join urls (12 as of 2026-11-06, all `ended`), so some API with a
+  `getbalo` key provisioned rooms into it: Railway at some point, a local `apps/api`, or another
+  deployment. List each one and move its `DAILY_API_KEY` in this cutover too. Any writer you miss
+  keeps stamping `getbalo` rooms after cutover and breaks one-domain-per-database.
+- **Resolve recording rows on `getbalo` rooms.** A recording on `getbalo` cannot be fetched with
+  the new key, and its webhooks went to Bubble, so nothing on Balo's side will ever close a row
+  that is still open. With the **old** key, find every `meeting_recordings` row whose meeting
+  joined on `getbalo` and whose status is not terminal:
+  - the recording exists at Daily → ingest it while the old key still works;
+  - it doesn't (no `daily_recording_id`, or Daily has no such recording) → mark it failed.
+
+  As of 2026-11-06 balo-dev has one such row in `recording` (meeting `e84fe8b7…`, since 26 Oct,
+  no `daily_recording_id`), plus seven rows on meeting `2132522b…` that already failed at the
+  `daily` stage and need no action.
 
 ## Step 1. Generate a secret per environment
 
@@ -88,13 +102,24 @@ npx dotenv -e <target-env-file> -- \
 ```
 
 `DATABASE_URL` in `<target-env-file>` is **the deployed database** for this environment (the one the
-Railway API uses), not `apps/api/.env.local`. The script prints `Database host: …` (host and port
-only, never credentials) first: confirm it is the host you wrote down in step 0 before reading on.
+Railway API uses), not `apps/api/.env.local`. The script prints `Database host: …` first: the host and port plus
+the Supabase **project ref**, never credentials. A Supavisor pooler host
+(`aws-0-<region>.pooler.supabase.com`) is shared by every project in the region, so the
+**project ref** is the only thing that identifies the database. Confirm it is the project you wrote
+down in step 0 before reading on.
 
-It prints the future meetings it would clear (targets) and any **blockers**: a live call, or a
-past-start meeting that is still joinable. **Gate: 0 blockers.** If there are any, wait for a
-quiet window and re-run. A past-start `scheduled` meeting is never nulled, because nulling would
-turn a no-show into `venue_unavailable`.
+It prints three groups:
+
+- **Targets**: future `scheduled` meetings it would clear.
+- **Blockers**: meetings that can still start or are running. That means a `scheduled` meeting
+  inside its missed-call window, or a live call until 10 minutes after its scheduled end. **Gate: 0 blockers.**
+  Blockers clear on their own as calls end, so re-run after the next one finishes.
+- **Stranded**: meetings past those windows that never ended (the `meeting.stranded` admin alert,
+  BAL-586, covers them). They are a warning only and do not gate the cutover. Resolve them through
+  that alert, not here.
+
+A past-start `scheduled` meeting is never nulled, because nulling would turn a no-show into
+`venue_unavailable`.
 
 ## Step 3. Vercel: unset `NEXT_PUBLIC_DAILY_DOMAIN` and redeploy
 
@@ -162,7 +187,9 @@ Set `NEXT_PUBLIC_DAILY_DOMAIN=<domain>.daily.co` for the environment and redeplo
 - `daily-webhook.ts verify` exits 0: the subscription is `ACTIVE`, `exponential`, with the full
   event list and `hmac: matches`.
 - `daily-venue-reprovision.ts --from-domain getbalo` (dry-run) shows 0 targets and 0 blockers once
-  the repair job has healed the rows.
+  the repair job has healed the rows. Stranded rows may remain; they are the BAL-586 alert's.
+- New meetings in this database get join urls on the new domain only. If a `getbalo` url appears
+  after cutover, a writer from step 0 still has the old key.
 - `npx dotenv -e <target-env-file> -- npx tsx apps/api/scripts/daily-token-smoke.ts` passes.
 
 ---
@@ -175,8 +202,9 @@ Done by ops after the PR merges; the PR itself changes no environment.
       reports the expected domain name.
 - [ ] **AC3** Each environment has its own subscription, registered with `sync --apply`.
 - [ ] **AC4** Each environment's `DAILY_WEBHOOK_SECRET` is a fresh base64 secret of at least 32 bytes.
-- [ ] **AC5** Non-production uses the non-prod domain and its own key.
-- [ ] **AC6** Re-provision dry-run reports 0 targets and 0 blockers once healed.
+- [ ] **AC5** Non-production, including balo-dev, uses the non-prod domain and its own key.
+- [ ] **AC6** Re-provision dry-run reports 0 targets and 0 blockers once healed (stranded rows are
+      BAL-586's and do not count).
 - [ ] **AC7** The Bubble subscription on `getbalo` is unchanged.
 
 ## Orphan rooms

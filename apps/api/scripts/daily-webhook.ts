@@ -33,10 +33,10 @@
  * ── ⚠ THIS FILE IS OUTSIDE THE APP'S TYPECHECK AND LINT SCOPE ───────────────────────────
  *
  * Like `daily-token-smoke.ts`: `scripts/` is covered by neither `pnpm typecheck` nor lint.
- * Verify by hand after editing:
+ * Verify by hand after editing, from the repo root:
  *
  *   npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler \
- *     --strict --skipLibCheck --esModuleInterop --types node \
+ *     --strict --noUncheckedIndexedAccess --skipLibCheck --esModuleInterop --types node \
  *     apps/api/scripts/daily-webhook.ts
  */
 import { parseArgs } from 'node:util';

@@ -789,8 +789,10 @@ export {
   type UnprovisionedScheduledMeeting,
   // BAL-518 — the Daily domain cutover's venue read / clear.
   type LiveMeetingStatus,
-  type ListLiveVenuesOnDomainInput,
-  type LiveVenueOnDomain,
+  type ListScheduledVenueTargetsInput,
+  type ScheduledVenueTarget,
+  type ListNonTargetLiveVenuesInput,
+  type NonTargetLiveVenue,
   type ClearScheduledVenuesInput,
   // BAL-586 — the `meeting.stranded` finder's read.
   type ListStrandedLiveInput,
