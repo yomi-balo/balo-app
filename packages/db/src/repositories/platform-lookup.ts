@@ -40,6 +40,7 @@ import {
   projectRequests,
   users,
 } from '../schema';
+import { publicProfileUsernameSql } from './_shared/expert-profile-public';
 
 /**
  * platform-lookup (BAL-551) — the platform-staff support search: ONE box that finds a
@@ -736,6 +737,10 @@ function searchExpertProfiles(pattern: string, uuidValue: string | null) {
         searchable: expertProfiles.searchable,
         approvedAt: expertProfiles.approvedAt,
         applicationStatus: expertProfiles.applicationStatus,
+        // The username only when `/experts/{username}` resolves (`expertProfileIsPublic`):
+        // the profile is approved and searchable AND its owner is live, which is wider than
+        // this arm's join (soft delete only; a suspended owner is still returned here).
+        publicExpertUsername: publicProfileUsernameSql,
         // `agencyName` alone decides affiliation — `agencies` has no soft delete and the FK
         // forbids a dangling `agency_id`, so `agencyName === null ⟺ agencyId === null`.
         agencyName: agencies.name,
@@ -1121,13 +1126,9 @@ export const platformLookupRepository = {
             applicationStatus: row.applicationStatus,
             searchable: row.searchable,
           }),
-          // The Open-link policy's ONE type-specific input: the public profile page 404s
-          // unless the profile is approved AND searchable AND its user is live (the last
-          // is already guaranteed by this arm's INNER JOIN).
-          publicExpertUsername:
-            row.username !== null && row.searchable && row.approvedAt !== null
-              ? row.username
-              : null,
+          // The Open-link policy's ONE type-specific input, gated in SQL by the same rule the
+          // public profile page applies.
+          publicExpertUsername: row.publicExpertUsername,
           engagementType: null,
           // A `draft` application has no staff review page yet; every other status does.
           expertApplicationReviewable: row.applicationStatus !== 'draft',

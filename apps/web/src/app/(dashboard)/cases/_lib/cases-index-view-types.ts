@@ -127,8 +127,9 @@ export interface CasesIndexCardView {
    */
   readonly actorLabel: string | null;
   /**
-   * `/experts/{username}`, or `null` — `expert_profiles.username` is NULLABLE, and a null one
-   * means NO BUTTON rather than a link to `/experts/null`. Client side only.
+   * `/experts/{username}`, or `null` when that public profile does not resolve (the cases
+   * index gates `expertUsername` on the public-profile rule in SQL) — a null means NO BUTTON
+   * rather than a link that 404s. Client side only.
    */
   readonly bookAgainHref: string | null;
   /**
@@ -187,7 +188,7 @@ export interface CasesIndexResolvedRowView {
   /** `null` on a row closed before the reason column existed — the copy then stays neutral. */
   readonly closeReason: CasesIndexCloseReason | null;
   readonly heldCount: number;
-  /** Client side only, and `null` when the expert has no username. */
+  /** Client side only, and `null` when the expert's public profile does not resolve. */
   readonly bookAgainHref: string | null;
 }
 

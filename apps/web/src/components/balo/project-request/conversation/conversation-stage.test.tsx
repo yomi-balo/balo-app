@@ -812,6 +812,24 @@ describe('ConversationStage — call + EOI intro', () => {
     expect(screen.queryByRole('button', { name: 'More thread options' })).not.toBeInTheDocument();
   });
 
+  it('links the desktop header name to the public profile on the client lens', () => {
+    renderStage(view());
+    expect(screen.getByRole('link', { name: 'Priya Nair' })).toHaveAttribute(
+      'href',
+      '/experts/priya-nair'
+    );
+  });
+
+  it('never links the header name on the expert lens, even with a username', () => {
+    renderStage(view(), 'expert');
+    expect(screen.queryByRole('link', { name: 'Priya Nair' })).not.toBeInTheDocument();
+  });
+
+  it('renders the header name plain when the profile is not public', () => {
+    renderStage(view({ threads: [thread({ expertUsername: null })] }));
+    expect(screen.queryByRole('link', { name: 'Priya Nair' })).not.toBeInTheDocument();
+  });
+
   it('opens the overflow sheet with the profile link when a username exists', async () => {
     const user = userEvent.setup();
     renderStage(view());

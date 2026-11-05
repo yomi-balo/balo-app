@@ -29,6 +29,7 @@ const {
   mockLogWarn,
   mockLogError,
   mockLoadDraftGeneration,
+  mockFindPublicUsernames,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockFindCurrentByRelationship: vi.fn(),
@@ -48,9 +49,11 @@ const {
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
   mockLoadDraftGeneration: vi.fn(),
+  mockFindPublicUsernames: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
+  expertsRepository: { findPublicUsernamesByProfileIds: mockFindPublicUsernames },
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
   proposalsRepository: { findCurrentByRelationship: mockFindCurrentByRelationship },
   proposalMilestonesRepository: { listByProposal: mockListMilestones },
@@ -309,6 +312,7 @@ function seedChildren(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   mockListChangeRequests.mockResolvedValue([]);
+  mockFindPublicUsernames.mockResolvedValue(new Map());
   mockNotFound.mockImplementation(() => {
     throw new Error('NEXT_NOT_FOUND');
   });
@@ -625,8 +629,11 @@ describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
       initials: 'PN',
       company: null,
       headline: null,
+      // The expert's own view never links their name.
+      profileHref: null,
       rating: null,
     });
+    expect(mockFindPublicUsernames).not.toHaveBeenCalled();
     expect(doc.milestones as unknown[]).toHaveLength(1);
     expect(doc.installments as unknown[]).toHaveLength(2);
     expect((doc.attachments as Array<{ fileName: string }>)[0]?.fileName).toBe('case-study.pdf');
@@ -848,6 +855,7 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
           relationship({
             id: OTHER_RELATIONSHIP_ID,
             status: 'proposal_submitted',
+            expertProfileId: 'expert-2',
             expertProfile: {
               id: 'expert-2',
               // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.
@@ -869,6 +877,8 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     mockListMilestones.mockResolvedValue([]);
     mockListInstallments.mockResolvedValue([]);
     mockListDocuments.mockResolvedValue([]);
+    // Only the first expert's public profile resolves.
+    mockFindPublicUsernames.mockResolvedValue(new Map([[EXPERT_PROFILE_ID, 'priya-nair']]));
 
     await renderPage();
 
@@ -887,6 +897,35 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     expect(firstDoc?.priceCents).toBe(1_500_000);
     // The fee/margin breakdown must NEVER reach the client audience.
     expect(firstDoc?.adminPricing).toBeUndefined();
+    // ONE batched public-profile read; a header links only where the profile resolves.
+    expect(mockFindPublicUsernames).toHaveBeenCalledTimes(1);
+    expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID, 'expert-2']);
+    const hrefs = (props.proposals as Array<{ expert: { profileHref: string | null } }>).map(
+      (doc) => doc.expert.profileHref
+    );
+    expect(hrefs).toEqual(['/experts/priya-nair', null]);
+  });
+
+  it('renders the review with unlinked headers when the username read fails', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+    mockFindPublicUsernames.mockRejectedValue(new Error('db down'));
+
+    await renderPage();
+
+    const props = mockReview.mock.calls[0]?.[0] as {
+      proposals: Array<{ expert: { profileHref: string | null } }>;
+    };
+    expect(props.proposals[0]?.expert.profileHref).toBeNull();
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Failed to load expert public usernames for proposal review',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'db down' })
+    );
   });
 
   it.each([
@@ -992,6 +1031,8 @@ describe('ProposalSurfacePage (RSC) — admin observer branch', () => {
     // 1_200_000 @ 2500 bps → client 1_500_000; margin = 1_500_000 − 1_200_000.
     expect(doc.adminPricing?.clientPriceCents).toBe(1_500_000);
     expect(doc.adminPricing?.marginCents).toBe(300_000);
+    expect((props.doc as { expert: { profileHref: string | null } }).expert.profileHref).toBeNull();
+    expect(mockFindPublicUsernames).not.toHaveBeenCalled();
   });
 
   it('redirects an admin viewing a relationship not yet at proposal_submitted', async () => {

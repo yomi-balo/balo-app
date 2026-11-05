@@ -394,7 +394,7 @@ export function CaseSurface({
               nudge={view.nudge}
               lens={view.lens}
               counterpartyLabel={counterpartyFirstName}
-              bookAgainHref={view.party.bookAgainHref}
+              profileHref={view.party.profileHref}
               onBookFollowUp={bookFollowUpInPage ? handleNudgeBookFollowUp : undefined}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}

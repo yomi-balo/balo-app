@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
+import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
 import { InfoNote } from '@/components/balo/section/section-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import { cn } from '@/lib/utils';
@@ -109,7 +110,15 @@ export function CaseHeader({
               {header.heldConsultationCount === 1 ? '' : 's'} held
             </span>
             <Dot />
-            <span className="truncate">{header.counterpartyOrgLabel}</span>
+            {/* `truncate` sits ON the link (a blockified flex item) rather than on a wrapper,
+                whose overflow clip would hide the link's focus ring. */}
+            {header.counterpartyOrgHref === null ? (
+              <span className="truncate">{header.counterpartyOrgLabel}</span>
+            ) : (
+              <ExpertProfileLink href={header.counterpartyOrgHref} className="truncate">
+                {header.counterpartyOrgLabel}
+              </ExpertProfileLink>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">

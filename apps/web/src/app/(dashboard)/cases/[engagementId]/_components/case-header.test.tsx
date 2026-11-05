@@ -29,6 +29,7 @@ const BASE: CaseHeaderView = {
   closeReason: null,
   closedAtIso: null,
   counterpartyOrgLabel: 'CloudPeak',
+  counterpartyOrgHref: null,
   closedNote: null,
 };
 
@@ -193,5 +194,40 @@ describe('CaseHeader — the record it states', () => {
 
     render(<CaseHeader header={BASE} />);
     expect(screen.queryByText(/Everything here stays available/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The meta line's org label links ONLY when it names the independent expert themselves
+ * (`counterpartyOrgHref`, set server-side on the client lens). An agency name and the client
+ * company render as plain text.
+ */
+describe('CaseHeader — the org label link', () => {
+  it("links an independent expert's name to their public profile", () => {
+    render(
+      <CaseHeader
+        header={{
+          ...BASE,
+          counterpartyOrgLabel: 'Amara Okafor',
+          counterpartyOrgHref: '/experts/amara',
+        }}
+      />
+    );
+    const link = screen.getByRole('link', { name: 'Amara Okafor' });
+    expect(link).toHaveAttribute('href', '/experts/amara');
+    // The truncation sits on the link itself, so no wrapper clips its focus ring.
+    expect(link).toHaveClass('truncate');
+  });
+
+  it('renders an agency name as plain text', () => {
+    render(<CaseHeader header={BASE} />);
+    expect(screen.getByText('CloudPeak')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('renders the client company (expert lens) as plain text', () => {
+    render(<CaseHeader header={{ ...BASE, counterpartyOrgLabel: 'Northwind Industrial' }} />);
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 });

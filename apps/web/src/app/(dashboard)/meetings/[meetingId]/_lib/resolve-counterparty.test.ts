@@ -46,7 +46,7 @@ const AGENCY_PROFILE = {
   agencyId: AGENCY_ID,
   type: 'agency' as const,
   headline: 'Salesforce CPQ specialist',
-  username: 'amara',
+  publicProfileUsername: 'amara',
   // BAL-422 — already parsed to a NUMBER by `findDisplayProfileById` (the column is
   // `numeric`, so the string→number parse happens in the repository, not here).
   ratingAverage: 4.3,
@@ -60,7 +60,7 @@ const FREELANCE_PROFILE = {
   agencyId: null,
   type: 'freelancer' as const,
   headline: null,
-  username: null,
+  publicProfileUsername: null,
   ratingAverage: null,
   ratingCount: 0,
 };
@@ -108,7 +108,7 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
     expect(labels.party.orgLabel).toBe('CloudPeak');
     expect(labels.party.initials).toBe('AO');
     expect(labels.party.ordinalLine).toBe('3rd consultation on this case');
-    expect(labels.party.bookAgainHref).toBe('/experts/amara');
+    expect(labels.party.profileHref).toBe('/experts/amara');
     expect(labels.agencyLabel).toBe('CloudPeak');
     // The bare GIVEN name — what the resolve dialog and the end-of-call duration line use.
     expect(labels.expertShortName).toBe('Amara');
@@ -172,8 +172,9 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
     expect(labels.party.ratingCount).toBe(0);
   });
 
-  it('omits the Book again href entirely when the username is null', async () => {
-    // ⚠ NEVER `/experts/null`, and never a disabled CTA.
+  it('omits the profile href entirely when the public profile does not resolve', async () => {
+    // `publicProfileUsername` is null for a null username, an unapproved or unsearchable
+    // profile, or a suspended/deleted owner. ⚠ Never a 404 link, and never a disabled CTA.
     const labels = await resolveCounterparty(
       'client',
       FREELANCE_PROFILE,
@@ -181,7 +182,7 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
       null,
       FROM_PROFILE
     );
-    expect(labels.party.bookAgainHref).toBeNull();
+    expect(labels.party.profileHref).toBeNull();
   });
 
   it('keeps an INDEPENDENT expert bare — no agency read, no @ clause', async () => {
@@ -203,7 +204,7 @@ describe('resolveCounterparty — CLIENT lens names the delivering EXPERT', () =
     expect(mockFindDisplayById).not.toHaveBeenCalled();
     expect(labels.party.name).toBe('An expert');
     expect(labels.party.avatarUrl).toBeNull();
-    expect(labels.party.bookAgainHref).toBeNull();
+    expect(labels.party.profileHref).toBeNull();
   });
 });
 
@@ -235,7 +236,7 @@ describe('resolveCounterparty — EXPERT lens names the client COMPANY, never a 
     expect(labels.party.orgLabel).toBeNull();
     expect(labels.party.avatarUrl).toBeNull();
     expect(labels.party.initials).toBe('NI');
-    expect(labels.party.bookAgainHref).toBeNull();
+    expect(labels.party.profileHref).toBeNull();
     // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The expert is not scoring the
     // client, and the delivering expert's OWN rating must not leak onto this card either —
     // note AGENCY_PROFILE carries 4.3/2 and neither value survives the expert branch.

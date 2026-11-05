@@ -58,10 +58,11 @@ interface CaseNudgeProps {
   lens: 'client' | 'expert';
   /** The other party's short name — the expert's first name, or the client company. */
   counterpartyLabel: string;
-  /** `/experts/{username}`, or `null` ⇒ the booking CTA does not render. */
-  bookAgainHref: string | null;
+  /** The expert's public profile (`/experts/{username}`, gated server-side so it resolves), or
+   *  `null` ⇒ the booking link does not render. */
+  profileHref: string | null;
   /** Set for an open case: the CTA books in-page (existing work, case fixed) instead of linking
-   *  out to the profile. Independent of `bookAgainHref`, which only the link path needs. */
+   *  out to the profile. Independent of `profileHref`, which only the link path needs. */
   onBookFollowUp?: () => void;
   onMarkResolved: () => void;
   onDismissAsk: () => void;
@@ -84,7 +85,7 @@ export function CaseNudge({
   nudge,
   lens,
   counterpartyLabel,
-  bookAgainHref,
+  profileHref,
   onBookFollowUp,
   onMarkResolved,
   onDismissAsk,
@@ -180,10 +181,10 @@ export function CaseNudge({
       title={lens === 'client' ? 'Nothing booked yet' : 'Nothing booked'}
       body={nothingBookedBody(lens, counterpartyLabel)}
       actions={
-        // ⚠ ONLY A LIVE DESTINATION RENDERS. `expert_profiles.username` is NULLABLE, so a null
-        // href means NO button rather than a link to `/experts/null`. And only a CLIENT can
-        // book, so the expert lens never has one.
-        renderBookConsultationCta(lens, bookAgainHref, onBookFollowUp)
+        // ⚠ ONLY A LIVE DESTINATION RENDERS. `profileHref` is null whenever the expert's public
+        // profile does not resolve, and a null means NO button rather than a link that 404s.
+        // And only a CLIENT can book, so the expert lens never has one.
+        renderBookConsultationCta(lens, profileHref, onBookFollowUp)
       }
     />
   );
@@ -191,7 +192,7 @@ export function CaseNudge({
 
 function renderBookConsultationCta(
   lens: 'client' | 'expert',
-  bookAgainHref: string | null,
+  profileHref: string | null,
   onBookFollowUp: (() => void) | undefined
 ): React.JSX.Element | undefined {
   if (lens !== 'client') return undefined;
@@ -202,10 +203,10 @@ function renderBookConsultationCta(
       </Button>
     );
   }
-  if (bookAgainHref === null) return undefined;
+  if (profileHref === null) return undefined;
   return (
     <Button asChild size="sm">
-      <a href={bookAgainHref}>Book a consultation</a>
+      <a href={profileHref}>Book a consultation</a>
     </Button>
   );
 }

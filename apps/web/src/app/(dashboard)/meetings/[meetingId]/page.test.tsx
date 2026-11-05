@@ -99,7 +99,7 @@ const BASE = {
     avatarUrl: null,
     initials: 'AO',
     ordinalLine: '3rd consultation on this case',
-    bookAgainHref: '/experts/amara',
+    profileHref: '/experts/amara',
     ratingAverage: 4.3,
     ratingCount: 2,
   },
@@ -129,7 +129,7 @@ const EXPERT_VIEW: RecapView = {
     name: 'Northwind Industrial',
     headline: null,
     orgLabel: null,
-    bookAgainHref: null,
+    profileHref: null,
     // ⚠ EXPERT LENS — the counterparty is the client company, and nothing evaluative
     // appears there. The server hardcodes these; the fixture mirrors it.
     ratingAverage: null,
@@ -491,7 +491,7 @@ describe('RecapPage — what actually renders', () => {
   });
 
   it('omits the Book again CTA entirely when the expert has no username', async () => {
-    await renderPage({ ...CLIENT_VIEW, party: { ...CLIENT_VIEW.party, bookAgainHref: null } });
+    await renderPage({ ...CLIENT_VIEW, party: { ...CLIENT_VIEW.party, profileHref: null } });
     expect(screen.queryByRole('link', { name: /Book again/ })).not.toBeInTheDocument();
   });
 

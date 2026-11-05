@@ -7,7 +7,7 @@ const {
   mockListMessagesPage,
   mockListFiles,
   mockEnsureManyForContexts,
-  mockFindProfileById,
+  mockFindPublicUsernamesByProfileIds,
   mockListActiveMeetingsForContexts,
   mockListProposalsByRequest,
   mockFindCurrentProposalByRelationship,
@@ -18,7 +18,7 @@ const {
   mockListMessagesPage: vi.fn(),
   mockListFiles: vi.fn(),
   mockEnsureManyForContexts: vi.fn(),
-  mockFindProfileById: vi.fn(),
+  mockFindPublicUsernamesByProfileIds: vi.fn(),
   mockListActiveMeetingsForContexts: vi.fn(),
   mockListProposalsByRequest: vi.fn(),
   mockFindCurrentProposalByRelationship: vi.fn(),
@@ -36,7 +36,8 @@ vi.mock('@balo/db', () => ({
     ensureManyForContexts: (...args: unknown[]) => mockEnsureManyForContexts(...args),
   },
   expertsRepository: {
-    findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+    findPublicUsernamesByProfileIds: (...args: unknown[]) =>
+      mockFindPublicUsernamesByProfileIds(...args),
   },
   // BAL-283 — the batched "is a call booked on this context?" read.
   meetingsRepository: {
@@ -175,7 +176,7 @@ describe('loadConversationView', () => {
     mockListThreadSummaries.mockResolvedValue([summary()]);
     mockListMessagesPage.mockResolvedValue({ messages: [], hasEarlier: false });
     mockListFiles.mockResolvedValue([]);
-    mockFindProfileById.mockResolvedValue({ id: 'exp-1', username: 'priya-nair' });
+    mockFindPublicUsernamesByProfileIds.mockResolvedValue(new Map([['exp-1', 'priya-nair']]));
     mockListActiveMeetingsForContexts.mockResolvedValue(new Map());
     mockListProposalsByRequest.mockResolvedValue([]);
   });
@@ -239,7 +240,7 @@ describe('loadConversationView', () => {
     expect(thread?.eoiHtml).toBeNull();
     expect(thread?.eoiSubmittedAtIso).toBeNull();
     // No username hydration for the expert lens.
-    expect(mockFindProfileById).not.toHaveBeenCalled();
+    expect(mockFindPublicUsernamesByProfileIds).not.toHaveBeenCalled();
   });
 
   it('client lens carries the EOI html + the hydrated expert username', async () => {
@@ -253,6 +254,29 @@ describe('loadConversationView', () => {
     expect(thread?.eoiHtml).toBe('<p>My pitch</p>');
     expect(thread?.eoiSubmittedAtIso).toBe('2026-06-02T00:00:00.000Z');
     expect(thread?.expertUsername).toBe('priya-nair');
+  });
+
+  it('hydrates every thread username in ONE batched public-profile read', async () => {
+    mockListThreadSummaries.mockResolvedValue([
+      summary(),
+      summary({ conversationId: convIdFor('rel-2') }),
+      summary({ conversationId: convIdFor('rel-3') }),
+    ]);
+    const req = request([
+      relationship(),
+      relationship({ id: 'rel-2', expertProfileId: 'exp-2' }),
+      // A second thread on the same profile must not widen the read.
+      relationship({ id: 'rel-3', expertProfileId: 'exp-1' }),
+    ]);
+    const view = await loadConversationView(req as never, CLIENT_CTX, USER, null);
+    expect(mockFindPublicUsernamesByProfileIds).toHaveBeenCalledTimes(1);
+    expect(mockFindPublicUsernamesByProfileIds).toHaveBeenCalledWith(['exp-1', 'exp-2']);
+    expect(view.threads.map((t) => [t.relationshipId, t.expertUsername])).toEqual([
+      ['rel-1', 'priya-nair'],
+      // Not returned by the read (profile not public) → null, so nothing links to a 404.
+      ['rel-2', null],
+      ['rel-3', 'priya-nair'],
+    ]);
   });
 
   // ── BAL-283 — availabilitySharedAtIso + upcomingCalls ──────────────────────────────────────
@@ -632,7 +656,7 @@ describe('loadConversationView', () => {
   });
 
   it('falls back to a null username when profile hydration fails', async () => {
-    mockFindProfileById.mockRejectedValue(new Error('db down'));
+    mockFindPublicUsernamesByProfileIds.mockRejectedValue(new Error('db down'));
     const view = await loadConversationView(
       request([relationship()]) as never,
       CLIENT_CTX,

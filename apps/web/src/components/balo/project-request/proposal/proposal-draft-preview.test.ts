@@ -18,6 +18,7 @@ const EXPERT: ProposalExpertIdentity = {
   initials: 'DE',
   company: 'CloudPeak',
   headline: 'CPQ Specialist',
+  profileHref: null,
   rating: 4.8,
   ratingCount: 12,
 };

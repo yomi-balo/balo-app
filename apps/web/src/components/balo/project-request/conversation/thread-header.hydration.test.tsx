@@ -41,6 +41,7 @@ function Header(): React.JSX.Element {
         nudgeIsProposal: false,
       })}
       callPending={false}
+      profileHref={null}
       profileBookingHref={null}
       deliveryEngagementId="eng-1"
       joinPartyLabel={t.expertName}

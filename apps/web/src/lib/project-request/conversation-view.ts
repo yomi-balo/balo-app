@@ -141,33 +141,28 @@ export function mapFileRowToView(
 }
 
 /**
- * Hydrate the expert usernames for the client lens (powers the mobile
- * overflow sheet's "View profile" action). Non-critical: any failure resolves
- * to `null` so a profile hiccup can never break the conversation page.
+ * Hydrate the PUBLIC profile usernames for the client lens, in ONE batched read. A profile is
+ * in the map only when `/experts/{username}` resolves (the shared public-profile rule), so every
+ * consumer — the thread header's name link, the mobile "View profile" row, the book-via-profile
+ * fallback — links only to a page that renders. Non-critical: a failure yields an empty map so a
+ * profile hiccup can never break the conversation page.
  */
 async function hydrateUsernames(
   relationships: Relationship[],
   lens: RequestViewerContext['lens']
-): Promise<Map<string, string | null>> {
-  const byProfileId = new Map<string, string | null>();
-  if (lens !== 'client') return byProfileId;
+): Promise<Map<string, string>> {
+  if (lens !== 'client') return new Map();
 
   const uniqueIds = [...new Set(relationships.map((r) => r.expertProfileId))];
-  await Promise.all(
-    uniqueIds.map(async (expertProfileId) => {
-      try {
-        const profile = await expertsRepository.findProfileById(expertProfileId);
-        byProfileId.set(expertProfileId, profile?.username ?? null);
-      } catch (error) {
-        log.warn('Failed to hydrate expert username for conversation thread', {
-          expertProfileId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        byProfileId.set(expertProfileId, null);
-      }
-    })
-  );
-  return byProfileId;
+  try {
+    return await expertsRepository.findPublicUsernamesByProfileIds(uniqueIds);
+  } catch (error) {
+    log.warn('Failed to hydrate expert usernames for conversation threads', {
+      expertProfileIds: uniqueIds,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new Map();
+  }
 }
 
 /**

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { ThreadHeader } from './thread-header';
 import { deriveThreadActions } from './thread-actions';
 import { thread } from '@/test/fixtures/conversation';
+import { axe } from '@/test/axe';
 import type {
   ConversationThreadView,
   UpcomingCallView,
@@ -40,6 +41,9 @@ function renderHeader(input: {
   onDecline?: (() => void) | null;
   /** BAL-540 — threaded to `deriveThreadActions`. */
   canDecline?: boolean;
+  profileHref?: string | null;
+  /** Defaults to the lens (the stage shows "(you)" to the expert only). */
+  showYouSuffix?: boolean;
   profileBookingHref?: string | null;
   deliveryEngagementId?: string | null;
   /** BAL-616 — threaded to `deriveThreadActions`. */
@@ -48,6 +52,7 @@ function renderHeader(input: {
   onCall: ReturnType<typeof vi.fn>;
   onBookAnother: ReturnType<typeof vi.fn>;
   onJoin: ReturnType<typeof vi.fn>;
+  container: HTMLElement;
 } {
   const lens = input.lens ?? 'client';
   const requestStatus = input.requestStatus ?? 'eoi_submitted';
@@ -63,12 +68,13 @@ function renderHeader(input: {
   const onCall = vi.fn();
   const onBookAnother = vi.fn();
   const onJoin = vi.fn();
-  render(
+  const { container } = render(
     <ThreadHeader
       thread={t}
-      showYouSuffix={lens === 'expert'}
+      showYouSuffix={input.showYouSuffix ?? lens === 'expert'}
       actions={actions}
       callPending={false}
+      profileHref={input.profileHref ?? null}
       profileBookingHref={input.profileBookingHref ?? null}
       deliveryEngagementId={input.deliveryEngagementId ?? null}
       joinPartyLabel={lens === 'expert' ? 'Northwind' : t.expertName}
@@ -81,13 +87,57 @@ function renderHeader(input: {
       onDecline={input.onDecline ?? null}
     />
   );
-  return { onCall, onBookAnother, onJoin };
+  return { onCall, onBookAnother, onJoin, container };
 }
 
 describe('ThreadHeader', () => {
   it('shows the expert identity', () => {
     renderHeader({});
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
+  });
+
+  it('client lens with a public profile: avatar + name are ONE link to it, named by the name', () => {
+    renderHeader({ profileHref: '/experts/priya-nair' });
+    const links = screen.getAllByRole('link', { name: 'Priya Nair' });
+    expect(links).toHaveLength(1);
+    const [link] = links;
+    expect(link).toHaveAttribute('href', '/experts/priya-nair');
+    // The initials avatar sits inside the same link, hidden from the accessible name.
+    expect(link).toHaveTextContent('PN');
+  });
+
+  it('no public profile: the name renders plain, with no link', () => {
+    renderHeader({ profileHref: null });
+    expect(screen.getByText('Priya Nair')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Priya Nair/ })).not.toBeInTheDocument();
+  });
+
+  it('expert lens: the name is plain and "(you)" still shows', () => {
+    renderHeader({ lens: 'expert' });
+    expect(screen.queryByRole('link', { name: /Priya Nair/ })).not.toBeInTheDocument();
+    expect(screen.getByText('(you)')).toBeInTheDocument();
+  });
+
+  it('has no axe violations with the avatar + name linked', async () => {
+    const { container } = renderHeader({ profileHref: '/experts/priya-nair' });
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('stacks the next-call line under the name BESIDE the avatar, in one identity column', () => {
+    renderHeader({
+      profileHref: '/experts/priya-nair',
+      threadOverrides: { upcomingCalls: [IN_TWO_DAYS] },
+    });
+    const column = screen.getByText(/Next call/).closest('p')?.parentElement;
+    expect(column).toHaveClass('relative', 'pl-[46px]');
+    expect(column).toContainElement(screen.getByText('PN'));
+    expect(column).toContainElement(screen.getByRole('link', { name: 'Priya Nair' }));
+  });
+
+  it('keeps the "(you)" suffix outside the profile link', () => {
+    renderHeader({ profileHref: '/experts/priya-nair', showYouSuffix: true });
+    const link = screen.getByRole('link', { name: 'Priya Nair' });
+    expect(link).not.toContainElement(screen.getByText('(you)'));
   });
 
   /**

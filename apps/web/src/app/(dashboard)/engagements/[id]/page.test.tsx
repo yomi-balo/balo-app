@@ -37,6 +37,7 @@ const {
   mockLoadProjectSettlement,
   mockHasCapability,
   mockHasDeliveryCapability,
+  mockFindPublicUsernames,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -58,6 +59,7 @@ const {
   mockLoadProjectSettlement: vi.fn(),
   mockHasCapability: vi.fn(),
   mockHasDeliveryCapability: vi.fn(),
+  mockFindPublicUsernames: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
@@ -76,6 +78,7 @@ vi.mock('@balo/db', () => ({
   actionItemsRepository: {
     listByEngagement: mockListActionItems,
   },
+  expertsRepository: { findPublicUsernamesByProfileIds: mockFindPublicUsernames },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/authz', async (importOriginal) => ({
@@ -205,6 +208,7 @@ beforeEach(() => {
   mockListContentEdits.mockResolvedValue([]);
   mockHasCapability.mockResolvedValue(true);
   mockHasDeliveryCapability.mockResolvedValue(false);
+  mockFindPublicUsernames.mockResolvedValue(new Map());
   mockLoadProjectSettlement.mockResolvedValue(
     deriveProjectSettlement({
       acceptedPriceCents: 5_800_000,
@@ -325,6 +329,83 @@ describe('EngagementWorkspacePage (RSC) — authorised lenses render the header 
     mockFindWithMilestones.mockResolvedValue(engagement());
 
     await renderPage();
+    expect(
+      screen.getByRole('heading', { name: new RegExp(ENGAGEMENT_TITLE, 'i') })
+    ).toBeInTheDocument();
+  });
+});
+
+describe('EngagementWorkspacePage (RSC) — header line expert profile link', () => {
+  const PUBLIC = new Map([[EXPERT_PROFILE_ID, 'priya-sharma']]);
+
+  it('client lens links the expert name to the public profile the shared rule resolves', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID]);
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      '/experts/priya-sharma'
+    );
+  });
+
+  it('admin lens links the expert name too', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      '/experts/priya-sharma'
+    );
+  });
+
+  it('expert lens reads nothing and links no expert', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({
+        companyId: OTHER_COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        activeMode: 'expert',
+      })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(mockFindPublicUsernames).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+  });
+
+  it('leaves the name unlinked when the profile is not public', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID]);
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+    expect(screen.getByText(/^Delivered by Priya Sharma/)).toBeInTheDocument();
+  });
+
+  it('a failed profile read logs a warning and renders the page with the name unlinked', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockRejectedValue(new Error('db down'));
+
+    await renderPage();
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Expert profile link unavailable for engagement header',
+      expect.objectContaining({
+        engagementId: ENGAGEMENT_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        error: 'db down',
+      })
+    );
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: new RegExp(ENGAGEMENT_TITLE, 'i') })
     ).toBeInTheDocument();

@@ -269,7 +269,11 @@ export interface ConversationThreadView {
   /** Tab label. */
   expertFirstName: string;
   expertInitials: string;
-  /** The expert's public-profile slug — null when not published/available. */
+  /**
+   * The expert's public-profile slug — non-null only on the client lens AND only when
+   * `/experts/{slug}` resolves (the shared public-profile rule), so a link built from it never
+   * 404s.
+   */
   expertUsername: string | null;
   /** Raw relationship enum, for action gating. */
   relationshipStatus: RelationshipStatus;

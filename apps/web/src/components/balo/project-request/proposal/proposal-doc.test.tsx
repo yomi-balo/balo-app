@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@/test/utils';
+import { axe } from '@/test/axe';
 import { ProposalDoc } from './proposal-doc';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -52,6 +53,7 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
       initials: 'PS',
       company: 'Cloudwerx',
       headline: 'CPQ Specialist',
+      profileHref: null,
       rating: 4.9,
       ratingCount: 12,
     },
@@ -223,6 +225,55 @@ describe('ProposalDoc — header + revision', () => {
     expect(container.textContent ?? '').not.toContain('0.0');
     expect(screen.queryByText('(0)')).not.toBeInTheDocument();
   });
+});
+
+describe('ProposalDoc — expert profile link', () => {
+  it('links the avatar + name to the public profile when the doc carries a profileHref', () => {
+    const base = baseDoc();
+    render(
+      <ProposalDoc
+        doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
+      />
+    );
+    const links = screen.getAllByRole('link', { name: 'Priya Sharma' });
+    expect(links).toHaveLength(1);
+    const [link] = links;
+    expect(link).toHaveAttribute('href', '/experts/priya-sharma');
+    // The avatar is inside the link; the company stays outside it.
+    expect(link).toHaveTextContent('PS');
+    expect(link).not.toHaveTextContent('Cloudwerx');
+  });
+
+  it('has no axe violations with the avatar + name linked', async () => {
+    const base = baseDoc();
+    const { container } = render(
+      <ProposalDoc
+        doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
+      />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('renders the name plain when profileHref is null (expert, admin, preview, share page)', () => {
+    render(<ProposalDoc doc={baseDoc()} />);
+    expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Priya Sharma/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['linked', '/experts/priya-sharma'],
+    ['unlinked', null],
+  ] as const)(
+    'stacks the rating / headline line under the name BESIDE the avatar (%s)',
+    (_label, profileHref) => {
+      const base = baseDoc();
+      render(<ProposalDoc doc={{ ...base, expert: { ...base.expert, profileHref } }} />);
+      const column = screen.getByText(/CPQ Specialist/).parentElement?.parentElement;
+      expect(column).toHaveClass('relative', 'pl-14');
+      expect(column).toContainElement(screen.getByText('PS'));
+      expect(column).toContainElement(screen.getByText('Priya Sharma'));
+    }
+  );
 });
 
 describe('ProposalDoc — attachments split + exclusions', () => {

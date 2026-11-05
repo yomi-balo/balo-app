@@ -272,7 +272,12 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
     isDeliveringExpert: false,
     header: {
       engagementTitle: 'CPQ implementation',
-      headerLine: 'Delivery with Priya',
+      headerLine: {
+        prefix: 'Delivered by ',
+        expertName: 'Priya Sharma',
+        suffix: '',
+        expertProfileHref: null,
+      },
       statusChip: { status: 'active', label: 'Active', tone: 'success', icon: 'Layers' },
       provenance: { requestId: 'req-1', href: '/projects/req-1' },
       terms: [{ icon: 'DollarSign', label: 'Pricing', value: 'Fixed price · A$58,000' }],

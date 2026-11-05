@@ -403,10 +403,13 @@ const SHOWS_STATE_BAND: Readonly<Record<CasesIndexSide, boolean>> = {
  * (`?book=1&src=…` exists, but on the EXPERT PROFILE route, which is the destination being
  * moved away from here.) A picker deep link is a case-page change, not an index one.
  *
- * ⚠ `bookAgainHref` IS STILL READ — AS A BOOKABILITY TEST, NOT AS THE HREF. It is `null` exactly
- * when `expert_profiles.username` is, and the case page's own two booking affordances both gate
- * on the same fact. Offering "Book another" into a case that can offer no booking would be a
- * promise the destination cannot keep, so the button is absent rather than dead-ending.
+ * ⚠ `bookAgainHref` IS STILL READ — AS A BOOKABILITY TEST, NOT AS THE HREF. It is `null`
+ * whenever the expert's public profile does not resolve (`expertProfileIsPublic`: no username,
+ * unapproved, not searchable, or an owner who is not live). That is the same gate as the case
+ * page's own booking affordances (`profileHref`) and the availability route's
+ * `findPublicVisibility`, which backs the case-page picker. Offering "Book another" into a case
+ * that can offer no booking would be a promise the destination cannot keep, so the button is
+ * absent rather than dead-ending.
  */
 function bookAction(
   context: NextSlotContext,

@@ -92,6 +92,7 @@ const OPEN_HEADER: CaseHeaderView = {
   closeReason: null,
   closedAtIso: null,
   counterpartyOrgLabel: 'CloudPeak',
+  counterpartyOrgHref: null,
   closedNote: null,
 };
 
@@ -163,7 +164,7 @@ const BASE = {
     orgLabel: 'CloudPeak',
     avatarUrl: null,
     initials: 'AO',
-    bookAgainHref: '/experts/amara',
+    profileHref: '/experts/amara',
     availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,

@@ -32,6 +32,7 @@ vi.mock('@balo/db', () => ({
   engagementMilestonesRepository: { listProposalContentEdits: vi.fn().mockResolvedValue([]) },
   projectEngagementsRepository: { findWithMilestones: mockFindWithMilestones },
   actionItemsRepository: { listByEngagement: vi.fn().mockResolvedValue([]) },
+  expertsRepository: { findPublicUsernamesByProfileIds: vi.fn().mockResolvedValue(new Map()) },
   engagementTimeEntriesRepository: {
     listByEngagement: mockListEntries,
     sumsForEngagement: mockSums,

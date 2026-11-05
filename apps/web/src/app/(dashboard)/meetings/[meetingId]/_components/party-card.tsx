@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { CalendarDays, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
 import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
@@ -33,10 +34,10 @@ import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types'
  * via a gravatar-style hash of one (ADR-1044). The avatar is `users.avatar_url` or initials.
  *
  * ⚠ ONLY LIVE DESTINATIONS RENDER, NEVER A DISABLED CTA. `/experts/{username}` is the ONE CTA
- * with a real route today — and `expert_profiles.username` is NULLABLE, so a null username
- * means NO button rather than a link to `/experts/null`. Turn into project, send proposal,
- * add a private note and offer a new time all have no destination and are simply absent. The
- * card reads complete with one action or with none.
+ * with a real route today — and `profileHref` is non-null only when that public profile
+ * resolves, so a null means NO button (and an unlinked name) rather than a link that 404s.
+ * Turn into project, send proposal, add a private note and offer a new time all have no
+ * destination and are simply absent. The card reads complete with one action or with none.
  *
  * ⚠ NOTHING EVALUATIVE ON THE EXPERT LENS. The expert is not scoring the client: no rating,
  * no score, no history judgement.
@@ -51,22 +52,30 @@ export function PartyCard({
 
   return (
     <section className="bg-card border-border rounded-2xl border p-6">
-      <div className="flex items-start gap-3">
-        <PartyAvatar avatarUrl={party.avatarUrl} initials={party.initials} />
-        <div className="min-w-0 flex-1">
-          <p className="text-foreground truncate text-sm font-semibold">{party.name}</p>
-          {party.headline !== null && (
-            <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{party.headline}</p>
-          )}
-          {party.orgLabel !== null && (
-            <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
-          )}
-          {party.ratingAverage !== null && (
-            <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
-              <InlineRating average={party.ratingAverage} count={party.ratingCount} />
-            </p>
-          )}
-        </div>
+      {/* Avatar + name are ONE link to the expert's public profile (client lens, profile
+          resolves); otherwise the same boxes render unlinked. The headline, agency and rating
+          stack under the name beside the avatar (40px + 12px gap, held by `pl-13`), outside the
+          link, so its accessible name is the person's name alone. */}
+      <div className="relative min-h-10 min-w-0 pl-13">
+        <p className="text-foreground text-sm font-semibold">
+          <ExpertProfileLink
+            href={party.profileHref}
+            avatar={<PartyAvatar avatarUrl={party.avatarUrl} initials={party.initials} />}
+          >
+            <span className="block truncate">{party.name}</span>
+          </ExpertProfileLink>
+        </p>
+        {party.headline !== null && (
+          <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{party.headline}</p>
+        )}
+        {party.orgLabel !== null && (
+          <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
+        )}
+        {party.ratingAverage !== null && (
+          <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
+            <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+          </p>
+        )}
       </div>
 
       {party.ordinalLine !== null && (
@@ -75,10 +84,10 @@ export function PartyCard({
         </p>
       )}
 
-      {party.bookAgainHref !== null && (
+      {party.profileHref !== null && (
         <div className="mt-4 flex flex-col gap-2">
           <Button asChild variant="outline" className="min-h-11 w-full gap-2">
-            <Link href={party.bookAgainHref} onClick={onBookAgain}>
+            <Link href={party.profileHref} onClick={onBookAgain}>
               <CalendarDays className="h-4 w-4" aria-hidden="true" />
               Book again
             </Link>

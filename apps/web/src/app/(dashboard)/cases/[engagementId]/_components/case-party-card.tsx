@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
 import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
@@ -111,52 +112,62 @@ export function CasePartyCard({
 
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
-      <div className="flex items-start gap-3">
-        <Avatar size="lg" className="flex-none">
-          {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
-          <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-            {party.initials}
-          </AvatarFallback>
-        </Avatar>
-        <div className="min-w-0">
-          <p className="text-foreground text-sm font-semibold">{party.name}</p>
-          {party.headline !== null && (
-            <p className="text-muted-foreground mt-0.5 text-xs leading-snug">{party.headline}</p>
-          )}
-          {party.orgLabel !== null && (
-            <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
-          )}
-          {party.ratingAverage !== null && (
-            <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
-              <InlineRating average={party.ratingAverage} count={party.ratingCount} />
-            </p>
-          )}
-        </div>
+      {/* Avatar + name are ONE link to the expert's public profile (client lens, profile
+          resolves); otherwise the same boxes render unlinked. The headline, agency and rating
+          stack under the name beside the avatar (40px + 12px gap, held by `pl-13`), outside the
+          link, so its accessible name is the person's name alone. */}
+      <div className="relative min-h-10 min-w-0 pl-13">
+        <p className="text-foreground text-sm font-semibold">
+          <ExpertProfileLink
+            href={party.profileHref}
+            avatar={
+              <Avatar size="lg" className="flex-none">
+                {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
+                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                  {party.initials}
+                </AvatarFallback>
+              </Avatar>
+            }
+          >
+            {party.name}
+          </ExpertProfileLink>
+        </p>
+        {party.headline !== null && (
+          <p className="text-muted-foreground mt-0.5 text-xs leading-snug">{party.headline}</p>
+        )}
+        {party.orgLabel !== null && (
+          <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
+        )}
+        {party.ratingAverage !== null && (
+          <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
+            <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+          </p>
+        )}
       </div>
 
       {/*
-        ⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `bookAgainHref` is
-        `/experts/{username}` and `expert_profiles.username` is NULLABLE, so a null username
-        means NO link rather than one to `/experts/null`. The in-page path (`onBookFollowUp`)
+        ⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `profileHref` is
+        `/experts/{username}` only when that public profile resolves, so a null means NO link
+        rather than one that 404s. The in-page path (`onBookFollowUp`)
         never uses the href, so it renders regardless. The expert lens never has either: only a
         client can book.
       */}
-      {(onBookFollowUp !== undefined || party.bookAgainHref !== null) && (
+      {(onBookFollowUp !== undefined || party.profileHref !== null) && (
         <div className="mt-4">
-          {onBookFollowUp !== undefined ? (
-            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
-              <Video className="h-4 w-4" aria-hidden="true" />
-              Book with {counterpartyFirstName} again
-            </Button>
-          ) : (
-            party.bookAgainHref !== null && (
+          {onBookFollowUp === undefined ? (
+            party.profileHref !== null && (
               <Button asChild className="min-h-11 w-full gap-2">
-                <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+                <Link href={`${party.profileHref}?book=1&src=book_again`} onClick={onBookAnother}>
                   <Video className="h-4 w-4" aria-hidden="true" />
                   Book with {counterpartyFirstName} again
                 </Link>
               </Button>
             )
+          ) : (
+            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
+              <Video className="h-4 w-4" aria-hidden="true" />
+              Book with {counterpartyFirstName} again
+            </Button>
           )}
           {!isOpen && (
             <p className="text-muted-foreground mt-2 text-center text-xs leading-relaxed">

@@ -19,9 +19,9 @@ vi.mock('./case-slot-quick-pick', () => ({
 /**
  * BAL-421 — the rail's counterparty card: ONE component for both lenses.
  *
- * ⚠⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `expert_profiles.username` is
- * NULLABLE, so a null `bookAgainHref` must produce NO button rather than a link to
- * `/experts/null`. That is the branch this file exists to hold.
+ * ⚠⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `profileHref` is null whenever the
+ * expert's public profile does not resolve, and must then produce NO button (and no name link)
+ * rather than a link that 404s. That is the branch this file exists to hold.
  *
  * ⚠ NO EMAIL ADDRESS ANYWHERE (ADR-1044) — asserted over the whole rendered tree.
  *
@@ -37,7 +37,7 @@ const PARTY: CasePartyView = {
   orgLabel: 'CloudPeak',
   avatarUrl: null,
   initials: 'AO',
-  bookAgainHref: '/experts/amara-okafor',
+  profileHref: '/experts/amara-okafor',
   availableForWork: true,
   ratingAverage: 4.3,
   ratingCount: 2,
@@ -73,6 +73,65 @@ const NEW_CASE_NOTE = 'Starts a new case — this one stays as it is.';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+/**
+ * The avatar + name are ONE link to the expert's public profile, built from the same
+ * server-gated `profileHref` as "Book again" — so it exists only when that profile resolves,
+ * and never on the expert lens, whose counterparty is the client company.
+ */
+describe('CasePartyCard — the profile link', () => {
+  it('links avatar and name as ONE link, named by the person alone', () => {
+    renderCard();
+    const link = screen.getByRole('link', { name: 'Amara Okafor' });
+    expect(link).toHaveAttribute('href', '/experts/amara-okafor');
+    expect(link).toContainElement(screen.getByText('AO'));
+    // The headline, agency and rating stay outside the link.
+    expect(link).not.toContainElement(screen.getByText('Salesforce architect'));
+    expect(link).not.toContainElement(screen.getByText('CloudPeak'));
+  });
+
+  it('renders the name unlinked when the profile does not resolve', () => {
+    renderCard({ party: { ...PARTY, profileHref: null } });
+    expect(screen.getByText('Amara Okafor')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Amara Okafor' })).not.toBeInTheDocument();
+  });
+
+  it('never links the client COMPANY on the expert lens', () => {
+    renderCard({
+      lens: 'expert',
+      earnings: NOT_YET,
+      party: {
+        ...PARTY,
+        name: 'Northwind Industrial',
+        initials: 'NI',
+        headline: null,
+        orgLabel: null,
+        profileHref: null,
+        ratingAverage: null,
+        ratingCount: 0,
+      },
+    });
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['linked', '/experts/amara-okafor'],
+    ['unlinked', null],
+  ] as const)(
+    'stacks the headline under the name BESIDE the avatar, in one identity column (%s)',
+    (_label, profileHref) => {
+      renderCard({ party: { ...PARTY, profileHref } });
+      // case-surface.jsx: the avatar sits beside a name + headline + rating stack. The column
+      // is the avatar's positioned ancestor, so the headline sits under the name, not below
+      // the avatar.
+      const column = screen.getByText('Salesforce architect').parentElement;
+      expect(column).toHaveClass('relative', 'pl-13');
+      expect(column).toContainElement(screen.getByText('AO'));
+      expect(column).toContainElement(screen.getByText('Amara Okafor'));
+    }
+  );
 });
 
 describe('CasePartyCard — the identity block', () => {
@@ -164,9 +223,9 @@ describe('CasePartyCard — the booking CTA is a live destination or nothing', (
     );
   });
 
-  /** ⚠ THE NULL-USERNAME BRANCH. An absent action beats a link to `/experts/null`. */
-  it('renders NO link at all when bookAgainHref is null', () => {
-    const { container } = renderCard({ party: { ...PARTY, bookAgainHref: null } });
+  /** ⚠ THE UNRESOLVED-PROFILE BRANCH. An absent action beats a link that 404s. */
+  it('renders NO link at all when profileHref is null', () => {
+    const { container } = renderCard({ party: { ...PARTY, profileHref: null } });
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(container.innerHTML).not.toContain('/experts/');
     expect(screen.queryByText(NEW_CASE_NOTE)).not.toBeInTheDocument();
@@ -309,7 +368,7 @@ describe('CasePartyCard — the open-case follow-up for a paused expert (BAL-591
     const user = userEvent.setup();
     const onBookFollowUp = vi.fn();
     renderCard({
-      party: { ...PARTY, bookAgainHref: null },
+      party: { ...PARTY, profileHref: null },
       onBookFollowUp,
     });
     await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));

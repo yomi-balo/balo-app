@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
 import { cn } from '@/lib/utils';
 import type { EngagementHeaderView, ViewIcon } from '@/lib/engagement/engagement-view';
 import { StatusChip } from './status-chip';
@@ -46,13 +47,15 @@ interface EngagementHeaderProps {
  * and (only for request-backed engagements) a provenance link to the source
  * request. Read-only — every string comes from the view; the only interactive
  * elements are navigational `<Link>`s. Retainers carry `provenance === null`,
- * so the provenance link is simply omitted.
+ * so the provenance link is simply omitted. In the sub-line only the expert
+ * person's name links (to their public profile), and only when the view carries
+ * an href for it.
  */
 export function EngagementHeader({
   header,
   actions,
 }: Readonly<EngagementHeaderProps>): React.JSX.Element {
-  const { provenance } = header;
+  const { provenance, headerLine } = header;
   return (
     <div className="mb-5">
       <Link
@@ -74,7 +77,15 @@ export function EngagementHeader({
         {actions}
       </div>
 
-      <p className="text-muted-foreground mt-1.5 text-sm">{header.headerLine}</p>
+      <p className="text-muted-foreground mt-1.5 text-sm">
+        {headerLine.prefix}
+        {headerLine.expertName !== null && (
+          <ExpertProfileLink href={headerLine.expertProfileHref}>
+            {headerLine.expertName}
+          </ExpertProfileLink>
+        )}
+        {headerLine.suffix}
+      </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {header.terms.map((item) => {

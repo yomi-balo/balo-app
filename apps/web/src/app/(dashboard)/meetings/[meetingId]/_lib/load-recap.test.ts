@@ -117,7 +117,7 @@ const FAT_PROFILE = {
   agencyId: null,
   type: 'freelancer',
   headline: 'Salesforce CPQ specialist',
-  username: 'amara',
+  publicProfileUsername: 'amara',
   rateCents: 33_700,
   stripeConnectId: 'acct_secret_connect',
 };
@@ -127,7 +127,7 @@ const AGENCY_PROFILE = {
   agencyId: 'agency-1',
   type: 'agency',
   headline: null,
-  username: null,
+  publicProfileUsername: null,
 };
 
 const FAT_USER = {
@@ -437,26 +437,26 @@ describe('loadRecap', () => {
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.party.name).toBe('Amara Okafor');
     expect(view?.party.headline).toBe('Salesforce CPQ specialist');
-    expect(view?.party.bookAgainHref).toBe('/experts/amara');
+    expect(view?.party.profileHref).toBe('/experts/amara');
   });
 
-  it('OMITS the Book again href when the expert username is null', async () => {
+  it('OMITS the profile href when the public profile does not resolve', async () => {
     m.findProfile.mockResolvedValue({
       userId: 'u-expert',
       agencyId: null,
       type: 'freelancer',
       headline: null,
-      username: null,
+      publicProfileUsername: null,
     });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
-    expect(view?.party.bookAgainHref).toBeNull();
+    expect(view?.party.profileHref).toBeNull();
   });
 
   it('renders the EXPERT-lens party card around the client COMPANY, with no CTA', async () => {
     mockResolveAccess.mockResolvedValue({ ...CASE_ACCESS, lens: 'expert' });
     const view = await loadRecap(MEETING_ID, USER_ID, NOW);
     expect(view?.party.name).toBe('Northwind Industrial');
-    expect(view?.party.bookAgainHref).toBeNull();
+    expect(view?.party.profileHref).toBeNull();
     expect(view?.party.headline).toBeNull();
   });
 });

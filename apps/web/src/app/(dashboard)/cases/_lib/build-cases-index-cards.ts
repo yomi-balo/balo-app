@@ -136,8 +136,8 @@ function resolveCounterparty(row: CasesIndexCounterparty, side: CasesIndexSide):
     // display site must run it through `getAvatarUrl` — this is that site.
     counterpartyAvatarUrl: getAvatarUrl(row.expertAvatarUrl, 'thumbnail'),
     counterpartyInitials: initialsOf(personName),
-    // ⚠ `expert_profiles.username` IS NULLABLE. A null one means NO BUTTON — never a link to
-    // `/experts/null`, and never a disabled CTA.
+    // ⚠ `expertUsername` is null unless the public profile resolves (gated in the cases-index
+    // SQL). A null one means NO BUTTON — never a link that 404s, and never a disabled CTA.
     bookAgainHref: row.expertUsername === null ? null : `/experts/${row.expertUsername}`,
   };
 }

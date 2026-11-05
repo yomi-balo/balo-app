@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import {
+  expertsRepository,
   projectRequestsRepository,
   proposalsRepository,
   proposalMilestonesRepository,
@@ -187,7 +188,8 @@ function hydrateDraftState(
  */
 async function loadReviewDoc(
   relationship: Relationship,
-  audience: ProposalAudience
+  audience: ProposalAudience,
+  publicUsername: string | null = null
 ): Promise<ProposalReviewDoc | null> {
   const proposal = await proposalsRepository.findCurrentByRelationship(relationship.id);
   if (proposal === undefined || !REVIEWABLE_PROPOSAL_STATUSES.has(proposal.status)) {
@@ -198,7 +200,35 @@ async function loadReviewDoc(
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
   ]);
-  return hydrateReviewDoc(proposal, milestones, installments, documents, relationship, audience);
+  return hydrateReviewDoc(
+    proposal,
+    milestones,
+    installments,
+    documents,
+    relationship,
+    audience,
+    publicUsername
+  );
+}
+
+/**
+ * The public-profile usernames of every expert on the request, in ONE batched read — present
+ * only where `/experts/{username}` resolves, so the client review's header links never 404.
+ * Non-critical: a failure leaves every header unlinked rather than failing the review.
+ */
+async function loadPublicUsernames(
+  request: ProjectRequestWithRelations
+): Promise<Map<string, string>> {
+  const expertProfileIds = [...new Set(request.relationships.map((r) => r.expertProfileId))];
+  try {
+    return await expertsRepository.findPublicUsernamesByProfileIds(expertProfileIds);
+  } catch (error) {
+    log.warn('Failed to load expert public usernames for proposal review', {
+      requestId: request.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return new Map();
+  }
 }
 
 /**
@@ -517,7 +547,12 @@ async function renderClientReview(
     return null;
   }
   // Every reviewable proposal on the request powers the switcher.
-  const docs = await Promise.all(request.relationships.map((r) => loadReviewDoc(r, 'client')));
+  const usernames = await loadPublicUsernames(request);
+  const docs = await Promise.all(
+    request.relationships.map((r) =>
+      loadReviewDoc(r, 'client', usernames.get(r.expertProfileId) ?? null)
+    )
+  );
   const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);
   if (reviewableDocs.length === 0) {
     return null;

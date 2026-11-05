@@ -55,7 +55,7 @@ const LENSES = ['client', 'expert'] as const;
 
 const BASE = {
   counterpartyLabel: 'Amara',
-  bookAgainHref: '/experts/amara-okafor',
+  profileHref: '/experts/amara-okafor',
   onMarkResolved: vi.fn(),
   onDismissAsk: vi.fn(),
   // Defaulted on; tests that need the gated-off case override explicitly with
@@ -359,7 +359,7 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
   it('renders NO booking CTA when the username is null — never /experts/null', () => {
     // `expert_profiles.username` is NULLABLE. An absent action beats a dead one.
     render(
-      <CaseNudge {...BASE} bookAgainHref={null} nudge={{ kind: 'nothing_booked' }} lens="client" />
+      <CaseNudge {...BASE} profileHref={null} nudge={{ kind: 'nothing_booked' }} lens="client" />
     );
     expect(screen.queryByRole('link', { name: 'Book a consultation' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
@@ -1275,13 +1275,13 @@ describe('CaseNudge — the nothing-booked CTA for a paused expert on an open ca
     expect(onBookFollowUp).toHaveBeenCalledTimes(1);
   });
 
-  it('still offers the in-page CTA with a null bookAgainHref (the href is link-path only)', async () => {
+  it('still offers the in-page CTA with a null profileHref (the href is link-path only)', async () => {
     const user = userEvent.setup();
     const onBookFollowUp = vi.fn();
     render(
       <CaseNudge
         {...BASE}
-        bookAgainHref={null}
+        profileHref={null}
         onBookFollowUp={onBookFollowUp}
         nudge={{ kind: 'nothing_booked' }}
         lens="client"

@@ -13,6 +13,13 @@ export interface ProposalExpertIdentity {
   company: string | null;
   headline: string | null; // e.g. 'CPQ Specialist'
   /**
+   * `/experts/{username}` — the expert's public profile, which the header links the avatar +
+   * name to. Non-null ONLY on a client-audience doc whose profile resolves (the shared
+   * public-profile rule); `null` for the expert, admin, the composer preview and the public
+   * share page.
+   */
+  profileHref: string | null;
+  /**
    * The expert's average rating (BAL-422), 1..5, or `null` for NO REVIEWS.
    *
    * ⚠ `null` IS NOT 0.0 and is NOT "unrated but zero-scored" — the scale starts at 1. Both

@@ -464,10 +464,11 @@ describe('resolveNextSlot', () => {
   });
 
   /**
-   * ⚠ `bookAgainHref === null` IS NOW A BOOKABILITY TEST, NOT AN HREF SOURCE. It is null exactly
-   * when the expert has no username, and the CASE PAGE's own booking affordances gate on the
-   * same fact — so "Book another" would land somewhere that can offer no booking. An absent
-   * action beats a promise the destination cannot keep.
+   * ⚠ `bookAgainHref === null` IS NOW A BOOKABILITY TEST, NOT AN HREF SOURCE. It is null
+   * whenever the expert's public profile does not resolve (no username, unapproved, not
+   * searchable, or an owner who is not live), and the CASE PAGE's own booking affordances gate
+   * on the same rule — so "Book another" would land somewhere that can offer no booking. An
+   * absent action beats a promise the destination cannot keep.
    */
   it('renders NO booking action when the expert is not bookable', () => {
     const slot = resolveNextSlot(
