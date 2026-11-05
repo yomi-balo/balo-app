@@ -279,9 +279,7 @@ describe('intro-call-booked — the recipient timezone (BAL-635)', () => {
           getEmailTemplate(key, { ...ZONED, recipientTimezone: 'Australia/Melbourne' }).component
         )
       );
-      expect(normaliseSept(text)).toContain(
-        'Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min.'
-      );
+      expect(normaliseSept(text)).toContain('Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time).');
       expect(text).not.toContain('(60 min)');
       expect(text).not.toContain('(UTC)');
     }

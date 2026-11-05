@@ -426,13 +426,34 @@ export function deriveCountryFromTimezone(
 }
 
 /**
+ * Zones ICU still lists under an old city spelling (`Intl.supportedValuesOf('timeZone')` has
+ * `Asia/Calcutta`, not `Asia/Kolkata`), so a browser can report them and `canonicalTimezone`
+ * keeps them. Mapped to the current city name so labels never read "Calcutta time".
+ */
+const LEGACY_ZONE_CITIES: Readonly<Record<string, string>> = {
+  'America/Godthab': 'Nuuk',
+  'Asia/Calcutta': 'Kolkata',
+  'Asia/Katmandu': 'Kathmandu',
+  'Asia/Rangoon': 'Yangon',
+  'Asia/Saigon': 'Ho Chi Minh',
+  'Atlantic/Faeroe': 'Faroe',
+  'Europe/Kiev': 'Kyiv',
+  'Pacific/Enderbury': 'Kanton',
+  'Pacific/Ponape': 'Pohnpei',
+  'Pacific/Truk': 'Chuuk',
+};
+
+/**
  * Extract the city name from an IANA timezone string (e.g. "Australia/Sydney" -> "Sydney").
  * Handles nested paths like "America/Indiana/Indianapolis" -> "Indianapolis".
- * Replaces underscores with spaces.
+ * Replaces underscores with spaces. Old spellings use the current name
+ * ("Asia/Calcutta" -> "Kolkata").
  * Returns null for UTC or invalid formats.
  */
 export function extractCityFromTimezone(timezone: string | null | undefined): string | null {
   if (!timezone || timezone === 'UTC') return null;
+  const legacy = LEGACY_ZONE_CITIES[timezone];
+  if (legacy !== undefined) return legacy;
   const parts = timezone.split('/');
   const city = parts.at(-1);
   if (!city) return null;

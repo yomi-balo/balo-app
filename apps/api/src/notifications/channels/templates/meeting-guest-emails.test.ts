@@ -805,9 +805,15 @@ describe('guest emails stay on UTC even when handed a recipient zone (BAL-635)',
 describe('formatMeetingWindowWithDuration', () => {
   const START = '2026-09-01T00:00:00.000Z';
 
-  it('appends "- N min" after the zoned window', () => {
+  it('leaves the length off the zoned window, whose end time already gives it', () => {
     expect(formatMeetingWindowWithDuration(START, 60, 'Australia/Melbourne', 'x')).toMatch(
-      /^Tue, 1 Sept? 2026 · 10:00–11:00 \(Melbourne time\) - 60 min$/
+      /^Tue, 1 Sept? 2026 · 10:00–11:00 \(Melbourne time\)$/
+    );
+  });
+
+  it('labels a legacy zone with its current city', () => {
+    expect(formatMeetingWindowWithDuration(START, 60, 'Asia/Calcutta', 'x')).toMatch(
+      /^Tue, 1 Sept? 2026 · 05:30–06:30 \(Kolkata time\)$/
     );
   });
 

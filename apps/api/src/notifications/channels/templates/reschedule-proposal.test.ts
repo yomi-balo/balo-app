@@ -259,7 +259,7 @@ describe('reschedule-proposal — the recipient timezone (BAL-635)', () => {
       )
     );
     expect(normaliseSept(text)).toContain(
-      'currently set for Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min.'
+      'currently set for Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time).'
     );
     expect(text).not.toContain('(60 min)');
     expect(normaliseSept(text)).toContain('Wed, 2 Sep 2026 · 10:00–11:00 (Melbourne time)');
@@ -297,7 +297,7 @@ describe('reschedule-proposal — the recipient timezone (BAL-635)', () => {
       )
     );
     expect(normaliseSept(text)).toContain(
-      'Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min still stands.'
+      'Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) still stands.'
     );
     expect(text).not.toContain('(60 min)');
     expect(text).not.toContain('(UTC)');

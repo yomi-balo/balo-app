@@ -34,8 +34,8 @@ Your hours are set in one timezone. The line under the page title reads "Hours a
 because your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every
 bookable slot shifts. Busy times on your connected calendar aren't affected.
 
-Emails about your bookings show times in this timezone too, for example "Tue, 1 Sep 2026 ·
-10:00–11:00 (Melbourne time) - 60 min". If an email names a zone you're not in, change it here.
+Booking confirmation, change and cancellation emails show times in this timezone too, for example
+"10:00–11:00 (Melbourne time)". If one names a zone you're not in, change it here.
 
 ![The timezone line under the page title, with Change timezone highlighted.](02)
 

@@ -235,9 +235,7 @@ describe('booking-rescheduled — the recipient timezone (BAL-635)', () => {
         )
       );
       expect(normaliseSept(text)).toContain('Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time)');
-      expect(normaliseSept(text)).toContain(
-        'Tue, 8 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min.'
-      );
+      expect(normaliseSept(text)).toContain('Tue, 8 Sep 2026 · 10:00–11:00 (Melbourne time).');
       expect(text).not.toContain('(60 min)');
       expect(text).not.toContain('(UTC)');
     }
