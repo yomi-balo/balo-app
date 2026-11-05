@@ -1,5 +1,5 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import { formatMeetingWindowForRecipient } from './meeting-guest-emails.js';
 
 /**
  * BAL-409 — `booking.rescheduled`: a booked consultation was moved by the CLIENT. ONE
@@ -37,6 +37,8 @@ export interface BookingRescheduledEmailProps {
   readonly previousScheduledStartIso: string;
   readonly scheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly caseUrl: string;
   readonly baseUrl: string;
   /** `?? 'client'` at the call site (deploy-skew fallback) — see `index.ts`'s registry entries. */
@@ -72,8 +74,17 @@ function introFor(
 function bodyLines(props: Readonly<BookingRescheduledEmailProps>): string[] {
   const { recipient, counterpartyLabel, caseTitle, durationMinutes, initiatedBy } = props;
   const previousWindow =
-    formatMeetingWindowUtc(props.previousScheduledStartIso) || 'its previous time';
-  const newWindow = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
+    formatMeetingWindowForRecipient(
+      props.previousScheduledStartIso,
+      durationMinutes,
+      props.recipientTimezone
+    ) || 'its previous time';
+  const newWindow =
+    formatMeetingWindowForRecipient(
+      props.scheduledStartIso,
+      durationMinutes,
+      props.recipientTimezone
+    ) || 'the scheduled time';
 
   const intro = introFor(recipient, initiatedBy, counterpartyLabel, newWindow, durationMinutes);
 

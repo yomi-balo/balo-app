@@ -297,3 +297,18 @@ describe('the `meeting-client-absent` IN-APP template', () => {
     assertRegister(`${result.title} ${result.body}`);
   });
 });
+
+describe('meeting-expert-absent-admin stays on UTC (BAL-635)', () => {
+  it('ignores a recipientTimezone handed to the template', async () => {
+    const output = getEmailTemplate('meeting-expert-absent-admin', {
+      meetingId: MEETING_ID,
+      minutesPastStart: 5,
+      contextType: 'case',
+      scheduledStartIso: '2026-08-14T10:00:00.000Z',
+      recipientTimezone: 'Australia/Melbourne',
+    });
+    const text = visibleText(await render(output.component));
+    expect(text).toContain('UTC');
+    expect(text).not.toContain('Melbourne time');
+  });
+});

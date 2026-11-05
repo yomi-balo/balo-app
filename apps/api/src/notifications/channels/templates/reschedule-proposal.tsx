@@ -1,5 +1,5 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import { formatMeetingWindowForRecipient } from './meeting-guest-emails.js';
 
 /**
  * BAL-411 — `reschedule_proposal.sent` and `reschedule_proposal.declined`. Two independent
@@ -20,8 +20,12 @@ import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
  * is none) — mirrors `BookingRescheduledEmail`.
  */
 
-function formatOption(iso: string): string {
-  return formatMeetingWindowUtc(iso) || 'a new time';
+function formatOption(
+  iso: string,
+  durationMinutes: number,
+  recipientTimezone: string | null | undefined
+): string {
+  return formatMeetingWindowForRecipient(iso, durationMinutes, recipientTimezone) || 'a new time';
 }
 
 // ── reschedule-proposal-sent ────────────────────────────────────────────────────────────────
@@ -35,6 +39,8 @@ export interface RescheduleProposalSentEmailProps {
   /** 1..3 ISO instants, in display order. */
   readonly optionStartIsos: readonly string[];
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly caseUrl: string;
   readonly baseUrl: string;
 }
@@ -42,8 +48,14 @@ export interface RescheduleProposalSentEmailProps {
 function sentBodyLines(props: Readonly<RescheduleProposalSentEmailProps>): string[] {
   const { expertPersonLabel, caseTitle, durationMinutes, optionStartIsos } = props;
   const originalWindow =
-    formatMeetingWindowUtc(props.originalScheduledStartIso) || 'its scheduled time';
-  const optionsLine = optionStartIsos.map(formatOption).join(' · ');
+    formatMeetingWindowForRecipient(
+      props.originalScheduledStartIso,
+      durationMinutes,
+      props.recipientTimezone
+    ) || 'its scheduled time';
+  const optionsLine = optionStartIsos
+    .map((iso) => formatOption(iso, durationMinutes, props.recipientTimezone))
+    .join(' · ');
   // CONSIDER item — "a few other times" for a 1-option proposal, unlike `case-nudge.tsx`'s
   // `{optionCount} time{optionCount === 1 ? '' : 's'}`, which already gets the singular right.
   const timesPhrase = optionStartIsos.length === 1 ? 'another time' : 'a few other times';
@@ -90,13 +102,19 @@ export interface RescheduleProposalDeclinedEmailProps {
   readonly caseTitle: string;
   readonly originalScheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly caseUrl: string;
   readonly baseUrl: string;
 }
 
 function declinedBodyLines(props: Readonly<RescheduleProposalDeclinedEmailProps>): string[] {
   const originalWindow =
-    formatMeetingWindowUtc(props.originalScheduledStartIso) || 'the original time';
+    formatMeetingWindowForRecipient(
+      props.originalScheduledStartIso,
+      props.durationMinutes,
+      props.recipientTimezone
+    ) || 'the original time';
   return [
     `${props.declinedByLabel} kept the original time for ${props.caseTitle} — ${originalWindow} (${props.durationMinutes} min) still stands.`,
     `Nothing else to do here.`,

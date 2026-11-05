@@ -5,6 +5,7 @@ import {
   MeetingGuestReentryLinkEmail,
   MeetingGuestRemovedEmail,
   MeetingGuestRescheduledEmail,
+  formatMeetingWindowForRecipient,
   formatMeetingWindowUtc,
 } from './meeting-guest-emails.js';
 import { getEmailTemplate } from './index.js';
@@ -705,5 +706,97 @@ describe('getEmailTemplate — meeting-guest-reentry-link', () => {
     const html = clean(await render(out.component));
 
     expect(html).toContain('Hi there,');
+  });
+});
+
+// ── formatMeetingWindowForRecipient (BAL-635) ──────────────────────────────────────────
+
+describe('formatMeetingWindowForRecipient', () => {
+  const MIDNIGHT = '2026-09-01T00:00:00.000Z';
+
+  it('drops to the start-only line, never throws, when the duration pushes the end out of range', () => {
+    expect(formatMeetingWindowForRecipient(MIDNIGHT, 1e12, 'Australia/Melbourne')).toMatch(
+      /^Tue, 1 Sept? 2026 · 10:00 \(Melbourne time\)$/
+    );
+  });
+
+  it.each([
+    ['Australia/Melbourne', MIDNIGHT, /^Tue, 1 Sept? 2026 · 10:00–11:00 \(Melbourne time\)$/],
+    [
+      'Australia/Melbourne',
+      '2026-12-01T00:00:00.000Z',
+      /^Tue, 1 Dec 2026 · 11:00–12:00 \(Melbourne time\)$/,
+    ],
+    [
+      'Australia/Melbourne',
+      '2026-09-01T23:30:00.000Z',
+      /^Wed, 2 Sept? 2026 · 09:30–10:30 \(Melbourne time\)$/,
+    ],
+    [
+      'America/Argentina/Buenos_Aires',
+      MIDNIGHT,
+      /^Mon, 31 Aug 2026 · 21:00–22:00 \(Buenos Aires time\)$/,
+    ],
+    ['US/Pacific', MIDNIGHT, /^Mon, 31 Aug 2026 · 17:00–18:00 \(Los Angeles time\)$/],
+  ])(
+    'renders %s at %s in the recipient zone, DST- and day-boundary-aware',
+    (zone, start, expected) => {
+      expect(formatMeetingWindowForRecipient(start, 60, zone)).toMatch(expected);
+    }
+  );
+
+  it.each([null, undefined, '', 'UTC', 'Etc/UTC', 'Mars/Olympus', '+05:30'])(
+    'falls back to exactly the start-only UTC window for %j',
+    (zone) => {
+      const out = formatMeetingWindowForRecipient(MIDNIGHT, 60, zone);
+      expect(out).toMatch(/^Tue, 1 Sept? 2026 · 00:00 \(UTC\)$/);
+      expect(out).toBe(formatMeetingWindowUtc(MIDNIGHT));
+    }
+  );
+
+  it('returns the empty string for an unparseable start, zoned or not', () => {
+    expect(formatMeetingWindowForRecipient('not-a-date', 60, 'Australia/Melbourne')).toBe('');
+    expect(formatMeetingWindowForRecipient('not-a-date', 60, null)).toBe('');
+  });
+
+  it('renders a single instant, never 10:00–10:00, for a zero duration', () => {
+    const out = formatMeetingWindowForRecipient(MIDNIGHT, 0, 'Australia/Melbourne');
+    expect(out).toMatch(/^Tue, 1 Sept? 2026 · 10:00 \(Melbourne time\)$/);
+    expect(out).not.toContain('–');
+  });
+});
+
+describe('guest emails stay on UTC even when handed a recipient zone (BAL-635)', () => {
+  it('meeting-guest-invited ignores recipientTimezone', async () => {
+    const out = getEmailTemplate('meeting-guest-invited', {
+      guestName: 'Dana',
+      inviterName: 'Priya',
+      inviterOrgLabel: 'Northwind Industrial',
+      meetingTitle: 'CPQ implementation',
+      scheduledStartIso: START,
+      scheduledEndIso: END,
+      accessScope: 'meeting',
+      expiresOn: '13 August 2026',
+      joinToken: RAW_TOKEN,
+      recipientTimezone: 'Australia/Melbourne',
+    });
+    const text = textOf(await render(out.component));
+    expect(text).toContain('(UTC)');
+    expect(text).not.toContain('Melbourne time');
+  });
+
+  it('meeting-guest-rescheduled ignores recipientTimezone', async () => {
+    const out = getEmailTemplate('meeting-guest-rescheduled', {
+      guestName: 'Dana',
+      meetingTitle: 'Salesforce CPQ rollout',
+      previousScheduledStartIso: '2026-09-01T04:00:00.000Z',
+      scheduledStartIso: '2026-09-08T06:30:00.000Z',
+      scheduledEndIso: '2026-09-08T07:00:00.000Z',
+      expiresOn: '15 September 2026',
+      recipientTimezone: 'Australia/Melbourne',
+    });
+    const text = textOf(await render(out.component));
+    expect(text).toContain('(UTC)');
+    expect(text).not.toContain('Melbourne time');
   });
 });

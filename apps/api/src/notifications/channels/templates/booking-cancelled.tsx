@@ -1,5 +1,5 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import { formatMeetingWindowForRecipient } from './meeting-guest-emails.js';
 
 /**
  * BAL-410 — `booking.cancelled`: a booked consultation was cancelled. ONE parameterized
@@ -55,6 +55,8 @@ export interface BookingCancelledEmailProps {
   readonly caseTitle: string;
   readonly scheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly cancelledBy: BookingCancelledInitiator;
   readonly reason: BookingCancelledReason;
   readonly caseUrl: string;
@@ -111,7 +113,12 @@ function introFor(props: Readonly<BookingCancelledEmailProps>, window: string): 
  * nothing about a hold, a balance or a release: see the module docblock.
  */
 function bodyLines(props: Readonly<BookingCancelledEmailProps>): string[] {
-  const window = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
+  const window =
+    formatMeetingWindowForRecipient(
+      props.scheduledStartIso,
+      props.durationMinutes,
+      props.recipientTimezone
+    ) || 'the scheduled time';
   const nextStep =
     props.recipient === 'client'
       ? `Whenever it suits, you can book another time with ${props.counterpartyLabel} from the case.`
