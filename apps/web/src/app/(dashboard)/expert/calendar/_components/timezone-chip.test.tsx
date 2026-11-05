@@ -65,4 +65,20 @@ describe('TimezoneChip', () => {
       /different timezone/i
     );
   });
+
+  it('omits the Info affordance for two zones that share an offset all year (Melbourne vs Sydney)', async () => {
+    mockBrowserTimezone('Australia/Sydney');
+    render(<TimezoneChip scheduleTimezone="Australia/Melbourne" />);
+    await waitFor(() => {
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+  });
+
+  it('omits the Info affordance for an alias of the schedule zone', async () => {
+    mockBrowserTimezone('Asia/Calcutta');
+    render(<TimezoneChip scheduleTimezone="Asia/Kolkata" />);
+    await waitFor(() => {
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+  });
 });

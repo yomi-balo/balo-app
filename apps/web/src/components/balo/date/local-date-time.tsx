@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { relativeDay } from './relative-day';
+import { useViewerZoneLabel } from './viewer-timezone-context';
 
 /**
  * An ABSOLUTE date/time, in the VIEWER's timezone (BAL-388 §R2). A recap — and a case — is a
@@ -65,6 +66,12 @@ type LocalDateTimeSharedProps = Readonly<{
    * every row instead of one per rendered date. Omitted, the label is computed once at mount.
    */
   now?: Date;
+  /**
+   * Default `true`. While the viewer's device zone differs from their saved zone, a time in the
+   * device zone carries a visible " (London)" label. `false` on pickers that already label their
+   * zone. Has no effect with an explicit `timeZone`, which is never labelled.
+   */
+  showZone?: boolean;
 }>;
 
 export type LocalDateTimeProps =
@@ -83,7 +90,8 @@ export type LocalDateTimeProps =
     });
 
 export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
-  const { iso, timeZone, relativeDays = false, now } = props;
+  const { iso, timeZone, relativeDays = false, now, showZone = true } = props;
+  const viewerZoneLabel = useViewerZoneLabel();
   const variant = props.variant ?? 'full';
   const isRange = props.variant === 'day-month-time-range';
   // Primitives, not an object — an object literal here would be a NEW reference every render
@@ -96,11 +104,13 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
     formatFor(iso, timeZone ?? 'UTC', variant, durationMinutes, showDay, showLength)
   );
   const [zone, setZone] = useState(timeZone ?? 'UTC');
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!resolved) return;
     setZone(resolved);
+    setMounted(true);
     setLabel(
       durationMinutes === undefined
         ? labelFor(iso, resolved, variant, relativeDays, now ?? new Date())
@@ -113,10 +123,19 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
      to answer, and the `sr-only` zone below is announced against it for the same reason. */
   const absolute = formatFor(iso, zone, variant, durationMinutes, showDay, showLength);
 
+  // Only after the mount upgrade (`zone` is the device's, not the server's UTC placeholder), and
+  // never for an explicit zone. The visible label is read by assistive tech as-is, so the `sr-only` duplicate
+  // is dropped rather than announcing the zone twice.
+  const visibleZoneLabel = timeZone === undefined && showZone && mounted ? viewerZoneLabel : null;
+
   return (
     <time dateTime={iso} title={absolute + ' (' + zone + ')'}>
       {label}
-      <span className="sr-only"> ({zone})</span>
+      {visibleZoneLabel === null ? (
+        <span className="sr-only"> ({zone})</span>
+      ) : (
+        <span> ({visibleZoneLabel})</span>
+      )}
     </time>
   );
 }

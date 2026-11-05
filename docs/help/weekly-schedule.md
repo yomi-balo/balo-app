@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 1
 published: true
-updated: 2026-11-02
+updated: 2026-11-06
 related: [connecting-your-calendar, pausing-new-work]
 ---
 
@@ -30,9 +30,12 @@ to date.
 ## Your timezone
 
 Your hours are set in one timezone. The line under the page title reads "Hours are set in {timezone}
-— currently {time}". To switch, choose **Change timezone**. Balo asks "Change your timezone?" first,
+— currently {time}". To switch, choose **Change timezone**. Balo asks "Switch your hours to {city} time?" first,
 because your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every
-bookable slot shifts. Busy times on your connected calendar aren't affected.
+bookable slot shifts. The message checks your upcoming consultations and tells you which, if any,
+would fall outside your hours in the new zone. Choose **Keep {city} hours** to leave things as they
+are, or **Switch to {city} time** to go ahead. Busy times on your connected calendar aren't
+affected.
 
 ![The timezone line under the page title, with Change timezone highlighted.](02)
 

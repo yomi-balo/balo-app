@@ -19,6 +19,13 @@ import {
 } from '@/components/ui/alert-dialog';
 import { track, SCHEDULE_EVENTS, EXPERT_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
+import { mostCommonWeeklyRange } from '@/lib/timezone/common-weekly-range';
+import { TimezoneMismatchDialog } from '@/components/balo/timezone-mismatch/timezone-mismatch-dialog';
+import {
+  SCHEDULE_TIMEZONE_CHANGED_EVENT,
+  cityOf,
+  switchedToast,
+} from '@/components/balo/timezone-mismatch/mismatch-lib';
 import { baloCardClassName } from '@/components/balo/card/balo-card';
 import { CalendarConnectionsSection } from './calendar-connections-section';
 import { DateOverridesCard } from './date-overrides-card';
@@ -58,7 +65,7 @@ import {
   type WeekState,
   type ScheduleConflict,
 } from '../_lib/schedule-helpers';
-import type { BookingSettings, WorkInFlight } from '../_types/schedule';
+import type { BookingSettings, ScheduleRule, WorkInFlight } from '../_types/schedule';
 
 type ViewState = 'loading' | 'empty' | 'error' | 'ready';
 
@@ -66,6 +73,8 @@ const AVAILABILITY_HEADING_ID = 'schedule-availability-heading';
 const PREVIEW_HEADING_ID = 'schedule-preview-heading';
 const PAUSED_NOTE_ID = 'schedule-paused-note';
 const NO_WORK_IN_FLIGHT: WorkInFlight = { upcomingConsultations: 0, activeProjects: 0 };
+
+type TimezoneChangeSource = 'settings' | 'mismatch_dialog';
 
 export function ScheduleTab(): React.JSX.Element {
   const reduceMotion = useReducedMotion();
@@ -80,9 +89,11 @@ export function ScheduleTab(): React.JSX.Element {
   const [expertProfileId, setExpertProfileId] = useState<string | null>(null);
   const [publiclyVisible, setPubliclyVisible] = useState(true);
   const [conflict, setConflict] = useState<ScheduleConflict | null>(null);
-  // Target timezone awaiting confirmation (AC12): non-null while the reinterpret
-  // warning dialog is open. Only reached when the expert has active saved rules.
+  // Target timezone awaiting confirmation: non-null while the mismatch dialog is open. Only
+  // reached when the expert has active saved rules.
   const [pendingTimezone, setPendingTimezone] = useState<string | null>(null);
+  // Outlives `pendingTimezone` so the dialog keeps its target while it animates closed.
+  const [dialogTimezone, setDialogTimezone] = useState<string | null>(null);
   // "Available for new work". Paused dims the Availability card's controls (Time off stays
   // editable) and swaps the client preview
   // for the paused message; nothing the expert entered is ever cleared.
@@ -101,6 +112,9 @@ export function ScheduleTab(): React.JSX.Element {
    * told "what clients see" is something no client sees.
    */
   const [persistedTimezone, setPersistedTimezone] = useState('Australia/Melbourne');
+  // The SAVED weekly rules, for the mismatch dialog's "your usual hours" sentence. Mirrors what
+  // is persisted, not the grid being edited.
+  const [persistedRules, setPersistedRules] = useState<ScheduleRule[]>([]);
 
   const expertIdRef = useRef<string>('');
   const persistedTimezoneRef = useRef<string>('Australia/Melbourne');
@@ -123,6 +137,7 @@ export function ScheduleTab(): React.JSX.Element {
     setPersistedTimezone(data.timezone);
     persistedBookingSettingsRef.current = data.bookingSettings;
     hasPersistedRulesRef.current = data.rules.length > 0;
+    setPersistedRules(data.rules);
     setTimezone(data.timezone);
     setBookingSettings(data.bookingSettings);
     if (data.rules.length === 0) {
@@ -211,36 +226,43 @@ export function ScheduleTab(): React.JSX.Element {
 
   // ── Timezone (persisted immediately via PATCH) ───────────────────
 
-  const commitTimezoneChange = useCallback(async (nextTimezone: string): Promise<void> => {
-    const previous = persistedTimezoneRef.current;
-    setTimezone(nextTimezone);
-    const result = await updateScheduleTimezoneAction(nextTimezone);
-    if (result.success) {
-      persistedTimezoneRef.current = nextTimezone;
-      setPersistedTimezone(nextTimezone);
-      track(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
-        expert_id: expertIdRef.current,
-        from_timezone: previous,
-        to_timezone: nextTimezone,
-      });
-      toast.success('Timezone updated');
-    } else {
-      setTimezone(previous);
-      toast.error(result.error ?? 'Failed to update timezone');
-    }
-  }, []);
+  const commitTimezoneChange = useCallback(
+    async (nextTimezone: string, source: TimezoneChangeSource): Promise<void> => {
+      const previous = persistedTimezoneRef.current;
+      setTimezone(nextTimezone);
+      const result = await updateScheduleTimezoneAction(nextTimezone);
+      if (result.success) {
+        persistedTimezoneRef.current = nextTimezone;
+        setPersistedTimezone(nextTimezone);
+        track(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
+          expert_id: expertIdRef.current,
+          from_timezone: previous,
+          to_timezone: nextTimezone,
+          source,
+        });
+        toast.success(
+          source === 'mismatch_dialog' ? switchedToast(cityOf(nextTimezone)) : 'Timezone updated'
+        );
+      } else {
+        setTimezone(previous);
+        toast.error(result.error ?? 'Failed to update timezone');
+      }
+    },
+    []
+  );
 
   // Changing timezone reinterprets every saved wall-clock rule (Melbourne 9–5 →
-  // New York 9–5). Confirm first when the expert has active rules (AC12 / §3);
-  // otherwise commit straight away.
+  // New York 9–5). Confirm first when the expert has active rules; otherwise commit
+  // straight away.
   const handleTimezoneChange = useCallback(
     (nextTimezone: string): void => {
       if (nextTimezone === persistedTimezoneRef.current) return;
       if (hasPersistedRulesRef.current) {
         setPendingTimezone(nextTimezone);
+        setDialogTimezone(nextTimezone);
         return;
       }
-      void commitTimezoneChange(nextTimezone);
+      void commitTimezoneChange(nextTimezone, 'settings');
     },
     [commitTimezoneChange]
   );
@@ -248,8 +270,22 @@ export function ScheduleTab(): React.JSX.Element {
   const confirmTimezoneChange = useCallback((): void => {
     const next = pendingTimezone;
     setPendingTimezone(null);
-    if (next) void commitTimezoneChange(next);
+    if (next) void commitTimezoneChange(next, 'mismatch_dialog');
   }, [pendingTimezone, commitTimezoneChange]);
+
+  const dismissPendingTimezone = useCallback((): void => {
+    setPendingTimezone(null);
+  }, []);
+
+  // The layout's mismatch prompt can switch the saved zone while this tab is open. Re-read it,
+  // or the next save would write the stale zone back over the switch.
+  useEffect(() => {
+    const reload = (): void => {
+      loadSchedule().catch(() => undefined);
+    };
+    globalThis.addEventListener(SCHEDULE_TIMEZONE_CHANGED_EVENT, reload);
+    return () => globalThis.removeEventListener(SCHEDULE_TIMEZONE_CHANGED_EVENT, reload);
+  }, [loadSchedule]);
 
   // ── Available for new work (persisted immediately, no Save) ──────
 
@@ -319,6 +355,7 @@ export function ScheduleTab(): React.JSX.Element {
       persistedTimezoneRef.current = timezone;
       setPersistedTimezone(timezone);
       hasPersistedRulesRef.current = rules.length > 0;
+      setPersistedRules(rules);
       track(SCHEDULE_EVENTS.SAVED, {
         expert_id: expertIdRef.current,
         days_enabled: countEnabledDays(week),
@@ -354,6 +391,7 @@ export function ScheduleTab(): React.JSX.Element {
     setSaving(false);
     if (result.success) {
       hasPersistedRulesRef.current = false;
+      setPersistedRules([]);
       track(SCHEDULE_EVENTS.CLEARED, { expert_id: expertIdRef.current });
       setWeek(createEmptyWeek());
       setViewState('empty');
@@ -376,6 +414,8 @@ export function ScheduleTab(): React.JSX.Element {
     () => (conflict ? conflictInlineMessages(conflict, week) : undefined),
     [conflict, week]
   );
+
+  const commonRange = useMemo(() => mostCommonWeeklyRange(persistedRules), [persistedRules]);
 
   const timezoneKnown = viewState === 'ready' || viewState === 'empty';
 
@@ -572,29 +612,18 @@ export function ScheduleTab(): React.JSX.Element {
         </SettingsCard>
       )}
 
-      {/* Reinterpret warning — only reached when active rules exist (AC12) */}
-      <AlertDialog
+      {/* Only reached when active rules exist. A manual Keep is not remembered: the expert asked
+          for this change, so declining it leaves nothing to suppress. */}
+      <TimezoneMismatchDialog
+        source="manual"
         open={pendingTimezone !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingTimezone(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Change your timezone?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your weekly hours are saved as clock times. Switching timezone keeps the same clock
-              times but reads them in the new zone — 9:00 AM stays 9:00 AM, but it now lands at a
-              different real moment, so every bookable slot shifts. Busy times on your connected
-              calendar aren&apos;t affected.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep current timezone</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmTimezoneChange}>Change timezone</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        expertProfileId={expertProfileId ?? ''}
+        fromTimezone={persistedTimezone}
+        toTimezone={dialogTimezone ?? persistedTimezone}
+        commonRange={commonRange}
+        onKeep={dismissPendingTimezone}
+        onSwitch={confirmTimezoneChange}
+      />
     </motion.div>
   );
 }

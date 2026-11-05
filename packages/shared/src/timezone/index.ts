@@ -631,6 +631,26 @@ export function getNextSpringForwardGap(timeZone: string, from: Date): SpringFor
   return null;
 }
 
+/** Number of 30-day steps past `from` that {@link zonesDiffer} compares offsets at. */
+const ZONE_COMPARE_SAMPLES = 12;
+const ZONE_COMPARE_STEP_MS = 30 * MS_PER_DAY;
+
+/**
+ * True when two zones keep different clock times at any point in the year starting at `from`.
+ * Offsets are compared at `from` and every 30 days after it for a year, so zones that only
+ * agree for part of the year (Brisbane vs Sydney, equal in winter) still differ, while zones
+ * that always move together (Melbourne vs Sydney) and aliases of one zone (Asia/Kolkata vs
+ * Asia/Calcutta) do not. An invalid zone on either side is never a difference.
+ */
+export function zonesDiffer(a: string, b: string, from: Date): boolean {
+  if (a === b || !isValidTimezone(a) || !isValidTimezone(b)) return false;
+  for (let step = 0; step <= ZONE_COMPARE_SAMPLES; step++) {
+    const instant = new Date(from.getTime() + step * ZONE_COMPARE_STEP_MS);
+    if (tzOffsetMinutes(a, instant) !== tzOffsetMinutes(b, instant)) return true;
+  }
+  return false;
+}
+
 /**
  * True when a weekly wall-clock range would land in the timezone's upcoming spring-forward
  * gap. Only the transition's own weekday is considered (v1: single upcoming transition).

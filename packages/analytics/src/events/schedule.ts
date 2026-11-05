@@ -3,7 +3,12 @@ export const SCHEDULE_EVENTS = {
   BOOKING_RULES_SAVED: 'booking_rules_saved',
   TIMEZONE_CHANGED: 'schedule_timezone_changed',
   CLEARED: 'schedule_cleared',
+  TIMEZONE_MISMATCH_SHOWN: 'schedule_timezone_mismatch_shown',
+  TIMEZONE_MISMATCH_RESOLVED: 'schedule_timezone_mismatch_resolved',
 } as const;
+
+/** How the mismatch dialog was reached: raised by device detection, or by a manual zone pick. */
+export type TimezoneMismatchSource = 'detected' | 'manual';
 
 export interface ScheduleEventMap {
   [SCHEDULE_EVENTS.SAVED]: {
@@ -30,8 +35,31 @@ export interface ScheduleEventMap {
     expert_id: string;
     from_timezone: string;
     to_timezone: string;
+    /** `settings`: the Schedule tab's zone picker with no hours to re-read. `mismatch_dialog`:
+     *  a Switch confirmed in the timezone mismatch dialog, whichever way it was opened. */
+    source: 'settings' | 'mismatch_dialog';
   };
   [SCHEDULE_EVENTS.CLEARED]: {
     expert_id: string;
+  };
+  [SCHEDULE_EVENTS.TIMEZONE_MISMATCH_SHOWN]: {
+    expert_id: string;
+    /** The zone the saved hours are read in. */
+    from_timezone: string;
+    /** The zone the hours would be re-read in. */
+    to_timezone: string;
+    source: TimezoneMismatchSource;
+  };
+  [SCHEDULE_EVENTS.TIMEZONE_MISMATCH_RESOLVED]: {
+    expert_id: string;
+    from_timezone: string;
+    to_timezone: string;
+    source: TimezoneMismatchSource;
+    action: 'kept' | 'switched';
+    /** True when the dialog was dismissed with Escape (always `action: 'kept'`). */
+    via_escape: boolean;
+    /** Upcoming consultations the switch would put outside the hours; `null` while the check
+     *  was still running or failed. */
+    affected_consultations: number | null;
   };
 }

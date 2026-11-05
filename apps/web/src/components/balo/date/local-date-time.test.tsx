@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { LocalDateTime, type LocalDateTimeVariant } from './local-date-time';
+import { ViewerTimezoneProvider } from './viewer-timezone-context';
 
 // Chosen so UTC and Australia/Sydney (AEDT, UTC+11) land on DIFFERENT calendar days —
 // 24 Dec in UTC, 25 Dec in Sydney — so the zone-dependent tests below are meaningful.
@@ -154,5 +155,105 @@ describe('LocalDateTime', () => {
       rerender(<LocalDateTime {...props} />);
       expect(container.querySelector('time')?.textContent).toContain('6:00 – 6:30 pm · 30 min');
     });
+  });
+});
+
+describe('LocalDateTime — visible zone label while the device zone differs from the saved zone', () => {
+  function mockDeviceZone(timeZone: string): void {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      timeZone,
+    } as Intl.ResolvedDateTimeFormatOptions);
+  }
+
+  function renderWithSaved(
+    savedTimezone: string | null,
+    node: React.ReactElement
+  ): ReturnType<typeof render> {
+    return render(
+      <ViewerTimezoneProvider savedTimezone={savedTimezone}>{node}</ViewerTimezoneProvider>
+    );
+  }
+
+  it('shows " (London)" visibly and drops the sr-only duplicate', () => {
+    mockDeviceZone('Europe/London');
+    const { container } = renderWithSaved('Australia/Sydney', <LocalDateTime iso={ISO} />);
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).toMatch(/ \(London\)$/);
+    expect(time?.querySelector('.sr-only')).toBeNull();
+  });
+
+  it('labels a device that really is on UTC when the saved zone differs', () => {
+    mockDeviceZone('UTC');
+    const { container } = renderWithSaved('Australia/Sydney', <LocalDateTime iso={ISO} />);
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).toMatch(/ \(UTC\)$/);
+    expect(time?.querySelector('.sr-only')).toBeNull();
+  });
+
+  it('shows no label for Melbourne vs Sydney', () => {
+    mockDeviceZone('Australia/Melbourne');
+    const { container } = renderWithSaved('Australia/Sydney', <LocalDateTime iso={ISO} />);
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).not.toMatch(/\(Melbourne\)/);
+    expect(time?.querySelector('.sr-only')?.textContent).toContain('Australia/Melbourne');
+  });
+
+  it('drops the label once the saved zone catches up with the device', () => {
+    mockDeviceZone('Europe/London');
+    const { container, rerender } = renderWithSaved(
+      'Australia/Sydney',
+      <LocalDateTime iso={ISO} />
+    );
+    expect(container.querySelector('time')?.textContent).toMatch(/\(London\)/);
+
+    rerender(
+      <ViewerTimezoneProvider savedTimezone="Europe/London">
+        <LocalDateTime iso={ISO} />
+      </ViewerTimezoneProvider>
+    );
+    expect(container.querySelector('time')?.textContent).not.toMatch(/\(London\)/);
+  });
+
+  it('shows no label when the user has no saved zone', () => {
+    mockDeviceZone('Europe/London');
+    const { container } = renderWithSaved(null, <LocalDateTime iso={ISO} />);
+
+    expect(container.querySelector('time')?.textContent).not.toMatch(/\(London\)/);
+  });
+
+  it('showZone={false} suppresses the label', () => {
+    mockDeviceZone('Europe/London');
+    const { container } = renderWithSaved(
+      'Australia/Sydney',
+      <LocalDateTime iso={ISO} showZone={false} />
+    );
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).not.toMatch(/\(London\)/);
+    expect(time?.querySelector('.sr-only')).not.toBeNull();
+  });
+
+  it('never labels an explicit timeZone', () => {
+    mockDeviceZone('Europe/London');
+    const { container } = renderWithSaved(
+      'Australia/Sydney',
+      <LocalDateTime iso={ISO} timeZone="Australia/Sydney" />
+    );
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).not.toMatch(/\(London\)/);
+    expect(time?.querySelector('.sr-only')?.textContent).toContain('Australia/Sydney');
+  });
+
+  it('with no provider the output is unchanged', () => {
+    mockDeviceZone('Europe/London');
+    const { container } = render(<LocalDateTime iso={ISO} />);
+
+    const time = container.querySelector('time');
+    expect(time?.textContent).not.toMatch(/\(London\)/);
+    expect(time?.querySelector('.sr-only')?.textContent).toContain('Europe/London');
   });
 });

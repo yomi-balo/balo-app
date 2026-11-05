@@ -61,6 +61,7 @@ function SlotRange({
       timeZone={viewerTimezone}
       showDay={false}
       showLength={false}
+      showZone={false}
     />
   );
 }

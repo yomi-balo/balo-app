@@ -261,6 +261,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
           });
         });
 
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true, timezone, bookingSettings, rules });
@@ -303,6 +304,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             expertProfileId,
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -354,6 +356,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             metadata: { oldTimezone, newTimezone: timezone },
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });

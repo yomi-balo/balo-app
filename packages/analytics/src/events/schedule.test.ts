@@ -8,6 +8,8 @@ describe('SCHEDULE_EVENTS (client)', () => {
       'BOOKING_RULES_SAVED',
       'TIMEZONE_CHANGED',
       'CLEARED',
+      'TIMEZONE_MISMATCH_SHOWN',
+      'TIMEZONE_MISMATCH_RESOLVED',
     ]);
   });
 
@@ -16,6 +18,8 @@ describe('SCHEDULE_EVENTS (client)', () => {
     expect(SCHEDULE_EVENTS.BOOKING_RULES_SAVED).toBe('booking_rules_saved');
     expect(SCHEDULE_EVENTS.TIMEZONE_CHANGED).toBe('schedule_timezone_changed');
     expect(SCHEDULE_EVENTS.CLEARED).toBe('schedule_cleared');
+    expect(SCHEDULE_EVENTS.TIMEZONE_MISMATCH_SHOWN).toBe('schedule_timezone_mismatch_shown');
+    expect(SCHEDULE_EVENTS.TIMEZONE_MISMATCH_RESOLVED).toBe('schedule_timezone_mismatch_resolved');
   });
 
   it('values follow the snake_case naming convention', () => {
