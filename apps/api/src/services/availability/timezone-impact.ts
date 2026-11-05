@@ -65,7 +65,7 @@ export async function findTimezoneImpact(
   const now = input.now ?? new Date();
 
   const settings = await expertsRepository.findResolverSettings(input.expertProfileId);
-  if (settings === null || settings.userId !== input.userId) {
+  if (settings?.userId !== input.userId) {
     return { outcome: 'expert_not_found' };
   }
 

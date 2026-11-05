@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, act } from '@testing-library/react';
 import { LocalDateTime, type LocalDateTimeVariant } from './local-date-time';
 import { ViewerTimezoneProvider } from './viewer-timezone-context';
 
@@ -246,6 +246,23 @@ describe('LocalDateTime — visible zone label while the device zone differs fro
     const time = container.querySelector('time');
     expect(time?.textContent).not.toMatch(/\(London\)/);
     expect(time?.querySelector('.sr-only')?.textContent).toContain('Australia/Sydney');
+  });
+
+  it('re-formats the TEXT, not just the label, when the device zone changes on focus', () => {
+    const iso = '2026-07-29T04:14:00Z';
+    mockDeviceZone('Australia/Sydney');
+    const { container } = renderWithSaved('Australia/Sydney', <LocalDateTime iso={iso} />);
+    expect(container.querySelector('time')?.textContent).toContain('2:14 pm');
+
+    mockDeviceZone('Europe/London');
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    const text = container.querySelector('time')?.textContent;
+    expect(text).toMatch(/ \(London\)$/);
+    expect(text).toContain('5:14 am');
+    expect(text).not.toContain('2:14 pm');
   });
 
   it('with no provider the output is unchanged', () => {

@@ -241,7 +241,7 @@ describe('TimezoneMismatchDialog', () => {
       expect(screen.getByText('Client 1')).toBeInTheDocument();
       expect(screen.getByText('Client 2')).toBeInTheDocument();
       expect(screen.queryByText(/and \d+ more/)).not.toBeInTheDocument();
-      expect(screen.getByText('You can reschedule any of them from its case.')).toBeInTheDocument();
+      expect(screen.getByText('Nothing is moved or cancelled for you.')).toBeInTheDocument();
     });
 
     it('uses the singular for one affected consultation', async () => {

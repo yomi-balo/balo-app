@@ -25,14 +25,14 @@ between places that share the same clock, like Sydney and Melbourne, never trigg
 ## Keep or switch
 
 - **Keep your hours where they are.** Choose **Keep {city} hours**. Pressing Escape does the same. Nothing changes, and we won't ask again for that pair of timezones on this
-  browser. This is the right choice if you're travelling and still working your usual hours.
+  browser. The message may come back after about a month. This is the right choice if you're travelling and still working your usual hours.
 - **Switch to the new timezone.** Choose **Switch to {city} time**. Your hours keep the same clock
-  times, read in the new timezone, so 9:00 AM stays 9:00 AM but at the new place. This is the right
+  times, read in the new timezone, so 9:00 am stays 9:00 am but at the new place. This is the right
   choice if you've moved.
 
 Either way, consultations that are already booked stay booked. If a switch would put some of them
-outside your new hours, Balo tells you which ones before you decide. You can reschedule any of them
-from its case. Your time off is read in the new timezone from then on, and busy times on your
+outside your new hours, Balo tells you which ones before you decide. Nothing is moved
+or cancelled for you. Your time off is read in the new timezone from then on, and busy times on your
 connected calendar don't change.
 
 ## Changing your timezone later

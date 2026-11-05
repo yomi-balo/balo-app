@@ -241,8 +241,11 @@ export async function getExpertSlots(
 
 /**
  * Drops the cached grid and the negative-cache breaker marker for one expert, so the next read
- * recomputes. Never throws: the pause is read live on every availability request, so a Redis
- * failure here costs freshness of an already-correct answer, not correctness.
+ * recomputes. Never throws: a failed invalidation is logged and swallowed, so callers (a schedule,
+ * timezone or time-off change) never fail on a cache error. The cost is a stale slot grid for up
+ * to `AVAILABILITY_CACHE_TTL_SECONDS` after that change. Correctness is still protected: the
+ * pause is read live on every availability request, and the booking gate's live check answers
+ * 409 for a slot that is no longer bookable.
  */
 export async function invalidateExpertSlots(expertProfileId: string): Promise<void> {
   try {

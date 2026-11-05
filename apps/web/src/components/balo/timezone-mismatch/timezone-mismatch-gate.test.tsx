@@ -81,9 +81,21 @@ describe('TimezoneMismatchGate — when it opens', () => {
   });
 
   it('stays closed when this pair was already answered', () => {
-    globalThis.localStorage.setItem(PAIR_KEY, '1');
+    globalThis.localStorage.setItem(PAIR_KEY, String(Date.now()));
     renderGate();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('prompts again once a remembered Keep is older than 30 days', () => {
+    globalThis.localStorage.setItem(PAIR_KEY, String(Date.now() - 31 * 24 * 60 * 60 * 1000));
+    renderGate();
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+
+  it('prompts again for the legacy "1" value', () => {
+    globalThis.localStorage.setItem(PAIR_KEY, '1');
+    renderGate();
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
   });
 
   it('holds a zone change that arrives after load until the next route change', async () => {

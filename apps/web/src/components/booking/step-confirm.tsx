@@ -230,7 +230,6 @@ export function StepConfirm(props: Readonly<StepConfirmProps>): React.JSX.Elemen
               durationMinutes={slot.durationMinutes}
               timeZone={viewerTimezone}
               showLength={false}
-              showZone={false}
             />
           </p>
           <p className="text-muted-foreground text-xs">

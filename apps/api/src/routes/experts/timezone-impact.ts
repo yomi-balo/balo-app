@@ -7,10 +7,10 @@ import { enforceRateLimitFailOpen } from '../../lib/rate-limit-fail-open.js';
 import { findTimezoneImpact } from '../../services/availability/timezone-impact.js';
 
 const querySchema = z.object({
-  expertProfileId: z.string().uuid(),
+  expertProfileId: z.uuid(),
   // The calling session's own `users.id`, asserted against the profile's owner before any
   // client company name is read.
-  userId: z.string().uuid(),
+  userId: z.uuid(),
   timezone: z.string().max(64).refine(isValidTimezone, 'Invalid timezone'),
 });
 
@@ -31,7 +31,7 @@ interface AffectedConsultationDto {
   clientCompanyName: string | null;
 }
 
-export async function timezoneImpactRoute(fastify: FastifyInstance): Promise<void> {
+export function timezoneImpactRoute(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/experts/timezone-impact?expertProfileId=&userId=&timezone=
    * Which upcoming confirmed consultations would fall outside the expert's saved weekly
@@ -101,12 +101,12 @@ export async function timezoneImpactRoute(fastify: FastifyInstance): Promise<voi
           affected,
           nextTimeOff: result.nextTimeOff,
         });
-      } catch (err: unknown) {
+      } catch (error: unknown) {
         request.log.error(
           {
             expertProfileId,
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
           },
           'Failed to check timezone impact'
         );
@@ -114,4 +114,5 @@ export async function timezoneImpactRoute(fastify: FastifyInstance): Promise<voi
       }
     }
   );
+  return Promise.resolve();
 }

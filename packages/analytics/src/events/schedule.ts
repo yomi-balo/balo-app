@@ -35,8 +35,9 @@ export interface ScheduleEventMap {
     expert_id: string;
     from_timezone: string;
     to_timezone: string;
-    /** `settings`: the Schedule tab's zone picker with no hours to re-read. `mismatch_dialog`:
-     *  a Switch confirmed in the timezone mismatch dialog, whichever way it was opened. */
+    /** Who started the change, not which UI finished it. `settings`: begun in the Schedule tab's
+     *  zone picker, whether it committed straight away or through that tab's manual confirm
+     *  dialog. `mismatch_dialog`: a Switch in the prompt raised by the device-zone mismatch gate. */
     source: 'settings' | 'mismatch_dialog';
   };
   [SCHEDULE_EVENTS.CLEARED]: {

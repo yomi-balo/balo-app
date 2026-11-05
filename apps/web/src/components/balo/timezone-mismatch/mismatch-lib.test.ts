@@ -107,13 +107,13 @@ describe('consequence copy', () => {
 
   it('keeps the hours in the old zone and reads them in the new one', () => {
     expect(consequenceBody(SYDNEY, LONDON, NINE_TO_FIVE, JULY_NOON_UTC)).toBe(
-      'Your hours stay 9:00 am – 5:00 pm, read in London time, and every time clients can book moves with them.'
+      'Your hours stay 9:00 am – 5:00 pm, read in London time, and the times clients can book move with them.'
     );
   });
 
   it('omits the range when there is none', () => {
     expect(consequenceBody(SYDNEY, LONDON, null, JULY_NOON_UTC)).toBe(
-      'Your hours stay the same, read in London time, and every time clients can book moves with them.'
+      'Your hours stay the same, read in London time, and the times clients can book move with them.'
     );
   });
 });

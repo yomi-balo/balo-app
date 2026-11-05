@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { ViewerTimezoneProvider, useViewerZoneLabel } from './viewer-timezone-context';
+import { cleanup, render, screen } from '@testing-library/react';
+import { ViewerTimezoneProvider, useViewerTimezone } from './viewer-timezone-context';
 
 function Probe(): React.JSX.Element {
-  const label = useViewerZoneLabel();
-  return <p data-testid="label">{label ?? 'none'}</p>;
+  const { label, deviceZone } = useViewerTimezone();
+  return (
+    <>
+      <p data-testid="label">{label ?? 'none'}</p>
+      <p data-testid="zone">{deviceZone ?? 'none'}</p>
+    </>
+  );
 }
 
 function mockDeviceZone(timeZone: string): void {
@@ -41,6 +46,21 @@ describe('ViewerTimezoneProvider', () => {
       </ViewerTimezoneProvider>
     );
     expect(screen.getByTestId('label')).toHaveTextContent('none');
+  });
+
+  it('exposes the device zone even when no label is due, and none with no provider', () => {
+    render(<Probe />);
+    expect(screen.getByTestId('zone')).toHaveTextContent('none');
+    cleanup();
+
+    mockDeviceZone('Australia/Melbourne');
+    render(
+      <ViewerTimezoneProvider savedTimezone="Australia/Sydney">
+        <Probe />
+      </ViewerTimezoneProvider>
+    );
+    expect(screen.getByTestId('label')).toHaveTextContent('none');
+    expect(screen.getByTestId('zone')).toHaveTextContent('Australia/Melbourne');
   });
 
   it('is null when no zone is saved', () => {

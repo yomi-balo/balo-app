@@ -636,11 +636,13 @@ const ZONE_COMPARE_SAMPLES = 12;
 const ZONE_COMPARE_STEP_MS = 30 * MS_PER_DAY;
 
 /**
- * True when two zones keep different clock times at any point in the year starting at `from`.
- * Offsets are compared at `from` and every 30 days after it for a year, so zones that only
- * agree for part of the year (Brisbane vs Sydney, equal in winter) still differ, while zones
- * that always move together (Melbourne vs Sydney) and aliases of one zone (Asia/Kolkata vs
- * Asia/Calcutta) do not. An invalid zone on either side is never a difference.
+ * True when two zones keep different clock times at any sampled point in the year starting at
+ * `from`. Offsets are compared at `from` and every 30 days after it for a year, so zones that
+ * only agree for part of the year (Brisbane vs Sydney, equal in winter) still differ, while
+ * zones that always move together (Melbourne vs Sydney) and aliases of one zone (Asia/Kolkata
+ * vs Asia/Calcutta) do not. Because it samples rather than scans, a difference shorter than
+ * about 30 days (zones whose DST starts in different weeks) can be missed; that is accepted for
+ * a prompt. An invalid zone on either side is never a difference.
  */
 export function zonesDiffer(a: string, b: string, from: Date): boolean {
   if (a === b || !isValidTimezone(a) || !isValidTimezone(b)) return false;

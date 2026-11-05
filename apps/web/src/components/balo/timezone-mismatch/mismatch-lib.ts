@@ -112,17 +112,18 @@ export function consequenceBody(
 ): string {
   const toCity = cityOf(toTimezone);
   if (commonRange === null) {
-    return `Your hours stay the same, read in ${toCity} time, and every time clients can book moves with them.`;
+    return `Your hours stay the same, read in ${toCity} time, and the times clients can book move with them.`;
   }
   const { start, end } = rangeInstants(commonRange, fromTimezone, now);
-  return `Your hours stay ${rangeText(start, end, fromTimezone)}, read in ${toCity} time, and every time clients can book moves with them.`;
+  return `Your hours stay ${rangeText(start, end, fromTimezone)}, read in ${toCity} time, and the times clients can book move with them.`;
 }
 
 /** "24 Dec – 2 Jan", or just "24 Dec" for a single-day block. */
 function timeOffDates(startDate: string, endDate: string): string {
   const start = formatShortUtc(new Date(`${startDate}T00:00:00Z`));
   if (endDate === startDate) return start;
-  return `${start} – ${formatShortUtc(new Date(`${endDate}T00:00:00Z`))}`;
+  const endInstant = new Date(`${endDate}T00:00:00Z`);
+  return `${start} – ${formatShortUtc(endInstant)}`;
 }
 
 export function timeOffLine(
@@ -155,7 +156,7 @@ export const CHECK_NONE_COPY =
   'None of your upcoming consultations would fall outside your new hours.';
 export const CHECK_FAILED_COPY =
   'We couldn’t check your upcoming consultations. Nothing that’s booked would move either way.';
-export const CHECK_RESCHEDULE_COPY = 'You can reschedule any of them from its case.';
+export const CHECK_RESCHEDULE_COPY = 'Nothing is moved or cancelled for you.';
 
 export function checkSomeHeadline(count: number): string {
   return `${count} upcoming consultation${count === 1 ? '' : 's'} would fall outside your new hours.`;

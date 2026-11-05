@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { relativeDay } from './relative-day';
-import { useViewerZoneLabel } from './viewer-timezone-context';
+import { useViewerTimezone } from './viewer-timezone-context';
 
 /**
  * An ABSOLUTE date/time, in the VIEWER's timezone (BAL-388 §R2). A recap — and a case — is a
@@ -91,7 +91,7 @@ export type LocalDateTimeProps =
 
 export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
   const { iso, timeZone, relativeDays = false, now, showZone = true } = props;
-  const viewerZoneLabel = useViewerZoneLabel();
+  const { label: viewerZoneLabel, deviceZone } = useViewerTimezone();
   const variant = props.variant ?? 'full';
   const isRange = props.variant === 'day-month-time-range';
   // Primitives, not an object — an object literal here would be a NEW reference every render
@@ -107,7 +107,9 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // The provider's canonical device zone wins over a fresh `Intl` read, so the text is
+    // formatted in the very zone the visible label names.
+    const resolved = timeZone ?? deviceZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!resolved) return;
     setZone(resolved);
     setMounted(true);
@@ -116,7 +118,7 @@ export function LocalDateTime(props: LocalDateTimeProps): React.JSX.Element {
         ? labelFor(iso, resolved, variant, relativeDays, now ?? new Date())
         : formatFor(iso, resolved, variant, durationMinutes, showDay, showLength)
     );
-  }, [iso, variant, timeZone, relativeDays, now, durationMinutes, showDay, showLength]);
+  }, [iso, variant, timeZone, deviceZone, relativeDays, now, durationMinutes, showDay, showLength]);
 
   /* ⚠ THE TOOLTIP STAYS ABSOLUTE even when the visible label reads "Today at 6:00 pm". The
      relative form is the convenience; the exact date is the thing a record must always be able

@@ -74,8 +74,6 @@ const PREVIEW_HEADING_ID = 'schedule-preview-heading';
 const PAUSED_NOTE_ID = 'schedule-paused-note';
 const NO_WORK_IN_FLIGHT: WorkInFlight = { upcomingConsultations: 0, activeProjects: 0 };
 
-type TimezoneChangeSource = 'settings' | 'mismatch_dialog';
-
 export function ScheduleTab(): React.JSX.Element {
   const reduceMotion = useReducedMotion();
   const [viewState, setViewState] = useState<ViewState>('loading');
@@ -227,7 +225,7 @@ export function ScheduleTab(): React.JSX.Element {
   // ── Timezone (persisted immediately via PATCH) ───────────────────
 
   const commitTimezoneChange = useCallback(
-    async (nextTimezone: string, source: TimezoneChangeSource): Promise<void> => {
+    async (nextTimezone: string, confirmedInDialog: boolean): Promise<void> => {
       const previous = persistedTimezoneRef.current;
       setTimezone(nextTimezone);
       const result = await updateScheduleTimezoneAction(nextTimezone);
@@ -238,11 +236,11 @@ export function ScheduleTab(): React.JSX.Element {
           expert_id: expertIdRef.current,
           from_timezone: previous,
           to_timezone: nextTimezone,
-          source,
+          // Keyed on who started the change: every change begun here is `settings`, whether it
+          // committed straight away or through the manual confirm dialog.
+          source: 'settings',
         });
-        toast.success(
-          source === 'mismatch_dialog' ? switchedToast(cityOf(nextTimezone)) : 'Timezone updated'
-        );
+        toast.success(confirmedInDialog ? switchedToast(cityOf(nextTimezone)) : 'Timezone updated');
       } else {
         setTimezone(previous);
         toast.error(result.error ?? 'Failed to update timezone');
@@ -262,7 +260,7 @@ export function ScheduleTab(): React.JSX.Element {
         setDialogTimezone(nextTimezone);
         return;
       }
-      void commitTimezoneChange(nextTimezone, 'settings');
+      void commitTimezoneChange(nextTimezone, false);
     },
     [commitTimezoneChange]
   );
@@ -270,7 +268,7 @@ export function ScheduleTab(): React.JSX.Element {
   const confirmTimezoneChange = useCallback((): void => {
     const next = pendingTimezone;
     setPendingTimezone(null);
-    if (next) void commitTimezoneChange(next, 'mismatch_dialog');
+    if (next) void commitTimezoneChange(next, true);
   }, [pendingTimezone, commitTimezoneChange]);
 
   const dismissPendingTimezone = useCallback((): void => {

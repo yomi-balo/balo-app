@@ -49,11 +49,11 @@ function withDateRangeRules<T extends { startDate: string; endDate: string }>(
   );
 }
 
-const listQuerySchema = z.object({ expertProfileId: z.string().uuid() });
+const listQuerySchema = z.object({ expertProfileId: z.uuid() });
 
 const createBodySchema = withDateRangeRules(
   z.object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     startDate: isoDate,
     endDate: isoDate,
     // Normalize empty/whitespace-only labels to `null` so a blank label never
@@ -68,16 +68,16 @@ const createBodySchema = withDateRangeRules(
 );
 
 const deleteBodySchema = z.object({
-  expertProfileId: z.string().uuid(),
-  overrideId: z.string().uuid(),
+  expertProfileId: z.uuid(),
+  overrideId: z.uuid(),
 });
 
 const conflictsQuerySchema = withDateRangeRules(
   z.object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     // S1 — the calling session's own `users.id`, asserted against `expertProfiles.userId`
     // before this route's counterparty-identity payload (`clientCompanyName`) is read.
-    userId: z.string().uuid(),
+    userId: z.uuid(),
     startDate: isoDate,
     endDate: isoDate,
   })
@@ -148,7 +148,7 @@ function toDto(o: AvailabilityOverride): OverrideDto {
 
 // ── Routes ──────────────────────────────────────────────────────
 
-export async function availabilityOverridesRoutes(fastify: FastifyInstance): Promise<void> {
+export function availabilityOverridesRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/experts/availability-overrides?expertProfileId=...
    * Lists an expert's upcoming (non-elapsed, non-deleted) time-off blocks.
@@ -375,4 +375,5 @@ export async function availabilityOverridesRoutes(fastify: FastifyInstance): Pro
       }
     }
   );
+  return Promise.resolve();
 }

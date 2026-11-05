@@ -575,7 +575,7 @@ describe('ScheduleTab', () => {
       expert_id: 'profile-1',
       from_timezone: 'Australia/Melbourne',
       to_timezone: 'Australia/Sydney',
-      source: 'mismatch_dialog',
+      source: 'settings',
     });
     expect(toast.success).toHaveBeenCalledWith(
       'Timezone updated. Your hours are now set in Sydney time.'
