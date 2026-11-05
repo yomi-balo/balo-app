@@ -248,6 +248,65 @@ export interface UnprovisionedScheduledMeeting {
   readonly roomNameStamped: boolean;
 }
 
+/** BAL-518 — the statuses {@link meetingsRepository.listLiveVenuesOnDomain} reads. */
+export type LiveMeetingStatus = (typeof END_MEETING_FROM)[number];
+
+const DAILY_JOIN_URL_SCHEME = 'https://';
+const DAILY_JOIN_URL_SUFFIX = '.daily.co/';
+
+/**
+ * BAL-518 — a join-url prefix must be exactly `https://<label>.daily.co/` with a non-empty
+ * `[a-z0-9-]` label, so a bare `https://` or an unrelated host can never select (or clear) every
+ * venue. Plain string checks: no regex over caller input.
+ */
+function assertDailyJoinUrlPrefix(prefix: string): void {
+  const valid =
+    prefix.startsWith(DAILY_JOIN_URL_SCHEME) &&
+    prefix.endsWith(DAILY_JOIN_URL_SUFFIX) &&
+    isDailyDomainLabel(
+      prefix.slice(DAILY_JOIN_URL_SCHEME.length, prefix.length - DAILY_JOIN_URL_SUFFIX.length)
+    );
+  if (!valid) {
+    throw new Error('joinUrlPrefix must be https://<label>.daily.co/');
+  }
+}
+
+function isDailyDomainLabel(label: string): boolean {
+  if (label.length === 0) return false;
+  for (const char of label) {
+    const isLower = char >= 'a' && char <= 'z';
+    const isDigit = char >= '0' && char <= '9';
+    if (!isLower && !isDigit && char !== '-') return false;
+  }
+  return true;
+}
+
+/** BAL-518 — {@link meetingsRepository.listLiveVenuesOnDomain}'s input. */
+export interface ListLiveVenuesOnDomainInput {
+  /**
+   * The Daily domain's URL prefix, trailing slash included (e.g. `https://old.daily.co/`).
+   * Anything but `https://<label>.daily.co/` throws.
+   */
+  joinUrlPrefix: string;
+  /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
+  limit: number;
+}
+
+/** BAL-518 — one live meeting whose stamped join url is on a given Daily domain. No venue column. */
+export interface LiveVenueOnDomain {
+  readonly meetingId: string;
+  readonly status: LiveMeetingStatus;
+  readonly scheduledStart: Date;
+}
+
+/** BAL-518 — {@link meetingsRepository.clearScheduledVenuesOnDomain}'s input. */
+export interface ClearScheduledVenuesInput {
+  meetingIds: readonly string[];
+  joinUrlPrefix: string;
+  /** Exclusive. A meeting starting at or before this is never cleared. */
+  scheduledStartAfter: Date;
+}
+
 /** BAL-586 — {@link meetingsRepository.listStrandedLive}'s input. */
 export interface ListStrandedLiveInput {
   /** Inclusive. Meetings whose `scheduled_end` is at or before this are in scope. */
@@ -1782,6 +1841,72 @@ export const meetingsRepository = {
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
       .limit(input.limit);
+  },
+
+  /**
+   * BAL-518 — live meetings (`scheduled`, `waiting_for_participants`, `in_progress`) whose stamped
+   * `join_url` starts with `joinUrlPrefix`, soonest first: the Daily domain cutover's read of what
+   * still sits on the old domain. `starts_with` needs no LIKE escaping, and a NULL url never
+   * matches; a prefix that is not `https://<label>.daily.co/` throws. Rides
+   * `meeting_status_scheduled_start_idx`; the prefix is a residual filter. Returns NO room name or
+   * join url (the rule at {@link meetingVenueReadySql}).
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the same no-silent-caps
+   * rule as {@link meetingsRepository.listUnprovisionedScheduled}. A `limit <= 0` returns `[]`
+   * without a query.
+   */
+  async listLiveVenuesOnDomain(input: ListLiveVenuesOnDomainInput): Promise<LiveVenueOnDomain[]> {
+    assertDailyJoinUrlPrefix(input.joinUrlPrefix);
+    if (input.limit <= 0) return [];
+    return db
+      .select({
+        meetingId: meetings.id,
+        status: sql<LiveMeetingStatus>`${meetings.status}`,
+        scheduledStart: meetings.scheduledStart,
+      })
+      .from(meetings)
+      .where(
+        and(
+          inArray(meetings.status, [...END_MEETING_FROM]),
+          isNull(meetings.deletedAt),
+          sql`starts_with(${meetings.joinUrl}, ${input.joinUrlPrefix})`
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+  },
+
+  /**
+   * BAL-518 — nulls `daily_room_name`, `join_url` and `venue_provisioned_at` on the named meetings
+   * so the venue repair job re-creates each room; returns the ids actually cleared.
+   *
+   * The WHERE re-asserts everything the caller's read relied on (`status = 'scheduled'`,
+   * `scheduled_start > scheduledStartAfter`, not soft-deleted, still on the domain), so a meeting
+   * that went live between the read and this write is never touched. Empty `meetingIds` → `[]`
+   * without a query. A `joinUrlPrefix` that is not `https://<label>.daily.co/` throws.
+   */
+  async clearScheduledVenuesOnDomain(input: ClearScheduledVenuesInput): Promise<string[]> {
+    assertDailyJoinUrlPrefix(input.joinUrlPrefix);
+    if (input.meetingIds.length === 0) return [];
+    const cleared = await db
+      .update(meetings)
+      .set({
+        dailyRoomName: null,
+        joinUrl: null,
+        venueProvisionedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          inArray(meetings.id, [...input.meetingIds]),
+          eq(meetings.status, 'scheduled'),
+          gt(meetings.scheduledStart, input.scheduledStartAfter),
+          isNull(meetings.deletedAt),
+          sql`starts_with(${meetings.joinUrl}, ${input.joinUrlPrefix})`
+        )
+      )
+      .returning({ id: meetings.id });
+    return cleared.map((row) => row.id);
   },
 
   /**

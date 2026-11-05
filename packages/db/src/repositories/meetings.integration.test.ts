@@ -3697,3 +3697,248 @@ describe('meetingsRepository.hasLiveSessionlessCaseMeeting (BAL-474, D11.1)', ()
     expect(await hasLive(call.companyId)).toBe(true);
   });
 });
+
+describe('Daily domain cutover reads and clears (BAL-518)', () => {
+  const MINUTE_MS = 60_000;
+  const OLD_PREFIX = 'https://getbalo.daily.co/';
+
+  function startIn(minutes: number): number {
+    return Date.now() + 400 * DAY_MS + minutes * MINUTE_MS;
+  }
+
+  async function seedOnDomain(
+    startMs: number,
+    values: Partial<NewMeeting> = {},
+    prefix = OLD_PREFIX
+  ): Promise<Meeting> {
+    const id = randomUUID();
+    const roomName = dailyRoomNameForMeeting(id);
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        id,
+        scheduledStart: new Date(startMs),
+        scheduledEnd: new Date(startMs + HOUR_MS),
+        dailyRoomName: roomName,
+        joinUrl: `${prefix}${roomName}`,
+        venueProvisionedAt: new Date(),
+        ...values,
+      },
+    });
+    return meeting;
+  }
+
+  async function reload(id: string): Promise<Meeting> {
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, id));
+    if (row === undefined) throw new Error('meeting vanished');
+    return row;
+  }
+
+  describe('listLiveVenuesOnDomain', () => {
+    it('returns only live-status rows whose join url is on the domain', async () => {
+      const start = startIn(0);
+      const scheduled = await seedOnDomain(start);
+      const waiting = await seedOnDomain(start + MINUTE_MS, { status: 'waiting_for_participants' });
+      const inProgress = await seedOnDomain(start + 2 * MINUTE_MS, { status: 'in_progress' });
+      await seedOnDomain(start + 3 * MINUTE_MS, { status: 'ended', endedAt: new Date() });
+      await seedOnDomain(start + 4 * MINUTE_MS, { status: 'cancelled' });
+      await seedOnDomain(start + 5 * MINUTE_MS, { deletedAt: new Date() });
+      await seedOnDomain(start + 6 * MINUTE_MS, { dailyRoomName: null, joinUrl: null });
+      await seedOnDomain(start + 7 * MINUTE_MS, {}, 'https://new.daily.co/');
+      await seedOnDomain(start + 8 * MINUTE_MS, {}, 'https://getbalo.daily.co.evil/');
+
+      const rows = await meetingsRepository.listLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        limit: 50,
+      });
+
+      expect(rows.map((row) => [row.meetingId, row.status])).toEqual([
+        [scheduled.id, 'scheduled'],
+        [waiting.id, 'waiting_for_participants'],
+        [inProgress.id, 'in_progress'],
+      ]);
+      expect(rows[0]?.scheduledStart).toEqual(new Date(start));
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['meetingId', 'scheduledStart', 'status']);
+    });
+
+    it('orders scheduled_start ASC, then id ASC', async () => {
+      const start = startIn(0);
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort(compareStrings);
+      if (lowId === undefined || highId === undefined) throw new Error('expected two ids');
+      const later = await seedOnDomain(start + MINUTE_MS);
+      await seedOnDomain(start + 2 * MINUTE_MS, { id: highId });
+      await seedOnDomain(start + 2 * MINUTE_MS, { id: lowId });
+      const earliest = await seedOnDomain(start);
+
+      const rows = await meetingsRepository.listLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        limit: 50,
+      });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([earliest.id, later.id, lowId, highId]);
+    });
+
+    it('honours the limit, keeping the soonest; a non-positive limit returns [] without querying', async () => {
+      const start = startIn(0);
+      const first = await seedOnDomain(start);
+      const second = await seedOnDomain(start + MINUTE_MS);
+      await seedOnDomain(start + 2 * MINUTE_MS);
+
+      const rows = await meetingsRepository.listLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        limit: 2,
+      });
+      expect(rows.map((row) => row.meetingId)).toEqual([first.id, second.id]);
+
+      const spy = vi.spyOn(db, 'select');
+      try {
+        await expect(
+          meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: 0 })
+        ).resolves.toEqual([]);
+        await expect(
+          meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: -1 })
+        ).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('joinUrlPrefix guard', () => {
+    it.each([
+      ['empty', ''],
+      ['bare scheme', 'https://'],
+      ['no label', 'https://.daily.co/'],
+      ['no trailing slash', 'https://getbalo.daily.co'],
+      ['http', 'http://getbalo.daily.co/'],
+      ['other host', 'https://getbalo.example.com/'],
+      ['suffix host', 'https://getbalo.daily.co.evil/'],
+      ['nested label', 'https://a.b.daily.co/'],
+      ['uppercase', 'https://GetBalo.daily.co/'],
+      ['path', 'https://getbalo.daily.co/room/'],
+    ])('both methods throw for a %s prefix and touch nothing', async (_label, prefix) => {
+      const target = await seedOnDomain(startIn(0));
+
+      await expect(
+        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: prefix, limit: 50 })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.clearScheduledVenuesOnDomain({
+          meetingIds: [target.id],
+          joinUrlPrefix: prefix,
+          scheduledStartAfter: new Date(),
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+
+      expect((await reload(target.id)).joinUrl).toBe(target.joinUrl);
+    });
+
+    it('throws before the empty-ids and non-positive-limit short-circuits', async () => {
+      await expect(
+        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: '', limit: 0 })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.clearScheduledVenuesOnDomain({
+          meetingIds: [],
+          joinUrlPrefix: '',
+          scheduledStartAfter: new Date(),
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+    });
+  });
+
+  describe('clearScheduledVenuesOnDomain', () => {
+    it('nulls the venue columns and bumps updated_at on a future scheduled meeting', async () => {
+      const target = await seedOnDomain(startIn(0));
+      const before = await reload(target.id);
+
+      const cleared = await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect(cleared).toEqual([target.id]);
+      const after = await reload(target.id);
+      expect(after.dailyRoomName).toBeNull();
+      expect(after.joinUrl).toBeNull();
+      expect(after.venueProvisionedAt).toBeNull();
+      expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    });
+
+    it('skips in_progress, past-start, other-domain and soft-deleted rows, leaving them untouched', async () => {
+      const inProgress = await seedOnDomain(startIn(0), { status: 'in_progress' });
+      const pastStart = await seedOnDomain(Date.now() - 5 * MINUTE_MS);
+      const otherDomain = await seedOnDomain(startIn(1), {}, 'https://new.daily.co/');
+      const softDeleted = await seedOnDomain(startIn(2), { deletedAt: new Date() });
+      const skipped = [inProgress, pastStart, otherDomain, softDeleted];
+      const target = await seedOnDomain(startIn(3));
+
+      const cleared = await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [...skipped.map((meeting) => meeting.id), target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect(cleared).toEqual([target.id]);
+      for (const meeting of skipped) {
+        const after = await reload(meeting.id);
+        expect(after.joinUrl).toBe(meeting.joinUrl);
+        expect(after.dailyRoomName).toBe(meeting.dailyRoomName);
+      }
+    });
+
+    it('only touches the named ids', async () => {
+      const named = await seedOnDomain(startIn(0));
+      const unnamed = await seedOnDomain(startIn(1));
+
+      await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [named.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect((await reload(unnamed.id)).joinUrl).toBe(unnamed.joinUrl);
+    });
+
+    it('returns [] without querying for empty ids', async () => {
+      const spy = vi.spyOn(db, 'update');
+      try {
+        await expect(
+          meetingsRepository.clearScheduledVenuesOnDomain({
+            meetingIds: [],
+            joinUrlPrefix: OLD_PREFIX,
+            scheduledStartAfter: new Date(),
+          })
+        ).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('makes a cleared row visible to listUnprovisionedScheduled with no room name stamped', async () => {
+      const start = startIn(0);
+      const target = await seedOnDomain(start);
+
+      await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      const rows = await meetingsRepository.listUnprovisionedScheduled({
+        scheduledStartAfter: new Date(start),
+        createdBefore: new Date(Date.now() + DAY_MS),
+        limit: 50,
+      });
+      expect(rows.filter((row) => row.meetingId === target.id)).toEqual([
+        expect.objectContaining({ meetingId: target.id, roomNameStamped: false }),
+      ]);
+      await expect(
+        meetingsRepository.listLiveVenuesOnDomain({ joinUrlPrefix: OLD_PREFIX, limit: 50 })
+      ).resolves.toEqual([]);
+    });
+  });
+});

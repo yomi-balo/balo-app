@@ -787,6 +787,11 @@ export {
   // BAL-581 — the venue repair producer's / `meeting.unprovisioned` finder's read.
   type ListUnprovisionedScheduledInput,
   type UnprovisionedScheduledMeeting,
+  // BAL-518 — the Daily domain cutover's venue read / clear.
+  type LiveMeetingStatus,
+  type ListLiveVenuesOnDomainInput,
+  type LiveVenueOnDomain,
+  type ClearScheduledVenuesInput,
   // BAL-586 — the `meeting.stranded` finder's read.
   type ListStrandedLiveInput,
   type StrandedLiveMeeting,
