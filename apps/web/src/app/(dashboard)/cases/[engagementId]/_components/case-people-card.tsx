@@ -2,7 +2,7 @@
 
 import { Users } from 'lucide-react';
 import { SectionHead } from '@/components/balo/section/section-states';
-import type { CasePersonView } from '@/lib/cases/case-view-types';
+import type { CasePeopleGroupView } from '@/lib/cases/case-view-types';
 
 /**
  * BAL-421 — who is on the case, plus the retrospective-access disclosure.
@@ -26,9 +26,15 @@ import type { CasePersonView } from '@/lib/cases/case-view-types';
  * registered domain, no address can ever match one, so naming a domain-based widening would
  * describe an outcome that can never fire — the same narrow fact the expert lens states.
  *
- * ⚠ "You" IS RESOLVED SERVER-SIDE (`isViewer`). The client never compares user ids to work out
- * who it is talking to.
+ * ⚠ GROUPS, ORDER, KEYS AND "You" ALL COME FROM `_lib/load-case-people.ts`. The card does no
+ * identity logic: it renders each group's label, then its names verbatim, then an unnamed-guest
+ * count, one line per group.
  */
+
+/** The count of guests with no name on record, e.g. `+1 guest` or `+3 guests`. */
+export function formatUnnamedGuestCount(count: number): string {
+  return count === 1 ? '+1 guest' : `+${count} guests`;
+}
 
 /** BAL-573 — verbatim, exported so `case-surface.test.tsx` can assert against it rather than a
  *  `stringContaining` fragment. */
@@ -39,12 +45,12 @@ export const PEOPLE_CARD_NARROW_DISCLOSURE =
   "Guests you invite see only the consultation they're invited to.";
 
 export function CasePeopleCard({
-  people,
+  groups,
   lens,
   clientCompanyName,
   hasCaseScopeDomains,
 }: Readonly<{
-  people: readonly CasePersonView[];
+  groups: readonly CasePeopleGroupView[];
   lens: 'client' | 'expert';
   /** `null` ⇒ "your company" — the composer's own fallback wording. */
   clientCompanyName: string | null;
@@ -63,15 +69,31 @@ export function CasePeopleCard({
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead icon={Users} title="People" />
-      <p className="text-muted-foreground text-xs leading-relaxed">
-        {people.map((person, index) => (
-          <span key={person.name + String(person.isViewer)}>
-            {index > 0 && ' · '}
-            {person.isViewer ? 'You' : person.name}
-          </span>
+      <div className="space-y-1">
+        {groups.map((group) => (
+          <p key={group.side} className="text-xs leading-relaxed">
+            <span className="text-foreground font-medium">{group.label}</span>
+            {(group.people.length > 0 || group.unnamedGuestCount > 0) && (
+              <span className="text-muted-foreground">
+                {' '}
+                {group.people.map((person, index) => (
+                  <span key={person.key}>
+                    {index > 0 && ', '}
+                    {person.name}
+                  </span>
+                ))}
+                {group.unnamedGuestCount > 0 && (
+                  <>
+                    {group.people.length > 0 && ' '}
+                    {formatUnnamedGuestCount(group.unnamedGuestCount)}
+                  </>
+                )}
+              </span>
+            )}
+          </p>
         ))}
-      </p>
-      <p className="text-muted-foreground/80 mt-1 text-xs leading-relaxed">{disclosure}</p>
+      </div>
+      <p className="text-muted-foreground/80 mt-2 text-xs leading-relaxed">{disclosure}</p>
     </section>
   );
 }

@@ -1479,6 +1479,215 @@ describe('meetingGuestsRepository.countsLiveByMeetingIds', () => {
   });
 });
 
+describe('meetingGuestsRepository.listRosterNamesForMeetings (BAL-633)', () => {
+  async function attend(meetingId: string, guestId: string): Promise<void> {
+    await db.insert(meetingPresence).values({
+      meetingId,
+      meetingGuestId: guestId,
+      userId: null,
+      party: 'client',
+      joinedAt: new Date(Date.now() - 2 * DAY_MS),
+      leftAt: new Date(Date.now() - 2 * DAY_MS + 60_000),
+    });
+  }
+
+  it('returns [] for empty input and issues no query', async () => {
+    const select = vi.spyOn(db, 'selectDistinctOn');
+    try {
+      await expect(
+        meetingGuestsRepository.listRosterNamesForMeetings({
+          attendedMeetingIds: [],
+          seatedMeetingIds: [],
+        })
+      ).resolves.toEqual([]);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  it('ignores a guest of another meeting, whether they attended or hold a seat there', async () => {
+    const a = await meetingFactory();
+    const b = await meetingFactory();
+    const attended = await meetingGuestFactory({ meetingId: b.meeting.id });
+    await meetingGuestFactory({ meetingId: b.meeting.id });
+    await attend(a.meeting.id, attended.guest.id);
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [a.meeting.id],
+        seatedMeetingIds: [a.meeting.id],
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it('does not qualify a guest by a presence row on a meeting outside attendedMeetingIds', async () => {
+    const a = await meetingFactory();
+    const b = await meetingFactory();
+    const { guest } = await meetingGuestFactory({
+      meetingId: a.meeting.id,
+      values: { revokedAt: new Date() },
+    });
+    await attend(b.meeting.id, guest.id);
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [a.meeting.id],
+        seatedMeetingIds: [],
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it('returns a seated pre_admitted email guest on an upcoming meeting', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingGuestFactory({ meetingId: meeting.id, values: { name: 'Dana Seated' } });
+
+    const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [],
+      seatedMeetingIds: [meeting.id],
+    });
+
+    expect(rows).toEqual([
+      {
+        name: 'Dana Seated',
+        party: 'client',
+        inviteChannel: 'email',
+        userId: null,
+        convertedToUserId: null,
+      },
+    ]);
+  });
+
+  it('projects exactly five keys and never an address, hash or id', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingGuestFactory({ meetingId: meeting.id });
+
+    const [row] = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [],
+      seatedMeetingIds: [meeting.id],
+    });
+
+    expect(Object.keys(row ?? {}).sort()).toEqual(
+      ['convertedToUserId', 'inviteChannel', 'name', 'party', 'userId'].sort()
+    );
+  });
+
+  it('does not return a guest invited to a meeting that is only in attendedMeetingIds with no presence', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingGuestFactory({ meetingId: meeting.id });
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [meeting.id],
+        seatedMeetingIds: [],
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['revoked', { revokedAt: new Date() }],
+    ['soft-deleted', { deletedAt: new Date() }],
+    ['a `denied` admission', { admission: 'denied' as const, admissionDecidedAt: new Date() }],
+    ['a `pending` admission', { admission: 'pending' as const }],
+    ['expired', { expiresAt: new Date(Date.now() - DAY_MS) }],
+  ])('omits a %s guest on a seated meeting that never joined', async (_label, values) => {
+    const { meeting } = await meetingFactory();
+    await meetingGuestFactory({ meetingId: meeting.id, values });
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [],
+        seatedMeetingIds: [meeting.id],
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it('returns a guest who attended and was later revoked and soft-deleted', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { name: 'Remy Past', revokedAt: new Date(), deletedAt: new Date() },
+    });
+    await attend(meeting.id, guest.id);
+
+    const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [meeting.id],
+      seatedMeetingIds: [],
+    });
+
+    expect(rows.map((row) => row.name)).toEqual(['Remy Past']);
+  });
+
+  it('does not qualify a guest whose only presence row is soft-deleted', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+    await attend(meeting.id, guest.id);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.meetingGuestId, guest.id));
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [meeting.id],
+        seatedMeetingIds: [],
+      })
+    ).resolves.toEqual([]);
+  });
+
+  it('dedupes one address seated on two meetings to one row, the named row winning', async () => {
+    const one = await meetingFactory();
+    const two = await meetingFactory();
+    const email = 'shared.person@northwind.test';
+    await meetingGuestFactory({ meetingId: one.meeting.id, values: { email, name: null } });
+    await meetingGuestFactory({ meetingId: two.meeting.id, values: { email, name: 'Sam Named' } });
+
+    const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [],
+      seatedMeetingIds: [one.meeting.id, two.meeting.id],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.name).toBe('Sam Named');
+  });
+
+  it('prefers the email-channel row over the link row for the same party and address', async () => {
+    const one = await meetingFactory();
+    const two = await meetingFactory();
+    const email = 'link.and.email@northwind.test';
+    await meetingGuestFactory({
+      meetingId: one.meeting.id,
+      values: { email, name: 'Via Link', inviteChannel: 'link' },
+    });
+    await meetingGuestFactory({
+      meetingId: two.meeting.id,
+      values: { email, name: 'Via Email', inviteChannel: 'email' },
+    });
+
+    const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [],
+      seatedMeetingIds: [one.meeting.id, two.meeting.id],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ name: 'Via Email', inviteChannel: 'email' });
+  });
+
+  it('keeps one row per party when both sides invited the same address', async () => {
+    const { meeting } = await meetingFactory();
+    const email = 'both.sides@northwind.test';
+    await meetingGuestFactory({ meetingId: meeting.id, values: { email, party: 'client' } });
+    await meetingGuestFactory({ meetingId: meeting.id, values: { email, party: 'expert' } });
+
+    const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: [],
+      seatedMeetingIds: [meeting.id],
+    });
+
+    expect(rows.map((row) => row.party).sort()).toEqual(['client', 'expert']);
+  });
+});
+
 /**
  * ⚠⚠ BAL-476 (T-14) — THE WITHDRAWAL READ, and the ONE read in this repository that sees a
  * revoked row. Everything else keeps refusing it: revocation stays IMMEDIATE AND TOTAL.

@@ -168,9 +168,14 @@ const BASE = {
     ratingAverage: 4.3,
     ratingCount: 2,
   },
-  people: [
-    { name: 'Dana Reyes', isViewer: true },
-    { name: 'Amara Okafor', isViewer: false },
+  peopleGroups: [
+    {
+      side: 'client' as const,
+      label: 'Northwind Industrial',
+      people: [{ key: 'p0', name: 'You', isViewer: true }],
+      unnamedGuestCount: 0,
+    },
+    { side: 'expert' as const, label: 'CloudPeak Consulting', people: [], unnamedGuestCount: 0 },
   ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
   clientCompanyName: 'Northwind Industrial',

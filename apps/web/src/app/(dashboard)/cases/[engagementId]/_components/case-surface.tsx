@@ -579,7 +579,7 @@ export function CaseSurface({
             </Reveal>
             <Reveal delay={0.3}>
               <CasePeopleCard
-                people={view.people}
+                groups={view.peopleGroups}
                 lens={view.lens}
                 clientCompanyName={view.clientCompanyName}
                 hasCaseScopeDomains={view.lens === 'client' && view.caseScopeDomains.length > 0}

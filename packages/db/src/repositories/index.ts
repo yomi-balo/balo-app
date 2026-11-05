@@ -980,6 +980,7 @@ export {
   type DecideMeetingGuestAdmissionInput,
   type MeetingGuestWithMeeting,
   type MeetingGuestPublic,
+  type GuestRosterNameRow,
   type LinkConvertedUserInput,
   type ConvertedGuestLink,
   // BAL-442 — the self-service lobby re-entry arm's read projection and write input.

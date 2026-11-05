@@ -1,7 +1,7 @@
-import { and, asc, eq, gt, inArray, isNull, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { canonicalGuestEmail, presencePartyForGuest } from '@balo/shared/meetings';
 import { db } from '../client';
-import { meetingGuests, meetings } from '../schema';
+import { meetingGuests, meetingPresence, meetings } from '../schema';
 import type {
   GuestAccessScope,
   Meeting,
@@ -19,6 +19,19 @@ const ENTITY_TYPE = 'meeting_guest';
 
 /** The two sides a guest can sit on — narrower than the reused three-label presence enum. */
 export type MeetingGuestParty = Extract<MeetingParticipantParty, 'client' | 'expert'>;
+
+/**
+ * BAL-633 — one guest as the case People card may see them: a name and the facts needed to place
+ * and dedupe them. ⚠ NO `email`, `email_domain`, `token_hash` or `id` — see
+ * `listRosterNamesForMeetings`.
+ */
+export interface GuestRosterNameRow {
+  name: string | null;
+  party: MeetingGuestParty;
+  inviteChannel: MeetingGuestInviteChannel;
+  userId: string | null;
+  convertedToUserId: string | null;
+}
 
 /** The two terminal admission decisions a host can take. */
 export type MeetingGuestAdmissionDecision = Extract<MeetingGuestAdmission, 'admitted' | 'denied'>;
@@ -570,7 +583,9 @@ export const meetingGuestsRepository = {
    * Callers default to 0; never treat absence as an error.
    * ⚠ A COUNT, NEVER A ROSTER. No email, no name, no `token_hash` is projected — ADR-1044 says
    * counterparty NAMES may cross the party boundary and email addresses never may, and a count
-   * carries no identity at all, which is why this is the only guest read the case surface makes.
+   * carries no identity at all. The case surface's only other guest read is
+   * {@link listRosterNamesForMeetings}, which projects names only and never an address
+   * (ADR-1044).
    * ⚠ UNSYNCHRONISED WITH THE INSERT, exactly as `countLiveByMeeting` is. It is a display number.
    */
   countsLiveByMeetingIds: async (
@@ -582,6 +597,82 @@ export const meetingGuestsRepository = {
       .from(meetingGuests)
       .where(liveSeatPredicate(inArray(meetingGuests.meetingId, [...meetingIds])))
       .groupBy(meetingGuests.meetingId);
+  },
+
+  /**
+   * BAL-633 — the guests to NAME on the case People card, in ONE query: those who attended one
+   * of `attendedMeetingIds`, and those who hold a live seat on one of `seatedMeetingIds`.
+   *
+   * ⚠⚠ NAMES ONLY, NEVER AN ADDRESS (ADR-1044). The projection is exactly
+   * {@link GuestRosterNameRow}: no `id`, `email`, `email_domain` or `token_hash`. `email` is used
+   * only inside DISTINCT ON / ORDER BY and is never selected.
+   * ⚠ ATTENDED ARM — a guest with a live presence row on one of `attendedMeetingIds`. The guest
+   * row's own `deleted_at` / `revoked_at` is DELIBERATELY NOT filtered ("past shows who actually
+   * joined", and `revoke` stamps both columns); this departs from the usual soft-delete query
+   * rule on purpose, as `meeting_presence` reads do. A soft-deleted PRESENCE row does not qualify.
+   * The guest row must also belong to one of `attendedMeetingIds`: `meeting_presence.meeting_guest_id`
+   * has no meeting-bound FK, so a presence row could otherwise name a guest of a different meeting.
+   * ⚠ SEATED ARM — {@link liveSeatPredicate}, the one definition of "holds a seat", so a pending,
+   * denied, revoked, deleted or expired invite is never listed.
+   * ⚠ DEDUPED IN SQL per `(party, email)` and PARTY-SCOPED ON PURPOSE: one address invited by both
+   * sides yields a row per side, because merging across parties would let a viewer infer an email
+   * match on the other side. Within a pair the email-channel row beats the link row, the named
+   * row beats the unnamed one, then the oldest wins.
+   * ⚠ NO TENANCY OF ITS OWN. Pass only ids that came from an already-authorised read.
+   */
+  listRosterNamesForMeetings: async (input: {
+    attendedMeetingIds: readonly string[];
+    seatedMeetingIds: readonly string[];
+  }): Promise<GuestRosterNameRow[]> => {
+    const arms: SQL[] = [];
+    if (input.attendedMeetingIds.length > 0) {
+      const attended = and(
+        inArray(meetingGuests.meetingId, [...input.attendedMeetingIds]),
+        inArray(
+          meetingGuests.id,
+          db
+            .select({ id: meetingPresence.meetingGuestId })
+            .from(meetingPresence)
+            .where(
+              and(
+                inArray(meetingPresence.meetingId, [...input.attendedMeetingIds]),
+                isNotNull(meetingPresence.meetingGuestId),
+                isNull(meetingPresence.deletedAt)
+              )
+            )
+        )
+      );
+      if (attended !== undefined) {
+        arms.push(attended);
+      }
+    }
+    if (input.seatedMeetingIds.length > 0) {
+      const seated = liveSeatPredicate(
+        inArray(meetingGuests.meetingId, [...input.seatedMeetingIds])
+      );
+      if (seated !== undefined) {
+        arms.push(seated);
+      }
+    }
+    if (arms.length === 0) return [];
+    return db
+      .selectDistinctOn([meetingGuests.party, meetingGuests.email], {
+        name: meetingGuests.name,
+        party: sql<MeetingGuestParty>`${meetingGuests.party}`,
+        inviteChannel: meetingGuests.inviteChannel,
+        userId: meetingGuests.userId,
+        convertedToUserId: meetingGuests.convertedToUserId,
+      })
+      .from(meetingGuests)
+      .where(or(...arms))
+      .orderBy(
+        meetingGuests.party,
+        meetingGuests.email,
+        sql`(${meetingGuests.inviteChannel} = 'link')`,
+        sql`(NULLIF(btrim(${meetingGuests.name}), '') IS NULL)`,
+        asc(meetingGuests.createdAt),
+        asc(meetingGuests.id)
+      );
   },
 
   /**

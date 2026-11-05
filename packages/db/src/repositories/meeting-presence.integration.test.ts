@@ -1138,6 +1138,70 @@ describe('a meeting’s raw clocks (through settlementFacts)', () => {
   });
 });
 
+describe('meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds (BAL-633)', () => {
+  it('returns [] for empty input', async () => {
+    await expect(
+      meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds([])
+    ).resolves.toEqual([]);
+  });
+
+  it('is distinct per (user, party) across several meetings', async () => {
+    const one = (await meetingFactory()).meeting.id;
+    const two = (await meetingFactory()).meeting.id;
+    const alex = await userFactory();
+    const dana = await userFactory();
+
+    await join(one, alex.id, 'client', 0);
+    await leave(one, alex.id, 5);
+    await join(one, alex.id, 'client', 10);
+    await join(two, alex.id, 'client', 0);
+    await join(two, dana.id, 'expert', 1);
+
+    const rows = await meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds([one, two]);
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { userId: alex.id, party: 'client' },
+        { userId: dana.id, party: 'expert' },
+      ])
+    );
+  });
+
+  it('excludes a guest-identity row and a no-identity row', async () => {
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: meeting.id });
+    const client = await userFactory();
+
+    await guestJoin(meeting.id, guest.id, 'client', 0);
+    await join(meeting.id, null, 'client', 1);
+    await join(meeting.id, client.id, 'client', 2);
+
+    await expect(
+      meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds([meeting.id])
+    ).resolves.toEqual([{ userId: client.id, party: 'client' }]);
+  });
+
+  it('excludes a soft-deleted row and another meeting’s row', async () => {
+    const { meeting } = await meetingFactory();
+    const other = await meetingFactory();
+    const deleted = await userFactory();
+    const elsewhere = await userFactory();
+    const present = await userFactory();
+
+    const row = await join(meeting.id, deleted.id, 'client', 0);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, row.id));
+    await join(other.meeting.id, elsewhere.id, 'client', 0);
+    await join(meeting.id, present.id, 'expert', 1);
+
+    await expect(
+      meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds([meeting.id])
+    ).resolves.toEqual([{ userId: present.id, party: 'expert' }]);
+  });
+});
+
 // ── BAL-390: the participation-derived nudge recipient source ────────────────
 
 describe('meetingPresenceRepository.listClientUserIdsForEngagement', () => {

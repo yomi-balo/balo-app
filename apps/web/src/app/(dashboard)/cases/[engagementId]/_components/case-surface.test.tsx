@@ -319,9 +319,19 @@ const BASE = {
     ratingAverage: 4.3,
     ratingCount: 2,
   },
-  people: [
-    { name: 'Dana Reyes', isViewer: true },
-    { name: 'Amara Okafor', isViewer: false },
+  peopleGroups: [
+    {
+      side: 'client',
+      label: 'Northwind Industrial',
+      people: [{ key: 'p0', name: 'You', isViewer: true }],
+      unnamedGuestCount: 0,
+    },
+    {
+      side: 'expert',
+      label: 'CloudPeak Consulting',
+      people: [{ key: 'p1', name: 'Amara Okafor', isViewer: false }],
+      unnamedGuestCount: 0,
+    },
   ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
   clientCompanyName: 'Northwind Industrial',
@@ -610,15 +620,14 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
   it('renders the header and people for both lenses', () => {
     const { unmount } = render(<CaseSurface view={clientView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
-    // "You" is resolved SERVER-SIDE via `isViewer`; the client never compares ids. The viewer's
-    // own name must therefore NOT be rendered in the people list.
     expect(screen.getByText('You')).toBeInTheDocument();
-    expect(screen.queryByText('Dana Reyes')).not.toBeInTheDocument();
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
     unmount();
 
     render(<CaseSurface view={expertView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
     expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
   });
 
   // BAL-589 — the "Convert to project" header action: client lens only, open or
