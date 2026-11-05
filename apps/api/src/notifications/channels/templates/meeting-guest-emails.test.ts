@@ -6,6 +6,7 @@ import {
   MeetingGuestRemovedEmail,
   MeetingGuestRescheduledEmail,
   formatMeetingWindowForRecipient,
+  formatMeetingWindowWithDuration,
   formatMeetingWindowUtc,
 } from './meeting-guest-emails.js';
 import { getEmailTemplate } from './index.js';
@@ -798,5 +799,33 @@ describe('guest emails stay on UTC even when handed a recipient zone (BAL-635)',
     const text = textOf(await render(out.component));
     expect(text).toContain('(UTC)');
     expect(text).not.toContain('Melbourne time');
+  });
+});
+
+describe('formatMeetingWindowWithDuration', () => {
+  const START = '2026-09-01T00:00:00.000Z';
+
+  it('appends "- N min" after the zoned window', () => {
+    expect(formatMeetingWindowWithDuration(START, 60, 'Australia/Melbourne', 'x')).toMatch(
+      /^Tue, 1 Sept? 2026 · 10:00–11:00 \(Melbourne time\) - 60 min$/
+    );
+  });
+
+  it.each([null, undefined, 'UTC', 'Mars/Olympus'])(
+    'keeps the pre-zone "(N min)" wording on the UTC fallback (%s)',
+    (tz) => {
+      expect(formatMeetingWindowWithDuration(START, 60, tz, 'x')).toBe(
+        `${formatMeetingWindowUtc(START)} (60 min)`
+      );
+    }
+  );
+
+  it('uses the fallback phrase for an unparseable start, zoned or not', () => {
+    expect(
+      formatMeetingWindowWithDuration('nope', 30, 'Australia/Melbourne', 'the scheduled time')
+    ).toBe('the scheduled time (30 min)');
+    expect(formatMeetingWindowWithDuration('nope', 30, null, 'the scheduled time')).toBe(
+      'the scheduled time (30 min)'
+    );
   });
 });

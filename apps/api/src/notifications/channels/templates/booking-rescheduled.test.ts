@@ -235,7 +235,10 @@ describe('booking-rescheduled — the recipient timezone (BAL-635)', () => {
         )
       );
       expect(normaliseSept(text)).toContain('Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time)');
-      expect(normaliseSept(text)).toContain('Tue, 8 Sep 2026 · 10:00–11:00 (Melbourne time)');
+      expect(normaliseSept(text)).toContain(
+        'Tue, 8 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min.'
+      );
+      expect(text).not.toContain('(60 min)');
       expect(text).not.toContain('(UTC)');
     }
   );
@@ -253,7 +256,7 @@ describe('booking-rescheduled — the recipient timezone (BAL-635)', () => {
       }
       const text = normaliseSept(textOf(htmls[0] ?? ''));
       expect(normaliseSept(text)).toContain('Tue, 1 Sep 2026 · 00:00 (UTC)');
-      expect(normaliseSept(text)).toContain('Tue, 8 Sep 2026 · 00:00 (UTC)');
+      expect(normaliseSept(text)).toContain('Tue, 8 Sep 2026 · 00:00 (UTC) (60 min).');
     }
   );
 });

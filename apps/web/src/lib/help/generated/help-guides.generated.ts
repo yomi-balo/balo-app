@@ -2125,7 +2125,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-booked"
     },
     "order": 1,
-    "updated": "2026-11-02",
+    "updated": "2026-11-06",
     "related": [
       "connecting-your-calendar",
       "pausing-new-work"
@@ -2162,7 +2162,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>",
+            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>\n<p>Emails about your bookings show times in this timezone too, for example \"Tue, 1 Sep 2026 ·\n10:00–11:00 (Melbourne time) - 60 min\". If an email names a zone you're not in, change it here.</p>",
             "id": "s2-b0"
           }
         ],

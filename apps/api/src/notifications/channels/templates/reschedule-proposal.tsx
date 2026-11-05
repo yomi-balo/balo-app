@@ -1,5 +1,8 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowForRecipient } from './meeting-guest-emails.js';
+import {
+  formatMeetingWindowForRecipient,
+  formatMeetingWindowWithDuration,
+} from './meeting-guest-emails.js';
 
 /**
  * BAL-411 — `reschedule_proposal.sent` and `reschedule_proposal.declined`. Two independent
@@ -47,12 +50,12 @@ export interface RescheduleProposalSentEmailProps {
 
 function sentBodyLines(props: Readonly<RescheduleProposalSentEmailProps>): string[] {
   const { expertPersonLabel, caseTitle, durationMinutes, optionStartIsos } = props;
-  const originalWindow =
-    formatMeetingWindowForRecipient(
-      props.originalScheduledStartIso,
-      durationMinutes,
-      props.recipientTimezone
-    ) || 'its scheduled time';
+  const originalWhen = formatMeetingWindowWithDuration(
+    props.originalScheduledStartIso,
+    durationMinutes,
+    props.recipientTimezone,
+    'its scheduled time'
+  );
   const optionsLine = optionStartIsos
     .map((iso) => formatOption(iso, durationMinutes, props.recipientTimezone))
     .join(' · ');
@@ -61,7 +64,7 @@ function sentBodyLines(props: Readonly<RescheduleProposalSentEmailProps>): strin
   const timesPhrase = optionStartIsos.length === 1 ? 'another time' : 'a few other times';
 
   return [
-    `${expertPersonLabel} suggested ${timesPhrase} for your consultation on ${caseTitle}, currently set for ${originalWindow} (${durationMinutes} min).`,
+    `${expertPersonLabel} suggested ${timesPhrase} for your consultation on ${caseTitle}, currently set for ${originalWhen}.`,
     `Other times that work for them: ${optionsLine}.`,
     `Pick one that suits, or keep your original time — no rush, and if it's not answered your original time simply stands.`,
   ];
@@ -109,14 +112,14 @@ export interface RescheduleProposalDeclinedEmailProps {
 }
 
 function declinedBodyLines(props: Readonly<RescheduleProposalDeclinedEmailProps>): string[] {
-  const originalWindow =
-    formatMeetingWindowForRecipient(
-      props.originalScheduledStartIso,
-      props.durationMinutes,
-      props.recipientTimezone
-    ) || 'the original time';
+  const originalWhen = formatMeetingWindowWithDuration(
+    props.originalScheduledStartIso,
+    props.durationMinutes,
+    props.recipientTimezone,
+    'the original time'
+  );
   return [
-    `${props.declinedByLabel} kept the original time for ${props.caseTitle} — ${originalWindow} (${props.durationMinutes} min) still stands.`,
+    `${props.declinedByLabel} kept the original time for ${props.caseTitle} — ${originalWhen} still stands.`,
     `Nothing else to do here.`,
   ];
 }

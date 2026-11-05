@@ -152,6 +152,25 @@ export function formatMeetingWindowForRecipient(
 }
 
 /**
+ * The window plus the call length, as it reads inside a member email's sentence:
+ * `Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) - 60 min` in the recipient's zone. On the UTC
+ * fallback it stays exactly the pre-zone wording, `Tue, 1 Sep 2026 · 10:00 (UTC) (60 min)`, with
+ * `fallback` standing in for an unparseable start.
+ */
+export function formatMeetingWindowWithDuration(
+  startIso: string,
+  durationMinutes: number,
+  recipientTimezone: string | null | undefined,
+  fallback: string
+): string {
+  const window = formatMeetingWindowForRecipient(startIso, durationMinutes, recipientTimezone);
+  if (window !== '' && recipientDisplayZone(recipientTimezone) !== null) {
+    return `${window} - ${durationMinutes} min`;
+  }
+  return `${window || fallback} (${durationMinutes} min)`;
+}
+
+/**
  * The greeting. Uses the guest's name when the inviter supplied one, and a generic "Hi
  * there," otherwise.
  *

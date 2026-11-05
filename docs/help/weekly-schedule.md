@@ -6,7 +6,7 @@ category:
   expert: getting-booked
 order: 1
 published: true
-updated: 2026-11-02
+updated: 2026-11-06
 related: [connecting-your-calendar, pausing-new-work]
 ---
 
@@ -33,6 +33,9 @@ Your hours are set in one timezone. The line under the page title reads "Hours a
 — currently {time}". To switch, choose **Change timezone**. Balo asks "Change your timezone?" first,
 because your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every
 bookable slot shifts. Busy times on your connected calendar aren't affected.
+
+Emails about your bookings show times in this timezone too, for example "Tue, 1 Sep 2026 ·
+10:00–11:00 (Melbourne time) - 60 min". If an email names a zone you're not in, change it here.
 
 ![The timezone line under the page title, with Change timezone highlighted.](02)
 
