@@ -8,9 +8,11 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({ meetingsRepository: {} }));
 
-import { MISSED_CALL_TERMINATION_MS } from '@balo/shared/meetings';
+import { DEFAULT_MEETING_TIMERS, type MeetingTimers } from '@balo/shared/meetings';
+import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import {
   DEFAULT_LIMIT,
+  blockerUntil,
   classifyNonTargets,
   describeDatabaseHost,
   joinUrlPrefixForDomain,
@@ -20,7 +22,10 @@ import {
 const NOW = new Date('2026-09-01T09:00:00.000Z');
 const FUTURE = new Date('2026-09-02T09:00:00.000Z');
 const HOUR_MS = 3_600_000;
-const CUTOFF_MS = NOW.getTime() - MISSED_CALL_TERMINATION_MS;
+const MINUTE_MS = 60_000;
+const { missedCallTerminationMs: MISSED_CALL_MS, overrunStopGraceMs: GRACE_MS } =
+  DEFAULT_MEETING_TIMERS;
+const SESSION_LIMIT_MS = MAX_SESSION_MINUTES * MINUTE_MS;
 
 function target(meetingId: string): ScheduledVenueTarget {
   return { meetingId, scheduledStart: FUTURE };
@@ -119,9 +124,45 @@ describe('describeDatabaseHost', () => {
   });
 });
 
+describe('blockerUntil', () => {
+  const start = NOW.getTime() - 5 * HOUR_MS;
+
+  it('is start + the missed-call window for a scheduled row, whatever its end', () => {
+    const scheduled = row('a', 'scheduled', start, start + 10 * HOUR_MS);
+
+    expect(blockerUntil(scheduled, DEFAULT_MEETING_TIMERS).getTime()).toBe(start + MISSED_CALL_MS);
+  });
+
+  it.each(['waiting_for_participants', 'in_progress'] as const)(
+    'is start + the session limit + grace for a %s row booked shorter than the session limit',
+    (status) => {
+      const live = row('a', status, start, start + HOUR_MS);
+
+      expect(blockerUntil(live, DEFAULT_MEETING_TIMERS).getTime()).toBe(
+        start + SESSION_LIMIT_MS + GRACE_MS
+      );
+    }
+  );
+
+  it.each(['waiting_for_participants', 'in_progress'] as const)(
+    'is end + grace for a %s row booked longer than the session limit',
+    (status) => {
+      const end = start + SESSION_LIMIT_MS + 2 * HOUR_MS;
+      const live = row('a', status, start, end);
+
+      expect(blockerUntil(live, DEFAULT_MEETING_TIMERS).getTime()).toBe(end + GRACE_MS);
+    }
+  );
+});
+
 describe('classifyNonTargets', () => {
+  const lengthenedTimers: MeetingTimers = {
+    ...DEFAULT_MEETING_TIMERS,
+    overrunStopGraceMs: GRACE_MS + 60 * MINUTE_MS,
+  };
+
   it('a scheduled meeting that started inside the missed-call window is a blocker', () => {
-    const inside = row('a', 'scheduled', CUTOFF_MS + 1);
+    const inside = row('a', 'scheduled', NOW.getTime() - MISSED_CALL_MS + 1);
     const justStarted = row('b', 'scheduled', NOW.getTime());
 
     const result = classifyNonTargets([inside, justStarted], NOW);
@@ -130,20 +171,22 @@ describe('classifyNonTargets', () => {
     expect(result.stranded).toEqual([]);
   });
 
-  it('a scheduled meeting that started at or before the cutoff is stranded', () => {
-    const atCutoff = row('a', 'scheduled', CUTOFF_MS);
-    const old = row('b', 'scheduled', NOW.getTime() - 30 * 24 * HOUR_MS);
+  it('a scheduled meeting is stranded exactly at start + the missed-call window, a blocker 1 ms before', () => {
+    const atBoundary = row('a', 'scheduled', NOW.getTime() - MISSED_CALL_MS);
+    const oneBefore = row('b', 'scheduled', NOW.getTime() - MISSED_CALL_MS + 1);
+    const old = row('c', 'scheduled', NOW.getTime() - 30 * 24 * HOUR_MS);
 
-    const result = classifyNonTargets([atCutoff, old], NOW);
+    const result = classifyNonTargets([atBoundary, oneBefore, old], NOW);
 
-    expect(result.stranded).toEqual([atCutoff, old]);
-    expect(result.blockers).toEqual([]);
+    expect(result.stranded).toEqual([atBoundary, old]);
+    expect(result.blockers).toEqual([oneBefore]);
   });
 
   it.each(['waiting_for_participants', 'in_progress'] as const)(
-    'a %s meeting still inside its scheduled window is a blocker, even if it started long ago',
+    'a %s meeting past its scheduled end plus the missed-call window is still a blocker before its overrun ceiling',
     (status) => {
-      const running = row('a', status, NOW.getTime() - 2 * HOUR_MS, NOW.getTime() + HOUR_MS);
+      const start = NOW.getTime() - 3 * HOUR_MS;
+      const running = row('a', status, start, NOW.getTime() - MISSED_CALL_MS - MINUTE_MS);
 
       const result = classifyNonTargets([running], NOW);
 
@@ -153,33 +196,56 @@ describe('classifyNonTargets', () => {
   );
 
   it.each(['waiting_for_participants', 'in_progress'] as const)(
-    'a %s meeting whose window ended at or before the cutoff is stranded',
+    'a %s meeting booked longer than the session limit is stranded exactly at end + grace, a blocker 1 ms before',
     (status) => {
-      const atCutoff = row('a', status, CUTOFF_MS - HOUR_MS, CUTOFF_MS);
-      const old = row('b', status, NOW.getTime() - 48 * HOUR_MS);
+      const start = NOW.getTime() - SESSION_LIMIT_MS - 3 * HOUR_MS;
+      const atBoundary = row('a', status, start, NOW.getTime() - GRACE_MS);
+      const oneBefore = row('b', status, start, NOW.getTime() - GRACE_MS + 1);
 
-      const result = classifyNonTargets([atCutoff, old], NOW);
+      const result = classifyNonTargets([atBoundary, oneBefore], NOW);
 
-      expect(result.stranded).toEqual([atCutoff, old]);
-      expect(result.blockers).toEqual([]);
+      expect(result.stranded).toEqual([atBoundary]);
+      expect(result.blockers).toEqual([oneBefore]);
     }
   );
 
-  it('a live-status meeting that ended just after the cutoff is still a blocker', () => {
-    const justInside = row('a', 'in_progress', CUTOFF_MS - HOUR_MS, CUTOFF_MS + 1);
+  it.each(['waiting_for_participants', 'in_progress'] as const)(
+    'a %s meeting booked shorter than the session limit is stranded exactly at start + session limit + grace, a blocker 1 ms before',
+    (status) => {
+      const atBoundaryStart = NOW.getTime() - SESSION_LIMIT_MS - GRACE_MS;
+      const atBoundary = row('a', status, atBoundaryStart);
+      const oneBefore = row('b', status, atBoundaryStart + 1);
 
-    expect(classifyNonTargets([justInside], NOW).blockers).toEqual([justInside]);
-  });
+      const result = classifyNonTargets([atBoundary, oneBefore], NOW);
+
+      expect(result.stranded).toEqual([atBoundary]);
+      expect(result.blockers).toEqual([oneBefore]);
+    }
+  );
 
   it('honours an injected missed-call window', () => {
-    const startedFiveMinutesAgo = row('a', 'scheduled', NOW.getTime() - 5 * 60_000);
+    const startedFiveMinutesAgo = row('a', 'scheduled', NOW.getTime() - 5 * MINUTE_MS);
 
-    expect(classifyNonTargets([startedFiveMinutesAgo], NOW, 3 * 60_000).stranded).toEqual([
-      startedFiveMinutesAgo,
-    ]);
-    expect(classifyNonTargets([startedFiveMinutesAgo], NOW, 30 * 60_000).blockers).toEqual([
-      startedFiveMinutesAgo,
-    ]);
+    expect(
+      classifyNonTargets([startedFiveMinutesAgo], NOW, {
+        ...DEFAULT_MEETING_TIMERS,
+        missedCallTerminationMs: 3 * MINUTE_MS,
+      }).stranded
+    ).toEqual([startedFiveMinutesAgo]);
+    expect(
+      classifyNonTargets([startedFiveMinutesAgo], NOW, {
+        ...DEFAULT_MEETING_TIMERS,
+        missedCallTerminationMs: 30 * MINUTE_MS,
+      }).blockers
+    ).toEqual([startedFiveMinutesAgo]);
+  });
+
+  it('a lengthened overrun grace keeps a live call a blocker that the default grace would strand', () => {
+    const start = NOW.getTime() - SESSION_LIMIT_MS - GRACE_MS - 1;
+    const live = row('a', 'in_progress', start);
+
+    expect(classifyNonTargets([live], NOW).stranded).toEqual([live]);
+    expect(classifyNonTargets([live], NOW, lengthenedTimers).blockers).toEqual([live]);
   });
 });
 
@@ -217,6 +283,8 @@ describe('runVenueReprovision', () => {
     expect(listNonTargetLiveVenuesOnDomain).toHaveBeenCalledWith({
       joinUrlPrefix: 'https://getbalo.daily.co/',
       scheduledStartAtOrBefore: NOW,
+      missedCallTerminationMs: MISSED_CALL_MS,
+      overrunStopGraceMs: GRACE_MS,
       limit: DEFAULT_LIMIT,
     });
     expect(clearScheduledVenuesOnDomain).not.toHaveBeenCalled();

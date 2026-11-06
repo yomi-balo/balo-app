@@ -112,11 +112,17 @@ It prints three groups:
 
 - **Targets**: future `scheduled` meetings it would clear.
 - **Blockers**: meetings that can still start or are running. That means a `scheduled` meeting
-  inside its missed-call window, or a live call until 10 minutes after its scheduled end. **Gate: 0 blockers.**
+  inside its missed-call window, or a live call until its overrun stop ceiling (the later of its
+  scheduled end and start + 240 minutes, plus the 30-minute grace). **Gate: 0 blockers.**
   Blockers clear on their own as calls end, so re-run after the next one finishes.
 - **Stranded**: meetings past those windows that never ended (the `meeting.stranded` admin alert,
   BAL-586, covers them). They are a warning only and do not gate the cutover. Resolve them through
   that alert, not here.
+
+The script reads the timer overrides (`MEETING_MISSED_CALL_MINUTES`,
+`MEETING_OVERRUN_STOP_GRACE_MINUTES`) from `<target-env-file>` through the API's own
+`resolveMeetingTimers`, so keep them identical to Railway's. The overrun grace can only be
+lengthened, never shortened below 30 minutes. With neither set, the shipped defaults apply.
 
 A past-start `scheduled` meeting is never nulled, because nulling would turn a no-show into
 `venue_unavailable`.

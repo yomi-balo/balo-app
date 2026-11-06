@@ -1,6 +1,11 @@
 import { meetingsRepository, type NonTargetLiveVenue, type ScheduledVenueTarget } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { isDailyDomainLabel, MISSED_CALL_TERMINATION_MS } from '@balo/shared/meetings';
+import {
+  DEFAULT_MEETING_TIMERS,
+  isDailyDomainLabel,
+  overrunStopCeiling,
+  type MeetingTimers,
+} from '@balo/shared/meetings';
 
 /**
  * BAL-518 — forced re-provision of call venues stamped on a Daily domain being retired.
@@ -10,21 +15,22 @@ import { isDailyDomainLabel, MISSED_CALL_TERMINATION_MS } from '@balo/shared/mee
  * points at. Room names are a pure function of the meeting id, so the same name is re-created.
  * Invites and emails carry Balo's `/meetings/{id}/call`, never the Daily URL, so nothing is re-sent.
  *
- * Every other live meeting on the old domain falls in one of two classes, split on
- * `cutoff = now − MISSED_CALL_TERMINATION_MS`:
+ * Every other live meeting on the old domain has a `blockerUntil` instant, the last moment it can
+ * still legitimately start or run (see {@link blockerUntil}), and is split on it against `now`:
  *
- *   - BLOCKER — can still legitimately start or run: a `scheduled` meeting that started after the
- *     cutoff (inside its missed-call window), or a `waiting_for_participants` / `in_progress`
- *     meeting whose `scheduled_end` is after the cutoff. Nulling its venue would turn a joinable
- *     call into `venue_unavailable`, so it is reported and left alone, and it gates the script.
- *   - STRANDED — can no longer start or run: a `scheduled` meeting that started at or before the
- *     cutoff (the lifecycle sweep terminates it as a missed call), or a live-status meeting whose
- *     `scheduled_end` is at or before the cutoff. Reported with its id, never gating: the
- *     `meeting.stranded` admin alert (BAL-586) owns getting it ended, and a row that has been
- *     stuck for days must not hold the cutover hostage.
+ *   - BLOCKER — `blockerUntil` is after `now`. A `scheduled` meeting is inside its missed-call
+ *     window; a `waiting_for_participants` / `in_progress` meeting is before its overrun stop
+ *     ceiling, so a case call running past its scheduled end is still live and joinable. Nulling its
+ *     venue would turn a joinable call into `venue_unavailable`, so it is reported and left alone,
+ *     and it gates the script.
+ *   - STRANDED — `blockerUntil` is at or before `now`: the lifecycle sweep has terminated or will
+ *     terminate it. Reported with its id, never gating: the `meeting.stranded` admin alert
+ *     (BAL-586) owns getting it ended, and a row that has been stuck for days must not hold the
+ *     cutover hostage.
  *
- * The cutoff uses the shipped default timer, not the `MEETING_MISSED_CALL_MINUTES` override (the
- * script runs without the API's environment).
+ * The timers are the API's own resolved set (`resolveMeetingTimers`, which reads the
+ * `MEETING_*_MINUTES` overrides from the script's environment), so an env override that lengthens
+ * the overrun grace lengthens the blocker window here too.
  *
  * Run by `scripts/daily-venue-reprovision.ts`; DB-only, no Daily call.
  */
@@ -113,20 +119,32 @@ export interface BlockerClassification {
 }
 
 /**
- * Splits the non-target live rows into {@link BlockerClassification}. A `scheduled` row is judged
- * on `scheduled_start`, any other live row on `scheduled_end`, both against `now − missedCallMs`.
+ * The last instant a non-target live row can still legitimately start or run. A `scheduled` row
+ * has `scheduled_start + missedCallTerminationMs` (the missed-call sweep ends it after that); a
+ * `waiting_for_participants` / `in_progress` row has `overrunStopCeiling`, the same function the
+ * overrun hard stop uses, so a call is never labelled stranded while the system would still let it
+ * run.
+ */
+export function blockerUntil(row: NonTargetLiveVenue, timers: MeetingTimers): Date {
+  if (row.status === 'scheduled') {
+    return new Date(row.scheduledStart.getTime() + timers.missedCallTerminationMs);
+  }
+  return overrunStopCeiling(row.scheduledStart, row.scheduledEnd, timers);
+}
+
+/**
+ * Splits the non-target live rows into {@link BlockerClassification}: a row is stranded once
+ * {@link blockerUntil} is at or before `now`, a blocker before that.
  */
 export function classifyNonTargets(
   rows: readonly NonTargetLiveVenue[],
   now: Date,
-  missedCallTerminationMs: number = MISSED_CALL_TERMINATION_MS
+  timers: MeetingTimers = DEFAULT_MEETING_TIMERS
 ): BlockerClassification {
-  const cutoffMs = now.getTime() - missedCallTerminationMs;
   const blockers: NonTargetLiveVenue[] = [];
   const stranded: NonTargetLiveVenue[] = [];
   for (const row of rows) {
-    const clock = row.status === 'scheduled' ? row.scheduledStart : row.scheduledEnd;
-    if (clock.getTime() <= cutoffMs) {
+    if (blockerUntil(row, timers).getTime() <= now.getTime()) {
       stranded.push(row);
     } else {
       blockers.push(row);
@@ -141,8 +159,8 @@ export interface VenueReprovisionInput {
   now: Date;
   /** Hard bound on each read. Defaults to {@link DEFAULT_LIMIT}. */
   limit?: number;
-  /** Defaults to the shipped {@link MISSED_CALL_TERMINATION_MS}. */
-  missedCallTerminationMs?: number;
+  /** Defaults to the shipped {@link DEFAULT_MEETING_TIMERS}; the script passes the env-resolved set. */
+  timers?: MeetingTimers;
 }
 
 export interface VenueReprovisionReport {
@@ -175,6 +193,7 @@ export async function runVenueReprovision(
 ): Promise<VenueReprovisionReport> {
   const joinUrlPrefix = joinUrlPrefixForDomain(input.fromDomain);
   const limit = input.limit ?? DEFAULT_LIMIT;
+  const timers = input.timers ?? DEFAULT_MEETING_TIMERS;
 
   const [targets, nonTargets] = await Promise.all([
     deps.repo.listScheduledVenueTargetsOnDomain({
@@ -185,6 +204,8 @@ export async function runVenueReprovision(
     deps.repo.listNonTargetLiveVenuesOnDomain({
       joinUrlPrefix,
       scheduledStartAtOrBefore: input.now,
+      missedCallTerminationMs: timers.missedCallTerminationMs,
+      overrunStopGraceMs: timers.overrunStopGraceMs,
       limit,
     }),
   ]);
@@ -203,11 +224,7 @@ export async function runVenueReprovision(
     );
   }
 
-  const { blockers, stranded } = classifyNonTargets(
-    nonTargets,
-    input.now,
-    input.missedCallTerminationMs
-  );
+  const { blockers, stranded } = classifyNonTargets(nonTargets, input.now, timers);
   if (stranded.length > 0) {
     log.warn(
       { fromDomain: input.fromDomain, stranded: stranded.length },

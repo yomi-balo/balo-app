@@ -10,10 +10,15 @@
  * Prints the database HOST and Supabase PROJECT REF (never credentials) so the operator can
  * confirm the target, then counts and meeting ids, never join urls.
  *
- * Other live meetings on the old domain are left alone and split in two (cutoff = now minus the
- * missed-call window): BLOCKERS can still start or run, and the script exits 1 while any exist;
- * STRANDED meetings can no longer start or run, are listed as a warning only, and are owned by
+ * Other live meetings on the old domain are left alone and split in two: BLOCKERS can still start
+ * or run (a `scheduled` meeting inside its missed-call window, or a live call before its overrun
+ * stop ceiling: the later of its end and start + 240 min, plus the grace), and the script exits 1
+ * while any exist; STRANDED meetings are past that, are listed as a warning only, and are owned by
  * the `meeting.stranded` alert (BAL-586).
+ * The timers come from `resolveMeetingTimers`, the API's own env reader, so the
+ * `MEETING_MISSED_CALL_MINUTES` / `MEETING_OVERRUN_STOP_GRACE_MINUTES` overrides in
+ * `<target-env-file>` apply here exactly as they do in the deployed API. Keep that file's values
+ * identical to Railway's, or the blocker window can be shorter than the API's.
  * Idempotent: cleared rows no longer match the domain prefix. When the batch is full, run again.
  *
  * ── HOW TO RUN ──────────────────────────────────────────────────────────────────────────
@@ -38,6 +43,7 @@
  */
 import { parseArgs } from 'node:util';
 import { db, type NonTargetLiveVenue } from '@balo/db';
+import { resolveMeetingTimers } from '../src/config/meeting-timers.js';
 import {
   DEFAULT_LIMIT,
   describeDatabaseHost,
@@ -142,6 +148,7 @@ async function main(): Promise<void> {
       apply,
       now: new Date(),
       limit: parseLimit(values.limit),
+      timers: resolveMeetingTimers(),
     });
     printReport(report, apply);
 

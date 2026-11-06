@@ -8,6 +8,7 @@ import {
   isMeetingVenueReady,
   type MeetingClocks,
 } from '@balo/shared/meetings';
+import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import { db } from '../client';
 import {
   auditEvents,
@@ -3820,12 +3821,18 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
   });
 
   describe('listNonTargetLiveVenuesOnDomain', () => {
+    const MISSED_CALL_MS = 10 * MINUTE_MS;
+    const OVERRUN_GRACE_MS = 30 * MINUTE_MS;
+    const SESSION_LIMIT_MS = MAX_SESSION_MINUTES * MINUTE_MS;
+
     function listNonTargets(
       overrides: Partial<{ scheduledStartAtOrBefore: Date; limit: number }> = {}
     ): Promise<{ meetingId: string; status: string; scheduledStart: Date; scheduledEnd: Date }[]> {
       return meetingsRepository.listNonTargetLiveVenuesOnDomain({
         joinUrlPrefix: OLD_PREFIX,
         scheduledStartAtOrBefore: new Date(),
+        missedCallTerminationMs: MISSED_CALL_MS,
+        overrunStopGraceMs: OVERRUN_GRACE_MS,
         limit: 50,
         ...overrides,
       });
@@ -3907,16 +3914,79 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
       expect(rows[0]?.meetingId).toBe(recent.id);
     });
 
-    it('orders by the classification clock, so a live call ending now outranks a scheduled row that started later', async () => {
+    it('sorts every blocker ahead of every stranded row on blockerUntil, whatever the status', async () => {
       const now = Date.now();
-      const blocker = await seedOnDomain(now - HOUR_MS, { status: 'in_progress' });
-      const stranded = await seedOnDomain(now - 30 * MINUTE_MS);
+      // scheduled: blockerUntil = start + 10 min.
+      const strandedScheduled = await seedOnDomain(now - MISSED_CALL_MS - MINUTE_MS);
+      const blockerScheduled = await seedOnDomain(now - MISSED_CALL_MS + MINUTE_MS);
+      // in_progress booked 1 h, started 2 h ago: end + 10 min passed, ceiling (start + 240 min + 30 min) has not.
+      const blockerOverrun = await seedOnDomain(now - 2 * HOUR_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - 2 * HOUR_MS + HOUR_MS),
+      });
+      // in_progress past its ceiling by a minute.
+      const strandedLive = await seedOnDomain(
+        now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS - MINUTE_MS,
+        {
+          status: 'in_progress',
+          scheduledEnd: new Date(now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS),
+        }
+      );
+      // waiting_for_participants booked longer than the session limit: ceiling = end + 30 min.
+      const longStart = now - SESSION_LIMIT_MS - 3 * HOUR_MS;
+      const blockerLong = await seedOnDomain(longStart, {
+        status: 'waiting_for_participants',
+        scheduledEnd: new Date(now - OVERRUN_GRACE_MS + MINUTE_MS),
+      });
+      const strandedLong = await seedOnDomain(longStart - MINUTE_MS, {
+        status: 'waiting_for_participants',
+        scheduledEnd: new Date(now - OVERRUN_GRACE_MS - MINUTE_MS),
+      });
+
+      const rows = await listNonTargets();
+      const ids = rows.map((row) => row.meetingId);
+
+      const blockerIds = [blockerScheduled.id, blockerOverrun.id, blockerLong.id];
+      const strandedIds = [strandedScheduled.id, strandedLive.id, strandedLong.id];
+      expect(ids.slice(0, 3).sort()).toEqual([...blockerIds].sort());
+      expect(ids.slice(3).sort()).toEqual([...strandedIds].sort());
+    });
+
+    it('--limit 1 keeps a running case call past scheduled end + 10 min ahead of stranded rows', async () => {
+      const now = Date.now();
+      const runningPastEnd = await seedOnDomain(now - 2 * HOUR_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - HOUR_MS),
+      });
+      await seedOnDomain(now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS - MINUTE_MS, {
+        status: 'in_progress',
+      });
+      await seedOnDomain(now - MISSED_CALL_MS - MINUTE_MS);
 
       const rows = await listNonTargets({ limit: 1 });
 
-      expect(rows.map((row) => row.meetingId)).toEqual([blocker.id]);
-      const both = await listNonTargets({ limit: 2 });
-      expect(both.map((row) => row.meetingId)).toEqual([blocker.id, stranded.id]);
+      expect(rows.map((row) => row.meetingId)).toEqual([runningPastEnd.id]);
+    });
+
+    it('applies the injected offsets: a longer overrun grace moves a live row ahead of a scheduled blocker', async () => {
+      const now = Date.now();
+      const scheduledBlocker = await seedOnDomain(now - MINUTE_MS);
+      const live = await seedOnDomain(now - SESSION_LIMIT_MS - 45 * MINUTE_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - SESSION_LIMIT_MS),
+      });
+
+      const defaultGrace = await listNonTargets({ limit: 2 });
+      const longGrace = await meetingsRepository.listNonTargetLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAtOrBefore: new Date(),
+        missedCallTerminationMs: MISSED_CALL_MS,
+        overrunStopGraceMs: 4 * HOUR_MS,
+        limit: 2,
+      });
+
+      expect(defaultGrace.map((row) => row.meetingId)).toEqual([scheduledBlocker.id, live.id]);
+      expect(longGrace.map((row) => row.meetingId)).toEqual([live.id, scheduledBlocker.id]);
     });
 
     it('returns [] without querying for a non-positive limit', async () => {
@@ -3958,6 +4028,8 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
         meetingsRepository.listNonTargetLiveVenuesOnDomain({
           joinUrlPrefix: prefix,
           scheduledStartAtOrBefore: new Date(),
+          missedCallTerminationMs: 10 * MINUTE_MS,
+          overrunStopGraceMs: 30 * MINUTE_MS,
           limit: 50,
         })
       ).rejects.toThrow(/joinUrlPrefix/);
@@ -3984,6 +4056,8 @@ describe('Daily domain cutover reads and clears (BAL-518)', () => {
         meetingsRepository.listNonTargetLiveVenuesOnDomain({
           joinUrlPrefix: '',
           scheduledStartAtOrBefore: new Date(),
+          missedCallTerminationMs: 10 * MINUTE_MS,
+          overrunStopGraceMs: 30 * MINUTE_MS,
           limit: 0,
         })
       ).rejects.toThrow(/joinUrlPrefix/);

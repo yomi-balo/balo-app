@@ -307,6 +307,10 @@ export interface ListNonTargetLiveVenuesInput {
    * instant as the target read's `scheduledStartAfter`.
    */
   scheduledStartAtOrBefore: Date;
+  /** `MeetingTimers.missedCallTerminationMs`: how long past its start a `scheduled` row can still block. */
+  missedCallTerminationMs: number;
+  /** `MeetingTimers.overrunStopGraceMs`: the grace past a live row's overrun ceiling. */
+  overrunStopGraceMs: number;
   /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
   limit: number;
 }
@@ -1908,11 +1912,14 @@ export const meetingsRepository = {
    * `waiting_for_participants` / `in_progress` row, and every `scheduled` row starting at or before
    * `scheduledStartAtOrBefore`. The two reads partition the live rows on the domain.
    *
-   * ORDERED BY THE CLASSIFICATION CLOCK, NEWEST FIRST: a `scheduled` row is judged on its
-   * `scheduled_start`, every other live row on its `scheduled_end` (the instant it stops being a
-   * blocker). Sorting on that same instant, descending, puts every row that can still block ahead
-   * of every stranded row, so a truncated result never drops a blocker in favour of a stranded
-   * row. Same prefix guard and no-venue-column rule as the target read.
+   * ORDERED BY THE CLASSIFICATION INSTANT, LATEST FIRST. The caller's `blockerUntil` is
+   * `scheduled_start + missedCallTerminationMs` for a `scheduled` row and
+   * `GREATEST(scheduled_end, scheduled_start + MAX_SESSION_MINUTES) + overrunStopGraceMs` for a
+   * `waiting_for_participants` / `in_progress` row (the SQL mirror of `overrunStopCeiling`). This
+   * query sorts on that exact instant, both branches including their offset, so every row whose
+   * `blockerUntil` is after `now` sorts ahead of every row at or before it and a truncated result
+   * never drops a blocker in favour of a stranded row. Same prefix guard and no-venue-column rule as
+   * the target read.
    *
    * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`.** A `limit <= 0` returns
    * `[]` without a query.
@@ -1942,9 +1949,11 @@ export const meetingsRepository = {
         )
       )
       .orderBy(
-        desc(
-          sql`CASE WHEN ${meetings.status} = 'scheduled' THEN ${meetings.scheduledStart} ELSE ${meetings.scheduledEnd} END`
-        ),
+        desc(sql`CASE WHEN ${meetings.status} = 'scheduled'
+          THEN ${meetings.scheduledStart} + ${input.missedCallTerminationMs}::double precision * interval '1 millisecond'
+          ELSE GREATEST(${meetings.scheduledEnd}, ${meetings.scheduledStart} + ${MAX_SESSION_MINUTES}::double precision * interval '1 minute')
+            + ${input.overrunStopGraceMs}::double precision * interval '1 millisecond'
+          END`),
         asc(meetings.id)
       )
       .limit(input.limit);
