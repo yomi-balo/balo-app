@@ -426,7 +426,13 @@ interface RegenerateDialogConfig {
 function resolveRegenerateDialog(
   isCaseMount: boolean,
   caseBriefFlow: UseCaseBriefFlowResult,
-  aiRegenerate: { open: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }
+  aiRegenerate: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onConfirm: () => void;
+    /** False when the documents changed since the brief was generated (upload-step Generate). */
+    sameDocuments: boolean;
+  }
 ): RegenerateDialogConfig {
   if (isCaseMount) {
     return {
@@ -442,7 +448,9 @@ function resolveRegenerateDialog(
     open: aiRegenerate.open,
     onOpenChange: aiRegenerate.onOpenChange,
     title: 'Regenerate the brief?',
-    body: "This replaces your edits with a new draft from the same documents. Your edits won't be recoverable.",
+    body: aiRegenerate.sameDocuments
+      ? "This replaces your edits with a new draft from the same documents. Your edits won't be recoverable."
+      : "This replaces your edits with a new draft from your updated documents. Your edits won't be recoverable.",
     confirmLabel: 'Regenerate',
     onConfirm: aiRegenerate.onConfirm,
   };
@@ -587,11 +595,9 @@ export function ProjectRequestPanel({
   // prop means the load failed (returned EMPTY_TAXONOMY) — surface the error state.
   // Context-free mounts start empty and self-load on first open, so the error flag
   // stays false until a self-load attempt fails.
-  const [tagsError, setTagsError] = useState(
-    projectTaxonomies !== undefined && projectTaxonomies.tags.groups.length === 0
-  );
+  const [tagsError, setTagsError] = useState(projectTaxonomies?.tags.groups.length === 0);
   const [productsError, setProductsError] = useState(
-    projectTaxonomies !== undefined && projectTaxonomies.products.groups.length === 0
+    projectTaxonomies?.products.groups.length === 0
   );
   const [retrying, setRetrying] = useState(false);
   // True once a context-free self-load has been kicked off (guard against re-fire).
@@ -1169,6 +1175,7 @@ export function ProjectRequestPanel({
     open: regenerateConfirmOpen,
     onOpenChange: setRegenerateConfirmOpen,
     onConfirm: handleConfirmRegenerate,
+    sameDocuments: hasBriefForCurrentDocuments,
   });
 
   return (
@@ -1249,7 +1256,8 @@ export function ProjectRequestPanel({
         <ProjectRequestDrawerFooter
           step={step}
           onBackToStart={() => setStep('start')}
-          onBackToReview={hasBriefForCurrentDocuments ? handleBackToReview : undefined}
+          canReturnToReview={hasBriefForCurrentDocuments}
+          onBackToReview={handleBackToReview}
           onGoReview={handleGoReview}
           isGenerating={isGenerating}
           documentCount={draft.documents.length}
@@ -1610,8 +1618,9 @@ function UploadStepBody({
 interface ProjectRequestDrawerFooterProps {
   step: ProjectStep;
   onBackToStart: () => void;
-  /** Present when the `upload` step's Back can return to an existing brief instead of `start`. */
-  onBackToReview: (() => void) | undefined;
+  /** True when the `upload` step's Back can return to an existing brief instead of `start`. */
+  canReturnToReview: boolean;
+  onBackToReview: () => void;
   onGoReview: () => void;
   isGenerating: boolean;
   documentCount: number;
@@ -1635,6 +1644,7 @@ interface ProjectRequestDrawerFooterProps {
 function ProjectRequestDrawerFooter({
   step,
   onBackToStart,
+  canReturnToReview,
   onBackToReview,
   onGoReview,
   isGenerating,
@@ -1666,10 +1676,10 @@ function ProjectRequestDrawerFooter({
   if (step === 'upload') {
     return (
       <DrawerFooter>
-        {onBackToReview === undefined ? (
-          <BackButton onClick={onBackToStart} disabled={isGenerating} />
-        ) : (
+        {canReturnToReview ? (
           <BackButton onClick={onBackToReview} disabled={isGenerating} label="Back to review" />
+        ) : (
+          <BackButton onClick={onBackToStart} disabled={isGenerating} />
         )}
         <PrimaryButton
           onClick={onGenerateClick}
@@ -2216,12 +2226,10 @@ function AiProvenanceBanner({
             : 'AI-drafted from your documents — check over everything below.'}
         </p>
         {/*
-          ⚠ 44px MINIMUM HIT AREA + A VISIBLE FOCUS RING ON BOTH CONTROLS (BAL-254 W5). Same rule
-          F13 applied to the uploader's Retry/Remove in this PR, and the same reason: this is a
-          touch-first surface. "Change source documents" additionally removed the NATIVE ring
-          (`focus-visible:outline-none`) and named a ring COLOUR with no `focus-visible:ring-2` to
-          draw — i.e. it had no visible focus indicator at all. The glyph and type scale are
-          unchanged; only the tappable box grows.
+          ⚠ 44px MINIMUM HIT AREA + A VISIBLE FOCUS RING ON BOTH CONTROLS (BAL-254): this is a
+          touch-first surface, the same rule the uploader's Retry/Remove follow. Both buttons set
+          `focus-visible:outline-none`, which removes the NATIVE ring — `focus-visible:ring-2` is
+          what draws a replacement, so dropping it leaves no visible focus indicator at all.
         */}
         {!isGenerating && (
           <div className="mt-2 flex flex-wrap items-center gap-3">
