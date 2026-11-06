@@ -277,6 +277,7 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
         expertName: 'Priya Sharma',
         suffix: '',
         expertProfileHref: null,
+        tracksProfileClicks: true,
       },
       statusChip: { status: 'active', label: 'Active', tone: 'success', icon: 'Layers' },
       provenance: { requestId: 'req-1', href: '/projects/req-1' },

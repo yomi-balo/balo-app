@@ -119,6 +119,7 @@ describe('mapEngagementToWorkspaceView — header line profile link', () => {
       expertName: 'Priya Sharma',
       suffix: ' — CPQ Specialist',
       expertProfileHref: HREF,
+      tracksProfileClicks: true,
     });
   });
 
@@ -128,6 +129,7 @@ describe('mapEngagementToWorkspaceView — header line profile link', () => {
       expertName: 'Priya Sharma',
       suffix: '',
       expertProfileHref: HREF,
+      tracksProfileClicks: false,
     });
   });
 
@@ -137,6 +139,7 @@ describe('mapEngagementToWorkspaceView — header line profile link', () => {
       expertName: null,
       suffix: '',
       expertProfileHref: null,
+      tracksProfileClicks: false,
     });
   });
 

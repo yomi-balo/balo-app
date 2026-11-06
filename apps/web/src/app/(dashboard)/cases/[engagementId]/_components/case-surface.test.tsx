@@ -1673,7 +1673,7 @@ describe('CaseSurface — follow-ups book in-page on an open case', () => {
     expect(screen.queryByRole('button', { name: 'Book a consultation' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /book/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
-    expect(screen.getByText(/isn't taking new bookings right now/)).toBeInTheDocument();
+    expect(screen.getByText(/isn't available to book on Balo right now/)).toBeInTheDocument();
   });
 
   it('CLOSED + paused keeps the profile links (a new case lands on the paused card)', () => {

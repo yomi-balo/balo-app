@@ -26,6 +26,7 @@ const agencyClientLine = (
   expertName: 'Priya Sharma',
   suffix: ', CPQ Specialist)',
   expertProfileHref: PROFILE_HREF,
+  tracksProfileClicks: true,
   ...overrides,
 });
 
@@ -77,6 +78,24 @@ describe('EngagementHeader', () => {
     expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
       surface: 'delivery_header',
     });
+  });
+
+  it('admin lens: the link works but a staff click is not reported', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    render(
+      <EngagementHeader
+        header={header({
+          headerLine: agencyClientLine({
+            prefix: 'Northwind Industrial ↔ ',
+            suffix: '',
+            tracksProfileClicks: false,
+          }),
+        })}
+      />
+    );
+    await user.click(screen.getByRole('link', { name: 'Priya Sharma' }));
+    expect(track).not.toHaveBeenCalled();
   });
 
   it('client lens (agency): links only the expert person, never the agency', () => {
@@ -140,6 +159,7 @@ describe('EngagementHeader', () => {
             expertName: null,
             suffix: '',
             expertProfileHref: null,
+            tracksProfileClicks: false,
           },
         })}
       />

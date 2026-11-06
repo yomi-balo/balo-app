@@ -134,6 +134,9 @@ export interface EngagementHeaderLineView {
    * `expertName` is null, so the line never carries a link it cannot render.
    */
   expertProfileHref: string | null;
+  /** Whether a click on the profile link is reported to analytics — client lens only, so staff
+   *  clicks on the admin lens stay out of the client-usage event. */
+  tracksProfileClicks: boolean;
 }
 
 export interface EngagementHeaderView {
@@ -1066,6 +1069,7 @@ export function mapEngagementToWorkspaceView(
       expertName: headerLine.expertPerson,
       suffix: headerLine.suffix,
       expertProfileHref: headerLine.expertPerson === null ? null : expertProfileHref,
+      tracksProfileClicks: ctx.lens === 'client',
     },
     statusChip: deriveStatusChip(status),
     provenance,

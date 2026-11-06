@@ -21,7 +21,8 @@ open **More** to find it. Select the pill to see what it means and what to do ne
   reconnected. Choose **Reconnect calendar**.
 - **Not taking work.** You still appear in search, but clients are offered a similar expert instead
   of booking you. Choose **Change availability** to turn new work back on.
-- **Not listed.** Clients can't find you right now. If your calendar has disconnected, choose
+- **Not listed.** Clients can't find you right now, and clients you already work with can't book a
+  follow-up until you're listed again. If your calendar has disconnected, choose
   **Reconnect calendar**. If another setup step needs attention, the pill points you to it. If
   nothing is missing, this usually clears up within a few minutes; if it doesn't, get in touch.
 

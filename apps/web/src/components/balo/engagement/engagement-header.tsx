@@ -80,7 +80,10 @@ export function EngagementHeader({
       <p className="text-muted-foreground mt-1.5 text-sm">
         {headerLine.prefix}
         {headerLine.expertName !== null && (
-          <ExpertProfileLink href={headerLine.expertProfileHref} surface="delivery_header">
+          <ExpertProfileLink
+            href={headerLine.expertProfileHref}
+            surface={headerLine.tracksProfileClicks ? 'delivery_header' : null}
+          >
             {headerLine.expertName}
           </ExpertProfileLink>
         )}

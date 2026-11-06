@@ -370,7 +370,7 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
       <CaseNudge {...BASE} profileHref={null} nudge={{ kind: 'nothing_booked' }} lens="client" />
     );
     expect(screen.queryByText(/book another consultation/)).not.toBeInTheDocument();
-    expect(screen.getByText(/isn't taking new bookings right now/)).toBeInTheDocument();
+    expect(screen.getByText(/isn't available to book on Balo right now/)).toBeInTheDocument();
   });
 
   /**

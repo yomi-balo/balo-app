@@ -12,8 +12,11 @@ interface ExpertProfileLinkBaseProps {
    * public-profile rule, so a non-null href never lands on a 404.
    */
   href: string | null;
-  /** The page region the link sits in, reported on click. */
-  surface: ExpertProfileLinkSurface;
+  /**
+   * The page region the link sits in, reported on click. `null` reports nothing — for staff
+   * views, whose clicks would otherwise mix into the client-usage event.
+   */
+  surface: ExpertProfileLinkSurface | null;
   children: ReactNode;
 }
 
@@ -38,8 +41,9 @@ const NAME_LINK_CLASS = cn(
   'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none'
 );
 
-function useTrackProfileLinkClick(surface: ExpertProfileLinkSurface): () => void {
+function useTrackProfileLinkClick(surface: ExpertProfileLinkSurface | null): () => void {
   return useCallback(() => {
+    if (surface === null) return;
     track(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, { surface });
   }, [surface]);
 }

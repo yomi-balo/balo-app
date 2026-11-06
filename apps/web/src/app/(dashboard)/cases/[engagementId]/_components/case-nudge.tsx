@@ -577,9 +577,14 @@ function nothingBookedBody(
   }
   // No booking CTA means the expert is no longer publicly listed, so the copy must not
   // invite a booking it cannot offer. The conversation stays open either way.
+  // ⚠ Deliberately distinct from "Not taking work": a paused expert who is still listed stays
+  // bookable here, so that wording would describe a different state.
+  // ⚠ Names the PERSON, not the party, even though this is prospective copy. Listing is per
+  // expert profile; the agency may still be bookable through someone else, so "{Agency} isn't
+  // available" would be false.
   return canBook
     ? `Pick up where you left off — book another consultation with ${counterparty}.`
-    : `${counterparty} isn't taking new bookings right now — you can still message them on the case.`;
+    : `${counterparty} isn't available to book on Balo right now — you can still message them on the case.`;
 }
 
 interface NudgeShellProps {
