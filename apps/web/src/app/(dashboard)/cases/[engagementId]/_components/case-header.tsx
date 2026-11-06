@@ -110,12 +110,16 @@ export function CaseHeader({
               {header.heldConsultationCount === 1 ? '' : 's'} held
             </span>
             <Dot />
-            {/* `truncate` sits ON the link (a blockified flex item) rather than on a wrapper,
-                whose overflow clip would hide the link's focus ring. */}
+            {/* `truncate` sits ON the link (a blockified flex item), so the label ellipsizes
+                as the last item of the meta line. */}
             {header.counterpartyOrgHref === null ? (
               <span className="truncate">{header.counterpartyOrgLabel}</span>
             ) : (
-              <ExpertProfileLink href={header.counterpartyOrgHref} className="truncate">
+              <ExpertProfileLink
+                href={header.counterpartyOrgHref}
+                surface="case_header"
+                className="truncate"
+              >
                 {header.counterpartyOrgLabel}
               </ExpertProfileLink>
             )}

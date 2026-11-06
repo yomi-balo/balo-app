@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
-import { track, RECAP_EVENTS } from '@/lib/analytics';
+import { track, EXPERT_PROFILE_EVENTS, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import { CasePartyCard } from './case-party-card';
 
@@ -76,19 +76,34 @@ beforeEach(() => {
 });
 
 /**
- * The avatar + name are ONE link to the expert's public profile, built from the same
- * server-gated `profileHref` as "Book again" — so it exists only when that profile resolves,
+ * The avatar and the name both link to the expert's public profile, built from the same
+ * server-gated `profileHref` as "Book again" — so they exist only when that profile resolves,
  * and never on the expert lens, whose counterparty is the client company.
  */
 describe('CasePartyCard — the profile link', () => {
-  it('links avatar and name as ONE link, named by the person alone', () => {
-    renderCard();
+  it('links the avatar and the name to the profile, as one link named by the person', () => {
+    const { container } = renderCard();
     const link = screen.getByRole('link', { name: 'Amara Okafor' });
     expect(link).toHaveAttribute('href', '/experts/amara-okafor');
-    expect(link).toContainElement(screen.getByText('AO'));
-    // The headline, agency and rating stay outside the link.
+    expect(screen.getAllByRole('link', { name: 'Amara Okafor' })).toHaveLength(1);
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/amara-okafor');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toContainElement(screen.getByText('AO'));
+    // The headline, agency and rating stay outside both links.
     expect(link).not.toContainElement(screen.getByText('Salesforce architect'));
     expect(link).not.toContainElement(screen.getByText('CloudPeak'));
+  });
+
+  it('reports a profile click as the case party card', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('link', { name: 'Amara Okafor' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'case_party_card',
+    });
   });
 
   it('renders the name unlinked when the profile does not resolve', () => {
@@ -98,7 +113,7 @@ describe('CasePartyCard — the profile link', () => {
   });
 
   it('never links the client COMPANY on the expert lens', () => {
-    renderCard({
+    const { container } = renderCard({
       lens: 'expert',
       earnings: NOT_YET,
       party: {
@@ -113,25 +128,8 @@ describe('CasePartyCard — the profile link', () => {
       },
     });
     expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
   });
-
-  it.each([
-    ['linked', '/experts/amara-okafor'],
-    ['unlinked', null],
-  ] as const)(
-    'stacks the headline under the name BESIDE the avatar, in one identity column (%s)',
-    (_label, profileHref) => {
-      renderCard({ party: { ...PARTY, profileHref } });
-      // case-surface.jsx: the avatar sits beside a name + headline + rating stack. The column
-      // is the avatar's positioned ancestor, so the headline sits under the name, not below
-      // the avatar.
-      const column = screen.getByText('Salesforce architect').parentElement;
-      expect(column).toHaveClass('relative', 'pl-13');
-      expect(column).toContainElement(screen.getByText('AO'));
-      expect(column).toContainElement(screen.getByText('Amara Okafor'));
-    }
-  );
 });
 
 describe('CasePartyCard — the identity block', () => {
@@ -282,6 +280,11 @@ describe('CasePartyCard — CaseSlotQuickPick gating', () => {
 
   it('omits the quick-pick on the expert lens', () => {
     renderCard({ lens: 'expert', isOpen: true });
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+  });
+
+  it('omits the quick-pick when the expert is no longer publicly listed', () => {
+    renderCard({ lens: 'client', isOpen: true, party: { ...PARTY, profileHref: null } });
     expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
   });
 

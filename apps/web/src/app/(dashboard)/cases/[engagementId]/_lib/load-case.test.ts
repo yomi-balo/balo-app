@@ -699,13 +699,12 @@ describe('loadCase — the counterparty, per lens', () => {
 
   /** ⚠ `publicProfileUsername` is null whenever `/experts/{username}` would 404 (no username,
    *  unapproved, unsearchable, or a suspended/deleted owner) — then NOTHING links there: not
-   *  the name, not the org line, not the People entry, and no book-again CTA. */
+   *  the name, not the org line, and no book-again CTA. */
   it('links NOTHING to the profile when the public profile does not resolve', async () => {
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, publicProfileUsername: null });
     const view = await loadOrThrow();
     expect(view.party.profileHref).toBeNull();
     expect(view.header.counterpartyOrgHref).toBeNull();
-    expect(view.people).toContainEqual({ name: 'Amara Okafor', isViewer: false, href: null });
   });
 
   it('CLIENT lens links the org line for an INDEPENDENT expert — the label IS the person', async () => {
@@ -767,16 +766,11 @@ describe('loadCase — the counterparty, per lens', () => {
    * membership (ADR-1029) and survive individual departures; there is no `created_by_user_id`
    * on an engagement to name a single client person from anyway.
    */
-  it('EXPERT lens never links the client COMPANY, in the header or the People card', async () => {
+  it('EXPERT lens never links the client COMPANY in the header', async () => {
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
     expect(view.header.counterpartyOrgLabel).toBe('Northwind Industrial');
     expect(view.header.counterpartyOrgHref).toBeNull();
-    expect(view.people).toContainEqual({
-      name: 'Northwind Industrial',
-      isViewer: false,
-      href: null,
-    });
   });
 
   it('EXPERT lens names the client COMPANY, with no forward CTA', async () => {
@@ -837,7 +831,7 @@ describe('loadCase — the counterparty, per lens', () => {
     const view = await loadOrThrow();
     expect(view.people).toEqual([
       { name: 'Dana Whitfield', isViewer: true },
-      { name: 'Amara Okafor', isViewer: false, href: '/experts/amara' },
+      { name: 'Amara Okafor', isViewer: false },
     ]);
   });
 

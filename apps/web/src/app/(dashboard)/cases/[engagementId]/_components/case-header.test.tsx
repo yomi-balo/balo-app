@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import type { CaseHeaderView } from '@/lib/cases/case-view-types';
 import { CaseHeader } from './case-header';
 
@@ -217,6 +218,24 @@ describe('CaseHeader — the org label link', () => {
     expect(link).toHaveAttribute('href', '/experts/amara');
     // The truncation sits on the link itself, so no wrapper clips its focus ring.
     expect(link).toHaveClass('truncate');
+  });
+
+  it('reports a profile click as the case header', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    render(
+      <CaseHeader
+        header={{
+          ...BASE,
+          counterpartyOrgLabel: 'Amara Okafor',
+          counterpartyOrgHref: '/experts/amara',
+        }}
+      />
+    );
+    await user.click(screen.getByRole('link', { name: 'Amara Okafor' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'case_header',
+    });
   });
 
   it('renders an agency name as plain text', () => {

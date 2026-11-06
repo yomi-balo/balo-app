@@ -184,21 +184,23 @@ function hydrateDraftState(
  * into an audience-resolved {@link ProposalReviewDoc} (BAL-357 — money is resolved
  * for `audience`: raw for expert/admin-base, `applyBaloFee`'d for client). Returns
  * `null` when the relationship has no current proposal, or its status isn't
- * reviewable (e.g. `draft`/`withdrawn`).
+ * reviewable (e.g. `draft`/`withdrawn`). `publicUsernameRead` is the expert's
+ * public-profile username, read alongside the proposal and awaited with its children.
  */
 async function loadReviewDoc(
   relationship: Relationship,
   audience: ProposalAudience,
-  publicUsername: string | null = null
+  publicUsernameRead: Promise<string | null> = Promise.resolve(null)
 ): Promise<ProposalReviewDoc | null> {
   const proposal = await proposalsRepository.findCurrentByRelationship(relationship.id);
   if (proposal === undefined || !REVIEWABLE_PROPOSAL_STATUSES.has(proposal.status)) {
     return null;
   }
-  const [milestones, installments, documents] = await Promise.all([
+  const [milestones, installments, documents, publicUsername] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposal.id),
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
+    publicUsernameRead,
   ]);
   return hydrateReviewDoc(
     proposal,
@@ -214,7 +216,8 @@ async function loadReviewDoc(
 /**
  * The public-profile usernames of every expert on the request, in ONE batched read — present
  * only where `/experts/{username}` resolves, so the client review's header links never 404.
- * Non-critical: a failure leaves every header unlinked rather than failing the review.
+ * Non-critical: a failure leaves every header unlinked rather than failing the review, so the
+ * returned promise never rejects.
  */
 async function loadPublicUsernames(
   request: ProjectRequestWithRelations
@@ -546,11 +549,16 @@ async function renderClientReview(
   if (ctx.lens !== 'client' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     return null;
   }
-  // Every reviewable proposal on the request powers the switcher.
-  const usernames = await loadPublicUsernames(request);
+  // Every reviewable proposal on the request powers the switcher. The username read is
+  // independent of the proposal reads, so it runs alongside them rather than before them.
+  const usernamesRead = loadPublicUsernames(request);
   const docs = await Promise.all(
     request.relationships.map((r) =>
-      loadReviewDoc(r, 'client', usernames.get(r.expertProfileId) ?? null)
+      loadReviewDoc(
+        r,
+        'client',
+        usernamesRead.then((usernames) => usernames.get(r.expertProfileId) ?? null)
+      )
     )
   );
   const reviewableDocs = docs.filter((d): d is ProposalReviewDoc => d !== null);

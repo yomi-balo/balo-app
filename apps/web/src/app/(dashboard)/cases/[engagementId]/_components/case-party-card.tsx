@@ -5,10 +5,15 @@ import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
+import { cn } from '@/lib/utils';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import type { BookingFlowExpert } from '@/components/booking';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
@@ -112,37 +117,33 @@ export function CasePartyCard({
 
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
-      {/* Avatar + name are ONE link to the expert's public profile (client lens, profile
-          resolves); otherwise the same boxes render unlinked. The headline, agency and rating
-          stack under the name beside the avatar (40px + 12px gap, held by `pl-13`), outside the
-          link, so its accessible name is the person's name alone. */}
-      <div className="relative min-h-10 min-w-0 pl-13">
-        <p className="text-foreground text-sm font-semibold">
-          <ExpertProfileLink
-            href={party.profileHref}
-            avatar={
-              <Avatar size="lg" className="flex-none">
-                {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
-                <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-                  {party.initials}
-                </AvatarFallback>
-              </Avatar>
-            }
-          >
-            {party.name}
-          </ExpertProfileLink>
-        </p>
-        {party.headline !== null && (
-          <p className="text-muted-foreground mt-0.5 text-xs leading-snug">{party.headline}</p>
-        )}
-        {party.orgLabel !== null && (
-          <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
-        )}
-        {party.ratingAverage !== null && (
-          <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
-            <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+      <div className={cn('flex items-start gap-3', EXPERT_PROFILE_ROW)}>
+        <ExpertProfileAvatarLink href={party.profileHref} surface="case_party_card">
+          <Avatar size="lg" className="flex-none">
+            {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
+            <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+              {party.initials}
+            </AvatarFallback>
+          </Avatar>
+        </ExpertProfileAvatarLink>
+        <div className="min-w-0">
+          <p className="text-foreground text-sm font-semibold">
+            <ExpertProfileLink href={party.profileHref} surface="case_party_card">
+              {party.name}
+            </ExpertProfileLink>
           </p>
-        )}
+          {party.headline !== null && (
+            <p className="text-muted-foreground mt-0.5 text-xs leading-snug">{party.headline}</p>
+          )}
+          {party.orgLabel !== null && (
+            <p className="text-muted-foreground mt-0.5 text-xs">{party.orgLabel}</p>
+          )}
+          {party.ratingAverage !== null && (
+            <p className="text-muted-foreground mt-0.5 inline-flex items-center gap-1 text-xs">
+              <InlineRating average={party.ratingAverage} count={party.ratingCount} />
+            </p>
+          )}
+        </div>
       </div>
 
       {/*
@@ -178,8 +179,9 @@ export function CasePartyCard({
       )}
 
       {/* BAL-400 (D4a entry point 3) — the next-available-slot quick-pick strip. Client lens,
-          open case only; silently renders nothing without ready availability. */}
-      {lens === 'client' && isOpen && (
+          open case, publicly listed expert only; silently renders nothing without ready
+          availability. */}
+      {lens === 'client' && isOpen && party.profileHref !== null && (
         <CaseSlotQuickPick
           engagementId={engagementId}
           caseTitle={caseTitle}

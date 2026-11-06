@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   EXPERT_PROFILE_EVENTS,
   type ExpertProfileCta,
+  type ExpertProfileLinkSurface,
   type ExpertReviewsFilter,
 } from './expert-profile';
 
@@ -11,6 +12,7 @@ describe('EXPERT_PROFILE_EVENTS', () => {
       'BOOKING_UNAVAILABLE_SHOWN',
       'PROFILE_CTA_CLICKED',
       'PROFILE_CTA_IMPRESSION',
+      'PROFILE_LINK_CLICKED',
       'PROFILE_SECTION_VIEWED',
       'PROFILE_VIEWED',
       'REVIEWS_FILTER_SELECTED',
@@ -24,6 +26,7 @@ describe('EXPERT_PROFILE_EVENTS', () => {
     expect(EXPERT_PROFILE_EVENTS.PROFILE_SECTION_VIEWED).toBe('expert_profile_section_viewed');
     expect(EXPERT_PROFILE_EVENTS.PROFILE_CTA_IMPRESSION).toBe('expert_profile_cta_impression');
     expect(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED).toBe('expert_profile_cta_clicked');
+    expect(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED).toBe('expert_profile_link_clicked');
     expect(EXPERT_PROFILE_EVENTS.BOOKING_UNAVAILABLE_SHOWN).toBe(
       'expert_profile_booking_unavailable_shown'
     );
@@ -48,5 +51,16 @@ describe('EXPERT_PROFILE_EVENTS', () => {
 
   it('the reviews filter vocabulary is all | project | case', () => {
     expectTypeOf<'all' | 'project' | 'case'>().toEqualTypeOf<ExpertReviewsFilter>();
+  });
+
+  it('the profile-link surface vocabulary names each page region that links the expert', () => {
+    expectTypeOf<
+      | 'case_party_card'
+      | 'case_header'
+      | 'request_thread_header'
+      | 'proposal_header'
+      | 'delivery_header'
+      | 'recap_party_card'
+    >().toEqualTypeOf<ExpertProfileLinkSurface>();
   });
 });

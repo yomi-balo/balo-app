@@ -1,7 +1,6 @@
 'use client';
 
 import { Users } from 'lucide-react';
-import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
 import { SectionHead } from '@/components/balo/section/section-states';
 import type { CasePersonView } from '@/lib/cases/case-view-types';
 
@@ -29,9 +28,6 @@ import type { CasePersonView } from '@/lib/cases/case-view-types';
  *
  * ⚠ "You" IS RESOLVED SERVER-SIDE (`isViewer`). The client never compares user ids to work out
  * who it is talking to.
- *
- * A person with an `href` (the client lens's delivering expert, whose public profile resolves)
- * renders as a link to that profile; everyone else is plain text.
  */
 
 /** BAL-573 — verbatim, exported so `case-surface.test.tsx` can assert against it rather than a
@@ -71,11 +67,7 @@ export function CasePeopleCard({
         {people.map((person, index) => (
           <span key={person.name + String(person.isViewer)}>
             {index > 0 && ' · '}
-            {person.isViewer ? (
-              'You'
-            ) : (
-              <ExpertProfileLink href={person.href ?? null}>{person.name}</ExpertProfileLink>
-            )}
+            {person.isViewer ? 'You' : person.name}
           </span>
         ))}
       </p>

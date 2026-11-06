@@ -365,6 +365,14 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
+  it('stops inviting a booking on the client lens when no booking path exists', () => {
+    render(
+      <CaseNudge {...BASE} profileHref={null} nudge={{ kind: 'nothing_booked' }} lens="client" />
+    );
+    expect(screen.queryByText(/book another consultation/)).not.toBeInTheDocument();
+    expect(screen.getByText(/isn't taking new bookings right now/)).toBeInTheDocument();
+  });
+
   /**
    * ⚠⚠ BAL-567 — **INVERTED**, NOT DELETED. This case used to assert that NO join button existed
    * anywhere, because no participant join route existed on `main`. BAL-435 shipped

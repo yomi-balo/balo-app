@@ -9,7 +9,11 @@ import type {
 import type { ThreadActions } from './thread-actions';
 import { CallGroup, NextCallLine } from './thread-call-group';
 import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
-import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { declineVerbFor } from '@/lib/project-request/close-copy';
 
 interface ThreadHeaderProps {
@@ -117,22 +121,21 @@ export function ThreadHeader({
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal, declineSlot } = actions;
   return (
-    <div className="border-border flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-4 py-3">
-      {/* The identity column holds the 36px avatar (absolutely placed by `ExpertProfileLink`,
-          vertically centred as the row's `items-center` did) plus the 10px row gap in
-          `pl-[46px]`, so the next-call line stacks under the name beside the avatar. */}
-      <div className="relative flex min-h-9 min-w-[calc(10rem+46px)] flex-1 flex-col justify-center pl-[46px]">
-        <p className="text-foreground flex min-w-0 items-baseline gap-1.5 text-sm font-semibold">
-          <ExpertProfileLink
-            href={profileHref}
-            avatar={<InitialsAvatar initials={thread.expertInitials} size="md" />}
-            avatarAlign="center"
-          >
-            <span className="block truncate">{thread.expertName}</span>
+    <div
+      className={cn(
+        'border-border flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-4 py-3',
+        EXPERT_PROFILE_ROW
+      )}
+    >
+      <ExpertProfileAvatarLink href={profileHref} surface="request_thread_header">
+        <InitialsAvatar initials={thread.expertInitials} size="md" />
+      </ExpertProfileAvatarLink>
+      <div className="min-w-[10rem] flex-1">
+        <p className="text-foreground truncate text-sm font-semibold">
+          <ExpertProfileLink href={profileHref} surface="request_thread_header">
+            {thread.expertName}
           </ExpertProfileLink>
-          {showYouSuffix && (
-            <span className="text-muted-foreground shrink-0 text-[11px]">(you)</span>
-          )}
+          {showYouSuffix && <span className="text-muted-foreground ml-1.5 text-[11px]">(you)</span>}
         </p>
         <NextCallLine
           slot={actions.callSlot}

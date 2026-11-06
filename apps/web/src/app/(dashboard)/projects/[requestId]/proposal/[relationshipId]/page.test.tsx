@@ -928,6 +928,37 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     );
   });
 
+  it('reads the public usernames alongside the proposals, not before them', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ expertProfileId: undefined }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(clientCtx());
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+    let releaseUsernames: (usernames: Map<string, string>) => void = () => undefined;
+    mockFindPublicUsernames.mockReturnValue(
+      new Promise<Map<string, string>>((resolve) => {
+        releaseUsernames = resolve;
+      })
+    );
+
+    const pending = renderPage();
+    // The proposal and its children load while the username read is still in flight.
+    await vi.waitFor(() => {
+      expect(mockListMilestones).toHaveBeenCalled();
+    });
+    expect(mockFindCurrentByRelationship).toHaveBeenCalled();
+    expect(mockReview).not.toHaveBeenCalled();
+    releaseUsernames(new Map([[EXPERT_PROFILE_ID, 'priya-nair']]));
+    await pending;
+
+    const props = mockReview.mock.calls[0]?.[0] as {
+      proposals: Array<{ expert: { profileHref: string | null } }>;
+    };
+    expect(props.proposals[0]?.expert.profileHref).toBe('/experts/priya-nair');
+  });
+
   it.each([
     [undefined, false],
     ['1', true],

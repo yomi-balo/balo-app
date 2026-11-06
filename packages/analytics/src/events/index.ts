@@ -76,6 +76,7 @@ export {
   type ExpertProfileEventMap,
   type ExpertProfileSection,
   type ExpertProfileCta,
+  type ExpertProfileLinkSurface,
   type ProfileViewport,
 } from './expert-profile';
 export {

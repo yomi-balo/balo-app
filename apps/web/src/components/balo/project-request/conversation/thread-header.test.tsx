@@ -5,6 +5,7 @@ import { ThreadHeader } from './thread-header';
 import { deriveThreadActions } from './thread-actions';
 import { thread } from '@/test/fixtures/conversation';
 import { axe } from '@/test/axe';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import type {
   ConversationThreadView,
   UpcomingCallView,
@@ -96,20 +97,36 @@ describe('ThreadHeader', () => {
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
   });
 
-  it('client lens with a public profile: avatar + name are ONE link to it, named by the name', () => {
-    renderHeader({ profileHref: '/experts/priya-nair' });
+  it('client lens with a public profile: avatar and name link to it, as one link named by the name', () => {
+    const { container } = renderHeader({ profileHref: '/experts/priya-nair' });
     const links = screen.getAllByRole('link', { name: 'Priya Nair' });
     expect(links).toHaveLength(1);
     const [link] = links;
     expect(link).toHaveAttribute('href', '/experts/priya-nair');
-    // The initials avatar sits inside the same link, hidden from the accessible name.
-    expect(link).toHaveTextContent('PN');
+    // The initials avatar is its own pointer-only link, outside the accessibility tree.
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/priya-nair');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toHaveTextContent('PN');
   });
 
-  it('no public profile: the name renders plain, with no link', () => {
-    renderHeader({ profileHref: null });
+  it('reports a profile click as the request thread header', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    renderHeader({ profileHref: '/experts/priya-nair' });
+    await user.click(screen.getByRole('link', { name: 'Priya Nair' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'request_thread_header',
+    });
+  });
+
+  it('no public profile: the avatar and name render plain, with no link', () => {
+    const { container } = renderHeader({ profileHref: null });
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Priya Nair/ })).not.toBeInTheDocument();
+    expect(container.querySelector('a[href^="/experts/"]')).toBeNull();
   });
 
   it('expert lens: the name is plain and "(you)" still shows', () => {
@@ -121,17 +138,6 @@ describe('ThreadHeader', () => {
   it('has no axe violations with the avatar + name linked', async () => {
     const { container } = renderHeader({ profileHref: '/experts/priya-nair' });
     expect(await axe(container)).toHaveNoViolations();
-  });
-
-  it('stacks the next-call line under the name BESIDE the avatar, in one identity column', () => {
-    renderHeader({
-      profileHref: '/experts/priya-nair',
-      threadOverrides: { upcomingCalls: [IN_TWO_DAYS] },
-    });
-    const column = screen.getByText(/Next call/).closest('p')?.parentElement;
-    expect(column).toHaveClass('relative', 'pl-[46px]');
-    expect(column).toContainElement(screen.getByText('PN'));
-    expect(column).toContainElement(screen.getByRole('link', { name: 'Priya Nair' }));
   });
 
   it('keeps the "(you)" suffix outside the profile link', () => {

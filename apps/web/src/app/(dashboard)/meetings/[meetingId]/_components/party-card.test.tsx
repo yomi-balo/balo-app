@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import type { RecapPartyView } from '@/lib/meetings/recap-view-types';
 
 const mockGetAvatarUrl = vi.fn();
@@ -29,18 +31,33 @@ beforeEach(() => {
 });
 
 /**
- * The avatar + name are ONE link to the expert's public profile, from the same server-gated
+ * The avatar and the name both link to the expert's public profile, from the same server-gated
  * `profileHref` as "Book again": present only when that profile resolves, and never on the
  * expert lens, whose counterparty is the client company.
  */
 describe('PartyCard — the profile link', () => {
-  it('links avatar and name as ONE link, named by the person alone', () => {
-    render(<PartyCard party={PARTY} lens="client" />);
+  it('links the avatar and the name to the profile, as one link named by the person', () => {
+    const { container } = render(<PartyCard party={PARTY} lens="client" />);
     const link = screen.getByRole('link', { name: 'Amara Okafor' });
     expect(link).toHaveAttribute('href', '/experts/amara');
-    expect(link).toContainElement(screen.getByText('AO'));
+    expect(screen.getAllByRole('link', { name: 'Amara Okafor' })).toHaveLength(1);
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/amara');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toContainElement(screen.getByText('AO'));
     expect(link).not.toContainElement(screen.getByText('Salesforce CPQ specialist'));
     expect(link).not.toContainElement(screen.getByText('CloudPeak'));
+  });
+
+  it('reports a profile click as the recap party card', async () => {
+    const user = userEvent.setup();
+    render(<PartyCard party={PARTY} lens="client" />);
+    await user.click(screen.getByRole('link', { name: 'Amara Okafor' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'recap_party_card',
+    });
   });
 
   it('"Book again" uses the same profile href', () => {
@@ -52,13 +69,15 @@ describe('PartyCard — the profile link', () => {
   });
 
   it('renders the name unlinked when the profile does not resolve', () => {
-    render(<PartyCard party={{ ...PARTY, profileHref: null }} lens="client" />);
+    const { container } = render(
+      <PartyCard party={{ ...PARTY, profileHref: null }} lens="client" />
+    );
     expect(screen.getByText('Amara Okafor')).toBeInTheDocument();
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
   });
 
   it('never links the client COMPANY on the expert lens', () => {
-    render(
+    const { container } = render(
       <PartyCard
         party={{
           ...PARTY,
@@ -74,23 +93,8 @@ describe('PartyCard — the profile link', () => {
       />
     );
     expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
   });
-
-  it.each([
-    ['linked', '/experts/amara'],
-    ['unlinked', null],
-  ] as const)(
-    'stacks the headline under the name BESIDE the avatar, in one identity column (%s)',
-    (_label, profileHref) => {
-      render(<PartyCard party={{ ...PARTY, profileHref }} lens="client" />);
-      // post-meeting-recap.jsx: the avatar sits beside the name / org / rating stack.
-      const column = screen.getByText('Salesforce CPQ specialist').parentElement;
-      expect(column).toHaveClass('relative', 'pl-13');
-      expect(column).toContainElement(screen.getByText('AO'));
-      expect(column).toContainElement(screen.getByText('Amara Okafor'));
-    }
-  );
 });
 
 describe('PartyCard', () => {

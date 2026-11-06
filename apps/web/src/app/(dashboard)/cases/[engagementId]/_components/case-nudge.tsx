@@ -179,7 +179,11 @@ export function CaseNudge({
     <NudgeShell
       icon={lens === 'client' ? Video : MessageSquare}
       title={lens === 'client' ? 'Nothing booked yet' : 'Nothing booked'}
-      body={nothingBookedBody(lens, counterpartyLabel)}
+      body={nothingBookedBody(
+        lens,
+        counterpartyLabel,
+        onBookFollowUp !== undefined || profileHref !== null
+      )}
       actions={
         // ⚠ ONLY A LIVE DESTINATION RENDERS. `profileHref` is null whenever the expert's public
         // profile does not resolve, and a null means NO button rather than a link that 404s.
@@ -560,13 +564,22 @@ function rescheduleProposalBody(optionCount: number, expiresAtIso: string): Reac
   );
 }
 
-function nothingBookedBody(lens: 'client' | 'expert', counterparty: string): string {
+function nothingBookedBody(
+  lens: 'client' | 'expert',
+  counterparty: string,
+  canBook: boolean
+): string {
   // ⚠ THE DESIGN'S "{Expert} has time this week" IS NOT RENDERED. There is no availability
   // read on this surface (and no slot-listing endpoint anywhere — owner decision D5), so
   // asserting that the expert has time would be a fabricated claim about a third party.
-  return lens === 'client'
+  if (lens === 'expert') {
+    return `${counterparty} hasn't booked a follow-up. You can still reply on the case.`;
+  }
+  // No booking CTA means the expert is no longer publicly listed, so the copy must not
+  // invite a booking it cannot offer. The conversation stays open either way.
+  return canBook
     ? `Pick up where you left off — book another consultation with ${counterparty}.`
-    : `${counterparty} hasn't booked a follow-up. You can still reply on the case.`;
+    : `${counterparty} isn't taking new bookings right now — you can still message them on the case.`;
 }
 
 interface NudgeShellProps {

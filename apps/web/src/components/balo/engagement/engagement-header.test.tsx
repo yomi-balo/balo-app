@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 
 import { EngagementHeader } from './engagement-header';
 import type {
@@ -65,6 +67,16 @@ describe('EngagementHeader', () => {
     expect(line).toHaveTextContent(
       /^Delivered by CloudPeak Consulting \(Priya Sharma, CPQ Specialist\)$/
     );
+  });
+
+  it('reports a profile click as the delivery header', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    render(<EngagementHeader header={header()} />);
+    await user.click(screen.getByRole('link', { name: 'Priya Sharma' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'delivery_header',
+    });
   });
 
   it('client lens (agency): links only the expert person, never the agency', () => {

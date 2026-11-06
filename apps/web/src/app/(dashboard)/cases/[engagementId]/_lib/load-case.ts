@@ -987,7 +987,7 @@ export const loadCase = cache(
     );
     const people: CasePersonView[] = [
       { name: viewerName, isViewer: true },
-      { name: labels.counterpartyName, isViewer: false, href: labels.party.profileHref },
+      { name: labels.counterpartyName, isViewer: false },
     ];
 
     const base = {

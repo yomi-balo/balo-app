@@ -126,6 +126,7 @@ export type {
   AnalyticsErrorReporter,
   ExpertProfileSection,
   ExpertProfileCta,
+  ExpertProfileLinkSurface,
   ProfileViewport,
   ProjectEventMap,
   ProjectEntryMethod,

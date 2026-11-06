@@ -15,7 +15,11 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InlineRating } from '@/components/balo/rating-display';
-import { ExpertProfileLink } from '@/components/balo/expert-profile-link';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
@@ -106,49 +110,42 @@ export function ProposalDoc({
   return (
     <div className="flex flex-col gap-[18px]">
       {/* 1 — Header: identity + pills */}
-      <div className="flex items-center gap-3">
-        {/* The identity column holds the 44px avatar (absolutely placed by `ExpertProfileLink`,
-            vertically centred as the row's `items-center` did) plus the 12px gap in `pl-14`, so
-            the rating / headline line stacks under the name beside the avatar. The inner block
-            keeps the rating line's inline box, and is centred against the avatar when shorter. */}
-        <div className="relative flex min-h-11 min-w-0 flex-1 flex-col justify-center pl-14">
-          <div className="min-w-0">
-            <p className="text-foreground flex min-w-0 items-baseline gap-1 text-[15px] font-semibold">
-              <ExpertProfileLink
-                href={doc.expert.profileHref}
-                avatar={<Avatar initials={doc.expert.initials} />}
-                avatarAlign="center"
-              >
-                {doc.expert.name}
-              </ExpertProfileLink>
-              {doc.expert.company !== null && (
-                <span className="text-muted-foreground text-xs font-medium">
-                  · {doc.expert.company}
-                </span>
-              )}
-            </p>
-            {(doc.expert.rating !== null || doc.expert.headline !== null) && (
-              <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                {/*
-                  ⚠ THE COUNT IS NOT OPTIONAL (BAL-422 AC). An average with no denominator
-                  reads as settled evidence when it may rest on a single engagement. The
-                  count rides INSIDE this fragment, so the null path and the ' · ' separator
-                  below are unchanged.
-
-                  ⚠ THE TREATMENT — including the CONTRAST of the count and its accessible
-                  name — lives in `InlineRating`, not here. It shipped inline as
-                  `text-muted-foreground/60` at ~12px (about 2.4:1 in light mode, under the
-                  4.5:1 WCAG AA floor) with the digits exposed bare to a screen reader, which
-                  announced "4.8 12". Both are fixed once, in one place.
-                */}
-                {doc.expert.rating !== null && (
-                  <InlineRating average={doc.expert.rating} count={doc.expert.ratingCount} />
-                )}
-                {doc.expert.rating !== null && doc.expert.headline !== null && ' · '}
-                {doc.expert.headline}
+      <div className={cn('flex items-center gap-3', EXPERT_PROFILE_ROW)}>
+        <ExpertProfileAvatarLink href={doc.expert.profileHref} surface="proposal_header">
+          <Avatar initials={doc.expert.initials} />
+        </ExpertProfileAvatarLink>
+        <div className="min-w-0 flex-1">
+          <p className="text-foreground text-[15px] font-semibold">
+            <ExpertProfileLink href={doc.expert.profileHref} surface="proposal_header">
+              {doc.expert.name}
+            </ExpertProfileLink>
+            {doc.expert.company !== null && (
+              <span className="text-muted-foreground ml-1 text-xs font-medium">
+                · {doc.expert.company}
               </span>
             )}
-          </div>
+          </p>
+          {(doc.expert.rating !== null || doc.expert.headline !== null) && (
+            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+              {/*
+                ⚠ THE COUNT IS NOT OPTIONAL (BAL-422 AC). An average with no denominator
+                reads as settled evidence when it may rest on a single engagement. The
+                count rides INSIDE this fragment, so the null path and the ' · ' separator
+                below are unchanged.
+
+                ⚠ THE TREATMENT — including the CONTRAST of the count and its accessible
+                name — lives in `InlineRating`, not here. It shipped inline as
+                `text-muted-foreground/60` at ~12px (about 2.4:1 in light mode, under the
+                4.5:1 WCAG AA floor) with the digits exposed bare to a screen reader, which
+                announced "4.8 12". Both are fixed once, in one place.
+              */}
+              {doc.expert.rating !== null && (
+                <InlineRating average={doc.expert.rating} count={doc.expert.ratingCount} />
+              )}
+              {doc.expert.rating !== null && doc.expert.headline !== null && ' · '}
+              {doc.expert.headline}
+            </span>
+          )}
         </div>
         {doc.version > 1 && (
           <span className="border-info/30 bg-info/10 text-info inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap">

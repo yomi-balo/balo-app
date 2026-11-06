@@ -200,8 +200,8 @@ export interface CasePartyView {
    * `/experts/{username}` — the delivering expert's public profile, non-null ONLY on the client
    * lens AND only when that profile resolves (`findDisplayProfileById`'s gated
    * `publicProfileUsername`), so it never points at a 404. The ONE value behind the avatar +
-   * name link, "Book with X again" (`?book=1&src=book_again`), the nudge's booking link and the
-   * People card's counterparty entry. `null` ⇒ the name renders unlinked and no CTA renders.
+   * name link, "Book with X again" (`?book=1&src=book_again`) and the nudge's booking link.
+   * `null` ⇒ the name renders unlinked and no CTA renders.
    * Always `null` on the expert lens: the counterparty there is the client company.
    */
   profileHref: string | null;
@@ -234,11 +234,6 @@ export interface CasePersonView {
   name: string;
   /** "You" is resolved server-side; the client never compares ids to decide it. */
   isViewer: boolean;
-  /**
-   * The person's public profile — set only on the client lens's counterparty entry, from the
-   * same gated value as `CasePartyView.profileHref`. Absent or `null` ⇒ the name is not a link.
-   */
-  href?: string | null;
 }
 
 // ── expert earnings (D2) ─────────────────────────────────────────────────────────────────
