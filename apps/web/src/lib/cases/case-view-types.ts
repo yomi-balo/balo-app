@@ -106,9 +106,10 @@ export interface CaseConsultationRowView {
    *
    * ⚠⚠ A COUNT, AND NEVER ANYTHING MORE. No email address, no name, no domain on THIS field —
    * ADR-1044, and the module docblock above. Guest NAMES cross on the People card through a
-   * separate names-only read (`projectGuestForViewer`,
-   * `packages/shared/src/meetings/guest-participation.ts`, is the roster projection); the
-   * address never crosses, and ADR-1044 is unchanged.
+   * separate names-only read that MIRRORS the rule of `projectGuestForViewer`
+   * (`packages/shared/src/meetings/guest-participation.ts`): names only, link channel first, a
+   * count in place of a 'Guest' label. It does not call it. The address never crosses, and
+   * ADR-1044 is unchanged.
    * ⚠ NOT `participantCount` from the invite response, which is guests **+ 2**.
    */
   guestCount: number;

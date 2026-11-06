@@ -27,8 +27,8 @@ import type { CasePeopleGroupView } from '@/lib/cases/case-view-types';
  * describe an outcome that can never fire — the same narrow fact the expert lens states.
  *
  * ⚠ GROUPS, ORDER, KEYS AND "You" ALL COME FROM `_lib/load-case-people.ts`. The card does no
- * identity logic: it renders each group's label, then its names verbatim, then an unnamed-guest
- * count, one line per group.
+ * identity logic: it renders each group's label as a heading, then one row per name verbatim, then
+ * an unnamed-guest count row.
  */
 
 /** The count of guests with no name on record, e.g. `+1 guest` or `+3 guests`. */
@@ -69,31 +69,28 @@ export function CasePeopleCard({
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead icon={Users} title="People" />
-      <div className="space-y-1">
+      <div className="space-y-3">
         {groups.map((group) => (
-          <p key={group.side} className="text-xs leading-relaxed">
-            <span className="text-foreground font-medium">{group.label}</span>
+          <div key={group.side} role="group" aria-label={group.label}>
+            <p className="text-muted-foreground text-xs font-medium">{group.label}</p>
             {(group.people.length > 0 || group.unnamedGuestCount > 0) && (
-              <span className="text-muted-foreground">
-                {' '}
-                {group.people.map((person, index) => (
-                  <span key={person.key}>
-                    {index > 0 && ', '}
+              <ul className="mt-1 space-y-0.5">
+                {group.people.map((person) => (
+                  <li key={person.key} className="text-foreground text-sm">
                     {person.name}
-                  </span>
+                  </li>
                 ))}
                 {group.unnamedGuestCount > 0 && (
-                  <>
-                    {group.people.length > 0 && ' '}
+                  <li className="text-muted-foreground text-sm">
                     {formatUnnamedGuestCount(group.unnamedGuestCount)}
-                  </>
+                  </li>
                 )}
-              </span>
+              </ul>
             )}
-          </p>
+          </div>
         ))}
       </div>
-      <p className="text-muted-foreground/80 mt-2 text-xs leading-relaxed">{disclosure}</p>
+      <p className="text-muted-foreground/80 mt-3 text-xs leading-relaxed">{disclosure}</p>
     </section>
   );
 }

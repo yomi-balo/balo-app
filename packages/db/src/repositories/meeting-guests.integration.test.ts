@@ -1506,6 +1506,20 @@ describe('meetingGuestsRepository.listRosterNamesForMeetings (BAL-633)', () => {
     }
   });
 
+  it('requires the presence row to be on the guest’s own meeting', async () => {
+    const a = await meetingFactory();
+    const b = await meetingFactory();
+    const { guest } = await meetingGuestFactory({ meetingId: a.meeting.id });
+    await attend(b.meeting.id, guest.id);
+
+    await expect(
+      meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [a.meeting.id, b.meeting.id],
+        seatedMeetingIds: [],
+      })
+    ).resolves.toEqual([]);
+  });
+
   it('ignores a guest of another meeting, whether they attended or hold a seat there', async () => {
     const a = await meetingFactory();
     const b = await meetingFactory();
@@ -1552,13 +1566,12 @@ describe('meetingGuestsRepository.listRosterNamesForMeetings (BAL-633)', () => {
         name: 'Dana Seated',
         party: 'client',
         inviteChannel: 'email',
-        userId: null,
-        convertedToUserId: null,
+        matchedUserId: null,
       },
     ]);
   });
 
-  it('projects exactly five keys and never an address, hash or id', async () => {
+  it('projects exactly four keys and never an address, hash or id', async () => {
     const { meeting } = await meetingFactory();
     await meetingGuestFactory({ meetingId: meeting.id });
 
@@ -1568,8 +1581,112 @@ describe('meetingGuestsRepository.listRosterNamesForMeetings (BAL-633)', () => {
     });
 
     expect(Object.keys(row ?? {}).sort()).toEqual(
-      ['convertedToUserId', 'inviteChannel', 'name', 'party', 'userId'].sort()
+      ['inviteChannel', 'matchedUserId', 'name', 'party'].sort()
     );
+  });
+
+  describe('matchedUserId', () => {
+    async function rosterOf(
+      meetingId: string
+    ): ReturnType<typeof meetingGuestsRepository.listRosterNamesForMeetings> {
+      return meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [],
+        seatedMeetingIds: [meetingId],
+      });
+    }
+
+    it('matches an existing user invited by email', async () => {
+      const { meeting } = await meetingFactory();
+      const user = await userFactory({ email: 'existing.member@northwind.test' });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        values: { email: 'existing.member@northwind.test' },
+      });
+
+      const rows = await rosterOf(meeting.id);
+
+      expect(rows.map((row) => row.matchedUserId)).toEqual([user.id]);
+    });
+
+    it('matches a user stored with a mixed-case email', async () => {
+      const { meeting } = await meetingFactory();
+      const user = await userFactory({ email: 'Mixed.Case@Northwind.test' });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        values: { email: 'mixed.case@northwind.test' },
+      });
+
+      const rows = await rosterOf(meeting.id);
+
+      expect(rows.map((row) => row.matchedUserId)).toEqual([user.id]);
+    });
+
+    it('refuses a user whose address has non-ASCII characters', async () => {
+      const { meeting } = await meetingFactory();
+      await userFactory({ email: 'k\u212Aate@northwind.test' });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        values: { email: 'kkate@northwind.test' },
+      });
+
+      const rows = await rosterOf(meeting.id);
+
+      expect(rows.map((row) => row.matchedUserId)).toEqual([null]);
+    });
+
+    it('never email-matches a link row', async () => {
+      const { meeting } = await meetingFactory();
+      await userFactory({ email: 'link.member@northwind.test' });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        values: { email: 'link.member@northwind.test', inviteChannel: 'link' },
+      });
+
+      const rows = await rosterOf(meeting.id);
+
+      expect(rows.map((row) => row.matchedUserId)).toEqual([null]);
+    });
+
+    it('does not match a soft-deleted user', async () => {
+      const { meeting } = await meetingFactory();
+      await userFactory({ email: 'gone.member@northwind.test', deletedAt: new Date() });
+      await meetingGuestFactory({
+        meetingId: meeting.id,
+        values: { email: 'gone.member@northwind.test' },
+      });
+
+      const rows = await rosterOf(meeting.id);
+
+      expect(rows.map((row) => row.matchedUserId)).toEqual([null]);
+    });
+
+    it('carries converted_to_user_id from an unnamed losing sibling onto the winning row', async () => {
+      const one = await meetingFactory();
+      const two = await meetingFactory();
+      const converted = await userFactory({ email: 'someone.else@elsewhere.test' });
+      const email = 'sibling.person@northwind.test';
+      await meetingGuestFactory({
+        meetingId: one.meeting.id,
+        values: {
+          email,
+          name: null,
+          convertedToUserId: converted.id,
+          convertedAt: new Date(),
+        },
+      });
+      await meetingGuestFactory({
+        meetingId: two.meeting.id,
+        values: { email, name: 'Sam Named' },
+      });
+
+      const rows = await meetingGuestsRepository.listRosterNamesForMeetings({
+        attendedMeetingIds: [],
+        seatedMeetingIds: [one.meeting.id, two.meeting.id],
+      });
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ name: 'Sam Named', matchedUserId: converted.id });
+    });
   });
 
   it('does not return a guest invited to a meeting that is only in attendedMeetingIds with no presence', async () => {

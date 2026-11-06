@@ -1,7 +1,7 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { canonicalGuestEmail, presencePartyForGuest } from '@balo/shared/meetings';
 import { db } from '../client';
-import { meetingGuests, meetingPresence, meetings } from '../schema';
+import { meetingGuests, meetingPresence, meetings, users } from '../schema';
 import type {
   GuestAccessScope,
   Meeting,
@@ -29,8 +29,13 @@ export interface GuestRosterNameRow {
   name: string | null;
   party: MeetingGuestParty;
   inviteChannel: MeetingGuestInviteChannel;
-  userId: string | null;
-  convertedToUserId: string | null;
+  /**
+   * ⚠ SERVER-ONLY DEDUPE KEY, NEVER FOR A VIEW. The Balo user this guest row is known to be, or
+   * null: `converted_to_user_id`, else `user_id`, else — for an email-channel row only — the live
+   * user holding the guest's address. It lets the caller drop a guest who is already listed as a
+   * member without the address leaving the query.
+   */
+  matchedUserId: string | null;
 }
 
 /** The two terminal admission decisions a host can take. */
@@ -605,19 +610,29 @@ export const meetingGuestsRepository = {
    *
    * ⚠⚠ NAMES ONLY, NEVER AN ADDRESS (ADR-1044). The projection is exactly
    * {@link GuestRosterNameRow}: no `id`, `email`, `email_domain` or `token_hash`. `email` is used
-   * only inside DISTINCT ON / ORDER BY and is never selected.
-   * ⚠ ATTENDED ARM — a guest with a live presence row on one of `attendedMeetingIds`. The guest
-   * row's own `deleted_at` / `revoked_at` is DELIBERATELY NOT filtered ("past shows who actually
-   * joined", and `revoke` stamps both columns); this departs from the usual soft-delete query
-   * rule on purpose, as `meeting_presence` reads do. A soft-deleted PRESENCE row does not qualify.
-   * The guest row must also belong to one of `attendedMeetingIds`: `meeting_presence.meeting_guest_id`
-   * has no meeting-bound FK, so a presence row could otherwise name a guest of a different meeting.
+   * only inside DISTINCT ON / ORDER BY and the `matchedUserId` subqueries, and is never selected.
+   * ⚠ ATTENDED ARM — a guest with a live presence row ON THAT SAME MEETING, the meeting being one
+   * of `attendedMeetingIds`. The correlation is explicit because
+   * `meeting_presence.meeting_guest_id` has no meeting-bound FK. The guest row's own
+   * `deleted_at` / `revoked_at` is DELIBERATELY NOT filtered ("past shows who actually joined",
+   * and `revoke` stamps both columns); this departs from the usual soft-delete query rule on
+   * purpose, as `meeting_presence` reads do. A soft-deleted PRESENCE row does not qualify.
    * ⚠ SEATED ARM — {@link liveSeatPredicate}, the one definition of "holds a seat", so a pending,
    * denied, revoked, deleted or expired invite is never listed.
    * ⚠ DEDUPED IN SQL per `(party, email)` and PARTY-SCOPED ON PURPOSE: one address invited by both
    * sides yields a row per side, because merging across parties would let a viewer infer an email
    * match on the other side. Within a pair the email-channel row beats the link row, the named
-   * row beats the unnamed one, then the oldest wins.
+   * row beats the unnamed one, then the oldest wins. A link row folding into an email row of the
+   * same address is DELIBERATE, and must not be "aligned" with `presencePartyForGuest`: a stranger
+   * who types an invitee's address into a link can at most hide a row, never reveal one.
+   * ⚠ `matchedUserId` — see {@link GuestRosterNameRow}. For an email-channel row it is the row's
+   * own `converted_to_user_id`, else `user_id` (documented future-proofing: nothing writes it
+   * today), else the same address's `converted_to_user_id` on any sibling row OF THIS READ, taken by a
+   * window over the rows already selected (so the answer is right whichever sibling wins DISTINCT
+   * ON, and is bounded to the case's meetings), else the live `users.id` whose address matches
+   * (the stored guest address is already `canonicalGuestEmail`, i.e. trimmed and lowercased; a
+   * non-ASCII user address never matches, as `linkConvertedUser` refuses non-ASCII). A link row
+   * carries only its own ids and never email-matches.
    * ⚠ NO TENANCY OF ITS OWN. Pass only ids that came from an already-authorised read.
    */
   listRosterNamesForMeetings: async (input: {
@@ -628,19 +643,7 @@ export const meetingGuestsRepository = {
     if (input.attendedMeetingIds.length > 0) {
       const attended = and(
         inArray(meetingGuests.meetingId, [...input.attendedMeetingIds]),
-        inArray(
-          meetingGuests.id,
-          db
-            .select({ id: meetingPresence.meetingGuestId })
-            .from(meetingPresence)
-            .where(
-              and(
-                inArray(meetingPresence.meetingId, [...input.attendedMeetingIds]),
-                isNotNull(meetingPresence.meetingGuestId),
-                isNull(meetingPresence.deletedAt)
-              )
-            )
-        )
+        sql`EXISTS (SELECT 1 FROM ${meetingPresence} p WHERE p.meeting_guest_id = ${meetingGuests.id} AND p.meeting_id = ${meetingGuests.meetingId} AND p.deleted_at IS NULL)`
       );
       if (attended !== undefined) {
         arms.push(attended);
@@ -655,13 +658,27 @@ export const meetingGuestsRepository = {
       }
     }
     if (arms.length === 0) return [];
+    // Qualified by hand: drizzle renders a lone-table column unqualified, which inside the users
+    // subquery would bind to the inner table instead of the outer guest row.
+    const outerEmail = sql.raw('"meeting_guests"."email"');
+    const matchedUserId = sql<string | null>`COALESCE(
+      ${meetingGuests.convertedToUserId},
+      ${meetingGuests.userId},
+      CASE WHEN ${meetingGuests.inviteChannel} = 'email' THEN COALESCE(
+        (MAX(${meetingGuests.convertedToUserId}::text) FILTER (WHERE ${meetingGuests.inviteChannel} = 'email')
+          OVER (PARTITION BY ${meetingGuests.party}, ${meetingGuests.email}))::uuid,
+        (SELECT u.id FROM ${users} u
+          WHERE lower(u.email) = ${outerEmail} AND u.deleted_at IS NULL
+            AND u.email !~ '[^ -~]'
+          LIMIT 1)
+      ) END
+    )`;
     return db
       .selectDistinctOn([meetingGuests.party, meetingGuests.email], {
         name: meetingGuests.name,
         party: sql<MeetingGuestParty>`${meetingGuests.party}`,
         inviteChannel: meetingGuests.inviteChannel,
-        userId: meetingGuests.userId,
-        convertedToUserId: meetingGuests.convertedToUserId,
+        matchedUserId,
       })
       .from(meetingGuests)
       .where(or(...arms))

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, within } from '@testing-library/react';
 import type { CasePeopleGroupView } from '@/lib/cases/case-view-types';
 import {
   CasePeopleCard,
@@ -34,6 +34,16 @@ function renderCard(
   );
 }
 
+/** Each group as `[heading, ...rows]`. */
+function outline(container: HTMLElement): Array<Array<string | null>> {
+  return within(container)
+    .queryAllByRole('group')
+    .map((groupEl) => [
+      groupEl.querySelector('p')?.textContent ?? null,
+      ...[...groupEl.querySelectorAll('li')].map((li) => li.textContent),
+    ]);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -60,12 +70,13 @@ describe('CasePeopleCard', () => {
     }),
   ];
 
-  it('renders one line per group, label first, on the client lens', () => {
+  it('renders a heading then one row per person, per group, on the client lens', () => {
     const { container } = renderCard(clientLensGroups);
-    const lines = [...container.querySelectorAll('p')].map((p) => p.textContent);
-    expect(lines[0]).toBe('Northwind Industrial You, Priya Shah');
-    expect(lines[1]).toBe('CloudPeak Consulting Amara Okafor');
-    expect(lines[2]).toBe(PEOPLE_CARD_NARROW_DISCLOSURE);
+    expect(outline(container)).toEqual([
+      ['Northwind Industrial', 'You', 'Priya Shah'],
+      ['CloudPeak Consulting', 'Amara Okafor'],
+    ]);
+    expect(container.querySelector('section > p')?.textContent).toBe(PEOPLE_CARD_NARROW_DISCLOSURE);
   });
 
   it('renders the viewer’s own group first on the expert lens', () => {
@@ -80,29 +91,46 @@ describe('CasePeopleCard', () => {
       ],
       'expert'
     );
-    const lines = [...container.querySelectorAll('p')].map((p) => p.textContent);
-    expect(lines[0]).toBe('CloudPeak Consulting You');
-    expect(lines[1]).toBe('Northwind Industrial Priya Shah');
+    expect(outline(container)).toEqual([
+      ['CloudPeak Consulting', 'You'],
+      ['Northwind Industrial', 'Priya Shah'],
+    ]);
   });
 
-  it('renders the company label alone when the group has nobody', () => {
+  it('renders an independent expert’s own name as the heading with You beneath', () => {
+    const { container } = renderCard(
+      [
+        group({
+          side: 'expert',
+          label: 'Amara Okafor',
+          people: [{ key: 'p0', name: 'You', isViewer: true }],
+        }),
+        group(),
+      ],
+      'expert'
+    );
+    expect(outline(container)[0]).toEqual(['Amara Okafor', 'You']);
+  });
+
+  it('renders the heading alone, with no rows, when the group has nobody', () => {
     const { container } = renderCard([group()], 'expert');
-    expect(container.querySelector('p')?.textContent).toBe('Northwind Industrial');
+    expect(outline(container)).toEqual([['Northwind Industrial']]);
+    expect(container.querySelectorAll('li')).toHaveLength(0);
   });
 
   it.each([
-    [1, 'Northwind Industrial +1 guest'],
-    [2, 'Northwind Industrial +2 guests'],
-  ])('renders an unnamed-guest count of %i', (count, expected) => {
+    [1, '+1 guest'],
+    [2, '+2 guests'],
+  ])('renders an unnamed-guest count row of %i', (count, expected) => {
     const { container } = renderCard([group({ unnamedGuestCount: count })]);
-    expect(container.querySelector('p')?.textContent).toBe(expected);
+    expect(outline(container)).toEqual([['Northwind Industrial', expected]]);
   });
 
-  it('puts the count after named people', () => {
+  it('puts the count row after named people', () => {
     const { container } = renderCard([
       group({ people: [{ key: 'p0', name: 'You', isViewer: true }], unnamedGuestCount: 2 }),
     ]);
-    expect(container.querySelector('p')?.textContent).toBe('Northwind Industrial You +2 guests');
+    expect(outline(container)).toEqual([['Northwind Industrial', 'You', '+2 guests']]);
   });
 
   it('marks no one as a guest', () => {
@@ -113,9 +141,8 @@ describe('CasePeopleCard', () => {
         people: [{ key: 'p0', name: 'Lena Link', isViewer: false }],
       }),
     ]);
-    const line = container.querySelector('p')?.textContent ?? '';
-    expect(line).toBe('Joined by link Lena Link');
-    expect(line).not.toMatch(/guest/i);
+    expect(outline(container)).toEqual([['Joined by link', 'Lena Link']]);
+    expect((outline(container)[0] ?? []).join(' ')).not.toMatch(/guest/i);
   });
 
   it('renders two people with the same name without a duplicate-key warning', () => {
@@ -128,7 +155,7 @@ describe('CasePeopleCard', () => {
         ],
       }),
     ]);
-    expect(container.querySelector('p')?.textContent).toBe('Northwind Industrial Sam Lee, Sam Lee');
+    expect(outline(container)).toEqual([['Northwind Industrial', 'Sam Lee', 'Sam Lee']]);
     expect(error).not.toHaveBeenCalled();
   });
 

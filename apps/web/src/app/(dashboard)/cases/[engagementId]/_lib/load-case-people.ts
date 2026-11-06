@@ -5,6 +5,8 @@ import {
   meetingPresenceRepository,
   partyMembershipsRepository,
   usersRepository,
+  type MeetingGuestInviteChannel,
+  type MeetingParticipantParty,
 } from '@balo/db';
 import { personDisplayName } from '@balo/shared/parties';
 import { errorMessage, log } from '@/lib/logging';
@@ -27,11 +29,24 @@ export interface LoadCasePeopleInput {
 }
 
 type Side = 'client' | 'expert';
+type GroupSide = Side | 'link';
 
 interface DraftPerson {
-  userId: string | null;
   isViewer: boolean;
   isDeliveringExpert: boolean;
+  name: string;
+}
+
+interface AttendeeRow {
+  userId: string;
+  party: MeetingParticipantParty;
+}
+
+interface GuestRow {
+  name: string | null;
+  party: Side;
+  inviteChannel: MeetingGuestInviteChannel;
+  matchedUserId: string | null;
 }
 
 /**
@@ -41,11 +56,12 @@ interface DraftPerson {
  * number of consultations. No tenancy of its own: the meeting ids come from
  * `listMeetingsForContext`, which the loader only calls after its tenancy steps.
  *
- * Who is listed: the viewer (as "You"), the delivering expert, every authenticated attendee of a
- * past or live consultation on their attended side, agency owners/admins who sat in as observers,
- * and guests who attended or hold a seat on an upcoming consultation. Nobody is read from the
- * audit trail, so there is no "booker". A Balo staffer observing is never listed. No email
- * address is read or returned (ADR-1044): a guest is a name or part of a count.
+ * Who is listed: the viewer (as "You"), the delivering expert (unless they are an independent
+ * expert, whose name is already the group label), every authenticated attendee of a past or live
+ * consultation on their attended side, live members of the delivering agency who sat in as
+ * observers (any role), and guests who attended or hold a seat on an upcoming consultation.
+ * Nobody is read from the audit trail, so there is no "booker". A Balo staffer observing is never
+ * listed. No email address is read or returned (ADR-1044): a guest is a name or part of a count.
  *
  * A person is placed once, on the first side that claims them. A failed read returns the
  * fallback groups (the viewer, plus the counterparty label alone) and logs, so the page never
@@ -68,13 +84,14 @@ function viewerSide(lens: LoadCasePeopleInput['lens']): Side {
   return lens === 'client' ? 'client' : 'expert';
 }
 
+function partyLabels(input: LoadCasePeopleInput): Record<Side, string> {
+  return { client: input.clientPartyLabel, expert: input.expertPartyLabel };
+}
+
 function fallbackGroups(input: LoadCasePeopleInput): CasePeopleGroupView[] {
   const own = viewerSide(input.lens);
   const other: Side = own === 'client' ? 'expert' : 'client';
-  const labels: Record<Side, string> = {
-    client: input.clientPartyLabel,
-    expert: input.expertPartyLabel,
-  };
+  const labels = partyLabels(input);
   return [
     {
       side: own,
@@ -86,105 +103,124 @@ function fallbackGroups(input: LoadCasePeopleInput): CasePeopleGroupView[] {
   ];
 }
 
-async function assemble(input: LoadCasePeopleInput): Promise<CasePeopleGroupView[]> {
-  const [attendees, guestRows] = await Promise.all([
-    meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds(input.meetingIds),
-    meetingGuestsRepository.listRosterNamesForMeetings({
-      attendedMeetingIds: input.meetingIds,
-      seatedMeetingIds: input.upcomingMeetingIds,
-    }),
-  ]);
-
+/** The first side to claim a user wins: viewer, delivering expert, then attendance by party. */
+function placeKnownUsers(
+  input: LoadCasePeopleInput,
+  attendees: readonly AttendeeRow[]
+): Map<string, Side> {
   const sideByUser = new Map<string, Side>();
   const place = (userId: string, side: Side): void => {
     if (!sideByUser.has(userId)) sideByUser.set(userId, side);
   };
-
   place(input.viewerUserId, viewerSide(input.lens));
   if (input.deliveringExpertUserId !== null) place(input.deliveringExpertUserId, 'expert');
   for (const row of attendees) {
     if (row.party === 'expert') place(row.userId, 'expert');
     if (row.party === 'client') place(row.userId, 'client');
   }
+  return sideByUser;
+}
 
-  const observerIds = attendees.filter((row) => row.party === 'observer').map((row) => row.userId);
-  const candidateObserverIds = observerIds.filter((id) => !sideByUser.has(id));
+function unplacedObserverIds(
+  attendees: readonly AttendeeRow[],
+  sideByUser: ReadonlyMap<string, Side>
+): string[] {
+  return attendees
+    .filter((row) => row.party === 'observer' && !sideByUser.has(row.userId))
+    .map((row) => row.userId);
+}
 
-  const namedIds = new Set<string>([...sideByUser.keys(), ...candidateObserverIds]);
-  namedIds.delete(input.viewerUserId);
-
+async function readNamesAndAgencyMembers(
+  input: LoadCasePeopleInput,
+  userIds: ReadonlySet<string>,
+  observerIds: readonly string[]
+): Promise<{ nameById: Map<string, string>; agencyMembers: Set<string> }> {
   const [nameRows, agencyMemberIds] = await Promise.all([
-    namedIds.size === 0 ? Promise.resolve([]) : usersRepository.findNamesByIds([...namedIds]),
-    candidateObserverIds.length > 0 && input.deliveringAgencyId !== null
+    userIds.size === 0 ? Promise.resolve([]) : usersRepository.findNamesByIds([...userIds]),
+    observerIds.length > 0 && input.deliveringAgencyId !== null
       ? partyMembershipsRepository.listMemberUserIds('agency', input.deliveringAgencyId)
       : Promise.resolve<string[]>([]),
   ]);
-
-  const agencyMembers = new Set(agencyMemberIds);
-  for (const id of candidateObserverIds) {
-    if (agencyMembers.has(id)) place(id, 'expert');
-  }
-
   const nameById = new Map<string, string>();
   for (const row of nameRows) {
     const name = personDisplayName(row.firstName, row.lastName, '');
     if (name.length > 0) nameById.set(row.id, name);
   }
+  return { nameById, agencyMembers: new Set(agencyMemberIds) };
+}
 
-  const expertLabelKey = input.expertPartyLabel.trim().toLowerCase();
-  const drafts: Record<Side, Array<DraftPerson & { name: string }>> = { client: [], expert: [] };
+/**
+ * The placed users who get a row. A user with no name on file is omitted rather than shown under
+ * a fallback. An independent expert (no delivering agency) is the group label itself, so is only
+ * a row when they are the viewer.
+ */
+function draftMembers(
+  input: LoadCasePeopleInput,
+  sideByUser: ReadonlyMap<string, Side>,
+  nameById: ReadonlyMap<string, string>
+): Record<Side, DraftPerson[]> {
+  const drafts: Record<Side, DraftPerson[]> = { client: [], expert: [] };
+  const independentExpert = input.deliveringAgencyId === null;
   for (const [userId, side] of sideByUser) {
     const isViewer = userId === input.viewerUserId;
     const isDeliveringExpert = userId === input.deliveringExpertUserId;
+    if (isDeliveringExpert && independentExpert && !isViewer) continue;
     const name = isViewer ? 'You' : nameById.get(userId);
-    if (name === undefined) continue;
-    if (isDeliveringExpert && !isViewer && name.trim().toLowerCase() === expertLabelKey) continue;
-    drafts[side].push({ userId, isViewer, isDeliveringExpert, name });
+    if (name !== undefined) drafts[side].push({ isViewer, isDeliveringExpert, name });
   }
+  return drafts;
+}
 
-  /**
-   * An email-channel guest is dropped only when the same person is placed on the guest's own side,
-   * so a match on the other side is never visible. A link guest has no party, so a placed member
-   * on either side drops it.
-   */
-  const isPlacedMember = (
-    userId: string | null,
-    guestSide: 'client' | 'expert' | 'link'
-  ): boolean => {
-    if (userId === null) return false;
-    const placed = sideByUser.get(userId);
-    if (placed === undefined) return false;
-    return guestSide === 'link' || placed === guestSide;
-  };
-  const linkDrafts: Array<DraftPerson & { name: string }> = [];
-  const unnamed: Record<'client' | 'expert' | 'link', number> = { client: 0, expert: 0, link: 0 };
-  for (const row of guestRows) {
-    const side = row.inviteChannel === 'link' ? 'link' : row.party;
-    if (isPlacedMember(row.userId, side) || isPlacedMember(row.convertedToUserId, side)) continue;
+/**
+ * An email-channel guest is dropped only when the same person is placed on the guest's own side,
+ * so a match on the other side is never visible. A link guest has no party, so a placed member on
+ * either side drops it.
+ */
+function isAlreadyListed(
+  row: GuestRow,
+  guestSide: GroupSide,
+  sideByUser: ReadonlyMap<string, Side>
+): boolean {
+  if (row.matchedUserId === null) return false;
+  const placed = sideByUser.get(row.matchedUserId);
+  if (placed === undefined) return false;
+  return guestSide === 'link' || placed === guestSide;
+}
+
+function bucketGuests(
+  rows: readonly GuestRow[],
+  sideByUser: ReadonlyMap<string, Side>,
+  drafts: Record<GroupSide, DraftPerson[]>
+): Record<GroupSide, number> {
+  const unnamed: Record<GroupSide, number> = { client: 0, expert: 0, link: 0 };
+  for (const row of rows) {
+    const side: GroupSide = row.inviteChannel === 'link' ? 'link' : row.party;
+    if (isAlreadyListed(row, side, sideByUser)) continue;
     const name = row.name?.trim() ?? '';
     if (name.length === 0) {
       unnamed[side] += 1;
-      continue;
+    } else {
+      drafts[side].push({ isViewer: false, isDeliveringExpert: false, name });
     }
-    const draft = { userId: null, isViewer: false, isDeliveringExpert: false, name };
-    if (side === 'link') linkDrafts.push(draft);
-    else drafts[side].push(draft);
   }
+  return unnamed;
+}
 
-  const own = viewerSide(input.lens);
-  const order: Array<'client' | 'expert' | 'link'> =
-    own === 'client' ? ['client', 'expert', 'link'] : ['expert', 'client', 'link'];
-  const labels = {
-    client: input.clientPartyLabel,
-    expert: input.expertPartyLabel,
-    link: JOINED_BY_LINK_LABEL,
-  };
+function assembleGroups(
+  input: LoadCasePeopleInput,
+  drafts: Record<GroupSide, DraftPerson[]>,
+  unnamed: Record<GroupSide, number>
+): CasePeopleGroupView[] {
+  const order: GroupSide[] =
+    viewerSide(input.lens) === 'client'
+      ? ['client', 'expert', 'link']
+      : ['expert', 'client', 'link'];
+  const labels: Record<GroupSide, string> = { ...partyLabels(input), link: JOINED_BY_LINK_LABEL };
 
   let nextKey = 0;
   const groups: CasePeopleGroupView[] = [];
   for (const side of order) {
-    const members = side === 'link' ? linkDrafts : drafts[side];
-    const people: CasePersonView[] = [...members].sort(compareDrafts).map((member) => ({
+    const people: CasePersonView[] = [...drafts[side]].sort(compareDrafts).map((member) => ({
       key: `p${nextKey++}`,
       name: member.name,
       isViewer: member.isViewer,
@@ -196,14 +232,36 @@ async function assemble(input: LoadCasePeopleInput): Promise<CasePeopleGroupView
   return groups;
 }
 
+async function assemble(input: LoadCasePeopleInput): Promise<CasePeopleGroupView[]> {
+  const [attendees, guestRows] = await Promise.all([
+    meetingPresenceRepository.listAuthenticatedAttendeesByMeetingIds(input.meetingIds),
+    meetingGuestsRepository.listRosterNamesForMeetings({
+      attendedMeetingIds: input.meetingIds,
+      seatedMeetingIds: input.upcomingMeetingIds,
+    }),
+  ]);
+
+  const sideByUser = placeKnownUsers(input, attendees);
+  const observerIds = unplacedObserverIds(attendees, sideByUser);
+  const toName = new Set<string>([...sideByUser.keys(), ...observerIds]);
+  toName.delete(input.viewerUserId);
+
+  const { nameById, agencyMembers } = await readNamesAndAgencyMembers(input, toName, observerIds);
+  for (const id of observerIds) {
+    if (agencyMembers.has(id)) sideByUser.set(id, 'expert');
+  }
+
+  const memberDrafts = draftMembers(input, sideByUser, nameById);
+  const drafts: Record<GroupSide, DraftPerson[]> = { ...memberDrafts, link: [] };
+  const unnamed = bucketGuests(guestRows, sideByUser, drafts);
+  return assembleGroups(input, drafts, unnamed);
+}
+
 function compareNames(a: string, b: string): number {
   return a.localeCompare(b, 'en', { sensitivity: 'base' });
 }
 
-function compareDrafts(
-  a: DraftPerson & { name: string },
-  b: DraftPerson & { name: string }
-): number {
+function compareDrafts(a: DraftPerson, b: DraftPerson): number {
   if (a.isViewer !== b.isViewer) return a.isViewer ? -1 : 1;
   if (a.isDeliveringExpert !== b.isDeliveringExpert) return a.isDeliveringExpert ? -1 : 1;
   return compareNames(a.name, b.name);

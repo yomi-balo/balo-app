@@ -59,8 +59,7 @@ function guest(over: Record<string, unknown> = {}): Record<string, unknown> {
     name: 'Guest Person',
     party: 'client',
     inviteChannel: 'email',
-    userId: null,
-    convertedToUserId: null,
+    matchedUserId: null,
     ...over,
   };
 }
@@ -165,9 +164,32 @@ describe('loadCasePeople — placement', () => {
     expect(names(groups, 'client')).toEqual(['You']);
   });
 
-  it('does not repeat an independent expert under a label that is their own name', async () => {
-    const groups = await loadCasePeople(input({ expertPartyLabel: 'amara okafor' }));
-    expect(names(groups, 'expert')).toEqual([]);
+  it('does not list an independent delivering expert as a row on the client lens', async () => {
+    const groups = await loadCasePeople(
+      input({ deliveringAgencyId: null, expertPartyLabel: 'Amara Okafor' })
+    );
+    expect(groups.find((g) => g.side === 'expert')).toMatchObject({
+      label: 'Amara Okafor',
+      people: [],
+    });
+  });
+
+  it('lists an independent expert as You, under their own name, on their own lens', async () => {
+    const groups = await loadCasePeople(
+      input({
+        lens: 'expert',
+        viewerUserId: EXPERT,
+        deliveringAgencyId: null,
+        expertPartyLabel: 'Amara Okafor',
+      })
+    );
+    expect(groups[0]).toMatchObject({ label: 'Amara Okafor' });
+    expect(names(groups, 'expert')).toEqual(['You']);
+  });
+
+  it('still lists an agency-based delivering expert by name', async () => {
+    const groups = await loadCasePeople(input());
+    expect(names(groups, 'expert')).toEqual(['Amara Okafor']);
   });
 
   it('shows the label alone for a counterparty with nobody named', async () => {
@@ -214,11 +236,30 @@ describe('loadCasePeople — guests', () => {
     expect(groups.some((g) => g.side === 'link')).toBe(false);
   });
 
-  it('drops a guest who is already a placed member, by userId or convertedToUserId', async () => {
+  it('lists a viewer who was also invited by email once, as You', async () => {
+    m.listGuests.mockResolvedValue([guest({ name: 'Dana Whitfield', matchedUserId: VIEWER })]);
+
+    const groups = await loadCasePeople(input());
+
+    expect(names(groups, 'client')).toEqual(['You']);
+  });
+
+  it('lists an agency colleague who joined and was email-invited expert-side once', async () => {
+    m.listAttendees.mockResolvedValue([{ userId: OBSERVER, party: 'observer' }]);
+    m.listAgencyMembers.mockResolvedValue([OBSERVER]);
+    m.listGuests.mockResolvedValue([
+      guest({ name: 'Omar Reyes', party: 'expert', matchedUserId: OBSERVER }),
+    ]);
+
+    const groups = await loadCasePeople(input());
+
+    expect(names(groups, 'expert').filter((n) => n === 'Omar Reyes')).toHaveLength(1);
+  });
+
+  it('drops an email guest matched to a member placed on the same side', async () => {
     m.listAttendees.mockResolvedValue([{ userId: COLLEAGUE, party: 'client' }]);
     m.listGuests.mockResolvedValue([
-      guest({ name: 'Priya Again', userId: COLLEAGUE }),
-      guest({ name: 'Priya Converted', convertedToUserId: COLLEAGUE }),
+      guest({ name: 'Priya Again', matchedUserId: COLLEAGUE }),
       guest({ name: 'Someone Else' }),
     ]);
 
@@ -230,7 +271,7 @@ describe('loadCasePeople — guests', () => {
   it('keeps an email guest whose converted user is placed on the OTHER side', async () => {
     m.listAttendees.mockResolvedValue([{ userId: COLLEAGUE, party: 'client' }]);
     m.listGuests.mockResolvedValue([
-      guest({ name: 'Cross Side', party: 'expert', convertedToUserId: COLLEAGUE }),
+      guest({ name: 'Cross Side', party: 'expert', matchedUserId: COLLEAGUE }),
     ]);
 
     const groups = await loadCasePeople(input());
@@ -241,7 +282,7 @@ describe('loadCasePeople — guests', () => {
   it('drops a link guest whose user is placed on any side', async () => {
     m.listAttendees.mockResolvedValue([{ userId: COLLEAGUE, party: 'client' }]);
     m.listGuests.mockResolvedValue([
-      guest({ name: 'Link Dup', inviteChannel: 'link', party: 'expert', userId: COLLEAGUE }),
+      guest({ name: 'Link Dup', inviteChannel: 'link', party: 'expert', matchedUserId: COLLEAGUE }),
     ]);
 
     const groups = await loadCasePeople(input());
