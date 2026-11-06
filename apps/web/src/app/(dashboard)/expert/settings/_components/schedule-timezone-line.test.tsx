@@ -64,4 +64,42 @@ describe('ScheduleTimezoneLine', () => {
     render(<ScheduleTimezoneLine timezone="UTC" onChange={vi.fn()} disabled />);
     expect(screen.getByRole('button', { name: 'Change timezone' })).toBeDisabled();
   });
+
+  describe('device zone note', () => {
+    /** Fakes only the zero-argument device probe; formatting calls still reach real `Intl`. */
+    function mockDeviceZone(timeZone: string): void {
+      const RealDateTimeFormat = Intl.DateTimeFormat;
+      vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (
+        this: unknown,
+        ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+      ) {
+        if (args.length === 0) {
+          return { resolvedOptions: () => ({ timeZone }) } as Intl.DateTimeFormat;
+        }
+        return new RealDateTimeFormat(...args);
+      } as unknown as typeof Intl.DateTimeFormat);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('says where the device is when it differs from the schedule zone', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-14T05:04:00Z'));
+      mockDeviceZone('Europe/London');
+      render(<ScheduleTimezoneLine timezone="Australia/Sydney" onChange={vi.fn()} />);
+
+      expect(screen.getByText('Your device is in London (GMT+1).')).toBeInTheDocument();
+    });
+
+    it('stays silent when the device zone matches in effect (Melbourne vs Sydney)', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-14T05:04:00Z'));
+      mockDeviceZone('Australia/Melbourne');
+      render(<ScheduleTimezoneLine timezone="Australia/Sydney" onChange={vi.fn()} />);
+
+      expect(screen.queryByText(/Your device is in/)).not.toBeInTheDocument();
+    });
+  });
 });

@@ -1,3 +1,5 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { SessionUser } from '@/lib/auth/session';
@@ -20,6 +22,7 @@ import type { NavContext } from '@/components/layout/nav-registry';
 const mockGetCurrentUser = vi.fn<() => Promise<SessionUser | null>>();
 const mockBuildNavContext = vi.fn<(user: SessionUser | null) => Promise<NavContext>>();
 const mockLoadTopBarWalletData = vi.fn();
+const mockLoadViewerTimezoneContext = vi.fn();
 
 vi.mock('@/lib/auth/session', () => ({
   getCurrentUser: () => mockGetCurrentUser(),
@@ -52,6 +55,30 @@ vi.mock('@/lib/credit/wallet-read', () => ({
 // flat, alongside every other collaborator this file already mocks.
 vi.mock('@/lib/workspaces/get-workspaces', () => ({
   getWorkspacesForCurrentUser: () => Promise.resolve([]),
+}));
+
+vi.mock('@/lib/timezone/load-viewer-timezone-context', () => ({
+  loadViewerTimezoneContext: (...args: unknown[]) => mockLoadViewerTimezoneContext(...args),
+}));
+
+vi.mock('@/components/balo/date/viewer-timezone-context', () => ({
+  ViewerTimezoneProvider: ({
+    savedTimezone,
+    children,
+  }: {
+    savedTimezone: string | null;
+    children: React.ReactNode;
+  }) => (
+    <div data-testid="viewer-timezone-provider" data-saved-timezone={savedTimezone ?? ''}>
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('@/components/balo/timezone-mismatch/timezone-mismatch-gate', () => ({
+  TimezoneMismatchGate: ({ mismatchPrompt }: { mismatchPrompt: { expertProfileId: string } }) => (
+    <div data-testid="timezone-mismatch-gate" data-expert={mismatchPrompt.expertProfileId} />
+  ),
 }));
 
 vi.mock('@/components/layout/sidebar', () => ({
@@ -123,6 +150,7 @@ const COMPANY_USER: SessionUser = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLoadViewerTimezoneContext.mockResolvedValue({ savedTimezone: null, mismatchPrompt: null });
 });
 
 describe('DashboardLayout — the credits-chip gate (BAL-499 F1)', () => {
@@ -199,5 +227,97 @@ describe('DashboardLayout — analytics identify placement (BAL-504)', () => {
     render(element);
 
     expect(mockAnalyticsIdentify).toHaveBeenCalledWith({});
+  });
+});
+
+describe('DashboardLayout — timezone context (BAL-634)', () => {
+  const PROMPT = {
+    expertProfileId: 'ep-1',
+    scheduleTimezone: 'Australia/Sydney',
+    commonRange: { startTime: '09:00', endTime: '17:00' },
+  };
+
+  it('wraps the page in the provider with the saved zone and mounts no gate for a client', async () => {
+    mockGetCurrentUser.mockResolvedValue(COMPANY_USER);
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+    mockLoadViewerTimezoneContext.mockResolvedValue({
+      savedTimezone: 'Australia/Sydney',
+      mismatchPrompt: null,
+    });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    const provider = screen.getByTestId('viewer-timezone-provider');
+    expect(provider).toHaveAttribute('data-saved-timezone', 'Australia/Sydney');
+    expect(provider).toContainElement(screen.getByText('page body'));
+    expect(screen.queryByTestId('timezone-mismatch-gate')).not.toBeInTheDocument();
+    expect(mockLoadViewerTimezoneContext).toHaveBeenCalledWith(COMPANY_USER);
+  });
+
+  it('mounts the gate for an eligible expert', async () => {
+    mockGetCurrentUser.mockResolvedValue(EXPERT_USER);
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'expert', capabilities: [] });
+    mockLoadViewerTimezoneContext.mockResolvedValue({
+      savedTimezone: 'Australia/Sydney',
+      mismatchPrompt: PROMPT,
+    });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    expect(screen.getByTestId('timezone-mismatch-gate')).toHaveAttribute('data-expert', 'ep-1');
+  });
+
+  it('mounts the gate in the client workspace too, because activeMode never decides it', async () => {
+    mockGetCurrentUser.mockResolvedValue({ ...EXPERT_USER, activeMode: 'client' });
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+    mockLoadViewerTimezoneContext.mockResolvedValue({
+      savedTimezone: 'Australia/Sydney',
+      mismatchPrompt: PROMPT,
+    });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    expect(screen.getByTestId('timezone-mismatch-gate')).toBeInTheDocument();
+  });
+
+  it('reads nothing and renders no provider value without a session user', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+
+    const element = await DashboardLayout({ children: <div>page body</div> });
+    render(element);
+
+    expect(mockLoadViewerTimezoneContext).not.toHaveBeenCalled();
+    expect(screen.getByTestId('viewer-timezone-provider')).toHaveAttribute(
+      'data-saved-timezone',
+      ''
+    );
+    expect(screen.queryByTestId('timezone-mismatch-gate')).not.toBeInTheDocument();
+  });
+});
+
+describe('timezone gate placement (BAL-634)', () => {
+  const appDir = join(__dirname, '..');
+
+  it('the call page and the lobby live outside the dashboard layout', () => {
+    expect(existsSync(join(appDir, '(call)/meetings/[meetingId]/call/page.tsx'))).toBe(true);
+    expect(existsSync(join(appDir, 'join/m/[meetingId]/lobby-client.tsx'))).toBe(true);
+  });
+
+  it('nothing under the dashboard layout is a call surface', () => {
+    const dashboardDir = __dirname;
+    const callDirs: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+        if (entry.name === 'call') callDirs.push(join(dir, entry.name));
+        walk(join(dir, entry.name));
+      }
+    };
+    walk(dashboardDir);
+    expect(callDirs).toEqual([]);
   });
 });

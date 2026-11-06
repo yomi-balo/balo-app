@@ -13,6 +13,7 @@ const {
   mockListConfirmedInRange,
   mockResolveCompanies,
   mockCheckRateLimit,
+  mockInvalidateExpertSlots,
 } = vi.hoisted(() => ({
   mockListUpcoming: vi.fn(),
   mockCreate: vi.fn(),
@@ -24,6 +25,11 @@ const {
   mockListConfirmedInRange: vi.fn(),
   mockResolveCompanies: vi.fn(),
   mockCheckRateLimit: vi.fn(),
+  mockInvalidateExpertSlots: vi.fn(),
+}));
+
+vi.mock('../../services/availability/expert-slots-cache.js', () => ({
+  invalidateExpertSlots: mockInvalidateExpertSlots,
 }));
 
 vi.mock('@balo/db', () => ({
@@ -226,6 +232,7 @@ describe('experts availability-overrides routes', () => {
       { expertProfileId: EXPERT_ID },
       expect.objectContaining({ jobId: `availability--${EXPERT_ID}` })
     );
+    expect(mockInvalidateExpertSlots).toHaveBeenCalledWith(EXPERT_ID);
     // Analytics: 3-day inclusive block with a label.
     expect(mockTrackServer).toHaveBeenCalledWith('availability_override_created', {
       duration_days: 3,
@@ -297,6 +304,7 @@ describe('experts availability-overrides routes', () => {
 
     expect(res.statusCode).toBe(500);
     expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalled();
   });
 
@@ -352,6 +360,7 @@ describe('experts availability-overrides routes', () => {
       { expertProfileId: EXPERT_ID },
       expect.objectContaining({ jobId: `availability--${EXPERT_ID}` })
     );
+    expect(mockInvalidateExpertSlots).toHaveBeenCalledWith(EXPERT_ID);
     expect(mockTrackServer).toHaveBeenCalledWith('availability_override_deleted', {
       distinct_id: EXPERT_ID,
     });
@@ -369,6 +378,7 @@ describe('experts availability-overrides routes', () => {
 
     expect(res.statusCode).toBe(404);
     expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalled();
   });
 

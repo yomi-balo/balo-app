@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Globe } from 'lucide-react';
+import { Globe, Info } from 'lucide-react';
+import { zonesDiffer } from '@balo/shared/timezone';
+import { useDeviceTimezone } from '@/hooks/use-device-timezone';
 import { ScheduleTimezoneCombobox } from './schedule-timezone-combobox';
 import { formatWallClock, timezoneLabel } from '../_lib/timezone-label';
 
@@ -44,29 +46,39 @@ export function ScheduleTimezoneLine({
   pausedNoteId,
 }: Readonly<ScheduleTimezoneLineProps>): React.JSX.Element {
   const now = useMinuteClock();
+  const device = useDeviceTimezone();
   const clock = now ? formatWallClock(timezone, now) : '';
+  const deviceDiffers = now !== null && device !== null && zonesDiffer(timezone, device, now);
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2.5">
-      <Globe className="text-muted-foreground size-[15px] shrink-0" aria-hidden="true" />
-      <p className="text-muted-foreground text-[13px] leading-normal">
-        Hours are set in{' '}
-        <span className="text-foreground font-medium">
-          {timezoneLabel(timezone, now ?? undefined)}
-        </span>
-        {clock && (
-          <>
-            {' '}
-            — currently <span className="tabular-nums">{clock}</span>
-          </>
-        )}
-      </p>
-      <ScheduleTimezoneCombobox
-        value={timezone}
-        onChange={onChange}
-        disabled={disabled}
-        pausedNoteId={pausedNoteId}
-      />
+    <div>
+      <div className="flex flex-wrap items-center gap-x-2.5">
+        <Globe className="text-muted-foreground size-[15px] shrink-0" aria-hidden="true" />
+        <p className="text-muted-foreground text-[13px] leading-normal">
+          Hours are set in{' '}
+          <span className="text-foreground font-medium">
+            {timezoneLabel(timezone, now ?? undefined)}
+          </span>
+          {clock && (
+            <>
+              {' '}
+              — currently <span className="tabular-nums">{clock}</span>
+            </>
+          )}
+        </p>
+        <ScheduleTimezoneCombobox
+          value={timezone}
+          onChange={onChange}
+          disabled={disabled}
+          pausedNoteId={pausedNoteId}
+        />
+      </div>
+      {deviceDiffers && (
+        <p className="text-muted-foreground mt-1.5 ml-[25px] flex items-center gap-1.5 text-[12.5px]">
+          <Info className="size-[13px] shrink-0" aria-hidden="true" />
+          Your device is in {timezoneLabel(device, now)}.
+        </p>
+      )}
     </div>
   );
 }
