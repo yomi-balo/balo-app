@@ -76,7 +76,14 @@ function clientView(
       ratingCount: 2,
       availableForWork: true,
     },
-    people: [{ name: 'Dana Reyes', isViewer: true }],
+    peopleGroups: [
+      {
+        side: 'client',
+        label: 'Northwind Industrial',
+        people: [{ key: 'p0', name: 'You', isViewer: true }],
+        unnamedGuestCount: 0,
+      },
+    ],
     counterpartyPartyLabel: 'CloudPeak Consulting',
     clientCompanyName: 'Northwind Industrial',
     lens: 'client',

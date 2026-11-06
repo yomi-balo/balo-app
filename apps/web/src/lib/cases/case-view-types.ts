@@ -104,10 +104,12 @@ export interface CaseConsultationRowView {
   /**
    * BAL-573 — how many guests hold a seat on THIS consultation. `0` on every non-upcoming row.
    *
-   * ⚠⚠ A COUNT, AND NEVER ANYTHING MORE. No email address, no name, no domain — ADR-1044, and
-   * the module docblock above. If a future ticket wants "Priya and 2 others" it needs a
-   * party-scoped name projection and a fresh look at that ADR; it is not a widening of this
-   * field.
+   * ⚠⚠ A COUNT, AND NEVER ANYTHING MORE. No email address, no name, no domain on THIS field —
+   * ADR-1044, and the module docblock above. Guest NAMES cross on the People card through a
+   * separate names-only read that MIRRORS the rule of `projectGuestForViewer`
+   * (`packages/shared/src/meetings/guest-participation.ts`): names only, link channel first, a
+   * count in place of a 'Guest' label. It does not call it. The address never crosses, and
+   * ADR-1044 is unchanged.
    * ⚠ NOT `participantCount` from the invite response, which is guests **+ 2**.
    */
   guestCount: number;
@@ -226,10 +228,28 @@ export interface CasePartyView {
   ratingCount: number;
 }
 
+/**
+ * One person on the case's People card. ⚠ NO EMAIL (ADR-1044): a guest is a name or nothing.
+ */
 export interface CasePersonView {
+  /** Server-assigned `p0`, `p1`, …; never a name, user id or guest id. */
+  key: string;
+  /** The viewer's `name` is the literal `'You'`; the card renders `name` verbatim. */
   name: string;
   /** "You" is resolved server-side; the client never compares ids to decide it. */
   isViewer: boolean;
+}
+
+/**
+ * One line of the People card. Groups arrive in render order (the viewer's side, then the
+ * counterparty, then link joiners), and the viewer is first within their own group.
+ */
+export interface CasePeopleGroupView {
+  side: 'client' | 'expert' | 'link';
+  label: string;
+  people: CasePersonView[];
+  /** Guests with no name on record, rendered as a count. */
+  unnamedGuestCount: number;
 }
 
 // ── expert earnings (D2) ─────────────────────────────────────────────────────────────────
@@ -429,7 +449,7 @@ interface CaseSurfaceViewBase {
   /** TRUE when the merged file list was BOUNDED — the card says so out loud (§6.4). */
   filesTruncated: boolean;
   party: CasePartyView;
-  people: CasePersonView[];
+  peopleGroups: CasePeopleGroupView[];
   /**
    * BAL-410 — the counterparty's PARTY label, lens-relative: the expert's agency (or their own
    * name when independent) on the client lens, the client company on the expert lens.

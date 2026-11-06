@@ -62,13 +62,13 @@ import type {
   CaseHeaderView,
   CaseNudgeView,
   CasePartyView,
-  CasePersonView,
   CaseProjectConversionView,
   CaseRescheduleProposalView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
 import { mapCaseConsultations } from './map-case-consultations';
 import { loadCaseFiles, type CaseFileMeetingRef } from './load-case-files';
+import { loadCasePeople } from './load-case-people';
 
 /**
  * BAL-421 — THE CASE SURFACE'S SINGLE LOADER. Assembles one lens-aware payload from the
@@ -656,7 +656,6 @@ export const loadCase = cache(
       messagePage,
       conversationFileRows,
       earningsAggregate,
-      viewer,
       projectConversion,
     ] = await Promise.all([
       meetingContextsRepository.listMeetingsForContext('case', engagementId),
@@ -677,7 +676,6 @@ export const loadCase = cache(
       lens === 'expert'
         ? creditSessionsRepository.sumExpertEarningsForEngagement(engagementId)
         : Promise.resolve(null),
-      usersRepository.findDisplayById(userId),
       // BAL-589 — CLIENT LENS ONLY, the `projectConversion` precedent's own mirror of
       // the `earnings` read immediately above.
       resolveProjectConversionIfClient(lens, engagementId, expertProfileId),
@@ -778,39 +776,50 @@ export const loadCase = cache(
     const invitableMeetingIds = derivedStates
       .filter((row) => caseConsultationIsUpcoming(row.state))
       .map((row) => row.meetingId);
-    const [guestCountRows, caseScopeDomains, rating, mayToggleActionItems] = await Promise.all([
-      invitableMeetingIds.length === 0
-        ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
-        : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
-      /**
-       * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare strings
-       * at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
-       * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on the
-       * expert lens there is nothing a domain match could widen and the composer must not
-       * estimate otherwise. It is the VIEWER'S OWN company's domains, never the counterparty's.
-       * ⚠ GATED ON THE SAME `invitableMeetingIds` TERM AS THE GUEST COUNT ABOVE — a case with
-       * nothing upcoming has no invite affordance for a domain list to serve, so this must not
-       * run on a closed case or one with only past consultations either.
-       * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
-       * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides which
-       * sentence renders.
-       */
-      lens === 'client' && invitableMeetingIds.length > 0
-        ? partyDomainsRepository
-            .listByParty('company', companyId)
-            .then((rows) => rows.map((row) => row.domain))
-        : Promise.resolve<string[]>([]),
-      readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
-      // Rides this batch rather than awaiting on its own after it.
-      resolveMayToggleActionItems({
-        isOpen: caseRow.closedAt === null,
-        itemCount: actionItems.length,
-        userId,
-        lens,
-        engagementId,
-        companyId,
-      }),
-    ]);
+    const [guestCountRows, caseScopeDomains, rating, mayToggleActionItems, peopleGroups] =
+      await Promise.all([
+        invitableMeetingIds.length === 0
+          ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
+          : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
+        /**
+         * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare strings
+         * at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
+         * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on the
+         * expert lens there is nothing a domain match could widen and the composer must not
+         * estimate otherwise. It is the VIEWER'S OWN company's domains, never the counterparty's.
+         * ⚠ GATED ON THE SAME `invitableMeetingIds` TERM AS THE GUEST COUNT ABOVE — a case with
+         * nothing upcoming has no invite affordance for a domain list to serve, so this must not
+         * run on a closed case or one with only past consultations either.
+         * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
+         * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides which
+         * sentence renders.
+         */
+        lens === 'client' && invitableMeetingIds.length > 0
+          ? partyDomainsRepository
+              .listByParty('company', companyId)
+              .then((rows) => rows.map((row) => row.domain))
+          : Promise.resolve<string[]>([]),
+        readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
+        // Rides this batch rather than awaiting on its own after it.
+        resolveMayToggleActionItems({
+          isOpen: caseRow.closedAt === null,
+          itemCount: actionItems.length,
+          userId,
+          lens,
+          engagementId,
+          companyId,
+        }),
+        loadCasePeople({
+          lens,
+          viewerUserId: userId,
+          deliveringExpertUserId: profile?.userId ?? null,
+          deliveringAgencyId: caseRow.deliveringAgencyId,
+          clientPartyLabel: clientCompanyName,
+          expertPartyLabel: labels.expertPartyShort,
+          meetingIds: meetings.map((meeting) => meeting.id),
+          upcomingMeetingIds: invitableMeetingIds,
+        }),
+      ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
     const actionItemCountByMeetingId = countByMeetingId(actionItems, (item) => item.meetingId);
@@ -969,16 +978,6 @@ export const loadCase = cache(
       closedNote: resolveClosedNote(caseRow),
     };
 
-    const viewerName = personDisplayName(
-      viewer?.firstName ?? null,
-      viewer?.lastName ?? null,
-      'You'
-    );
-    const people: CasePersonView[] = [
-      { name: viewerName, isViewer: true },
-      { name: labels.counterpartyName, isViewer: false },
-    ];
-
     const base = {
       counterpartyPartyLabel: labels.counterpartyPartyLabel,
       /**
@@ -1014,7 +1013,7 @@ export const loadCase = cache(
       files: fileResult.files,
       filesTruncated: fileResult.truncated,
       party: labels.party,
-      people,
+      peopleGroups,
     };
 
     // ⚠⚠ THE LENS IS A DISCRIMINANT. The client arm is CONSTRUCTED WITHOUT an `earnings`
