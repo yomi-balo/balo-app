@@ -3,7 +3,8 @@ import { render, screen } from '@/test/utils';
 import { StepBooked, type StepBookedProps } from './step-booked';
 import * as ics from './ics';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const mockPush = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
 
 function renderStep(over: Partial<StepBookedProps> = {}) {
   const onDone = vi.fn();
@@ -101,6 +102,13 @@ describe('StepBooked', () => {
     const { onDone } = renderStep();
     screen.getByRole('button', { name: 'Done' }).click();
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the flow and opens the case from "View case"', () => {
+    const { onDone } = renderStep();
+    screen.getByRole('button', { name: 'View case' }).click();
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(mockPush).toHaveBeenCalledWith('/cases/engagement-1');
   });
 
   it('builds and downloads the .ics event from "Add to calendar"', () => {

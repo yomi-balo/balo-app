@@ -93,10 +93,15 @@ export function StepBooked({
           </p>
         )}
       </div>
+      <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
+        <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+        Add to calendar
+      </Button>
       <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button variant="outline" onClick={onDone}>
+          Done
+        </Button>
         <Button
-          variant="outline"
-          size="sm"
           onClick={() => {
             onDone();
             router.push(`/cases/${engagementId}`);
@@ -104,12 +109,7 @@ export function StepBooked({
         >
           View case
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
-          <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
-          Add to calendar
-        </Button>
       </div>
-      <Button onClick={onDone}>Done</Button>
       {/* `joinPath` is not rendered as a raw link here — the case surface is the durable place
           a member joins from; keeping it out of Step 3 avoids a second, easy-to-lose copy of it. */}
       <span className="sr-only">{joinPath}</span>

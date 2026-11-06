@@ -590,6 +590,43 @@ describe('ProjectRequestPanel', () => {
     await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('pr-1'));
   });
 
+  it('links the done step to the created request, closing the drawer on click', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<ProjectRequestPanel open onClose={onClose} {...BASE_PROPS} />);
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
+
+    const viewRequest = await screen.findByRole('link', { name: /view request/i });
+    expect(viewRequest).toHaveAttribute('href', '/projects/pr-1');
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    await user.click(viewRequest);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows only "Done" when the submit returns no request id', async () => {
+    mockSubmit.mockResolvedValue({ success: true });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+    await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+    await user.type(
+      screen.getByLabelText(/project description/i),
+      'Rebuild our lead routing in Flow.'
+    );
+    await user.click(screen.getByRole('button', { name: /^review/i }));
+    await user.click(screen.getByRole('button', { name: 'Submit request' }));
+
+    expect(await screen.findByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /view request/i })).not.toBeInTheDocument();
+  });
+
   it('captures budget (whole dollars → cents) and timeline into the submit payload', async () => {
     const user = userEvent.setup();
     renderPanel();

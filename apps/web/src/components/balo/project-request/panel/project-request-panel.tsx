@@ -586,6 +586,8 @@ export function ProjectRequestPanel({
   const [submittedRouting, setSubmittedRouting] = useState<ProjectRouting>(
     expertBound ? 'direct' : 'match'
   );
+  // The created request, for the done screen's "View request" link.
+  const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null);
 
   // Local taxonomy state so Retry / self-load can refresh without a page reload.
   // Context-free mounts (no RSC-supplied taxonomies) seed EMPTY and self-load.
@@ -1006,6 +1008,7 @@ export function ProjectRequestPanel({
     // Snapshot routing for the done screen BEFORE clearing the draft (clear resets
     // routing to the computed default), so Match submits keep their done copy.
     setSubmittedRouting(effectiveRouting);
+    setSubmittedRequestId(result.projectRequestId ?? null);
     clearDraft();
     const successCopy = getRoutingCopy(effectiveRouting, expertFirstName);
     toast.success('Request sent', { description: successCopy.successDescription });
@@ -1271,6 +1274,7 @@ export function ProjectRequestPanel({
           routing={routing}
           submitCta={SUBMIT_CTA}
           onDone={handleClose}
+          submittedRequestId={submittedRequestId}
           isCaseMount={isCaseMount}
           caseBriefWorking={caseBriefWorking}
         />
@@ -1634,6 +1638,8 @@ interface ProjectRequestDrawerFooterProps {
   routing: ProjectRouting;
   submitCta: string;
   onDone: () => void;
+  /** The created request — the done step links to it; `null` shows only "Done". */
+  submittedRequestId: string | null;
   /** BAL-589 — a case mount's `manual` step has no `start` step to go back to. */
   isCaseMount: boolean;
   /** BAL-589 — true while the case brief is drafting or revealing; disables "Review". */
@@ -1659,6 +1665,7 @@ function ProjectRequestDrawerFooter({
   routing,
   submitCta,
   onDone,
+  submittedRequestId,
   isCaseMount,
   caseBriefWorking,
 }: Readonly<ProjectRequestDrawerFooterProps>): React.JSX.Element | null {
@@ -1726,7 +1733,20 @@ function ProjectRequestDrawerFooter({
   if (step === 'done') {
     return (
       <DrawerFooter className="justify-end">
-        <PrimaryButton onClick={onDone}>Done</PrimaryButton>
+        {submittedRequestId === null ? (
+          <PrimaryButton onClick={onDone}>Done</PrimaryButton>
+        ) : (
+          <>
+            <SecondaryButton onClick={onDone}>Done</SecondaryButton>
+            <Link
+              href={`/projects/${submittedRequestId}`}
+              onClick={onDone}
+              className={cn(PRIMARY_BUTTON_CLASS, 'hover:shadow-md')}
+            >
+              View request <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
+          </>
+        )}
       </DrawerFooter>
     );
   }
@@ -2254,11 +2274,15 @@ function AiProvenanceBanner({
   );
 }
 
-function BackButton({
+function SecondaryButton({
   onClick,
   disabled,
-  label = 'Back',
-}: Readonly<{ onClick: () => void; disabled?: boolean; label?: string }>): React.JSX.Element {
+  children,
+}: Readonly<{
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}>): React.JSX.Element {
   return (
     <button
       type="button"
@@ -2266,10 +2290,26 @@ function BackButton({
       disabled={disabled}
       className="border-border bg-card text-muted-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[11px] border px-4 text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
     >
-      <ChevronLeft className="h-4 w-4" aria-hidden="true" /> {label}
+      {children}
     </button>
   );
 }
+
+function BackButton({
+  onClick,
+  disabled,
+  label = 'Back',
+}: Readonly<{ onClick: () => void; disabled?: boolean; label?: string }>): React.JSX.Element {
+  return (
+    <SecondaryButton onClick={onClick} disabled={disabled}>
+      <ChevronLeft className="h-4 w-4" aria-hidden="true" /> {label}
+    </SecondaryButton>
+  );
+}
+
+/** Shared by {@link PrimaryButton} and the done step's "View request" link. */
+const PRIMARY_BUTTON_CLASS =
+  'from-primary inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-6 text-sm font-semibold text-white shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500';
 
 function PrimaryButton({
   onClick,
@@ -2289,7 +2329,7 @@ function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'from-primary inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] bg-gradient-to-r to-violet-600 px-6 text-sm font-semibold text-white shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-violet-500/50 focus-visible:outline-none dark:to-violet-500',
+        PRIMARY_BUTTON_CLASS,
         'enabled:hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none'
       )}
     >
