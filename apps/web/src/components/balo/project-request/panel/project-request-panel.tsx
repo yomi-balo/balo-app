@@ -426,7 +426,13 @@ interface RegenerateDialogConfig {
 function resolveRegenerateDialog(
   isCaseMount: boolean,
   caseBriefFlow: UseCaseBriefFlowResult,
-  aiRegenerate: { open: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }
+  aiRegenerate: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onConfirm: () => void;
+    /** False when the documents changed since the brief was generated (upload-step Generate). */
+    sameDocuments: boolean;
+  }
 ): RegenerateDialogConfig {
   if (isCaseMount) {
     return {
@@ -442,7 +448,9 @@ function resolveRegenerateDialog(
     open: aiRegenerate.open,
     onOpenChange: aiRegenerate.onOpenChange,
     title: 'Regenerate the brief?',
-    body: "This replaces your edits with a new draft from the same documents. Your edits won't be recoverable.",
+    body: aiRegenerate.sameDocuments
+      ? "This replaces your edits with a new draft from the same documents. Your edits won't be recoverable."
+      : "This replaces your edits with a new draft from your updated documents. Your edits won't be recoverable.",
     confirmLabel: 'Regenerate',
     onConfirm: aiRegenerate.onConfirm,
   };
@@ -587,11 +595,9 @@ export function ProjectRequestPanel({
   // prop means the load failed (returned EMPTY_TAXONOMY) — surface the error state.
   // Context-free mounts start empty and self-load on first open, so the error flag
   // stays false until a self-load attempt fails.
-  const [tagsError, setTagsError] = useState(
-    projectTaxonomies !== undefined && projectTaxonomies.tags.groups.length === 0
-  );
+  const [tagsError, setTagsError] = useState(projectTaxonomies?.tags.groups.length === 0);
   const [productsError, setProductsError] = useState(
-    projectTaxonomies !== undefined && projectTaxonomies.products.groups.length === 0
+    projectTaxonomies?.products.groups.length === 0
   );
   const [retrying, setRetrying] = useState(false);
   // True once a context-free self-load has been kicked off (guard against re-fire).
@@ -742,6 +748,7 @@ export function ProjectRequestPanel({
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
+    hasBriefForCurrentDocuments,
     cancelGeneration,
     handleGenerateClick,
     handleRetryGenerate,
@@ -832,6 +839,14 @@ export function ProjectRequestPanel({
     setField('source', 'manual');
     setStep('manual');
   }, [expertProfileId, entryPoint, setField, cancelGeneration]);
+
+  // `upload` → `review` without regenerating, offered only while the existing brief still matches
+  // the documents. A failed regenerate is set aside too: the brief it failed to replace is intact.
+  const { dismissFailure: dismissBriefFailure } = briefGeneration;
+  const handleBackToReview = useCallback(() => {
+    dismissBriefFailure();
+    setStep('review');
+  }, [dismissBriefFailure]);
 
   const handleJump = useCallback((key: string) => {
     if (key === 'start' || key === 'upload' || key === 'manual' || key === 'review') setStep(key);
@@ -1160,6 +1175,7 @@ export function ProjectRequestPanel({
     open: regenerateConfirmOpen,
     onOpenChange: setRegenerateConfirmOpen,
     onConfirm: handleConfirmRegenerate,
+    sameDocuments: hasBriefForCurrentDocuments,
   });
 
   return (
@@ -1240,6 +1256,8 @@ export function ProjectRequestPanel({
         <ProjectRequestDrawerFooter
           step={step}
           onBackToStart={() => setStep('start')}
+          canReturnToReview={hasBriefForCurrentDocuments}
+          onBackToReview={handleBackToReview}
           onGoReview={handleGoReview}
           isGenerating={isGenerating}
           documentCount={draft.documents.length}
@@ -1600,6 +1618,9 @@ function UploadStepBody({
 interface ProjectRequestDrawerFooterProps {
   step: ProjectStep;
   onBackToStart: () => void;
+  /** True when the `upload` step's Back can return to an existing brief instead of `start`. */
+  canReturnToReview: boolean;
+  onBackToReview: () => void;
   onGoReview: () => void;
   isGenerating: boolean;
   documentCount: number;
@@ -1623,6 +1644,8 @@ interface ProjectRequestDrawerFooterProps {
 function ProjectRequestDrawerFooter({
   step,
   onBackToStart,
+  canReturnToReview,
+  onBackToReview,
   onGoReview,
   isGenerating,
   documentCount,
@@ -1653,7 +1676,11 @@ function ProjectRequestDrawerFooter({
   if (step === 'upload') {
     return (
       <DrawerFooter>
-        <BackButton onClick={onBackToStart} disabled={isGenerating} />
+        {canReturnToReview ? (
+          <BackButton onClick={onBackToReview} disabled={isGenerating} label="Back to review" />
+        ) : (
+          <BackButton onClick={onBackToStart} disabled={isGenerating} />
+        )}
         <PrimaryButton
           onClick={onGenerateClick}
           disabled={documentCount === 0 || uploading || isGenerating}
@@ -2183,43 +2210,46 @@ function AiProvenanceBanner({
   onChangeSourceDocuments: () => void;
 }>): React.JSX.Element {
   return (
-    <div className="border-primary/30 bg-primary/[0.04] flex flex-wrap items-center gap-3 rounded-xl border p-4">
+    <div className="border-primary/30 bg-primary/[0.04] flex items-start gap-3 rounded-xl border p-4">
       {isGenerating ? (
-        <RotateCw className="text-primary h-4.5 w-4.5 shrink-0 animate-spin" aria-hidden="true" />
+        <RotateCw
+          className="text-primary mt-px h-4.5 w-4.5 shrink-0 animate-spin"
+          aria-hidden="true"
+        />
       ) : (
-        <Sparkles className="text-primary h-4.5 w-4.5 shrink-0" aria-hidden="true" />
+        <Sparkles className="text-primary mt-px h-4.5 w-4.5 shrink-0" aria-hidden="true" />
       )}
-      <p className="text-foreground min-w-0 flex-1 text-sm font-medium">
-        {isGenerating
-          ? 'Regenerating your brief…'
-          : 'AI-drafted from your documents — check over everything below.'}
-      </p>
-      {/*
-        ⚠ 44px MINIMUM HIT AREA + A VISIBLE FOCUS RING ON BOTH CONTROLS (BAL-254 W5). Same rule
-        F13 applied to the uploader's Retry/Remove in this PR, and the same reason: this is a
-        touch-first surface. "Change source documents" additionally removed the NATIVE ring
-        (`focus-visible:outline-none`) and named a ring COLOUR with no `focus-visible:ring-2` to
-        draw — i.e. it had no visible focus indicator at all. The glyph and type scale are
-        unchanged; only the tappable box grows.
-      */}
-      {!isGenerating && (
-        <div className="flex shrink-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={onRegenerate}
-            className="border-border bg-card text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <RotateCw className="h-3.5 w-3.5" aria-hidden="true" /> Regenerate
-          </button>
-          <button
-            type="button"
-            onClick={onChangeSourceDocuments}
-            className="text-primary hover:text-primary/80 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md px-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Change source documents
-          </button>
-        </div>
-      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground text-sm font-medium">
+          {isGenerating
+            ? 'Regenerating your brief…'
+            : 'AI-drafted from your documents — check over everything below.'}
+        </p>
+        {/*
+          ⚠ 44px MINIMUM HIT AREA + A VISIBLE FOCUS RING ON BOTH CONTROLS (BAL-254): this is a
+          touch-first surface, the same rule the uploader's Retry/Remove follow. Both buttons set
+          `focus-visible:outline-none`, which removes the NATIVE ring — `focus-visible:ring-2` is
+          what draws a replacement, so dropping it leaves no visible focus indicator at all.
+        */}
+        {!isGenerating && (
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={onRegenerate}
+              className="border-border bg-card text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <RotateCw className="h-3.5 w-3.5" aria-hidden="true" /> Regenerate
+            </button>
+            <button
+              type="button"
+              onClick={onChangeSourceDocuments}
+              className="text-primary hover:text-primary/80 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md px-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
+            >
+              Change source documents
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2227,7 +2257,8 @@ function AiProvenanceBanner({
 function BackButton({
   onClick,
   disabled,
-}: Readonly<{ onClick: () => void; disabled?: boolean }>): React.JSX.Element {
+  label = 'Back',
+}: Readonly<{ onClick: () => void; disabled?: boolean; label?: string }>): React.JSX.Element {
   return (
     <button
       type="button"
@@ -2235,7 +2266,7 @@ function BackButton({
       disabled={disabled}
       className="border-border bg-card text-muted-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[11px] border px-4 text-sm font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
     >
-      <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back
+      <ChevronLeft className="h-4 w-4" aria-hidden="true" /> {label}
     </button>
   );
 }
