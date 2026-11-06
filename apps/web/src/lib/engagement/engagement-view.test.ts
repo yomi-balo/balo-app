@@ -107,6 +107,55 @@ function ctxFor(lens: EngagementLens): EngagementViewerContext {
   };
 }
 
+describe('mapEngagementToWorkspaceView — header line profile link', () => {
+  const HREF = '/experts/priya-sharma';
+  const headerLineFor = (lens: EngagementLens, href: string | null = HREF) =>
+    mapEngagementToWorkspaceView(makeEngagement(), ctxFor(lens), NOW, [], [], null, href).header
+      .headerLine;
+
+  it('client lens: the expert person carries the gated profile href', () => {
+    expect(headerLineFor('client')).toEqual({
+      prefix: 'Delivered by ',
+      expertName: 'Priya Sharma',
+      suffix: ' — CPQ Specialist',
+      expertProfileHref: HREF,
+      tracksProfileClicks: true,
+    });
+  });
+
+  it('admin lens: the expert person carries the gated profile href', () => {
+    expect(headerLineFor('admin')).toEqual({
+      prefix: 'Northwind Industrial ↔ ',
+      expertName: 'Priya Sharma',
+      suffix: '',
+      expertProfileHref: HREF,
+      tracksProfileClicks: false,
+    });
+  });
+
+  it('expert lens: names no expert, so the href is dropped even when supplied', () => {
+    expect(headerLineFor('expert')).toEqual({
+      prefix: 'For Northwind Industrial',
+      expertName: null,
+      suffix: '',
+      expertProfileHref: null,
+      tracksProfileClicks: false,
+    });
+  });
+
+  it('a profile that does not resolve (null href) leaves the name unlinked', () => {
+    expect(headerLineFor('client', null)).toMatchObject({
+      expertName: 'Priya Sharma',
+      expertProfileHref: null,
+    });
+  });
+
+  it('defaults to no href when the caller passes none', () => {
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
+    expect(view.header.headerLine.expertProfileHref).toBeNull();
+  });
+});
+
 describe('mapEngagementToWorkspaceView — header & title', () => {
   it('uses the source request title when present', () => {
     const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);

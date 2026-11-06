@@ -163,11 +163,14 @@ export interface RecapPartyView {
   /** The ordinal line, e.g. 3rd consultation on this case. `null` when not derivable. */
   ordinalLine: string | null;
   /**
-   * `/experts/{username}` — the ONE forward action with a live destination today, and ONLY
-   * when `expert_profiles.username` is non-null (the column is NULLABLE). `null` ⇒ the card
-   * renders no action at all. NEVER a disabled CTA, and never a link to `/experts/null`.
+   * `/experts/{username}` — the delivering expert's public profile, non-null ONLY on the client
+   * lens AND only when that profile resolves (`findDisplayProfileById`'s gated
+   * `publicProfileUsername`). The ONE value behind the avatar + name link and "Book again".
+   * `null` ⇒ the name renders unlinked and the card renders no action at all — NEVER a
+   * disabled CTA, and never an href that 404s. Always `null` on the expert lens, whose
+   * counterparty is the client company.
    */
-  bookAgainHref: string | null;
+  profileHref: string | null;
   /**
    * The delivering expert's average rating (BAL-422), or `null`.
    *

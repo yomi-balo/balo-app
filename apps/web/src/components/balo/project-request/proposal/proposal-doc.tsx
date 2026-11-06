@@ -15,6 +15,11 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { InlineRating } from '@/components/balo/rating-display';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
@@ -105,11 +110,15 @@ export function ProposalDoc({
   return (
     <div className="flex flex-col gap-[18px]">
       {/* 1 — Header: identity + pills */}
-      <div className="flex items-center gap-3">
-        <Avatar initials={doc.expert.initials} />
+      <div className={cn('flex items-center gap-3', EXPERT_PROFILE_ROW)}>
+        <ExpertProfileAvatarLink href={doc.expert.profileHref} surface="proposal_header">
+          <Avatar initials={doc.expert.initials} />
+        </ExpertProfileAvatarLink>
         <div className="min-w-0 flex-1">
           <p className="text-foreground text-[15px] font-semibold">
-            {doc.expert.name}
+            <ExpertProfileLink href={doc.expert.profileHref} surface="proposal_header">
+              {doc.expert.name}
+            </ExpertProfileLink>
             {doc.expert.company !== null && (
               <span className="text-muted-foreground ml-1 text-xs font-medium">
                 · {doc.expert.company}

@@ -199,10 +199,14 @@ export interface CasePartyView {
   avatarUrl: string | null;
   initials: string;
   /**
-   * `/experts/{username}` — the ONE forward action with a live destination, and only when
-   * `expert_profiles.username` is non-null (the column is NULLABLE). `null` ⇒ no CTA at all.
+   * `/experts/{username}` — the delivering expert's public profile, non-null ONLY on the client
+   * lens AND only when that profile resolves (`findDisplayProfileById`'s gated
+   * `publicProfileUsername`), so it never points at a 404. The ONE value behind the avatar +
+   * name link, "Book with X again" (`?book=1&src=book_again`) and the nudge's booking link.
+   * `null` ⇒ the name renders unlinked and no CTA renders.
+   * Always `null` on the expert lens: the counterparty there is the client company.
    */
-  bookAgainHref: string | null;
+  profileHref: string | null;
   /**
    * The counterparty expert's "Available for new work" switch (BAL-591). `false` only on the
    * client lens for a paused expert; the expert lens hardcodes `true`. Decides whether the
@@ -302,6 +306,12 @@ export interface CaseHeaderView {
   closedAtIso: string | null;
   /** The other party's org: the expert's agency (client lens) or the company (expert lens). */
   counterpartyOrgLabel: string;
+  /**
+   * The independent expert's public profile when `counterpartyOrgLabel` IS that person's name:
+   * non-null only on the client lens, for an expert with no agency, whose profile resolves.
+   * An agency name and the client company (expert lens) are never linked.
+   */
+  counterpartyOrgHref: string | null;
   /** The neutral note a CLOSED case renders. `null` while open. */
   closedNote: string | null;
 }

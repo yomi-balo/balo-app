@@ -7,6 +7,7 @@ import {
   engagementChangeOrdersRepository,
   engagementMilestonesRepository,
   engagementTimeEntriesRepository,
+  expertsRepository,
   type ProjectEngagementWithMilestones,
   type TimeEntryListRow,
   type TimeEntrySums,
@@ -21,6 +22,7 @@ import {
   resolveWorkspaceAccess,
 } from '@/lib/engagement/resolve-engagement-viewer';
 import { mapEngagementToWorkspaceView, offersRatingCard } from '@/lib/engagement/engagement-view';
+import type { EngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { resolveWorkspaceBackHref } from '@/lib/engagement/workspace-back-href';
 import { mapActionItemsToView } from '@/lib/engagement/action-items-view';
 import {
@@ -133,6 +135,33 @@ function loadTimeReads(
   ];
 }
 
+/**
+ * The delivering expert's public profile path for the header line, or null when that profile
+ * does not resolve under the shared public-profile rule. The expert lens's line names no expert,
+ * so it reads nothing. Never rejects: a failed read leaves the name unlinked rather than failing
+ * the page.
+ */
+async function loadExpertProfileHref(
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens
+): Promise<string | null> {
+  if (lens === 'expert') return null;
+  try {
+    const usernames = await expertsRepository.findPublicUsernamesByProfileIds([
+      engagement.expertProfileId,
+    ]);
+    const username = usernames.get(engagement.expertProfileId);
+    return username === undefined ? null : `/experts/${username}`;
+  } catch (error) {
+    log.warn('Expert profile link unavailable for engagement header', {
+      engagementId: engagement.id,
+      expertProfileId: engagement.expertProfileId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 /** When time was last logged on the engagement, for the admin activity chip. */
 function latestTimeLoggedAt(entries: readonly TimeEntryListRow[]): Date | null {
   let latest: Date | null = null;
@@ -231,6 +260,8 @@ export default async function EngagementWorkspacePage({
     .map((m) => m.id);
   const now = new Date();
   const billingPeriod = workspaceBillingPeriod(engagement, now);
+  // Runs alongside the batch below; it never rejects, so awaiting it afterwards is safe.
+  const expertProfileHrefRead = loadExpertProfileHref(engagement, ctx.lens);
   const [rating, actionItems, changeOrderRows, contentEdits, timeEntries, timeSums, notified] =
     await Promise.all([
       offersRatingCard(engagement.status, ctx.lens)
@@ -259,7 +290,8 @@ export default async function EngagementWorkspacePage({
     now,
     changeOrderRows,
     contentEdits,
-    latestTimeLoggedAt(timeEntries)
+    latestTimeLoggedAt(timeEntries),
+    await expertProfileHrefRead
   );
   const view = {
     ...mappedView,

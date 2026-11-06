@@ -283,6 +283,7 @@ const BASE = {
     closeReason: null,
     closedAtIso: null,
     counterpartyOrgLabel: 'CloudPeak',
+    counterpartyOrgHref: null,
     closedNote: null,
   },
   nudge: null,
@@ -314,7 +315,7 @@ const BASE = {
     orgLabel: 'CloudPeak',
     avatarUrl: null,
     initials: 'AO',
-    bookAgainHref: '/experts/amara-okafor',
+    profileHref: '/experts/amara-okafor',
     availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,
@@ -1666,6 +1667,22 @@ describe('CaseSurface — follow-ups book in-page on an open case', () => {
     expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
       'request: 2 source: case_nudge'
     );
+  });
+
+  it('OPEN + no longer publicly listed: no in-page booking, and the nudge stops inviting one', () => {
+    render(
+      <CaseSurface
+        view={clientView({
+          party: { ...BASE.party, profileHref: null },
+          nudge: { kind: 'nothing_booked' },
+        })}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Book with Amara again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book a consultation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /book/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+    expect(screen.getByText(/isn't available to book on Balo right now/)).toBeInTheDocument();
   });
 
   it('CLOSED + paused keeps the profile links (a new case lands on the paused card)', () => {

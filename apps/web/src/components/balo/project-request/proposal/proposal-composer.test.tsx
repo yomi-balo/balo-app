@@ -110,6 +110,7 @@ const EXPERT: ProposalExpertIdentity = {
   initials: 'SE',
   company: null,
   headline: 'CPQ Specialist',
+  profileHref: null,
   rating: 4.8,
   ratingCount: 12,
 };

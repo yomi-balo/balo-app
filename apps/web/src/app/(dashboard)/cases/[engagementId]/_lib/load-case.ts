@@ -436,6 +436,11 @@ interface CounterpartyLabels {
   /** The org line under the case title: the agency (client lens) or the company (expert). */
   counterpartyOrgLabel: string;
   /**
+   * `party.profileHref` when `counterpartyOrgLabel` names the independent expert themselves
+   * (client lens, no agency); otherwise `null` — an agency or a company is never linked.
+   */
+  counterpartyOrgHref: string | null;
+  /**
    * BAL-567 — the delivering expert's AGENCY name, or `null` for an INDEPENDENT expert.
    *
    * ⚠ THE RAW AGENCY, NOT `counterpartyOrgLabel`. That one coalesces to `expertPartyShort` on
@@ -450,8 +455,8 @@ interface CounterpartyLabels {
 /**
  * The rail's party card, both lenses.
  *
- * CLIENT LENS → the delivering EXPERT: avatar, person name, headline, agency, and the one
- * live forward destination (`/experts/{username}`).
+ * CLIENT LENS → the delivering EXPERT: avatar, person name, headline, agency, and their public
+ * profile (`/experts/{username}`) — the name link and the one live forward destination.
  *
  * EXPERT LENS → the client PARTY, i.e. THE COMPANY.
  *
@@ -510,9 +515,11 @@ async function resolveCounterparty(
   });
 
   if (lens === 'client') {
-    // ⚠ `expert_profiles.username` IS NULLABLE. A null username means NO CTA at all — never a
-    // disabled button, and never an href pointing at `/experts/null`.
-    const username = profile?.username ?? null;
+    // `publicProfileUsername` is null unless `/experts/{username}` resolves (a null username,
+    // an unapproved or unsearchable profile, or a suspended/deleted owner), so a null means no
+    // link and no CTA — never a disabled button, and never an href that 404s.
+    const username = profile?.publicProfileUsername ?? null;
+    const profileHref = username === null ? null : '/experts/' + username;
     return {
       expertPartyShort,
       counterpartyName: expertPerson,
@@ -521,6 +528,8 @@ async function resolveCounterparty(
       // independent. Already resolved by `expertPartyDisplayName` above; reused, never re-derived.
       counterpartyPartyLabel: expertPartyShort,
       counterpartyOrgLabel: agencyLabel ?? expertPartyShort,
+      // Without an agency the org line IS the expert's own name, so it links to their profile.
+      counterpartyOrgHref: agencyLabel === null ? profileHref : null,
       agencyLabel,
       party: {
         name: expertPerson,
@@ -528,7 +537,7 @@ async function resolveCounterparty(
         orgLabel: agencyLabel,
         avatarUrl: expertUser?.avatarUrl ?? null,
         initials: initialsOf(expertPerson),
-        bookAgainHref: username === null ? null : '/experts/' + username,
+        profileHref,
         // An unreadable profile reads as available, so the CTA keeps today's profile link.
         availableForWork: resolverSettings?.availableForWork ?? true,
         // BAL-422 — already parsed to a number by `findDisplayProfileById`.
@@ -546,6 +555,7 @@ async function resolveCounterparty(
     // (see this function's docblock on the deliberate departure from the design fixture).
     counterpartyPartyLabel: clientCompanyName,
     counterpartyOrgLabel: clientCompanyName,
+    counterpartyOrgHref: null,
     // The delivering expert's agency, on the EXPERT lens too — see the field's docblock.
     agencyLabel,
     party: {
@@ -554,9 +564,9 @@ async function resolveCounterparty(
       orgLabel: null,
       avatarUrl: null,
       initials: initialsOf(clientCompanyName),
-      // ⚠ NO expert-side CTA. "Book another" is the CLIENT's action (only a client can book),
-      // and every other expert-side forward action the design considered has no destination.
-      bookAgainHref: null,
+      // ⚠ NO expert-side link or CTA. The counterparty is a company, which has no profile page,
+      // and "Book another" is the CLIENT's action (only a client can book).
+      profileHref: null,
       availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
       // client COMPANY; the expert does not score the client, and companies carry no rating
@@ -975,6 +985,7 @@ export const loadCase = cache(
       closeReason: caseRow.closeReason,
       closedAtIso: caseRow.closedAt?.toISOString() ?? null,
       counterpartyOrgLabel: labels.counterpartyOrgLabel,
+      counterpartyOrgHref: labels.counterpartyOrgHref,
       closedNote: resolveClosedNote(caseRow),
     };
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
-import { track, RECAP_EVENTS } from '@/lib/analytics';
+import { track, EXPERT_PROFILE_EVENTS, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import { CasePartyCard } from './case-party-card';
 
@@ -19,9 +19,9 @@ vi.mock('./case-slot-quick-pick', () => ({
 /**
  * BAL-421 — the rail's counterparty card: ONE component for both lenses.
  *
- * ⚠⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `expert_profiles.username` is
- * NULLABLE, so a null `bookAgainHref` must produce NO button rather than a link to
- * `/experts/null`. That is the branch this file exists to hold.
+ * ⚠⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `profileHref` is null whenever the
+ * expert's public profile does not resolve, and must then produce NO button (and no name link)
+ * rather than a link that 404s. That is the branch this file exists to hold.
  *
  * ⚠ NO EMAIL ADDRESS ANYWHERE (ADR-1044) — asserted over the whole rendered tree.
  *
@@ -37,7 +37,7 @@ const PARTY: CasePartyView = {
   orgLabel: 'CloudPeak',
   avatarUrl: null,
   initials: 'AO',
-  bookAgainHref: '/experts/amara-okafor',
+  profileHref: '/experts/amara-okafor',
   availableForWork: true,
   ratingAverage: 4.3,
   ratingCount: 2,
@@ -73,6 +73,63 @@ const NEW_CASE_NOTE = 'Starts a new case — this one stays as it is.';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+/**
+ * The avatar and the name both link to the expert's public profile, built from the same
+ * server-gated `profileHref` as "Book again" — so they exist only when that profile resolves,
+ * and never on the expert lens, whose counterparty is the client company.
+ */
+describe('CasePartyCard — the profile link', () => {
+  it('links the avatar and the name to the profile, as one link named by the person', () => {
+    const { container } = renderCard();
+    const link = screen.getByRole('link', { name: 'Amara Okafor' });
+    expect(link).toHaveAttribute('href', '/experts/amara-okafor');
+    expect(screen.getAllByRole('link', { name: 'Amara Okafor' })).toHaveLength(1);
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/amara-okafor');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toContainElement(screen.getByText('AO'));
+    // The headline, agency and rating stay outside both links.
+    expect(link).not.toContainElement(screen.getByText('Salesforce architect'));
+    expect(link).not.toContainElement(screen.getByText('CloudPeak'));
+  });
+
+  it('reports a profile click as the case party card', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('link', { name: 'Amara Okafor' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'case_party_card',
+    });
+  });
+
+  it('renders the name unlinked when the profile does not resolve', () => {
+    renderCard({ party: { ...PARTY, profileHref: null } });
+    expect(screen.getByText('Amara Okafor')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Amara Okafor' })).not.toBeInTheDocument();
+  });
+
+  it('never links the client COMPANY on the expert lens', () => {
+    const { container } = renderCard({
+      lens: 'expert',
+      earnings: NOT_YET,
+      party: {
+        ...PARTY,
+        name: 'Northwind Industrial',
+        initials: 'NI',
+        headline: null,
+        orgLabel: null,
+        profileHref: null,
+        ratingAverage: null,
+        ratingCount: 0,
+      },
+    });
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+  });
 });
 
 describe('CasePartyCard — the identity block', () => {
@@ -164,9 +221,9 @@ describe('CasePartyCard — the booking CTA is a live destination or nothing', (
     );
   });
 
-  /** ⚠ THE NULL-USERNAME BRANCH. An absent action beats a link to `/experts/null`. */
-  it('renders NO link at all when bookAgainHref is null', () => {
-    const { container } = renderCard({ party: { ...PARTY, bookAgainHref: null } });
+  /** ⚠ THE UNRESOLVED-PROFILE BRANCH. An absent action beats a link that 404s. */
+  it('renders NO link at all when profileHref is null', () => {
+    const { container } = renderCard({ party: { ...PARTY, profileHref: null } });
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(container.innerHTML).not.toContain('/experts/');
     expect(screen.queryByText(NEW_CASE_NOTE)).not.toBeInTheDocument();
@@ -223,6 +280,11 @@ describe('CasePartyCard — CaseSlotQuickPick gating', () => {
 
   it('omits the quick-pick on the expert lens', () => {
     renderCard({ lens: 'expert', isOpen: true });
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+  });
+
+  it('omits the quick-pick when the expert is no longer publicly listed', () => {
+    renderCard({ lens: 'client', isOpen: true, party: { ...PARTY, profileHref: null } });
     expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
   });
 
@@ -309,7 +371,7 @@ describe('CasePartyCard — the open-case follow-up for a paused expert (BAL-591
     const user = userEvent.setup();
     const onBookFollowUp = vi.fn();
     renderCard({
-      party: { ...PARTY, bookAgainHref: null },
+      party: { ...PARTY, profileHref: null },
       onBookFollowUp,
     });
     await user.click(screen.getByRole('button', { name: BOOK_AGAIN }));

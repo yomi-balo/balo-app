@@ -161,31 +161,53 @@ export function personAtCompany(
 }
 
 /**
+ * The header sub-line split around the expert person's name, so the name alone can render as a
+ * profile link. `prefix + expertPerson + suffix` reads as the whole line. `expertPerson` is null
+ * when the line names no expert person; `prefix` is then the whole line and `suffix` is empty.
+ */
+export interface EngagementHeaderLineParts {
+  prefix: string;
+  expertPerson: string | null;
+  suffix: string;
+}
+
+/**
  * The per-lens header sub-line under the engagement title.
  *  - client   → prospective "Delivered by …" naming the expert PARTY (+ person &
  *               headline in the parenthetical / suffix);
- *  - expert   → "For {clientCompanyName}";
+ *  - expert   → "For {clientCompanyName}" (names no expert person);
  *  - admin    → "{clientCompanyName} ↔ {expertParty} ({expertPerson})" (agency) |
  *               "{clientCompanyName} ↔ {expertPerson}" (independent).
+ * Only the expert PERSON is split out: an agency or client company name stays in the text.
  */
-export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties): string {
+export function engagementHeaderLine(
+  lens: EngagementLens,
+  p: EngagementParties
+): EngagementHeaderLineParts {
   if (lens === 'expert') {
-    return `For ${p.clientCompanyName}`;
+    return { prefix: `For ${p.clientCompanyName}`, expertPerson: null, suffix: '' };
   }
+  const expertPerson = p.expertPerson;
   if (lens === 'admin') {
     return p.isAgencyExpert
-      ? `${p.clientCompanyName} ↔ ${p.expertParty} (${p.expertPerson})`
-      : `${p.clientCompanyName} ↔ ${p.expertPerson}`;
+      ? { prefix: `${p.clientCompanyName} ↔ ${p.expertParty} (`, expertPerson, suffix: ')' }
+      : { prefix: `${p.clientCompanyName} ↔ `, expertPerson, suffix: '' };
   }
   // client lens — prospective, party-named.
+  const headline =
+    p.expertHeadline !== null && p.expertHeadline.trim() !== '' ? p.expertHeadline : null;
   if (p.isAgencyExpert) {
-    return p.expertHeadline !== null && p.expertHeadline.trim() !== ''
-      ? `Delivered by ${p.expertParty} (${p.expertPerson}, ${p.expertHeadline})`
-      : `Delivered by ${p.expertParty} (${p.expertPerson})`;
+    return {
+      prefix: `Delivered by ${p.expertParty} (`,
+      expertPerson,
+      suffix: headline === null ? ')' : `, ${headline})`,
+    };
   }
-  return p.expertHeadline !== null && p.expertHeadline.trim() !== ''
-    ? `Delivered by ${p.expertPerson} — ${p.expertHeadline}`
-    : `Delivered by ${p.expertPerson}`;
+  return {
+    prefix: 'Delivered by ',
+    expertPerson,
+    suffix: headline === null ? '' : ` — ${headline}`,
+  };
 }
 
 /**

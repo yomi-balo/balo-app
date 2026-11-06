@@ -8,6 +8,7 @@ import {
   engagementHeaderLine,
   personAtCompany,
   projectEngagementTitle,
+  type EngagementHeaderLineParts,
 } from './engagement-parties';
 
 type ExpertProfile = ProjectEngagementWithMilestones['expertProfile'];
@@ -230,38 +231,68 @@ describe('expertSideActorLabel', () => {
 });
 
 describe('engagementHeaderLine', () => {
-  it('client (independent): "Delivered by {person} — {headline}"', () => {
+  const read = (parts: EngagementHeaderLineParts): string =>
+    `${parts.prefix}${parts.expertPerson ?? ''}${parts.suffix}`;
+
+  it('client (independent): "Delivered by {person} — {headline}", the person split out', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('client', p)).toBe('Delivered by Priya Sharma — CPQ Specialist');
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by Priya Sharma — CPQ Specialist');
+    expect(parts).toEqual({
+      prefix: 'Delivered by ',
+      expertPerson: 'Priya Sharma',
+      suffix: ' — CPQ Specialist',
+    });
   });
 
-  it('client (agency): "Delivered by {agency} ({person}, {headline})"', () => {
+  it('client (agency): "Delivered by {agency} ({person}, {headline})", the agency left in the text', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: makeAgency() }));
-    expect(engagementHeaderLine('client', p)).toBe(
-      'Delivered by CloudPeak Consulting (Priya Sharma, CPQ Specialist)'
-    );
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by CloudPeak Consulting (Priya Sharma, CPQ Specialist)');
+    expect(parts).toEqual({
+      prefix: 'Delivered by CloudPeak Consulting (',
+      expertPerson: 'Priya Sharma',
+      suffix: ', CPQ Specialist)',
+    });
+  });
+
+  it('client (agency, no headline): closes the parenthetical after the person', () => {
+    const p = deriveEngagementParties(makeEngagement({ agency: makeAgency(), headline: null }));
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by CloudPeak Consulting (Priya Sharma)');
+    expect(parts.suffix).toBe(')');
   });
 
   it('client (no headline): omits the specialty suffix', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null, headline: null }));
-    expect(engagementHeaderLine('client', p)).toBe('Delivered by Priya Sharma');
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by Priya Sharma');
+    expect(parts.suffix).toBe('');
   });
 
-  it('expert: "For {clientCompanyName}"', () => {
+  it('expert: "For {clientCompanyName}", naming no expert person', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('expert', p)).toBe('For Northwind Industrial');
+    expect(engagementHeaderLine('expert', p)).toEqual({
+      prefix: 'For Northwind Industrial',
+      expertPerson: null,
+      suffix: '',
+    });
   });
 
   it('admin (independent): "{company} ↔ {person}"', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('admin', p)).toBe('Northwind Industrial ↔ Priya Sharma');
+    expect(engagementHeaderLine('admin', p)).toEqual({
+      prefix: 'Northwind Industrial ↔ ',
+      expertPerson: 'Priya Sharma',
+      suffix: '',
+    });
   });
 
   it('admin (agency): "{company} ↔ {agency} ({person})"', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: makeAgency() }));
-    expect(engagementHeaderLine('admin', p)).toBe(
-      'Northwind Industrial ↔ CloudPeak Consulting (Priya Sharma)'
-    );
+    const parts = engagementHeaderLine('admin', p);
+    expect(read(parts)).toBe('Northwind Industrial ↔ CloudPeak Consulting (Priya Sharma)');
+    expect(parts.expertPerson).toBe('Priya Sharma');
   });
 });
 

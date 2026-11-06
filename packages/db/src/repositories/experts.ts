@@ -41,7 +41,7 @@ import {
   type StaffEditSnapshot,
 } from './_shared/expert-application-edit';
 import { consultationCountExpression } from './_shared/consultation-count';
-import { expertOwnerIsLive } from './_shared/expert-owner-live';
+import { expertProfileIsPublic, publicProfileUsernameSql } from './_shared/expert-profile-public';
 import { recordScheduleAudit } from './_shared/schedule-audit';
 import {
   consultations,
@@ -1057,6 +1057,12 @@ export const expertsRepository = {
    *
    * ⚠ NULL MEANS NO REVIEWS, NEVER 0.0. Every consumer null-gates on `ratingAverage` (never on
    * `ratingCount`), because 0.0 is unrepresentable on a 1..5 scale and must never render.
+   *
+   * ⚠ `publicProfileUsername` IS GATED, NOT THE RAW COLUMN. It is the username only while
+   * `/experts/{username}` resolves (`expertProfileIsPublic`: searchable, approved, live owner),
+   * otherwise null, so a party card's profile and "Book again" links never point at a 404.
+   * Searchability flips on its own and owners get suspended, so a bare `username !== null`
+   * check is not enough. The raw column is deliberately not projected.
    */
   async findDisplayProfileById(expertProfileId: string): Promise<
     | {
@@ -1065,7 +1071,7 @@ export const expertsRepository = {
         agencyId: string | null;
         type: ExpertProfile['type'];
         headline: string | null;
-        username: string | null;
+        publicProfileUsername: string | null;
         ratingAverage: number | null;
         ratingCount: number;
       }
@@ -1078,7 +1084,7 @@ export const expertsRepository = {
         agencyId: expertProfiles.agencyId,
         type: expertProfiles.type,
         headline: expertProfiles.headline,
-        username: expertProfiles.username,
+        publicProfileUsername: publicProfileUsernameSql,
         ratingAverage: expertProfiles.ratingAverage,
         ratingCount: expertProfiles.ratingCount,
       })
@@ -1089,6 +1095,31 @@ export const expertsRepository = {
       return undefined;
     }
     return { ...row, ratingAverage: parseRatingAverage(row.ratingAverage) };
+  },
+
+  /**
+   * The usernames of those `expertProfileIds` whose public page `/experts/{username}` resolves,
+   * keyed by profile id: ONE query for a whole page of experts. A profile that is unclaimed,
+   * unapproved, not searchable or owned by a soft-deleted / suspended / inactive user is absent
+   * from the map, so the caller renders the name without a link. Unknown ids are absent too.
+   *
+   * The gate is `expertProfileIsPublic`, the rule `findPublicProfileByUsername` applies, so the
+   * href built from a returned username cannot 404 on visibility. `expert_profiles` has no
+   * `deleted_at`. Empty input returns an empty map without a query.
+   */
+  async findPublicUsernamesByProfileIds(
+    expertProfileIds: readonly string[]
+  ): Promise<Map<string, string>> {
+    if (expertProfileIds.length === 0) return new Map();
+    const rows = await db
+      .select({ id: expertProfiles.id, username: expertProfiles.username })
+      .from(expertProfiles)
+      .where(and(inArray(expertProfiles.id, [...expertProfileIds]), expertProfileIsPublic));
+    const usernames = new Map<string, string>();
+    for (const row of rows) {
+      if (row.username !== null) usernames.set(row.id, row.username);
+    }
+    return usernames;
   },
 
   /**
@@ -1409,11 +1440,13 @@ export const expertsRepository = {
    * non-searchable profiles, and owners that are soft-deleted, suspended or inactive,
    * resolve to undefined (→ 404). Username match is exact (the unique username index).
    *
-   * Owner liveness is `expertOwnerIsLive` (`_shared/expert-owner-live.ts`), the SQL twin of
-   * `userRowIsLive`, shared with `findPublicVisibility` and search so the public surfaces
-   * cannot disagree on who is visible. This read also backs the public front page's curated
-   * spotlight, so a suspended expert drops off it too. The fragment is a raw `sql` EXISTS for
-   * the relational-alias reason its docblock records.
+   * The gate is `expertProfileIsPublic` (`_shared/expert-profile-public.ts`), whose owner term is
+   * `expertOwnerIsLive`, the SQL twin of `userRowIsLive`. It is shared with `findPublicVisibility`,
+   * search and every gated profile href (`findDisplayProfileById`,
+   * `findPublicUsernamesByProfileIds`, the cases index), so a link and the page it opens cannot
+   * disagree on who is visible. This read also backs the public front page's curated spotlight,
+   * so a suspended expert drops off it too. The fragment's columns sit in raw `sql` for the
+   * relational-alias reason its docblock records.
    *
    * `availableForWork` is projected but does NOT gate visibility: an expert who has paused new
    * work keeps a public profile, which renders the paused alternatives instead of booking.
@@ -1424,12 +1457,7 @@ export const expertsRepository = {
    */
   async findPublicProfileByUsername(username: string) {
     return db.query.expertProfiles.findFirst({
-      where: and(
-        eq(expertProfiles.username, username),
-        eq(expertProfiles.searchable, true),
-        isNotNull(expertProfiles.approvedAt),
-        expertOwnerIsLive
-      ),
+      where: and(eq(expertProfiles.username, username), expertProfileIsPublic),
       // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
       // public view-model + page consume. Keeps sensitive columns
       // (stripeConnectId, internal flags) out of the RSC by construction — not
@@ -1510,9 +1538,9 @@ export const expertsRepository = {
 
   /**
    * BAL-236 / BAL-591 — is this profile publicly visible, and if so, is the expert taking on new
-   * work? Visible means approved AND searchable AND a live owner (`expertOwnerIsLive`), the same
+   * work? Visible is `expertProfileIsPublic` (approved AND searchable AND a live owner), the same
    * rule `findPublicProfileByUsername` (above) and `buildWhereConditions` (`expert-search.ts`)
-   * apply. Do not write a fourth visibility rule. Returns null when not visible.
+   * apply. Do not write another visibility rule. Returns null when not visible.
    *
    * `availableForWork` rides along so the public slot route can answer a paused expert without
    * a second read; it does not affect visibility.
@@ -1531,14 +1559,7 @@ export const expertsRepository = {
     const [row] = await db
       .select({ availableForWork: expertProfiles.availableForWork })
       .from(expertProfiles)
-      .where(
-        and(
-          eq(expertProfiles.id, expertProfileId),
-          eq(expertProfiles.searchable, true),
-          isNotNull(expertProfiles.approvedAt),
-          expertOwnerIsLive
-        )
-      )
+      .where(and(eq(expertProfiles.id, expertProfileId), expertProfileIsPublic))
       .limit(1);
     return row ?? null;
   },

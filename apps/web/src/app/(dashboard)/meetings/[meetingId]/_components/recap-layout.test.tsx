@@ -94,7 +94,7 @@ const VIEW: RecapView = {
     avatarUrl: null,
     initials: 'AO',
     ordinalLine: null,
-    bookAgainHref: null,
+    profileHref: null,
     // Expert lens (below) — nothing evaluative on the client company.
     ratingAverage: null,
     ratingCount: 0,

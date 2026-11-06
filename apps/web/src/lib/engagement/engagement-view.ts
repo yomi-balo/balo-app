@@ -120,10 +120,29 @@ export interface ProvenanceLinkView {
   href: string;
 }
 
+/**
+ * The per-lens sub-line under the title, split so the expert person's name alone can link to
+ * their public profile. Reads as `prefix + expertName + suffix`.
+ */
+export interface EngagementHeaderLineView {
+  prefix: string;
+  /** The expert person's name; null when the line names none (the expert lens names the client). */
+  expertName: string | null;
+  suffix: string;
+  /**
+   * `/experts/{username}` when the expert's public profile resolves, else null. Always null when
+   * `expertName` is null, so the line never carries a link it cannot render.
+   */
+  expertProfileHref: string | null;
+  /** Whether a click on the profile link is reported to analytics — client lens only, so staff
+   *  clicks on the admin lens stay out of the client-usage event. */
+  tracksProfileClicks: boolean;
+}
+
 export interface EngagementHeaderView {
   engagementTitle: string;
   /** Per-lens sub-line (parties util). */
-  headerLine: string;
+  headerLine: EngagementHeaderLineView;
   statusChip: StatusChipView;
   /** Optional — retainers have no source request. */
   provenance: ProvenanceLinkView | null;
@@ -1004,7 +1023,9 @@ function deriveCompletionCard(
  * engagement's live change orders, oldest first: they move the terms strip to the effective
  * price, lock and badge milestones, and block the completion card while one is open.
  * `lastTimeLoggedAt` is when the latest live time entry was logged (T&M), a delivery signal for
- * the admin activity chip.
+ * the admin activity chip. `expertProfileHref` is the expert's public profile path, already gated
+ * on the public-profile rule by the caller (null when it does not resolve); it links the expert's
+ * name in the header line, and is dropped on a lens whose line names no expert.
  */
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
@@ -1012,7 +1033,8 @@ export function mapEngagementToWorkspaceView(
   now: Date = new Date(),
   changeOrders: readonly ChangeOrderWithLines[] = [],
   contentEdits: readonly MilestoneContentEditRow[] = [],
-  lastTimeLoggedAt: Date | null = null
+  lastTimeLoggedAt: Date | null = null,
+  expertProfileHref: string | null = null
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -1039,9 +1061,16 @@ export function mapEngagementToWorkspaceView(
     contentEdits
   );
 
+  const headerLine = engagementHeaderLine(ctx.lens, parties);
   const header: EngagementHeaderView = {
     engagementTitle,
-    headerLine: engagementHeaderLine(ctx.lens, parties),
+    headerLine: {
+      prefix: headerLine.prefix,
+      expertName: headerLine.expertPerson,
+      suffix: headerLine.suffix,
+      expertProfileHref: headerLine.expertPerson === null ? null : expertProfileHref,
+      tracksProfileClicks: ctx.lens === 'client',
+    },
     statusChip: deriveStatusChip(status),
     provenance,
     terms: [

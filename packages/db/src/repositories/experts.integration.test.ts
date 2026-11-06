@@ -37,6 +37,10 @@ import {
   UNCOUNTED_CONSULTATION_LABELS,
   seedConsultationCountMatrix,
 } from '../test/helpers/consultation-count-matrix';
+import {
+  PUBLIC_PROFILE_MATRIX,
+  seedPublicProfileCase,
+} from '../test/helpers/public-profile-matrix';
 import { ExpertAgencyAlreadyLinkedError, expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { reviewsRepository } from './reviews';
@@ -1940,6 +1944,50 @@ describe('expertsRepository.findUserIdsByProfileIds', () => {
   });
 });
 
+// ── findPublicUsernamesByProfileIds ──────────────────────────────────
+
+describe('expertsRepository.findPublicUsernamesByProfileIds', () => {
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: present in the map iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const { profile, username } = await seedPublicProfileCase(apply);
+
+      const usernames = await expertsRepository.findPublicUsernamesByProfileIds([profile.id]);
+
+      expect(usernames).toEqual(isPublic ? new Map([[profile.id, username]]) : new Map());
+    }
+  );
+
+  it('answers a whole batch in one call, keeping only the public profiles', async () => {
+    const seeded: Array<{ profile: ExpertProfile; username: string; isPublic: boolean }> = [];
+    for (const entry of PUBLIC_PROFILE_MATRIX) {
+      seeded.push({ ...(await seedPublicProfileCase(entry.apply)), isPublic: entry.isPublic });
+    }
+    const visible = seeded.filter((s) => s.isPublic);
+    expect(visible).toHaveLength(1);
+    expect(seeded.length).toBeGreaterThan(visible.length);
+
+    const usernames = await expertsRepository.findPublicUsernamesByProfileIds([
+      ...seeded.map((s) => s.profile.id),
+      randomUUID(),
+    ]);
+
+    expect(usernames).toEqual(new Map(visible.map((s) => [s.profile.id, s.username])));
+  });
+
+  it('returns an empty map for an empty input without querying', async () => {
+    const selectSpy = vi.spyOn(db, 'select');
+    try {
+      const usernames = await expertsRepository.findPublicUsernamesByProfileIds([]);
+
+      expect(usernames).toEqual(new Map());
+      expect(selectSpy).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+});
+
 // ── isUniqueViolation (pure narrowing helper) ────────────────────────
 
 describe('isUniqueViolation', () => {
@@ -2161,7 +2209,7 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
    * public card, while `rateCents` (the UN-MARKED-UP consultant rate) and `stripeConnectId` (a
    * vendor id) stay structurally absent.
    */
-  it('returns eight display columns and NEVER rateCents / stripeConnectId', async () => {
+  it('returns eight display columns and NEVER rateCents / stripeConnectId / the raw username', async () => {
     const expert = await expertFactory();
     await db
       .update(expertProfiles)
@@ -2177,15 +2225,35 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
       'agencyId',
       'headline',
       'id',
+      'publicProfileUsername',
       'ratingAverage',
       'ratingCount',
       'type',
       'userId',
-      'username',
     ]);
     expect(row).not.toHaveProperty('rateCents');
     expect(row).not.toHaveProperty('stripeConnectId');
+    expect(row).not.toHaveProperty('username');
   });
+
+  /**
+   * `publicProfileUsername` is the username only while `/experts/{username}` resolves, so a party
+   * card's profile and "Book again" links never open a 404. Each row agrees with
+   * `findPublicProfileByUsername`, the read behind that page.
+   */
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: publicProfileUsername is the username iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const { profile, username } = await seedPublicProfileCase(apply);
+
+      const row = await expertsRepository.findDisplayProfileById(profile.id);
+
+      expect(row).toBeDefined();
+      expect(row?.publicProfileUsername).toBe(isPublic ? username : null);
+      const page = await expertsRepository.findPublicProfileByUsername(username);
+      expect(page?.id).toBe(isPublic ? profile.id : undefined);
+    }
+  );
 
   /**
    * ⚠ THE `numeric` → `number` PARSE HAPPENS IN THE REPOSITORY, and this is the only test that

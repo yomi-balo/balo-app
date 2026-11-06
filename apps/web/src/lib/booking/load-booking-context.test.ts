@@ -53,7 +53,7 @@ beforeEach(() => {
     agencyId: null,
     type: 'freelancer',
     headline: null,
-    username: 'dana',
+    publicProfileUsername: 'dana',
     ratingAverage: null,
     ratingCount: 0,
   });
@@ -155,7 +155,7 @@ describe('loadBookingContext', () => {
       agencyId: 'agency-1',
       type: 'agency',
       headline: null,
-      username: 'dana',
+      publicProfileUsername: 'dana',
       ratingAverage: null,
       ratingCount: 0,
     });

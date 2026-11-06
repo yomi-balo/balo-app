@@ -281,6 +281,25 @@ describe('platformLookupRepository.search — expert profiles', () => {
     expect(publishedHit?.sub).toContain('searchable');
   });
 
+  it('FINDS an approved, searchable expert whose owner is suspended but withholds publicExpertUsername', async () => {
+    // MUTATION: map `publicExpertUsername` from username/searchable/approvedAt again (no owner
+    // status check) and the suspended expert gets an Open link the public page 404s.
+    const token = uniqueToken('Suspendexp');
+    const user = await userFactory({ firstName: 'Suspended', lastName: token });
+    const expert = await expertFactory({ userId: user.id });
+    await db
+      .update(expertProfiles)
+      .set({ username: `suspended-${token}`, searchable: true })
+      .where(eq(expertProfiles.id, expert.id));
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'expert' && r.id === expert.id);
+
+    expect(hit).toBeDefined();
+    expect(hit?.publicExpertUsername).toBeNull();
+  });
+
   it('marks a draft application unreviewable, a submitted or approved one reviewable', async () => {
     // MUTATION: map `expertApplicationReviewable` to a constant (or drop the `draft` test) and
     // one of the expectations below fails.

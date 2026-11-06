@@ -13,8 +13,9 @@ import { expertProfiles } from '../../schema';
  *
  * `expert_profiles` has no `deleted_at`, so an expert's soft delete and suspension both live on
  * the owning `users` row, and every public expert read and every expert-targeting filter uses
- * this one fragment: the public profile, the public slot route's visibility read, and search
- * (results, the zero-results recount and facet totals).
+ * this one fragment: the public profile, the public slot route's visibility read and the gated
+ * profile usernames (all through `expertProfileIsPublic`, `expert-profile-public.ts`), and
+ * search (results, the zero-results recount and facet totals).
  *
  * ⚠ IT IS A RAW `sql` EXISTS, NOT `exists(db.select()…)`. The relational query builder
  * aliases the top-level table as `"expertProfiles"`; a Column embedded in a raw `sql` template

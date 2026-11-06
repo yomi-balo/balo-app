@@ -232,7 +232,8 @@ const FAT_PROFILE = {
   agencyId: null,
   type: 'freelancer',
   headline: 'Salesforce CPQ specialist',
-  username: 'amara',
+  // Already gated by `findDisplayProfileById`: non-null only when `/experts/amara` resolves.
+  publicProfileUsername: 'amara',
   rateCents: 33_700,
   // BAL-422 — already a NUMBER here: `findDisplayProfileById` parses the `numeric` column.
   ratingAverage: 4.3,
@@ -679,7 +680,7 @@ describe('loadCase — the counterparty, per lens', () => {
       orgLabel: null,
       avatarUrl: null,
       initials: 'AO',
-      bookAgainHref: '/experts/amara',
+      profileHref: '/experts/amara',
       availableForWork: true,
       // ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. Note
       // this is a `toEqual`, so it ALSO pins that `rateCents` (on FAT_PROFILE) never
@@ -710,12 +711,20 @@ describe('loadCase — the counterparty, per lens', () => {
     expect(view.party.ratingCount).toBe(0);
   });
 
-  /** ⚠ `expert_profiles.username` IS NULLABLE — a null username means NO CTA, never
-   *  `/experts/null` and never a disabled button. */
-  it('emits NO book-again CTA when the expert has no username', async () => {
-    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, username: null });
+  /** ⚠ `publicProfileUsername` is null whenever `/experts/{username}` would 404 (no username,
+   *  unapproved, unsearchable, or a suspended/deleted owner) — then NOTHING links there: not
+   *  the name, not the org line, and no book-again CTA. */
+  it('links NOTHING to the profile when the public profile does not resolve', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, publicProfileUsername: null });
     const view = await loadOrThrow();
-    expect(view.party.bookAgainHref).toBeNull();
+    expect(view.party.profileHref).toBeNull();
+    expect(view.header.counterpartyOrgHref).toBeNull();
+  });
+
+  it('CLIENT lens links the org line for an INDEPENDENT expert — the label IS the person', async () => {
+    const view = await loadOrThrow();
+    expect(view.header.counterpartyOrgLabel).toBe('Amara Okafor');
+    expect(view.header.counterpartyOrgHref).toBe('/experts/amara');
   });
 
   it('shows the AGENCY as the org label when the expert delivers through one', async () => {
@@ -725,6 +734,9 @@ describe('loadCase — the counterparty, per lens', () => {
     const view = await loadOrThrow();
     expect(view.party.orgLabel).toBe('CloudPeak');
     expect(view.header.counterpartyOrgLabel).toBe('CloudPeak');
+    // An agency has no page: the org line stays unlinked while the person still links.
+    expect(view.header.counterpartyOrgHref).toBeNull();
+    expect(view.party.profileHref).toBe('/experts/amara');
   });
 
   /**
@@ -768,6 +780,13 @@ describe('loadCase — the counterparty, per lens', () => {
    * membership (ADR-1029) and survive individual departures; there is no `created_by_user_id`
    * on an engagement to name a single client person from anyway.
    */
+  it('EXPERT lens never links the client COMPANY in the header', async () => {
+    seed({ access: { lens: 'expert' } });
+    const view = await loadOrThrow();
+    expect(view.header.counterpartyOrgLabel).toBe('Northwind Industrial');
+    expect(view.header.counterpartyOrgHref).toBeNull();
+  });
+
   it('EXPERT lens names the client COMPANY, with no forward CTA', async () => {
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
@@ -777,7 +796,7 @@ describe('loadCase — the counterparty, per lens', () => {
       orgLabel: null,
       avatarUrl: null,
       initials: 'NI',
-      bookAgainHref: null,
+      profileHref: null,
       availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). FAT_PROFILE carries 4.3/2 and
       // NEITHER value survives this branch — the expert is not scoring the client, and the

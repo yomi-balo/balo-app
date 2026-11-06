@@ -76,6 +76,7 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
       initials: 'PS',
       company: 'Acme',
       headline: 'CPQ',
+      profileHref: null,
       rating: 4.9,
       ratingCount: 12,
     },
@@ -94,6 +95,7 @@ function marcus(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
       initials: 'ML',
       company: 'Globex',
       headline: 'Dev',
+      profileHref: null,
       rating: 4.7,
       ratingCount: 8,
     },
@@ -290,11 +292,11 @@ describe('ProposalReview', () => {
   });
 
   it('openAccept opens the accept confirmation on arrival and drops ?accept=1 from the URL', () => {
-    window.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1');
+    globalThis.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1');
     renderReview([doc()], 'rel-priya', true);
     expect(screen.getByRole('dialog')).toHaveTextContent(/Accept .*proposal\?/);
-    expect(window.location.search).toBe('');
-    expect(window.location.pathname).toBe('/projects/req-1/proposal/rel-priya');
+    expect(globalThis.location.search).toBe('');
+    expect(globalThis.location.pathname).toBe('/projects/req-1/proposal/rel-priya');
   });
 
   it("openAccept never opens the confirmation for another expert's proposal", () => {
@@ -306,10 +308,14 @@ describe('ProposalReview', () => {
   });
 
   it('openAccept removes only ?accept=1, keeping other params and the hash', () => {
-    window.history.replaceState(null, '', '/projects/req-1/proposal/rel-priya?accept=1&x=2#terms');
+    globalThis.history.replaceState(
+      null,
+      '',
+      '/projects/req-1/proposal/rel-priya?accept=1&x=2#terms'
+    );
     renderReview([doc()], 'rel-priya', true);
-    expect(window.location.search).toBe('?x=2');
-    expect(window.location.hash).toBe('#terms');
+    expect(globalThis.location.search).toBe('?x=2');
+    expect(globalThis.location.hash).toBe('#terms');
   });
 
   it('openAccept never opens the confirmation for a proposal that is not submitted', () => {

@@ -1637,6 +1637,7 @@ export function ConversationStage({
             showYouSuffix={showYouSuffix}
             actions={actions}
             callPending={callPending}
+            profileHref={profileHref}
             profileBookingHref={profileBookingHref}
             deliveryEngagementId={deliveryEngagementId}
             joinPartyLabel={joinPartyLabel}

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import type { RecapPartyView } from '@/lib/meetings/recap-view-types';
 
 const mockGetAvatarUrl = vi.fn();
@@ -18,7 +20,7 @@ const PARTY: RecapPartyView = {
   avatarUrl: null,
   initials: 'AO',
   ordinalLine: '3rd consultation on this case',
-  bookAgainHref: '/experts/amara',
+  profileHref: '/experts/amara',
   ratingAverage: 4.3,
   ratingCount: 2,
 };
@@ -26,6 +28,73 @@ const PARTY: RecapPartyView = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetAvatarUrl.mockReturnValue(null);
+});
+
+/**
+ * The avatar and the name both link to the expert's public profile, from the same server-gated
+ * `profileHref` as "Book again": present only when that profile resolves, and never on the
+ * expert lens, whose counterparty is the client company.
+ */
+describe('PartyCard — the profile link', () => {
+  it('links the avatar and the name to the profile, as one link named by the person', () => {
+    const { container } = render(<PartyCard party={PARTY} lens="client" />);
+    const link = screen.getByRole('link', { name: 'Amara Okafor' });
+    expect(link).toHaveAttribute('href', '/experts/amara');
+    expect(screen.getAllByRole('link', { name: 'Amara Okafor' })).toHaveLength(1);
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/amara');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toContainElement(screen.getByText('AO'));
+    expect(link).not.toContainElement(screen.getByText('Salesforce CPQ specialist'));
+    expect(link).not.toContainElement(screen.getByText('CloudPeak'));
+  });
+
+  it('reports a profile click as the recap party card', async () => {
+    const user = userEvent.setup();
+    render(<PartyCard party={PARTY} lens="client" />);
+    await user.click(screen.getByRole('link', { name: 'Amara Okafor' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'recap_party_card',
+    });
+  });
+
+  it('"Book again" uses the same profile href', () => {
+    render(<PartyCard party={PARTY} lens="client" />);
+    expect(screen.getByRole('link', { name: 'Book again' })).toHaveAttribute(
+      'href',
+      '/experts/amara'
+    );
+  });
+
+  it('renders the name unlinked when the profile does not resolve', () => {
+    const { container } = render(
+      <PartyCard party={{ ...PARTY, profileHref: null }} lens="client" />
+    );
+    expect(screen.getByText('Amara Okafor')).toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+  });
+
+  it('never links the client COMPANY on the expert lens', () => {
+    const { container } = render(
+      <PartyCard
+        party={{
+          ...PARTY,
+          name: 'Northwind Industrial',
+          initials: 'NI',
+          headline: null,
+          orgLabel: null,
+          profileHref: null,
+          ratingAverage: null,
+          ratingCount: 0,
+        }}
+        lens="expert"
+      />
+    );
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+  });
 });
 
 describe('PartyCard', () => {
@@ -56,10 +125,10 @@ describe('PartyCard', () => {
   });
 
   it('renders NO action at all when there is no live destination', () => {
-    // `expert_profiles.username` is NULLABLE: a null username means NO button, never a disabled
-    // one and never a link to `/experts/null`.
+    // `profileHref` is null whenever the public profile does not resolve: NO button, never a
+    // disabled one and never a link that 404s.
     const { container } = render(
-      <PartyCard party={{ ...PARTY, bookAgainHref: null }} lens="expert" />
+      <PartyCard party={{ ...PARTY, profileHref: null }} lens="expert" />
     );
     expect(container.querySelectorAll('a')).toHaveLength(0);
     expect(screen.queryByText('Book again')).not.toBeInTheDocument();

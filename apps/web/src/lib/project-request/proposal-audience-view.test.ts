@@ -208,6 +208,7 @@ describe('expertIdentityOf', () => {
       initials: 'PS',
       company: null,
       headline: null,
+      profileHref: null,
       rating: 4.3,
       ratingCount: 2,
     });
@@ -224,6 +225,36 @@ describe('expertIdentityOf', () => {
     const identity = expertIdentityOf(blank);
     expect(identity.name).toBe('Your expert');
     expect(identity.initials).toBe('EX');
+  });
+});
+
+describe('hydrateReviewDoc — the expert profile link', () => {
+  const hrefFor = (
+    audience: 'client' | 'expert' | 'admin',
+    publicUsername?: string | null
+  ): string | null =>
+    hydrateReviewDoc(
+      proposal,
+      milestones,
+      installments,
+      documents,
+      relationship,
+      audience,
+      publicUsername
+    ).expert.profileHref;
+
+  it('links the client header to the public profile when it resolves', () => {
+    expect(hrefFor('client', 'priya-sharma')).toBe('/experts/priya-sharma');
+  });
+
+  it('leaves the client header plain when the profile does not resolve', () => {
+    expect(hrefFor('client', null)).toBeNull();
+    expect(hrefFor('client')).toBeNull();
+  });
+
+  it('never links the header for the expert or admin audience, even given a username', () => {
+    expect(hrefFor('expert', 'priya-sharma')).toBeNull();
+    expect(hrefFor('admin', 'priya-sharma')).toBeNull();
   });
 });
 
