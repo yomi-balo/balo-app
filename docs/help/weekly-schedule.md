@@ -37,6 +37,9 @@ would fall outside your hours in the new zone. Choose **Keep {city} hours** to l
 are, or **Switch to {city} time** to go ahead. Busy times on your connected calendar aren't
 affected.
 
+Booking confirmation, change and cancellation emails show times in this timezone too, for example
+"10:00–11:00 (Melbourne time)". If one names a zone you're not in, change it here.
+
 ![The timezone line under the page title, with Change timezone highlighted.](02)
 
 ## Hours that run past midnight

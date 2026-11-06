@@ -2236,7 +2236,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Switch your hours to {city} time?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. The message checks your upcoming consultations and tells you which, if any,\nwould fall outside your hours in the new zone. Choose <strong>Keep {city} hours</strong> to leave things as they\nare, or <strong>Switch to {city} time</strong> to go ahead. Busy times on your connected calendar aren't\naffected.</p>",
+            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Switch your hours to {city} time?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. The message checks your upcoming consultations and tells you which, if any,\nwould fall outside your hours in the new zone. Choose <strong>Keep {city} hours</strong> to leave things as they\nare, or <strong>Switch to {city} time</strong> to go ahead. Busy times on your connected calendar aren't\naffected.</p>\n<p>Booking confirmation, change and cancellation emails show times in this timezone too, for example\n\"10:00–11:00 (Melbourne time)\". If one names a zone you're not in, change it here.</p>",
             "id": "s2-b0"
           }
         ],

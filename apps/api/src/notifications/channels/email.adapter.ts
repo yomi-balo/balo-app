@@ -227,9 +227,11 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
   //    lookup; otherwise resolve the user by id.
   let toEmail: string;
   let recipientName: string;
+  let recipientTimezone: string | null;
   if (payload.recipientEmail) {
     toEmail = payload.recipientEmail;
     recipientName = 'team';
+    recipientTimezone = null;
   } else {
     const user = await usersRepository.findById(payload.recipientId);
     if (!user?.email) {
@@ -239,13 +241,16 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
     }
     toEmail = user.email;
     recipientName = user.firstName ?? 'there';
+    recipientTimezone = user.timezone ?? null;
   }
 
-  // 2. Render template
+  // 2. Render template. `recipientName` and `recipientTimezone` come AFTER both spreads so a
+  //    payload key can never override them; the zone is always set, even to null.
   const { component, subject } = getEmailTemplate(payload.template, {
     ...payload.data,
     ...payload.payload,
     recipientName,
+    recipientTimezone,
   });
 
   const html = await render(component);

@@ -1,5 +1,8 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import {
+  formatMeetingWindowForRecipient,
+  formatMeetingWindowWithDuration,
+} from './meeting-guest-emails.js';
 
 /**
  * BAL-409 — `booking.rescheduled`: a booked consultation was moved by the CLIENT. ONE
@@ -37,6 +40,8 @@ export interface BookingRescheduledEmailProps {
   readonly previousScheduledStartIso: string;
   readonly scheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly caseUrl: string;
   readonly baseUrl: string;
   /** `?? 'client'` at the call site (deploy-skew fallback) — see `index.ts`'s registry entries. */
@@ -56,26 +61,34 @@ function introFor(
   recipient: BookingRescheduledRecipient,
   initiatedBy: BookingRescheduledInitiator,
   counterpartyLabel: string,
-  newWindow: string,
-  durationMinutes: number
+  newWhen: string
 ): string {
   if (recipient === 'expert') {
     return initiatedBy === 'expert'
-      ? `${counterpartyLabel} accepted your new time — ${newWindow} (${durationMinutes} min).`
-      : `${counterpartyLabel} moved your consultation to ${newWindow} (${durationMinutes} min).`;
+      ? `${counterpartyLabel} accepted your new time — ${newWhen}.`
+      : `${counterpartyLabel} moved your consultation to ${newWhen}.`;
   }
   return initiatedBy === 'expert'
-    ? `You confirmed a new time with ${counterpartyLabel} — ${newWindow} (${durationMinutes} min).`
-    : `Your consultation with ${counterpartyLabel} has moved to ${newWindow} (${durationMinutes} min).`;
+    ? `You confirmed a new time with ${counterpartyLabel} — ${newWhen}.`
+    : `Your consultation with ${counterpartyLabel} has moved to ${newWhen}.`;
 }
 
 function bodyLines(props: Readonly<BookingRescheduledEmailProps>): string[] {
   const { recipient, counterpartyLabel, caseTitle, durationMinutes, initiatedBy } = props;
   const previousWindow =
-    formatMeetingWindowUtc(props.previousScheduledStartIso) || 'its previous time';
-  const newWindow = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
+    formatMeetingWindowForRecipient(
+      props.previousScheduledStartIso,
+      durationMinutes,
+      props.recipientTimezone
+    ) || 'its previous time';
+  const newWhen = formatMeetingWindowWithDuration(
+    props.scheduledStartIso,
+    durationMinutes,
+    props.recipientTimezone,
+    'the scheduled time'
+  );
 
-  const intro = introFor(recipient, initiatedBy, counterpartyLabel, newWindow, durationMinutes);
+  const intro = introFor(recipient, initiatedBy, counterpartyLabel, newWhen);
 
   return [
     intro,

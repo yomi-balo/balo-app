@@ -146,6 +146,26 @@ describe('extractCityFromTimezone', () => {
     expect(extractCityFromTimezone('America/Argentina/Buenos_Aires')).toBe('Buenos Aires');
   });
 
+  it.each([
+    ['Asia/Calcutta', 'Kolkata'],
+    ['Asia/Saigon', 'Ho Chi Minh'],
+    ['Europe/Kiev', 'Kyiv'],
+    ['Asia/Katmandu', 'Kathmandu'],
+    ['Asia/Rangoon', 'Yangon'],
+    ['America/Godthab', 'Nuuk'],
+    ['Atlantic/Faeroe', 'Faroe'],
+    ['Pacific/Enderbury', 'Kanton'],
+    ['Pacific/Ponape', 'Pohnpei'],
+    ['Pacific/Truk', 'Chuuk'],
+  ])('names the current city for the legacy zone %s', (zone, city) => {
+    expect(extractCityFromTimezone(zone)).toBe(city);
+  });
+
+  it('gives the same city for a legacy zone and its current name', () => {
+    expect(extractCityFromTimezone('Asia/Kolkata')).toBe(extractCityFromTimezone('Asia/Calcutta'));
+    expect(extractCityFromTimezone('Europe/Kyiv')).toBe(extractCityFromTimezone('Europe/Kiev'));
+  });
+
   it('replaces underscores with spaces', () => {
     expect(extractCityFromTimezone('America/New_York')).toBe('New York');
     expect(extractCityFromTimezone('Asia/Ho_Chi_Minh')).toBe('Ho Chi Minh');

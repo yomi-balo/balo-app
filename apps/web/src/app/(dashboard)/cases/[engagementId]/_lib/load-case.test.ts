@@ -153,6 +153,19 @@ vi.mock('@/lib/reviews/read-rating-card', () => ({
   readRatingCard: (...a: unknown[]) => mockReadRatingCard(...a),
 }));
 
+const PEOPLE_GROUPS = [
+  {
+    side: 'client' as const,
+    label: 'Northwind Industrial',
+    people: [{ key: 'p0', name: 'You', isViewer: true }],
+    unnamedGuestCount: 0,
+  },
+];
+const mockLoadCasePeople = vi.fn();
+vi.mock('./load-case-people', () => ({
+  loadCasePeople: (...a: unknown[]) => mockLoadCasePeople(...a),
+}));
+
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import { loadCase } from './load-case';
 import { log } from '@/lib/logging';
@@ -279,6 +292,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.listProductIds.mockResolvedValue([]);
   m.findNewWorkEligibility.mockResolvedValue({ eligible: true });
   mockReadRatingCard.mockResolvedValue(null);
+  mockLoadCasePeople.mockResolvedValue(PEOPLE_GROUPS);
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -808,20 +822,20 @@ describe('loadCase — the counterparty, per lens', () => {
     expect(m.findAgency).not.toHaveBeenCalled();
   });
 
-  it('names the viewer and the counterparty in the people list', async () => {
+  it('hands the people groups through from loadCasePeople and passes it the case inputs', async () => {
     const view = await loadOrThrow();
-    expect(view.people).toEqual([
-      { name: 'Dana Whitfield', isViewer: true },
-      { name: 'Amara Okafor', isViewer: false },
-    ]);
-  });
-
-  it('falls back to "You" when the viewer has no name on file', async () => {
-    m.findUser.mockImplementation((id: string) =>
-      Promise.resolve(id === USER_ID ? undefined : { firstName: 'Amara', lastName: 'Okafor' })
-    );
-    const view = await loadOrThrow();
-    expect(view.people).toContainEqual({ name: 'You', isViewer: true });
+    expect(view.peopleGroups).toBe(PEOPLE_GROUPS);
+    expect(mockLoadCasePeople).toHaveBeenCalledTimes(1);
+    expect(mockLoadCasePeople).toHaveBeenCalledWith({
+      lens: 'client',
+      viewerUserId: USER_ID,
+      deliveringExpertUserId: EXPERT_USER_ID,
+      deliveringAgencyId: null,
+      clientPartyLabel: 'Northwind Industrial',
+      expertPartyLabel: 'Amara Okafor',
+      meetingIds: ['m1'],
+      upcomingMeetingIds: [],
+    });
   });
 });
 
