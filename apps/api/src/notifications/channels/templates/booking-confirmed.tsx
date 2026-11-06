@@ -1,5 +1,5 @@
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import { formatMeetingWindowWithDuration } from './meeting-guest-emails.js';
 
 /**
  * BAL-400 (D4) — `booking.confirmed`: a consultation was booked into a case. ONE parameterized
@@ -32,6 +32,8 @@ export interface BookingConfirmedEmailProps {
   readonly caseTitle: string;
   readonly scheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly isNewCase: boolean;
   /** Count BEFORE this booking. Only referenced on an attach (`isNewCase: false`). */
   readonly priorConsultationCount: number;
@@ -56,12 +58,17 @@ export const HAND_OFF_LINE =
 function bodyLines(props: Readonly<BookingConfirmedEmailProps>): string[] {
   const { recipient, counterpartyLabel, caseTitle, isNewCase, priorConsultationCount, guestCount } =
     props;
-  const window = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
+  const when = formatMeetingWindowWithDuration(
+    props.scheduledStartIso,
+    props.durationMinutes,
+    props.recipientTimezone,
+    'the scheduled time'
+  );
 
   const intro =
     recipient === 'client'
-      ? `Your consultation with ${counterpartyLabel} is confirmed for ${window} (${props.durationMinutes} min).`
-      : `${counterpartyLabel} booked a consultation with you for ${window} (${props.durationMinutes} min).`;
+      ? `Your consultation with ${counterpartyLabel} is confirmed for ${when}.`
+      : `${counterpartyLabel} booked a consultation with you for ${when}.`;
 
   const caseLine = isNewCase
     ? `This opens a new case, ${caseTitle}, which you can track anytime.`

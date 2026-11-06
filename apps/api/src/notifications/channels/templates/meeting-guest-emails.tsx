@@ -1,5 +1,6 @@
 import { Button, Heading, Section, Text } from '@react-email/components';
 import { personWithOrgLabel } from '@balo/shared/parties';
+import { canonicalTimezone, extractCityFromTimezone } from '@balo/shared/timezone';
 import {
   colors,
   shared,
@@ -70,19 +71,28 @@ const guestPillStyle = {
  * `Invalid Date` into somebody's inbox.
  */
 export function formatMeetingWindowUtc(startIso: string, endIso?: string): string {
+  return formatMeetingWindowIn(startIso, endIso, 'UTC', 'UTC');
+}
+
+function formatMeetingWindowIn(
+  startIso: string,
+  endIso: string | undefined,
+  timeZone: string,
+  label: string
+): string {
   const start = new Date(startIso);
   if (Number.isNaN(start.getTime())) {
     return '';
   }
   const day = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
+    timeZone,
     weekday: 'short',
     day: 'numeric',
     month: 'short',
     year: 'numeric',
   }).format(start);
   const time = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'UTC',
+    timeZone,
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
@@ -90,9 +100,74 @@ export function formatMeetingWindowUtc(startIso: string, endIso?: string): strin
 
   const end = endIso === undefined ? undefined : new Date(endIso);
   if (end === undefined || Number.isNaN(end.getTime())) {
-    return `${day} · ${time.format(start)} (UTC)`;
+    return `${day} · ${time.format(start)} (${label})`;
   }
-  return `${day} · ${time.format(start)}–${time.format(end)} (UTC)`;
+  return `${day} · ${time.format(start)}–${time.format(end)} (${label})`;
+}
+
+/**
+ * The display zone for a member recipient, or `null` when the email should stay on UTC:
+ * nullish or empty, unrecognised, UTC itself, or a zone with no city to name.
+ */
+function recipientDisplayZone(
+  tz: string | null | undefined
+): { readonly zone: string; readonly city: string } | null {
+  if (tz === null || tz === undefined || tz === '') {
+    return null;
+  }
+  const canonical = canonicalTimezone(tz);
+  if (canonical === null || canonical === 'UTC') {
+    return null;
+  }
+  const city = extractCityFromTimezone(canonical);
+  return city === null ? null : { zone: canonical, city };
+}
+
+/**
+ * Render the scheduled window in a MEMBER recipient's own zone:
+ * `Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time)`. A guest has no profile and so stays on
+ * {@link formatMeetingWindowUtc}; members use this one.
+ *
+ * A missing, invalid or UTC zone returns exactly `formatMeetingWindowUtc(startIso)` (start
+ * only), so the UTC output is byte-identical to what these emails rendered before. A zero
+ * duration renders a single instant rather than `10:00–10:00`. Unparseable start → `''`.
+ */
+export function formatMeetingWindowForRecipient(
+  startIso: string,
+  durationMinutes: number,
+  recipientTimezone: string | null | undefined
+): string {
+  const display = recipientDisplayZone(recipientTimezone);
+  if (display === null) {
+    return formatMeetingWindowUtc(startIso);
+  }
+  const start = new Date(startIso).getTime();
+  if (Number.isNaN(start)) {
+    return '';
+  }
+  const end = durationMinutes > 0 ? new Date(start + durationMinutes * 60_000) : undefined;
+  // An out-of-range end (absurd duration) drops to the start-only line rather than throwing.
+  const endIso = end !== undefined && !Number.isNaN(end.getTime()) ? end.toISOString() : undefined;
+  return formatMeetingWindowIn(startIso, endIso, display.zone, `${display.city} time`);
+}
+
+/**
+ * The window as it reads inside a member email's sentence. In the recipient's zone the end time
+ * already gives the length: `Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time)`. On the UTC
+ * fallback it stays exactly the pre-zone wording, `Tue, 1 Sep 2026 · 10:00 (UTC) (60 min)`, with
+ * `fallback` standing in for an unparseable start.
+ */
+export function formatMeetingWindowWithDuration(
+  startIso: string,
+  durationMinutes: number,
+  recipientTimezone: string | null | undefined,
+  fallback: string
+): string {
+  const window = formatMeetingWindowForRecipient(startIso, durationMinutes, recipientTimezone);
+  if (window !== '' && recipientDisplayZone(recipientTimezone) !== null) {
+    return window;
+  }
+  return `${window || fallback} (${durationMinutes} min)`;
 }
 
 /**

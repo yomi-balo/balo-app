@@ -222,3 +222,101 @@ describe('rescheduleProposalSentSubject / rescheduleProposalDeclinedSubject', ()
     );
   });
 });
+
+/** ICU renders September as "Sep" or "Sept" depending on the Node build; compare on "Sep". */
+function normaliseSept(text: string): string {
+  return text.replaceAll('Sept ', 'Sep ');
+}
+
+describe('reschedule-proposal — the recipient timezone (BAL-635)', () => {
+  const SENT_ZONED = {
+    ...SENT_DATA,
+    originalScheduledStartIso: '2026-09-01T00:00:00.000Z',
+    optionStartIsos: ['2026-09-02T00:00:00.000Z', '2026-09-03T00:00:00.000Z'],
+    durationMinutes: 60,
+  };
+  const DECLINED_ZONED = {
+    ...DECLINED_DATA,
+    originalScheduledStartIso: '2026-09-01T00:00:00.000Z',
+    durationMinutes: 60,
+  };
+  const FALLBACK_ZONES: readonly (string | null | undefined)[] = [
+    undefined,
+    null,
+    'UTC',
+    'Mars/Olympus',
+  ];
+
+  it('reschedule-proposal-sent renders the original window and every option in the recipient zone', async () => {
+    const text = normaliseSept(
+      textOf(
+        await render(
+          getEmailTemplate('reschedule-proposal-sent', {
+            ...SENT_ZONED,
+            recipientTimezone: 'Australia/Melbourne',
+          }).component
+        )
+      )
+    );
+    expect(normaliseSept(text)).toContain(
+      'currently set for Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time).'
+    );
+    expect(text).not.toContain('(60 min)');
+    expect(normaliseSept(text)).toContain('Wed, 2 Sep 2026 · 10:00–11:00 (Melbourne time)');
+    expect(normaliseSept(text)).toContain('Thu, 3 Sep 2026 · 10:00–11:00 (Melbourne time)');
+    expect(text).not.toContain('(UTC)');
+  });
+
+  it('reschedule-proposal-sent renders byte-identical start-only UTC for an absent, null, UTC or invalid zone', async () => {
+    const htmls = await Promise.all(
+      FALLBACK_ZONES.map((recipientTimezone) =>
+        render(
+          getEmailTemplate('reschedule-proposal-sent', { ...SENT_ZONED, recipientTimezone })
+            .component
+        )
+      )
+    );
+    for (const html of htmls) {
+      expect(html).toBe(htmls[0]);
+    }
+    const text = normaliseSept(textOf(htmls[0] ?? ''));
+    expect(normaliseSept(text)).toContain('Tue, 1 Sep 2026 · 00:00 (UTC) (60 min).');
+    expect(normaliseSept(text)).toContain('Wed, 2 Sep 2026 · 00:00 (UTC)');
+    expect(normaliseSept(text)).toContain('Thu, 3 Sep 2026 · 00:00 (UTC)');
+  });
+
+  it('reschedule-proposal-declined renders the original window in the recipient zone', async () => {
+    const text = normaliseSept(
+      textOf(
+        await render(
+          getEmailTemplate('reschedule-proposal-declined', {
+            ...DECLINED_ZONED,
+            recipientTimezone: 'Australia/Melbourne',
+          }).component
+        )
+      )
+    );
+    expect(normaliseSept(text)).toContain(
+      'Tue, 1 Sep 2026 · 10:00–11:00 (Melbourne time) still stands.'
+    );
+    expect(text).not.toContain('(60 min)');
+    expect(text).not.toContain('(UTC)');
+  });
+
+  it('reschedule-proposal-declined renders byte-identical start-only UTC for an absent, null, UTC or invalid zone', async () => {
+    const htmls = await Promise.all(
+      FALLBACK_ZONES.map((recipientTimezone) =>
+        render(
+          getEmailTemplate('reschedule-proposal-declined', { ...DECLINED_ZONED, recipientTimezone })
+            .component
+        )
+      )
+    );
+    for (const html of htmls) {
+      expect(html).toBe(htmls[0]);
+    }
+    expect(normaliseSept(textOf(htmls[0] ?? ''))).toContain(
+      'Tue, 1 Sep 2026 · 00:00 (UTC) (60 min) still stands.'
+    );
+  });
+});

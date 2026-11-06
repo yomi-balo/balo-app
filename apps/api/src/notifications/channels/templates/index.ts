@@ -198,6 +198,11 @@ function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/** The recipient's zone as injected by the email adapter; null when absent or not a string. */
+function readRecipientTimezone(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
 /** BAL-622 — the present pre-formatted change labels joined on one line; undefined when none. */
 function joinLabels(...labels: unknown[]): string | undefined {
   const present = labels.filter((l): l is string => typeof l === 'string' && l.length > 0);
@@ -245,6 +250,7 @@ function bookingCancelledClientTemplate(
       caseTitle: (data.caseTitle as string) ?? 'your case',
       scheduledStartIso: (data.scheduledStartIso as string) ?? '',
       durationMinutes: numberCount(data.durationMinutes),
+      recipientTimezone: readRecipientTimezone(data.recipientTimezone),
       cancelledBy,
       reason,
       caseUrl: `${BASE_URL}/cases/${engagementId}`,
@@ -2330,6 +2336,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'your case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         isNewCase,
         priorConsultationCount: numberCount(data.priorConsultationCount),
         guestCount: numberCount(data.guestCount),
@@ -2357,6 +2364,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         isNewCase,
         priorConsultationCount: numberCount(data.priorConsultationCount),
         guestCount: numberCount(data.guestCount),
@@ -2387,6 +2395,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
         initiatedBy,
@@ -2422,6 +2431,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         cancelledBy,
         reason,
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
@@ -2447,6 +2457,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
         initiatedBy,
@@ -2471,6 +2482,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
         optionStartIsos,
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
       }),
@@ -2490,6 +2502,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
       }),
@@ -2537,6 +2550,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestTitle: (data.requestTitle as string) ?? 'your request',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         guestCount: numberCount(data.guestCount),
         provisioned: data.provisioned === true,
         joinUrl: `${BASE_URL}${joinPath}`,
@@ -2570,6 +2584,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestTitle: (data.requestTitle as string) ?? 'the request',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         guestCount: numberCount(data.guestCount),
         provisioned: data.provisioned === true,
         joinUrl: `${BASE_URL}${joinPath}`,
