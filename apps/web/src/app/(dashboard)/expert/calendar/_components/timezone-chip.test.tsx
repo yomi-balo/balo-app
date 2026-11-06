@@ -33,12 +33,10 @@ describe('TimezoneChip', () => {
     expect(screen.getByText(/Melbourne/i)).toBeInTheDocument();
   });
 
-  it('omits the Info affordance when the browser zone equals the schedule zone', async () => {
+  it('omits the Info affordance when the browser zone equals the schedule zone', () => {
     mockBrowserTimezone('Australia/Melbourne');
     render(<TimezoneChip scheduleTimezone="Australia/Melbourne" />);
-    await waitFor(() => {
-      expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('shows the Info affordance, reachable by tap, when the browser zone differs', async () => {
@@ -66,19 +64,15 @@ describe('TimezoneChip', () => {
     );
   });
 
-  it('omits the Info affordance for two zones that share an offset all year (Melbourne vs Sydney)', async () => {
+  it('omits the Info affordance for two zones that share an offset all year (Melbourne vs Sydney)', () => {
     mockBrowserTimezone('Australia/Sydney');
     render(<TimezoneChip scheduleTimezone="Australia/Melbourne" />);
-    await waitFor(() => {
-      expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('omits the Info affordance for an alias of the schedule zone', async () => {
+  it('omits the Info affordance for an alias of the schedule zone', () => {
     mockBrowserTimezone('Asia/Calcutta');
     render(<TimezoneChip scheduleTimezone="Asia/Kolkata" />);
-    await waitFor(() => {
-      expect(screen.queryByRole('button')).not.toBeInTheDocument();
-    });
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });
