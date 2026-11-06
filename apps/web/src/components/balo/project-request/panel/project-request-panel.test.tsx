@@ -2046,6 +2046,42 @@ describe('ProjectRequestPanel', () => {
         );
       }, 12000);
 
+      it('choosing AI again from "Change entry method" returns to the generated brief', async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 });
+
+        await user.click(screen.getByRole('button', { name: /^back$/i }));
+        await user.click(screen.getByRole('button', { name: /change entry method/i }));
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+
+        expect(await screen.findByText(/sandbox refresh/i)).toBeInTheDocument();
+        expect(mockStartBrief).toHaveBeenCalledTimes(1);
+      }, 12000);
+
+      it('"Change source documents" offers Back to review, which keeps the brief', async () => {
+        mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+        mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_BRIEF_WITH_UNMATCHED });
+        const user = userEvent.setup();
+        renderHome();
+        await user.click(screen.getByRole('button', { name: /upload docs/i }));
+        expect(screen.queryByRole('button', { name: /back to review/i })).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /attach test file/i }));
+        await user.click(screen.getByRole('button', { name: /generate brief/i }));
+        await screen.findByText(/sandbox refresh/i, {}, { timeout: 4000 });
+
+        await user.click(screen.getByRole('button', { name: /change source documents/i }));
+        await user.click(screen.getByRole('button', { name: /back to review/i }));
+
+        expect(await screen.findByText(/sandbox refresh/i)).toBeInTheDocument();
+        expect(mockStartBrief).toHaveBeenCalledTimes(1);
+      }, 12000);
+
       it('resumeDraft opens at manual for a manual-source draft', () => {
         globalThis.localStorage.setItem(
           HOME_KEY,

@@ -36,6 +36,14 @@ export function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean
 
 const NO_UNMATCHED: { tags: string[]; products: string[] } = { tags: [], products: [] };
 
+/** Order-insensitive identity of a document set — "were these the files the brief came from?" */
+function documentSetKey(documents: ProjectDraft['documents']): string {
+  return documents
+    .map((doc) => doc.r2Key)
+    .sort((a, b) => a.localeCompare(b))
+    .join('\n');
+}
+
 /**
  * Everything an AI generation leaves behind that must survive a "set aside, then Undo" cycle
  * together: the snapshot `hasEditsSinceGenerate` compares against, the unmatched-label hints,
@@ -49,6 +57,8 @@ export interface AiGeneratedState {
   editedFields: readonly string[];
   /** BAL-592 — the prompt version of the generation that produced `snapshot`. */
   promptVersion: string | null;
+  /** The {@link documentSetKey} of the documents `snapshot` was generated from. */
+  documentsKey: string;
 }
 
 export interface UseAiBriefFlowOptions {
@@ -80,7 +90,17 @@ export interface UseAiBriefFlowResult {
   aiProductSuggestion: AiProductSuggestion | null;
   regenerateConfirmOpen: boolean;
   setRegenerateConfirmOpen: (open: boolean) => void;
+  /**
+   * Picks the AI path from `start`. Lands on `review` when this draft already holds a brief
+   * generated from its CURRENT documents (the user went Back to "Change entry method" and chose
+   * AI again), so they keep that brief instead of having to regenerate it; otherwise `upload`.
+   */
   handleSelectAi: () => void;
+  /**
+   * True when the draft holds a brief generated from exactly its current documents — the case in
+   * which leaving the `upload` step back to `review` loses nothing.
+   */
+  hasBriefForCurrentDocuments: boolean;
   /**
    * ⚠ BAL-254 W2 — ABANDON any in-flight generation. The panel calls this from
    * `handleSelectManual` ("I'll write it myself" on the start step); this hook calls it itself
@@ -142,11 +162,19 @@ export function useAiBriefFlow({
     NO_UNMATCHED
   );
   const [lastPromptVersion, setLastPromptVersion] = useState<string | null>(null);
+  const [lastGeneratedDocumentsKey, setLastGeneratedDocumentsKey] = useState<string | null>(null);
+  // The documents the IN-FLIGHT generation was started from — read on success, since the user
+  // can add or remove a file between starting a generate and it landing.
+  const generatingDocumentsKeyRef = useRef<string | null>(null);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const isRegenerateRef = useRef(false);
   const generateStartedAtRef = useRef<number | null>(null);
   const failureTrackedRef = useRef(false);
   const editedFieldsFiredRef = useRef<Set<string>>(new Set());
+
+  const currentDocumentsKey = documentSetKey(draft.documents);
+  const hasBriefForCurrentDocuments =
+    lastGeneratedSnapshot !== null && lastGeneratedDocumentsKey === currentDocumentsKey;
 
   const handleSelectAi = useCallback(() => {
     track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
@@ -154,8 +182,8 @@ export function useAiBriefFlow({
       method: 'ai',
     });
     setField('source', 'ai');
-    setStep('upload');
-  }, [expertProfileId, entryPoint, setField, setStep]);
+    setStep(hasBriefForCurrentDocuments ? 'review' : 'upload');
+  }, [expertProfileId, entryPoint, setField, setStep, hasBriefForCurrentDocuments]);
 
   const currentAiSnapshot: AiFieldSnapshot = useMemo(
     () => ({ title: trimmedTitle, descriptionHtml, tagIds, productIds }),
@@ -165,13 +193,14 @@ export function useAiBriefFlow({
     lastGeneratedSnapshot !== null && snapshotsDiffer(lastGeneratedSnapshot, currentAiSnapshot);
 
   const capturedAiState: AiGeneratedState | null =
-    lastGeneratedSnapshot === null
+    lastGeneratedSnapshot === null || lastGeneratedDocumentsKey === null
       ? null
       : {
           snapshot: lastGeneratedSnapshot,
           unmatchedLabels,
           editedFields: [...editedFieldsFiredRef.current],
           promptVersion: lastPromptVersion,
+          documentsKey: lastGeneratedDocumentsKey,
         };
 
   const aiProductSuggestion: AiProductSuggestion | null =
@@ -182,6 +211,7 @@ export function useAiBriefFlow({
   const clearAiState = useCallback(() => {
     setLastGeneratedSnapshot(null);
     setLastPromptVersion(null);
+    setLastGeneratedDocumentsKey(null);
     setUnmatchedLabels(NO_UNMATCHED);
     editedFieldsFiredRef.current = new Set();
   }, []);
@@ -190,12 +220,14 @@ export function useAiBriefFlow({
     if (state === null) {
       setLastGeneratedSnapshot(null);
       setLastPromptVersion(null);
+      setLastGeneratedDocumentsKey(null);
       setUnmatchedLabels(NO_UNMATCHED);
       editedFieldsFiredRef.current = new Set();
       return;
     }
     setLastGeneratedSnapshot(state.snapshot);
     setLastPromptVersion(state.promptVersion);
+    setLastGeneratedDocumentsKey(state.documentsKey);
     setUnmatchedLabels(state.unmatchedLabels);
     editedFieldsFiredRef.current = new Set(state.editedFields);
   }, []);
@@ -227,6 +259,9 @@ export function useAiBriefFlow({
         productIds: patch.productIds,
       });
       setLastPromptVersion(patch.promptVersion);
+      setLastGeneratedDocumentsKey(
+        generatingDocumentsKeyRef.current ?? documentSetKey(draft.documents)
+      );
       editedFieldsFiredRef.current = new Set();
 
       const durationMs =
@@ -242,7 +277,7 @@ export function useAiBriefFlow({
       });
       setStep('review');
     },
-    [draft.documents.length, setField, setStep]
+    [draft.documents, setField, setStep]
   );
 
   const briefGeneration = useProjectBriefGeneration({ onSucceeded: handleGenerationSucceeded });
@@ -318,6 +353,7 @@ export function useAiBriefFlow({
   const handleGenerateClick = useCallback(() => {
     isRegenerateRef.current = false;
     generateStartedAtRef.current = Date.now();
+    generatingDocumentsKeyRef.current = documentSetKey(draft.documents);
     track(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
       document_count: draft.documents.length,
       is_regenerate: false,
@@ -353,6 +389,7 @@ export function useAiBriefFlow({
     track(PROJECT_EVENTS.PROJECT_AI_REGENERATE_CLICKED, { had_edits: hasEditsSinceGenerate });
     isRegenerateRef.current = true;
     generateStartedAtRef.current = Date.now();
+    generatingDocumentsKeyRef.current = documentSetKey(draft.documents);
     track(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
       document_count: draft.documents.length,
       is_regenerate: true,
@@ -386,6 +423,7 @@ export function useAiBriefFlow({
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
+    hasBriefForCurrentDocuments,
     cancelGeneration,
     handleGenerateClick,
     handleRetryGenerate,

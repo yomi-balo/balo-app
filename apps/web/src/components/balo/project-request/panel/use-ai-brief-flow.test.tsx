@@ -289,6 +289,7 @@ describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (th
       unmatchedLabels: { tags: [], products: [] },
       editedFields: [],
       promptVersion: 'v2',
+      documentsKey: '',
     });
   });
 
@@ -392,6 +393,107 @@ describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (th
     act(() => view.result.current.flow.restoreAiState(null));
     expect(view.result.current.flow.capturedAiState).toBeNull();
     expect(view.result.current.flow.unmatchedLabels).toEqual({ tags: [], products: [] });
+  });
+});
+
+// "Change entry method" → AI again must not throw away a brief already generated from the SAME
+// documents — it returns to `review`; changed documents (or no brief yet) still go to `upload`.
+describe('useAiBriefFlow — re-picking the AI path keeps an existing brief', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  const SECOND_DOC = {
+    r2Key: 'project-documents/c/u/k2',
+    fileName: 'notes.pdf',
+    contentType: 'application/pdf' as const,
+    sizeBytes: 2000,
+  };
+
+  it('goes to upload when nothing has been generated yet', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleSelectAi());
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('goes straight to review when a brief exists for the current documents', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() => view.result.current.setDraftState((prev) => ({ ...prev, source: 'manual' })));
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('review');
+    expect(view.result.current.draft.source).toBe('ai');
+  });
+
+  it('ignores document order', () => {
+    const { view, setStep } = renderConnectedFlow({
+      ...DRAFT_WITH_DOC,
+      documents: [...DRAFT_WITH_DOC.documents, SECOND_DOC],
+    });
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents].reverse(),
+      }))
+    );
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('review');
+  });
+
+  it('goes to upload when the documents changed since the brief was generated', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents, SECOND_DOC],
+      }))
+    );
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('records the documents the generate STARTED from, not ones added while it ran', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents, SECOND_DOC],
+      }))
+    );
+    act(() => captured.onSucceeded?.(PATCH));
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('goes to upload after clearAiState (a fresh request)', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() => view.result.current.flow.clearAiState());
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
   });
 });
 
