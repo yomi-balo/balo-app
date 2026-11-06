@@ -3,6 +3,7 @@ import {
   DAILY_WEBHOOK_SIGNATURE_HEADER,
   DAILY_WEBHOOK_TIMESTAMP_HEADER,
   DAILY_WEBHOOK_TOLERANCE_MS,
+  isBase64Secret,
   signDailyWebhookForTest,
   verifyDailyWebhookSignature,
 } from './webhook-signature.js';
@@ -234,5 +235,17 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
     expect(
       verifyDailyWebhookSignature(BODY, signDailyWebhookForTest(BODY, plain, NOW), plain, NOW)
     ).toEqual({ ok: true });
+  });
+});
+
+describe('isBase64Secret', () => {
+  it('accepts padded and unpadded base64', () => {
+    expect(isBase64Secret(SECRET)).toBe(true);
+    expect(isBase64Secret(Buffer.from('ab').toString('base64'))).toBe(true);
+    expect(isBase64Secret('YWJj')).toBe(true);
+  });
+
+  it.each(['', 'not base64 !!!', 'YWJj$', 'a'])('rejects %j', (value) => {
+    expect(isBase64Secret(value)).toBe(false);
   });
 });

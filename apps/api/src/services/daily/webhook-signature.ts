@@ -118,17 +118,26 @@ function signatureEquals(expected: string, provided: string): boolean {
  * silently keying on a truncated decode.
  */
 function secretKey(secret: string): Buffer {
-  const decoded = Buffer.from(secret, 'base64');
-  // `Buffer.from(x, 'base64')` never throws — it stops at the first invalid character. A
-  // round-trip mismatch therefore means "this was not base64", and the raw bytes are the
-  // honest reading.
-  if (
-    decoded.length > 0 &&
-    stripBase64Padding(decoded.toString('base64')) === stripBase64Padding(secret)
-  ) {
-    return decoded;
+  if (isBase64Secret(secret)) {
+    return Buffer.from(secret, 'base64');
   }
   return Buffer.from(secret, 'utf8');
+}
+
+/**
+ * Whether `secret` is valid base64 text, by round trip.
+ *
+ * `Buffer.from(x, 'base64')` never throws — it stops at the first invalid character. A
+ * round-trip mismatch therefore means "this was not base64". This is the single definition of
+ * that test: {@link secretKey} keys on it, and the webhook registration script validates the
+ * secret it is about to hand to Daily with it.
+ */
+export function isBase64Secret(secret: string): boolean {
+  const decoded = Buffer.from(secret, 'base64');
+  return (
+    decoded.length > 0 &&
+    stripBase64Padding(decoded.toString('base64')) === stripBase64Padding(secret)
+  );
 }
 
 /**

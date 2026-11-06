@@ -8,6 +8,7 @@ import {
   isMeetingVenueReady,
   type MeetingClocks,
 } from '@balo/shared/meetings';
+import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import { db } from '../client';
 import {
   auditEvents,
@@ -3695,5 +3696,476 @@ describe('meetingsRepository.hasLiveSessionlessCaseMeeting (BAL-474, D11.1)', ()
 
     expect(seenInside).toBe(false);
     expect(await hasLive(call.companyId)).toBe(true);
+  });
+});
+
+describe('Daily domain cutover reads and clears (BAL-518)', () => {
+  const MINUTE_MS = 60_000;
+  const OLD_PREFIX = 'https://getbalo.daily.co/';
+
+  function startIn(minutes: number): number {
+    return Date.now() + 400 * DAY_MS + minutes * MINUTE_MS;
+  }
+
+  async function seedOnDomain(
+    startMs: number,
+    values: Partial<NewMeeting> = {},
+    prefix = OLD_PREFIX
+  ): Promise<Meeting> {
+    const id = randomUUID();
+    const roomName = dailyRoomNameForMeeting(id);
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        id,
+        scheduledStart: new Date(startMs),
+        scheduledEnd: new Date(startMs + HOUR_MS),
+        dailyRoomName: roomName,
+        joinUrl: `${prefix}${roomName}`,
+        venueProvisionedAt: new Date(),
+        ...values,
+      },
+    });
+    return meeting;
+  }
+
+  async function reload(id: string): Promise<Meeting> {
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, id));
+    if (row === undefined) throw new Error('meeting vanished');
+    return row;
+  }
+
+  describe('listScheduledVenueTargetsOnDomain', () => {
+    function listTargets(
+      overrides: Partial<{ scheduledStartAfter: Date; limit: number }> = {}
+    ): Promise<{ meetingId: string; scheduledStart: Date }[]> {
+      return meetingsRepository.listScheduledVenueTargetsOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+        limit: 50,
+        ...overrides,
+      });
+    }
+
+    it('returns only future scheduled rows whose join url is on the domain', async () => {
+      const start = startIn(0);
+      const target = await seedOnDomain(start);
+      await seedOnDomain(start + MINUTE_MS, { status: 'waiting_for_participants' });
+      await seedOnDomain(start + 2 * MINUTE_MS, { status: 'in_progress' });
+      await seedOnDomain(start + 3 * MINUTE_MS, { status: 'ended', endedAt: new Date() });
+      await seedOnDomain(start + 4 * MINUTE_MS, { status: 'cancelled' });
+      await seedOnDomain(start + 5 * MINUTE_MS, { deletedAt: new Date() });
+      await seedOnDomain(start + 6 * MINUTE_MS, { dailyRoomName: null, joinUrl: null });
+      await seedOnDomain(start + 7 * MINUTE_MS, {}, 'https://new.daily.co/');
+      await seedOnDomain(start + 8 * MINUTE_MS, {}, 'https://getbalo.daily.co.evil/');
+      await seedOnDomain(Date.now() - 5 * MINUTE_MS);
+
+      const rows = await listTargets();
+
+      expect(rows.map((row) => row.meetingId)).toEqual([target.id]);
+      expect(rows[0]?.scheduledStart).toEqual(new Date(start));
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['meetingId', 'scheduledStart']);
+    });
+
+    it('excludes a meeting starting exactly at the boundary', async () => {
+      const boundary = new Date(startIn(0));
+      await seedOnDomain(boundary.getTime());
+
+      await expect(listTargets({ scheduledStartAfter: boundary })).resolves.toEqual([]);
+    });
+
+    it('orders scheduled_start ASC, then id ASC', async () => {
+      const start = startIn(0);
+      const [lowId, highId] = [randomUUID(), randomUUID()].sort(compareStrings);
+      if (lowId === undefined || highId === undefined) throw new Error('expected two ids');
+      const later = await seedOnDomain(start + MINUTE_MS);
+      await seedOnDomain(start + 2 * MINUTE_MS, { id: highId });
+      await seedOnDomain(start + 2 * MINUTE_MS, { id: lowId });
+      const earliest = await seedOnDomain(start);
+
+      const rows = await listTargets();
+
+      expect(rows.map((row) => row.meetingId)).toEqual([earliest.id, later.id, lowId, highId]);
+    });
+
+    it('honours the limit, keeping the soonest; a non-positive limit returns [] without querying', async () => {
+      const start = startIn(0);
+      const first = await seedOnDomain(start);
+      const second = await seedOnDomain(start + MINUTE_MS);
+      await seedOnDomain(start + 2 * MINUTE_MS);
+
+      const rows = await listTargets({ limit: 2 });
+      expect(rows.map((row) => row.meetingId)).toEqual([first.id, second.id]);
+
+      const spy = vi.spyOn(db, 'select');
+      try {
+        await expect(listTargets({ limit: 0 })).resolves.toEqual([]);
+        await expect(listTargets({ limit: -1 })).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('is never starved by blockers ahead of it in scheduled_start order', async () => {
+      const now = Date.now();
+      for (let i = 1; i <= 3; i++) {
+        await seedOnDomain(now - i * MINUTE_MS, { status: 'in_progress' });
+      }
+      const target = await seedOnDomain(startIn(0));
+
+      const rows = await listTargets({ limit: 1 });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([target.id]);
+    });
+  });
+
+  describe('listNonTargetLiveVenuesOnDomain', () => {
+    const MISSED_CALL_MS = 10 * MINUTE_MS;
+    const OVERRUN_GRACE_MS = 30 * MINUTE_MS;
+    const SESSION_LIMIT_MS = MAX_SESSION_MINUTES * MINUTE_MS;
+
+    function listNonTargets(
+      overrides: Partial<{ scheduledStartAtOrBefore: Date; limit: number }> = {}
+    ): Promise<{ meetingId: string; status: string; scheduledStart: Date; scheduledEnd: Date }[]> {
+      return meetingsRepository.listNonTargetLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAtOrBefore: new Date(),
+        missedCallTerminationMs: MISSED_CALL_MS,
+        overrunStopGraceMs: OVERRUN_GRACE_MS,
+        limit: 50,
+        ...overrides,
+      });
+    }
+
+    it('returns live rows that are not future-scheduled, newest first, and nothing else', async () => {
+      const now = Date.now();
+      const pastScheduled = await seedOnDomain(now - 3 * MINUTE_MS);
+      const waiting = await seedOnDomain(now - 2 * MINUTE_MS, {
+        status: 'waiting_for_participants',
+      });
+      const futureInProgress = await seedOnDomain(startIn(0), { status: 'in_progress' });
+      await seedOnDomain(startIn(1));
+      await seedOnDomain(now - 4 * MINUTE_MS, { status: 'ended', endedAt: new Date() });
+      await seedOnDomain(now - 5 * MINUTE_MS, { status: 'cancelled' });
+      await seedOnDomain(now - 6 * MINUTE_MS, { deletedAt: new Date() });
+      await seedOnDomain(now - 7 * MINUTE_MS, { dailyRoomName: null, joinUrl: null });
+      await seedOnDomain(now - 8 * MINUTE_MS, {}, 'https://new.daily.co/');
+      await seedOnDomain(now - 9 * MINUTE_MS, {}, 'https://getbalo.daily.co.evil/');
+
+      const rows = await listNonTargets();
+
+      expect(rows.map((row) => [row.meetingId, row.status])).toEqual([
+        [futureInProgress.id, 'in_progress'],
+        [waiting.id, 'waiting_for_participants'],
+        [pastScheduled.id, 'scheduled'],
+      ]);
+      expect(rows[2]?.scheduledStart).toEqual(pastScheduled.scheduledStart);
+      expect(rows[2]?.scheduledEnd).toEqual(pastScheduled.scheduledEnd);
+      expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
+        'meetingId',
+        'scheduledEnd',
+        'scheduledStart',
+        'status',
+      ]);
+    });
+
+    it('partitions the live rows on the domain with the target read, with no overlap', async () => {
+      const now = new Date();
+      const nowMs = now.getTime();
+      await seedOnDomain(nowMs - MINUTE_MS);
+      await seedOnDomain(nowMs - 2 * MINUTE_MS, { status: 'in_progress' });
+      await seedOnDomain(nowMs + MINUTE_MS);
+      await seedOnDomain(nowMs + 2 * MINUTE_MS, { status: 'waiting_for_participants' });
+
+      const targets = await meetingsRepository.listScheduledVenueTargetsOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: now,
+        limit: 50,
+      });
+      const nonTargets = await listNonTargets({ scheduledStartAtOrBefore: now });
+
+      const targetIds = targets.map((row) => row.meetingId);
+      const nonTargetIds = nonTargets.map((row) => row.meetingId);
+      expect(targetIds).toHaveLength(1);
+      expect(nonTargetIds).toHaveLength(3);
+      expect(nonTargetIds.filter((id) => targetIds.includes(id))).toEqual([]);
+    });
+
+    it('includes a scheduled row starting exactly at the boundary', async () => {
+      const boundary = new Date(Date.now() - MINUTE_MS);
+      const atBoundary = await seedOnDomain(boundary.getTime());
+
+      const rows = await listNonTargets({ scheduledStartAtOrBefore: boundary });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([atBoundary.id]);
+    });
+
+    it('keeps the newest rows when the limit truncates, so stranded rows cannot hide a blocker', async () => {
+      const now = Date.now();
+      for (let i = 1; i <= 3; i++) {
+        await seedOnDomain(now - (100 + i) * MINUTE_MS);
+      }
+      const recent = await seedOnDomain(now - MINUTE_MS, { status: 'in_progress' });
+
+      const rows = await listNonTargets({ limit: 2 });
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]?.meetingId).toBe(recent.id);
+    });
+
+    it('sorts every blocker ahead of every stranded row on blockerUntil, whatever the status', async () => {
+      const now = Date.now();
+      // scheduled: blockerUntil = start + 10 min.
+      const strandedScheduled = await seedOnDomain(now - MISSED_CALL_MS - MINUTE_MS);
+      const blockerScheduled = await seedOnDomain(now - MISSED_CALL_MS + MINUTE_MS);
+      // in_progress booked 1 h, started 2 h ago: end + 10 min passed, ceiling (start + 240 min + 30 min) has not.
+      const blockerOverrun = await seedOnDomain(now - 2 * HOUR_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - 2 * HOUR_MS + HOUR_MS),
+      });
+      // in_progress past its ceiling by a minute.
+      const strandedLive = await seedOnDomain(
+        now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS - MINUTE_MS,
+        {
+          status: 'in_progress',
+          scheduledEnd: new Date(now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS),
+        }
+      );
+      // waiting_for_participants booked longer than the session limit: ceiling = end + 30 min.
+      const longStart = now - SESSION_LIMIT_MS - 3 * HOUR_MS;
+      const blockerLong = await seedOnDomain(longStart, {
+        status: 'waiting_for_participants',
+        scheduledEnd: new Date(now - OVERRUN_GRACE_MS + MINUTE_MS),
+      });
+      const strandedLong = await seedOnDomain(longStart - MINUTE_MS, {
+        status: 'waiting_for_participants',
+        scheduledEnd: new Date(now - OVERRUN_GRACE_MS - MINUTE_MS),
+      });
+
+      const rows = await listNonTargets();
+      const ids = rows.map((row) => row.meetingId);
+
+      const blockerIds = [blockerScheduled.id, blockerOverrun.id, blockerLong.id];
+      const strandedIds = [strandedScheduled.id, strandedLive.id, strandedLong.id];
+      expect(ids.slice(0, 3).sort()).toEqual([...blockerIds].sort());
+      expect(ids.slice(3).sort()).toEqual([...strandedIds].sort());
+    });
+
+    it('--limit 1 keeps a running case call past scheduled end + 10 min ahead of stranded rows', async () => {
+      const now = Date.now();
+      const runningPastEnd = await seedOnDomain(now - 2 * HOUR_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - HOUR_MS),
+      });
+      await seedOnDomain(now - SESSION_LIMIT_MS - OVERRUN_GRACE_MS - MINUTE_MS, {
+        status: 'in_progress',
+      });
+      await seedOnDomain(now - MISSED_CALL_MS - MINUTE_MS);
+
+      const rows = await listNonTargets({ limit: 1 });
+
+      expect(rows.map((row) => row.meetingId)).toEqual([runningPastEnd.id]);
+    });
+
+    it('applies the injected offsets: a longer overrun grace moves a live row ahead of a scheduled blocker', async () => {
+      const now = Date.now();
+      const scheduledBlocker = await seedOnDomain(now - MINUTE_MS);
+      const live = await seedOnDomain(now - SESSION_LIMIT_MS - 45 * MINUTE_MS, {
+        status: 'in_progress',
+        scheduledEnd: new Date(now - SESSION_LIMIT_MS),
+      });
+
+      const defaultGrace = await listNonTargets({ limit: 2 });
+      const longGrace = await meetingsRepository.listNonTargetLiveVenuesOnDomain({
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAtOrBefore: new Date(),
+        missedCallTerminationMs: MISSED_CALL_MS,
+        overrunStopGraceMs: 4 * HOUR_MS,
+        limit: 2,
+      });
+
+      expect(defaultGrace.map((row) => row.meetingId)).toEqual([scheduledBlocker.id, live.id]);
+      expect(longGrace.map((row) => row.meetingId)).toEqual([live.id, scheduledBlocker.id]);
+    });
+
+    it('returns [] without querying for a non-positive limit', async () => {
+      await seedOnDomain(Date.now() - MINUTE_MS, { status: 'in_progress' });
+      const spy = vi.spyOn(db, 'select');
+      try {
+        await expect(listNonTargets({ limit: 0 })).resolves.toEqual([]);
+        await expect(listNonTargets({ limit: -1 })).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('joinUrlPrefix guard', () => {
+    it.each([
+      ['empty', ''],
+      ['bare scheme', 'https://'],
+      ['no label', 'https://.daily.co/'],
+      ['no trailing slash', 'https://getbalo.daily.co'],
+      ['http', 'http://getbalo.daily.co/'],
+      ['other host', 'https://getbalo.example.com/'],
+      ['suffix host', 'https://getbalo.daily.co.evil/'],
+      ['nested label', 'https://a.b.daily.co/'],
+      ['uppercase', 'https://GetBalo.daily.co/'],
+      ['path', 'https://getbalo.daily.co/room/'],
+    ])('all three methods throw for a %s prefix and touch nothing', async (_label, prefix) => {
+      const target = await seedOnDomain(startIn(0));
+
+      await expect(
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: prefix,
+          scheduledStartAfter: new Date(),
+          limit: 50,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.listNonTargetLiveVenuesOnDomain({
+          joinUrlPrefix: prefix,
+          scheduledStartAtOrBefore: new Date(),
+          missedCallTerminationMs: 10 * MINUTE_MS,
+          overrunStopGraceMs: 30 * MINUTE_MS,
+          limit: 50,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.clearScheduledVenuesOnDomain({
+          meetingIds: [target.id],
+          joinUrlPrefix: prefix,
+          scheduledStartAfter: new Date(),
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+
+      expect((await reload(target.id)).joinUrl).toBe(target.joinUrl);
+    });
+
+    it('throws before the empty-ids and non-positive-limit short-circuits', async () => {
+      await expect(
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: '',
+          scheduledStartAfter: new Date(),
+          limit: 0,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.listNonTargetLiveVenuesOnDomain({
+          joinUrlPrefix: '',
+          scheduledStartAtOrBefore: new Date(),
+          missedCallTerminationMs: 10 * MINUTE_MS,
+          overrunStopGraceMs: 30 * MINUTE_MS,
+          limit: 0,
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+      await expect(
+        meetingsRepository.clearScheduledVenuesOnDomain({
+          meetingIds: [],
+          joinUrlPrefix: '',
+          scheduledStartAfter: new Date(),
+        })
+      ).rejects.toThrow(/joinUrlPrefix/);
+    });
+  });
+
+  describe('clearScheduledVenuesOnDomain', () => {
+    it('nulls the venue columns and bumps updated_at on a future scheduled meeting', async () => {
+      const target = await seedOnDomain(startIn(0));
+      const before = await reload(target.id);
+
+      const cleared = await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect(cleared).toEqual([target.id]);
+      const after = await reload(target.id);
+      expect(after.dailyRoomName).toBeNull();
+      expect(after.joinUrl).toBeNull();
+      expect(after.venueProvisionedAt).toBeNull();
+      expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    });
+
+    it('skips in_progress, past-start, other-domain and soft-deleted rows, leaving them untouched', async () => {
+      const inProgress = await seedOnDomain(startIn(0), { status: 'in_progress' });
+      const pastStart = await seedOnDomain(Date.now() - 5 * MINUTE_MS);
+      const otherDomain = await seedOnDomain(startIn(1), {}, 'https://new.daily.co/');
+      const softDeleted = await seedOnDomain(startIn(2), { deletedAt: new Date() });
+      const skipped = [inProgress, pastStart, otherDomain, softDeleted];
+      const target = await seedOnDomain(startIn(3));
+
+      const cleared = await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [...skipped.map((meeting) => meeting.id), target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect(cleared).toEqual([target.id]);
+      for (const meeting of skipped) {
+        const after = await reload(meeting.id);
+        expect(after.joinUrl).toBe(meeting.joinUrl);
+        expect(after.dailyRoomName).toBe(meeting.dailyRoomName);
+      }
+    });
+
+    it('only touches the named ids', async () => {
+      const named = await seedOnDomain(startIn(0));
+      const unnamed = await seedOnDomain(startIn(1));
+
+      await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [named.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      expect((await reload(unnamed.id)).joinUrl).toBe(unnamed.joinUrl);
+    });
+
+    it('returns [] without querying for empty ids', async () => {
+      const spy = vi.spyOn(db, 'update');
+      try {
+        await expect(
+          meetingsRepository.clearScheduledVenuesOnDomain({
+            meetingIds: [],
+            joinUrlPrefix: OLD_PREFIX,
+            scheduledStartAfter: new Date(),
+          })
+        ).resolves.toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('makes a cleared row visible to listUnprovisionedScheduled with no room name stamped', async () => {
+      const start = startIn(0);
+      const target = await seedOnDomain(start);
+
+      await meetingsRepository.clearScheduledVenuesOnDomain({
+        meetingIds: [target.id],
+        joinUrlPrefix: OLD_PREFIX,
+        scheduledStartAfter: new Date(),
+      });
+
+      const rows = await meetingsRepository.listUnprovisionedScheduled({
+        scheduledStartAfter: new Date(start),
+        createdBefore: new Date(Date.now() + DAY_MS),
+        limit: 50,
+      });
+      expect(rows.filter((row) => row.meetingId === target.id)).toEqual([
+        expect.objectContaining({ meetingId: target.id, roomNameStamped: false }),
+      ]);
+      await expect(
+        meetingsRepository.listScheduledVenueTargetsOnDomain({
+          joinUrlPrefix: OLD_PREFIX,
+          scheduledStartAfter: new Date(),
+          limit: 50,
+        })
+      ).resolves.toEqual([]);
+    });
   });
 });

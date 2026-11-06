@@ -68,6 +68,8 @@ export * from './room-name';
 // lifecycle sweep and the absence recheck (apps/api), `load-case.ts` (apps/web) and
 // `@balo/analytics` must all reach ONE predicate without value-importing `@balo/db`.
 export * from './venue';
+// BAL-518 — the one Daily subdomain-label check (join-url prefix guard, venue re-provision).
+export * from './daily-domain';
 // BAL-132 — the Daily `user_id` claim's encoding, beside `room-name` and for the SAME
 // reason: this ticket's token minter WRITES it, BAL-131's webhook resolver READS it, and
 // BAL-134's presence writer ROUTES on it (`user_id` vs `meeting_guest_id`). Two apps, three
