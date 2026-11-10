@@ -123,6 +123,7 @@ export function UpNextRow({
 
   return (
     <div
+      data-up-next-row={featured ? 'featured' : 'default'}
       className={cn(
         'flex items-center gap-3',
         featured
@@ -130,7 +131,7 @@ export function UpNextRow({
           : 'border-border border-b px-1 py-3 last:border-b-0',
         row.href !== null &&
           (featured
-            ? 'hover:bg-success/15 transition-colors'
+            ? 'hover:bg-success/20 transition-colors'
             : 'hover:bg-muted/50 transition-colors')
       )}
     >
