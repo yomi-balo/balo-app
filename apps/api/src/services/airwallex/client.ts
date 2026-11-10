@@ -1,4 +1,4 @@
-import { AirwallexAuthError, AirwallexApiError } from './errors.js';
+import { AirwallexAuthError, AirwallexApiError, AirwallexConfigError } from './errors.js';
 
 // ── Token Cache ─────────────────────────────────────────────────
 
@@ -10,15 +10,29 @@ interface TokenCache {
 let tokenCache: TokenCache | null = null;
 
 function getEnvConfig(): { base: string; clientId: string; apiKey: string } {
-  const env = process.env.AIRWALLEX_ENV ?? 'demo';
-  const base =
-    env === 'prod' ? process.env.AIRWALLEX_API_BASE_PROD! : process.env.AIRWALLEX_API_BASE_DEMO!;
-  const clientId =
-    env === 'prod' ? process.env.AIRWALLEX_CLIENT_ID_PROD! : process.env.AIRWALLEX_CLIENT_ID_DEMO!;
-  const apiKey =
-    env === 'prod' ? process.env.AIRWALLEX_API_KEY_PROD! : process.env.AIRWALLEX_API_KEY_DEMO!;
+  const suffix = process.env.AIRWALLEX_ENV === 'prod' ? 'PROD' : 'DEMO';
+  const base = process.env[`AIRWALLEX_API_BASE_${suffix}`];
+  const clientId = process.env[`AIRWALLEX_CLIENT_ID_${suffix}`];
+  const apiKey = process.env[`AIRWALLEX_API_KEY_${suffix}`];
+
+  const missing = [
+    ['AIRWALLEX_API_BASE', base],
+    ['AIRWALLEX_CLIENT_ID', clientId],
+    ['AIRWALLEX_API_KEY', apiKey],
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => `${name}_${suffix}`);
+
+  if (!base || !clientId || !apiKey) {
+    throw new AirwallexConfigError(missing);
+  }
 
   return { base, clientId, apiKey };
+}
+
+/** Clears the cached token. Exported for tests. */
+export function resetTokenCache(): void {
+  tokenCache = null;
 }
 
 async function getToken(): Promise<string> {
@@ -39,7 +53,7 @@ async function getToken(): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new AirwallexAuthError(await res.text());
+    throw new AirwallexAuthError(await res.text(), res.status);
   }
 
   const data = (await res.json()) as { token: string; expires_at: string };
@@ -78,14 +92,10 @@ export async function airwallexRequest<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  // Token expired mid-request — clear cache and retry once
+  // Any 401 means the cached token is no longer accepted — clear it and retry once
   if (res.status === 401 && !options?.isRetry) {
-    const errText = await res.text();
-    if (errText.includes('credentials_expired')) {
-      tokenCache = null;
-      return airwallexRequest(method, path, body, { ...options, isRetry: true });
-    }
-    throw new AirwallexApiError(401, path, errText);
+    tokenCache = null;
+    return airwallexRequest(method, path, body, { ...options, isRetry: true });
   }
 
   if (!res.ok) {
