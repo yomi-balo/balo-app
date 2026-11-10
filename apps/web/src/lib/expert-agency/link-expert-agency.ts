@@ -1,10 +1,11 @@
 import 'server-only';
 
-import { expertsRepository, agenciesRepository } from '@balo/db';
+import { expertsRepository, agenciesRepository, ExpertAgencyAlreadyLinkedError } from '@balo/db';
 import { extractEmailDomain } from '@balo/shared/domains';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { resolveExpertAgency } from './resolve-expert-agency';
+import { soloAgencyName } from './solo-agency-name';
 import type { LinkExpertAgencyOutcome } from './types';
 
 /**
@@ -40,17 +41,20 @@ export interface LinkResult {
   membershipId?: string;
 }
 
-/**
- * The internal payout-entity name for a SOLO agency (agency-of-one). Locked Decision
- * 5: `"${firstName} ${lastName}".trim() || 'Independent Expert'`. This is an internal
- * label only — the UI NEVER surfaces it to the solo expert as "your agency".
- */
-function soloAgencyName(firstName: string | null, lastName: string | null): string {
-  const composed = `${firstName ?? ''} ${lastName ?? ''}`.trim();
-  return composed || 'Independent Expert';
+export async function runLinkExpertAgency(input: LinkExpertAgencyInput): Promise<LinkResult> {
+  try {
+    return await resolveAndLinkExpertAgency(input);
+  } catch (error) {
+    // The link is write-once: a concurrent request linked this profile first, which rolled this
+    // one's transaction back, so the outcome is the same no-op as a resume.
+    if (error instanceof ExpertAgencyAlreadyLinkedError) {
+      return { outcome: 'already_linked', agencyId: error.existingAgencyId, fresh: false };
+    }
+    throw error;
+  }
 }
 
-export async function runLinkExpertAgency(input: LinkExpertAgencyInput): Promise<LinkResult> {
+async function resolveAndLinkExpertAgency(input: LinkExpertAgencyInput): Promise<LinkResult> {
   // 0. Idempotency: if the draft already has an agencyId, this step already ran
   //    (resume / double-click) → no-op. No second agency, no notification.
   const existing = await expertsRepository.findProfileById(input.expertProfileId);

@@ -70,7 +70,8 @@ export function CaseClosedExpertEmail({
 
       <WhatHappensNowBlock>
         Everything from the case stays on the case page. If there&apos;s more to do, {clientCompany}{' '}
-        can book again any time — that starts a new case.
+        can book again any time, as long as you&apos;re still listed on Balo — that starts a new
+        case.
       </WhatHappensNowBlock>
 
       <Section style={reviewStyles.ctaWrapper}>

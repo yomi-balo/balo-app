@@ -23,20 +23,24 @@ import {
 
 interface TurnStyle {
   readonly token: string;
+  readonly hover: string;
   readonly dot: string;
 }
 
 const TURN_STYLE: Record<DashboardTrackTurn, TurnStyle> = {
   your_move: {
     token: 'bg-primary/10 text-primary border-transparent font-semibold',
+    hover: 'hover:bg-primary/20',
     dot: 'bg-primary',
   },
   waiting: {
     token: 'bg-card text-muted-foreground border-dashed border-muted-foreground/60 font-medium',
+    hover: 'hover:bg-accent hover:text-foreground hover:border-muted-foreground',
     dot: 'border-[1.5px] border-muted-foreground/60 bg-transparent',
   },
   in_progress: {
     token: 'bg-muted-foreground/10 text-muted-foreground border-transparent font-medium',
+    hover: 'hover:bg-muted-foreground/20 hover:text-foreground',
     dot: 'bg-muted-foreground',
   },
 };
@@ -75,8 +79,9 @@ function TokenLink({
       title={summary}
       aria-label={token.label === token.title ? summary : `${token.label}, ${summary}`}
       className={cn(
-        'focus-visible:ring-ring inline-flex min-h-11 max-w-full items-center gap-[7px] rounded-full border px-2.5 text-[12.5px] focus-visible:ring-2 focus-visible:outline-none md:min-h-7',
-        style.token
+        'focus-visible:ring-ring inline-flex min-h-11 max-w-full items-center gap-[7px] rounded-full border px-2.5 text-[12.5px] transition-colors focus-visible:ring-2 focus-visible:outline-none md:min-h-7',
+        style.token,
+        style.hover
       )}
     >
       <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', style.dot)} />

@@ -34,6 +34,8 @@ export interface PublishBookingRescheduledInput {
   engagementId: string;
   companyId: string;
   expertProfileId: string;
+  /** `engagements.delivering_agency_id` of the case: the agency the labels name. */
+  deliveringAgencyId: string | null;
   caseTitle: string;
   recipientId: string;
   /** ISO. The server's committed PREVIOUS window start — never the client's submitted slot. */
@@ -57,6 +59,7 @@ export async function publishBookingRescheduled(
     engagementId,
     companyId,
     expertProfileId,
+    deliveringAgencyId,
     caseTitle,
     recipientId,
     previousScheduledStart,
@@ -67,20 +70,22 @@ export async function publishBookingRescheduled(
     logContext,
   } = input;
 
-  const labels = await resolveNotificationLabels(companyId, expertProfileId).catch(
-    (error: unknown) => {
-      log.error('Failed to resolve booking.rescheduled labels — publishing with fallbacks', {
-        meetingId,
-        engagementId,
-        error: errorMessage(error),
-      });
-      return {
-        clientCompanyName: 'your company',
-        expertPartyLabel: 'Your expert',
-        expertPersonLabel: 'Your expert',
-      };
-    }
-  );
+  const labels = await resolveNotificationLabels(
+    companyId,
+    expertProfileId,
+    deliveringAgencyId
+  ).catch((error: unknown) => {
+    log.error('Failed to resolve booking.rescheduled labels — publishing with fallbacks', {
+      meetingId,
+      engagementId,
+      error: errorMessage(error),
+    });
+    return {
+      clientCompanyName: 'your company',
+      expertPartyLabel: 'Your expert',
+      expertPersonLabel: 'Your expert',
+    };
+  });
 
   if (rescheduleAuditId === undefined) {
     log.warn('Reschedule response carried no rescheduleAuditId — falling back to a window key', {
@@ -91,7 +96,7 @@ export async function publishBookingRescheduled(
   }
 
   // Fire-and-forget by contract — `publishNotificationEvent` never throws (see its own
-  // docblock); nothing here needs a `.catch()`.
+  // docblock), so the `.catch()` only marks the promise as handled.
   publishNotificationEvent('booking.rescheduled', {
     // ⚠ THE AUDIT ROW ID, NOT THE TARGET WINDOW — see this module's own docblock.
     correlationId: `${meetingId}:${rescheduleAuditId ?? scheduledStart}`,
@@ -106,5 +111,7 @@ export async function publishBookingRescheduled(
     scheduledStartIso: scheduledStart,
     durationMinutes,
     initiatedBy,
+  }).catch(() => {
+    // publishNotificationEvent logs internally
   });
 }

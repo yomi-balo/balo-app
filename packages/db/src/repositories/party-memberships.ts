@@ -8,6 +8,7 @@ import {
   companyMembers,
   companyRoleEnum,
   agencyMembers,
+  agencyRoleEnum,
   type PartyType,
   type Company,
 } from '../schema';
@@ -40,6 +41,12 @@ const PARTY_MEMBERSHIP: Record<
   company: { entityType: 'company_member', baseRole: 'member' },
   agency: { entityType: 'agency_member', baseRole: 'expert' },
 };
+
+/** An agency the actor holds a live membership in, projected to id + name. */
+export interface EligibleAgency {
+  id: string;
+  name: string;
+}
 
 export interface DomainMembershipInput {
   partyType: PartyType;
@@ -430,6 +437,55 @@ export const partyMembershipsRepository = {
   listAdminUserIds: async (partyType: PartyType, partyId: string): Promise<string[]> => {
     const adminRoles = rolesWithCapability(CAPABILITIES.MANAGE_MEMBERS);
     return selectAdminUserIds(partyType, partyId, adminRoles);
+  },
+
+  /**
+   * Live member user ids of a party, any role. Branches once on `partyType`.
+   */
+  listMemberUserIds: async (partyType: PartyType, partyId: string): Promise<string[]> => {
+    if (partyType === 'company') {
+      const rows = await db
+        .select({ userId: companyMembers.userId })
+        .from(companyMembers)
+        .where(and(eq(companyMembers.companyId, partyId), isNull(companyMembers.deletedAt)));
+      return rows.map((r) => r.userId);
+    }
+    const rows = await db
+      .select({ userId: agencyMembers.userId })
+      .from(agencyMembers)
+      .where(and(eq(agencyMembers.agencyId, partyId), isNull(agencyMembers.deletedAt)));
+    return rows.map((r) => r.userId);
+  },
+
+  /**
+   * The user's LIVE AGENCY memberships whose role grants `capability`, projected to
+   * `EligibleAgency` (id + name). The role set is derived from `rolesWithCapability`
+   * intersected with `agencyRoleEnum.enumValues` (never a role literal). Liveness is the
+   * membership's `deleted_at`. Ordered `name ASC, id ASC`; an empty role set returns `[]`
+   * without querying.
+   */
+  listCapabilityEligibleAgencies: async (
+    userId: string,
+    capability: Capability
+  ): Promise<EligibleAgency[]> => {
+    const agencyRoles: readonly string[] = agencyRoleEnum.enumValues;
+    const roles = rolesWithCapability(capability).filter((role) => agencyRoles.includes(role));
+    if (roles.length === 0) {
+      return [];
+    }
+
+    return db
+      .select({ id: agencies.id, name: agencies.name })
+      .from(agencyMembers)
+      .innerJoin(agencies, eq(agencies.id, agencyMembers.agencyId))
+      .where(
+        and(
+          eq(agencyMembers.userId, userId),
+          isNull(agencyMembers.deletedAt),
+          inArray(sql`${agencyMembers.role}`, roles)
+        )
+      )
+      .orderBy(asc(agencies.name), asc(agencies.id));
   },
 
   /**

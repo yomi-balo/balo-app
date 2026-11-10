@@ -1,3 +1,5 @@
+import { hoursLabel } from '@balo/shared/engagements';
+import { formatWholeCurrency } from '@/lib/utils/currency';
 /** The two pricing methods a project can be delivered under. */
 export type ComposerPricing = 'fixed' | 'tm';
 
@@ -267,6 +269,44 @@ interface ComposerIssueInput {
   priceDeltaCents: number;
   /** Whether the typed price (or T&M cap) parses to a non-negative amount. */
   priceValid: boolean;
+  /** T&M: the value of the time already logged, in cents; null on fixed price. */
+  loggedValueCents: number | null;
+  /** The cap (or price) the typed total comes to, in cents. */
+  nextCapCents: number;
+  /** Currency code, to name the cap floor. */
+  currency: string;
+  /** The live milestones as the composer opened on them, for their current estimates. */
+  milestones: readonly ComposerMilestone[];
+  /**
+   * T&M: minutes of live time logged per milestone. Removing a milestone with time is refused,
+   * and so is changing its estimate to less than the time logged.
+   */
+  loggedMinutesByMilestone: Readonly<Record<string, number>>;
+}
+
+function capBelowLoggedMessage(loggedValueCents: number, currency: string): string {
+  const floor = formatWholeCurrency(Math.ceil(loggedValueCents / 100) * 100, currency);
+  return `The cap can't go below ${floor} — the value of the time already logged.`;
+}
+
+/** Why a line can't go, given the time already logged on its milestone; null when it can. */
+function loggedTimeIssue(
+  line: ComposerLineDraft,
+  milestones: readonly ComposerMilestone[],
+  loggedMinutesByMilestone: Readonly<Record<string, number>>
+): string | null {
+  if (line.milestoneId === undefined) return null;
+  const logged = loggedMinutesByMilestone[line.milestoneId] ?? 0;
+  if (logged <= 0) return null;
+  if (line.op === 'remove') {
+    return `Time has been logged on ${line.title}, so it can't be removed. Complete it instead.`;
+  }
+  const current = milestones.find((m) => m.id === line.milestoneId)?.estimatedMinutes ?? null;
+  const next = line.estimatedMinutes ?? null;
+  if (line.op === 'edit' && next !== null && next !== current && next < logged) {
+    return `The estimate for ${line.title} can't go below the ${hoursLabel(logged)} already logged.`;
+  }
+  return null;
 }
 
 /** What stops one line from being sent. */
@@ -283,13 +323,28 @@ function lineIssues(line: ComposerLineDraft, pricing: ComposerPricing): string[]
 
 /** What stops a send, in the order the form reads. Mirrors the server's coherence rules. */
 export function composerIssues(input: ComposerIssueInput): string[] {
-  const { pricing, note, lines, priceDeltaCents, priceValid } = input;
+  const {
+    pricing,
+    note,
+    lines,
+    priceDeltaCents,
+    priceValid,
+    loggedValueCents,
+    nextCapCents,
+    currency,
+    milestones,
+    loggedMinutesByMilestone,
+  } = input;
   const issues: string[] = [];
   if (note.trim() === '') issues.push("Add a short summary of what's changing and why.");
   if (lines.length === 0 && priceDeltaCents === 0) {
     issues.push('Change at least one milestone or the price.');
   }
-  for (const line of lines) issues.push(...lineIssues(line, pricing));
+  for (const line of lines) {
+    issues.push(...lineIssues(line, pricing));
+    const loggedIssue = loggedTimeIssue(line, milestones, loggedMinutesByMilestone);
+    if (loggedIssue !== null) issues.push(loggedIssue);
+  }
   if (!priceValid) {
     issues.push(
       pricing === 'fixed'
@@ -297,5 +352,13 @@ export function composerIssues(input: ComposerIssueInput): string[] {
         : 'Enter a cap of zero or more.'
     );
   }
+  // Only a cap decrease is checked: a raise moves toward coherence and logging is not capped.
+  const capBelowLogged =
+    pricing === 'tm' &&
+    priceValid &&
+    priceDeltaCents < 0 &&
+    loggedValueCents !== null &&
+    nextCapCents < loggedValueCents;
+  if (capBelowLogged) issues.push(capBelowLoggedMessage(loggedValueCents, currency));
   return [...new Set(issues)];
 }

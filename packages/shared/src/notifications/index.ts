@@ -193,6 +193,47 @@ export interface EngagementMilestoneCompletedPayload {
   totalCount: number; // {m} — total live milestones
 }
 
+// BAL-624 first crossing of a milestone's estimate by logged time. Fans out to the CLIENT
+// company owner (email + in-app) and the Balo ADMINS (in-app); the expert gets nothing.
+// `correlationId = `${milestoneId}:estimate_exceeded:${estimatedMinutes}`` — one notice per
+// milestone per estimate, yet a raised estimate that is crossed again notifies again. Labels carry
+// hours, never money. `recipientId` is absent for a retainer / owner-miss (client rules skip;
+// admins still fire).
+export interface EngagementMilestoneEstimateExceededPayload {
+  correlationId: string; // `${milestoneId}:estimate_exceeded:${estimatedMinutes}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  milestoneId: string;
+  recipientId?: string; // client company owner user id → recipient:'client'
+  expertPartyLabel: string; // prospective party label
+  actorExpertLabel: string; // retrospective person label
+  projectTitle: string;
+  milestoneTitle: string;
+  loggedHoursLabel: string; // e.g. "8.5 hrs"
+  estimatedHoursLabel: string; // e.g. "8 hrs"
+  // Optional so a Vercel-ahead or Railway-ahead deploy still validates.
+  expertProfileId?: string; // delivering expert profile; no rule reads it (agency admins resolve from the engagement's pin)
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
+}
+
+// BAL-626 (D15b) someone other than a time entry's author edited or removed it. Goes to the
+// entry's AUTHOR alone (recipient:'self' via `userId`; email + in-app — these are their billable
+// hours). The never-self guard lives in the rule condition (`actorUserId !== userId`), so the
+// publisher need not pre-filter. `correlationId = `${timeEntryId}:${change}:${updatedAtEpochMs}``.
+// `hoursLabel` is the hours after an edit, and the removed hours on a removal.
+export interface EngagementTimeEntryChangedPayload {
+  correlationId: string; // `${timeEntryId}:${change}:${updatedAtEpochMs}`
+  engagementId: string; // CTA / actionUrl → /engagements/{id}
+  timeEntryId: string;
+  userId: string; // entry author → recipient:'self'
+  actorUserId: string;
+  change: 'edited' | 'removed';
+  actorExpertLabel: string; // retrospective Person @ Agency
+  projectTitle: string;
+  workedOnLabel: string; // e.g. "14 Oct"
+  hoursLabel: string; // e.g. "2.5 hrs"
+}
+
 // BAL-332 (D2) expert milestone reverted. The delivering EXPERT moved a completed
 // milestone back to in progress — fans out to the CLIENT company owner and the Balo
 // ADMINS (in-app both; reverts are never silent). `correlationId =
@@ -301,6 +342,11 @@ export interface EngagementCancelledPayload {
   projectTitle: string; // {title} — email subject/body + in-app body
   cancelledOn: string; // "9 Jul 2026" (pre-formatted, UTC)
   reason: string; // verbatim cancellation reason (email body block)
+  // Optional so a Vercel-ahead or Railway-ahead deploy still validates.
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
+  clientCompanyName?: string; // agency notice copy
+  actorLabel?: string; // retrospective person label, e.g. "MJ @ Balo"
 }
 
 // BAL-338 (D7) client accepted the project (pending_acceptance → completed, method
@@ -366,6 +412,8 @@ export interface EngagementChangesRequestedPayload {
   // Optional on both the TS and Zod sides so a Vercel-ahead or Railway-ahead deploy still validates.
   roundNumber?: number; // change-request round ordinal (count of live rounds, this one included)
   taggedMilestoneTitles?: string[]; // titles in sort order the client tagged; empty = untagged round
+  actorUserId?: string; // exclusion only (never `userId`, which would trigger data.user / self)
+  deliveringExpertName?: string; // full person name
 }
 
 // BAL-622 change orders on a live project. Six events share one base: the order, its

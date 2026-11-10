@@ -32,7 +32,11 @@ export interface NotificationRule {
     // a meeting guest), as an id. Resolved by the dispatcher, addressed by the email channel.
     // Used by exactly one event — never a fan-out kind, because the ICS names exactly one
     // attendee, the recipient, so one payload can never serve two people.
-    | 'calendar_invite_recipient';
+    | 'calendar_invite_recipient'
+    // BAL-631 — the delivering expert's agency owners/admins (`data.deliveringAgencyAdminUserIds`),
+    // hydrated by the resolver from the payload's `expertProfileId`; the delivering expert and the
+    // actor are already excluded from the list.
+    | 'delivering_agency_admins';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -792,6 +796,34 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-624: a time entry took a milestone past its estimate for the first time at that
+  // estimate. CLIENT owner (recipient:'client' via payload.recipientId; email + in-app) and
+  // Balo ADMINS (recipient:'admin_users' fan-out; in-app). No expert rule: the expert logged
+  // the time and sees the over-state on the page.
+  'engagement.milestone_estimate_exceeded': [
+    ...emailAndInApp('client', 'engagement-milestone-estimate-exceeded-client'),
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'engagement-milestone-estimate-exceeded-admin',
+      timing: 'immediate',
+    },
+    // BAL-631: the delivering expert's agency owners/admins (in-app only).
+    {
+      channel: 'in-app',
+      recipient: 'delivering_agency_admins',
+      template: 'engagement-milestone-estimate-exceeded-agency',
+      timing: 'immediate',
+    },
+  ],
+  // BAL-626 (D15b): someone other than the author edited or removed a time entry. The AUTHOR
+  // alone (recipient:'self' via payload.userId; email + in-app — their billable hours). The
+  // condition is the never-self guard: a self-edit notifies nobody. Not an admin fan-out.
+  'engagement.time_entry_changed': emailAndInApp(
+    'self',
+    'engagement-time-entry-changed',
+    (ctx) => ctx.payload.actorUserId !== ctx.payload.userId
+  ),
   // BAL-332 (D2): the expert reopened a completed milestone. IN-APP ONLY to BOTH the
   // client owner and the admins — reverts are never silent, but they aren't
   // email-worthy. One template shared by both rules.
@@ -861,6 +893,8 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   'engagement.cancelled': [
     ...emailAndInApp('client', 'engagement-cancelled'),
     ...emailAndInApp('expert', 'engagement-cancelled'),
+    // BAL-631: the delivering expert's agency owners/admins (email + in-app).
+    ...emailAndInApp('delivering_agency_admins', 'engagement-cancelled-agency'),
   ],
   // BAL-338 (D7): the client ACCEPTED the project (explicit). Fans out to the
   // delivering EXPERT (recipient:'expert' via payload.expertProfileId → data.expert;
@@ -902,6 +936,13 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       channel: 'in-app',
       recipient: 'admin_users',
       template: 'engagement-changes-requested-admin',
+      timing: 'immediate',
+    },
+    // BAL-631: the delivering expert's agency owners/admins (in-app only).
+    {
+      channel: 'in-app',
+      recipient: 'delivering_agency_admins',
+      template: 'engagement-changes-requested-agency',
       timing: 'immediate',
     },
   ],

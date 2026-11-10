@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track } from '@/lib/analytics';
 import { SCHEDULE_EVENTS, EXPERT_EVENTS } from '@balo/analytics/events';
 import { toast } from 'sonner';
+import { SCHEDULE_TIMEZONE_CHANGED_EVENT } from '@/components/balo/timezone-mismatch/mismatch-lib';
 import type { ScheduleLoadResult } from '../_actions/get-schedule';
 
 // ── Mocks ───────────────────────────────────────────────────────
@@ -121,6 +122,12 @@ vi.mock('../_actions/set-work-availability', () => ({
   setWorkAvailabilityAction: (...args: unknown[]) => mockSetWorkAvailability(...args),
 }));
 
+// The mismatch dialog's consultation check has its own suite; here it only needs to resolve.
+const mockGetTimezoneImpact = vi.fn();
+vi.mock('../_actions/get-timezone-impact', () => ({
+  getTimezoneImpactAction: (...args: unknown[]) => mockGetTimezoneImpact(...args),
+}));
+
 const mockUseReducedMotion = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock('motion/react', () => {
@@ -189,6 +196,13 @@ describe('ScheduleTab', () => {
     mockClearSchedule.mockResolvedValue({ success: true });
     mockUpdateTimezone.mockResolvedValue({ success: true });
     mockSetWorkAvailability.mockResolvedValue({ success: true });
+    mockGetTimezoneImpact.mockResolvedValue({
+      timezone: 'Australia/Sydney',
+      affectedCount: 0,
+      truncated: false,
+      affected: [],
+      nextTimeOff: null,
+    });
   });
 
   it('renders the ready editor after loading a schedule', async () => {
@@ -545,21 +559,40 @@ describe('ScheduleTab', () => {
     render(<ScheduleTab />);
     await screen.findByText('Weekly hours');
 
-    // Selecting a new timezone opens the reinterpret confirmation — it must NOT persist yet.
+    // Selecting a new timezone opens the mismatch dialog — it must NOT persist yet.
     await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
-    expect(await screen.findByText('Change your timezone?')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Switch your hours to Sydney time?' })
+    ).toBeInTheDocument();
     expect(mockUpdateTimezone).not.toHaveBeenCalled();
+    expect(mockGetTimezoneImpact).toHaveBeenCalledWith({ timezone: 'Australia/Sydney' });
 
     // Confirming performs the change.
-    await user.click(screen.getByRole('button', { name: 'Change timezone' }));
+    await user.click(screen.getByRole('button', { name: 'Switch to Sydney time' }));
 
     await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
     expect(track).toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
       expert_id: 'profile-1',
       from_timezone: 'Australia/Melbourne',
       to_timezone: 'Australia/Sydney',
+      source: 'settings',
     });
-    expect(toast.success).toHaveBeenCalledWith('Timezone updated');
+    expect(toast.success).toHaveBeenCalledWith(
+      'Timezone updated. Your hours are now set in Sydney time.'
+    );
+  });
+
+  it('describes the saved hours in the dialog using their most common range', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+
+    await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
+
+    const dialog = await screen.findByRole('alertdialog');
+    await waitFor(() => {
+      expect(dialog).toHaveAccessibleDescription(/Your 9:00 am – 5:00 pm Melbourne hours are/);
+    });
   });
 
   it('cancels a timezone change, leaving it unpersisted', async () => {
@@ -568,12 +601,39 @@ describe('ScheduleTab', () => {
     await screen.findByText('Weekly hours');
 
     await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
-    expect(await screen.findByText('Change your timezone?')).toBeInTheDocument();
+    await screen.findByRole('alertdialog', { name: 'Switch your hours to Sydney time?' });
 
-    await user.click(screen.getByRole('button', { name: 'Keep current timezone' }));
+    await user.click(screen.getByRole('button', { name: 'Keep Melbourne hours' }));
 
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(mockUpdateTimezone).not.toHaveBeenCalled();
     expect(track).not.toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, expect.anything());
+  });
+
+  it('re-reads the schedule when the layout switches the saved timezone', async () => {
+    render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+    expect(mockGetSchedule).toHaveBeenCalledTimes(1);
+
+    mockGetSchedule.mockResolvedValue(loadResult({ timezone: 'Australia/Sydney' }));
+    act(() => {
+      globalThis.dispatchEvent(new Event(SCHEDULE_TIMEZONE_CHANGED_EVENT));
+    });
+
+    await waitFor(() => expect(mockGetSchedule).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByRole('button', { name: /timezone:Australia\/Sydney/ })
+    ).toBeInTheDocument();
+  });
+
+  it('stops listening for the layout switch once unmounted', async () => {
+    const { unmount } = render(<ScheduleTab />);
+    await screen.findByText('Weekly hours');
+    unmount();
+
+    globalThis.dispatchEvent(new Event(SCHEDULE_TIMEZONE_CHANGED_EVENT));
+
+    expect(mockGetSchedule).toHaveBeenCalledTimes(1);
   });
 
   it('changes timezone immediately (no confirmation) when no schedule is saved yet', async () => {
@@ -585,7 +645,14 @@ describe('ScheduleTab', () => {
     await user.click(await screen.findByRole('button', { name: /timezone:Australia\/Melbourne/ }));
 
     await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
-    expect(screen.queryByText('Change your timezone?')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mockGetTimezoneImpact).not.toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(SCHEDULE_EVENTS.TIMEZONE_CHANGED, {
+      expert_id: 'profile-1',
+      from_timezone: 'Australia/Melbourne',
+      to_timezone: 'Australia/Sydney',
+      source: 'settings',
+    });
     expect(toast.success).toHaveBeenCalledWith('Timezone updated');
     expect(screen.getByText(/Hours are set in/)).toHaveTextContent(/Hours are set in Sydney/);
   });
@@ -601,7 +668,7 @@ describe('ScheduleTab', () => {
 
     await user.click(screen.getByRole('button', { name: /timezone:Australia\/Melbourne/ }));
     await waitFor(() => expect(mockUpdateTimezone).toHaveBeenCalledWith('Australia/Sydney'));
-    expect(screen.queryByText('Change your timezone?')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('reverts the timezone line and reports the error when the change fails', async () => {

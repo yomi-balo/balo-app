@@ -37,7 +37,11 @@ import {
   UNCOUNTED_CONSULTATION_LABELS,
   seedConsultationCountMatrix,
 } from '../test/helpers/consultation-count-matrix';
-import { expertsRepository, isUniqueViolation } from './experts';
+import {
+  PUBLIC_PROFILE_MATRIX,
+  seedPublicProfileCase,
+} from '../test/helpers/public-profile-matrix';
+import { ExpertAgencyAlreadyLinkedError, expertsRepository, isUniqueViolation } from './experts';
 import { referenceDataRepository } from './reference-data';
 import { reviewsRepository } from './reviews';
 import { usersRepository } from './users';
@@ -359,6 +363,97 @@ describe('expertsRepository.linkAgency', () => {
     await expect(expertsRepository.linkAgency(randomUUID(), agency.id)).rejects.toThrow(
       /not found/i
     );
+  });
+
+  it('is write-once: linking a second agency throws and leaves the first link', async () => {
+    const draft = await expertDraftFactory();
+    const first = await agencyFactory();
+    const second = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, first.id);
+
+    const attempt = expertsRepository.linkAgency(draft.id, second.id);
+    await expect(attempt).rejects.toBeInstanceOf(ExpertAgencyAlreadyLinkedError);
+    await expect(attempt).rejects.toMatchObject({
+      expertProfileId: draft.id,
+      existingAgencyId: first.id,
+    });
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(first.id);
+  });
+
+  it('relinking the same agency is an idempotent no-op', async () => {
+    const draft = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, agency.id);
+
+    await expect(expertsRepository.linkAgency(draft.id, agency.id)).resolves.toBeUndefined();
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(agency.id);
+  });
+});
+
+describe('expertsRepository.repointAgency', () => {
+  it('moves the link when it still points at fromAgencyId', async () => {
+    const draft = await expertDraftFactory();
+    const from = await agencyFactory();
+    const to = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, from.id);
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: from.id, toAgencyId: to.id })
+    ).resolves.toBe(true);
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(to.id);
+  });
+
+  it('returns false and changes nothing when the link points elsewhere', async () => {
+    const draft = await expertDraftFactory();
+    const linked = await agencyFactory();
+    const stale = await agencyFactory();
+    const to = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, linked.id);
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: stale.id, toAgencyId: to.id })
+    ).resolves.toBe(false);
+
+    const profile = await expertsRepository.findProfileById(draft.id);
+    expect(profile?.agencyId).toBe(linked.id);
+  });
+
+  it('returns false for an unlinked profile', async () => {
+    const draft = await expertDraftFactory();
+    const from = await agencyFactory();
+    const to = await agencyFactory();
+
+    await expect(
+      expertsRepository.repointAgency(draft.id, { fromAgencyId: from.id, toAgencyId: to.id })
+    ).resolves.toBe(false);
+    expect((await expertsRepository.findProfileById(draft.id))?.agencyId).toBeNull();
+  });
+});
+
+describe('expertsRepository.findProfileIdLinkedToAgencyForUpdate', () => {
+  it("returns the user's profile id only while it links the given agency", async () => {
+    const draft = await expertDraftFactory();
+    const linked = await agencyFactory();
+    const other = await agencyFactory();
+    await expertsRepository.linkAgency(draft.id, linked.id);
+
+    await db.transaction(async (tx) => {
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(draft.userId, linked.id, tx)
+      ).resolves.toBe(draft.id);
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(draft.userId, other.id, tx)
+      ).resolves.toBeUndefined();
+      await expect(
+        expertsRepository.findProfileIdLinkedToAgencyForUpdate(randomUUID(), linked.id, tx)
+      ).resolves.toBeUndefined();
+    });
   });
 });
 
@@ -1518,7 +1613,6 @@ describe('expertsRepository.saveProfileStep', () => {
         linkedinUrl: 'https://linkedin.com/in/eva-stone',
         isSalesforceMvp: true,
         isSalesforceCta: false,
-        isCertifiedTrainer: false,
         languages: [
           { languageId: lang1.id, proficiency: 'native' },
           { languageId: lang2.id, proficiency: 'intermediate' },
@@ -1574,7 +1668,6 @@ describe('expertsRepository.saveProfileStep', () => {
           linkedinUrl: null,
           isSalesforceMvp: false,
           isSalesforceCta: false,
-          isCertifiedTrainer: false,
           languages: [{ languageId: lang1.id, proficiency: 'native' }],
           industryIds: [randomUUID()],
         }
@@ -1618,7 +1711,6 @@ describe('expertsRepository.saveProfileStep', () => {
         linkedinUrl: null,
         isSalesforceMvp: false,
         isSalesforceCta: false,
-        isCertifiedTrainer: false,
         languages: [{ languageId: lang1.id, proficiency: 'advanced' }],
         industryIds: [randomUUID()], // invalid FK → rollback
       })
@@ -1655,7 +1747,6 @@ describe('expertsRepository.saveProfileStep', () => {
       linkedinUrl: null,
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
       languages: [],
       industryIds: [ind1.id],
     });
@@ -1846,6 +1937,50 @@ describe('expertsRepository.findUserIdsByProfileIds', () => {
 
     expect(ids).toEqual([liveUser.id]);
     expect(ids).not.toContain(deletedUser.id);
+  });
+});
+
+// ── findPublicUsernamesByProfileIds ──────────────────────────────────
+
+describe('expertsRepository.findPublicUsernamesByProfileIds', () => {
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: present in the map iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const { profile, username } = await seedPublicProfileCase(apply);
+
+      const usernames = await expertsRepository.findPublicUsernamesByProfileIds([profile.id]);
+
+      expect(usernames).toEqual(isPublic ? new Map([[profile.id, username]]) : new Map());
+    }
+  );
+
+  it('answers a whole batch in one call, keeping only the public profiles', async () => {
+    const seeded: Array<{ profile: ExpertProfile; username: string; isPublic: boolean }> = [];
+    for (const entry of PUBLIC_PROFILE_MATRIX) {
+      seeded.push({ ...(await seedPublicProfileCase(entry.apply)), isPublic: entry.isPublic });
+    }
+    const visible = seeded.filter((s) => s.isPublic);
+    expect(visible).toHaveLength(1);
+    expect(seeded.length).toBeGreaterThan(visible.length);
+
+    const usernames = await expertsRepository.findPublicUsernamesByProfileIds([
+      ...seeded.map((s) => s.profile.id),
+      randomUUID(),
+    ]);
+
+    expect(usernames).toEqual(new Map(visible.map((s) => [s.profile.id, s.username])));
+  });
+
+  it('returns an empty map for an empty input without querying', async () => {
+    const selectSpy = vi.spyOn(db, 'select');
+    try {
+      const usernames = await expertsRepository.findPublicUsernamesByProfileIds([]);
+
+      expect(usernames).toEqual(new Map());
+      expect(selectSpy).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
   });
 });
 
@@ -2070,7 +2205,7 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
    * public card, while `rateCents` (the UN-MARKED-UP consultant rate) and `stripeConnectId` (a
    * vendor id) stay structurally absent.
    */
-  it('returns eight display columns and NEVER rateCents / stripeConnectId', async () => {
+  it('returns eight display columns and NEVER rateCents / stripeConnectId / the raw username', async () => {
     const expert = await expertFactory();
     await db
       .update(expertProfiles)
@@ -2086,15 +2221,35 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
       'agencyId',
       'headline',
       'id',
+      'publicProfileUsername',
       'ratingAverage',
       'ratingCount',
       'type',
       'userId',
-      'username',
     ]);
     expect(row).not.toHaveProperty('rateCents');
     expect(row).not.toHaveProperty('stripeConnectId');
+    expect(row).not.toHaveProperty('username');
   });
+
+  /**
+   * `publicProfileUsername` is the username only while `/experts/{username}` resolves, so a party
+   * card's profile and "Book again" links never open a 404. Each row agrees with
+   * `findPublicProfileByUsername`, the read behind that page.
+   */
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: publicProfileUsername is the username iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const { profile, username } = await seedPublicProfileCase(apply);
+
+      const row = await expertsRepository.findDisplayProfileById(profile.id);
+
+      expect(row).toBeDefined();
+      expect(row?.publicProfileUsername).toBe(isPublic ? username : null);
+      const page = await expertsRepository.findPublicProfileByUsername(username);
+      expect(page?.id).toBe(isPublic ? profile.id : undefined);
+    }
+  );
 
   /**
    * ⚠ THE `numeric` → `number` PARSE HAPPENS IN THE REPOSITORY, and this is the only test that
@@ -2742,5 +2897,87 @@ describe('expertsRepository.saveSettingsCertifications — §settings-lock', () 
     ]);
     const profile = await expertsRepository.findProfileById(seeded.expertProfileId);
     expect(profile?.trailheadUrl).toBe('https://trailblazer.me/id/after');
+  });
+});
+
+describe('expertsRepository.findAgenciesWithOtherDelivery', () => {
+  it('returns an empty Set for no ids', async () => {
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([], randomUUID())
+    ).resolves.toEqual(new Set());
+  });
+
+  it('arm 1: includes an agency another user’s profile links, never the viewer’s own link', async () => {
+    const solo = await agencyFactory();
+    const team = await agencyFactory();
+    const lone = await expertDraftFactory();
+    const viewer = await expertDraftFactory();
+    const mate = await expertDraftFactory();
+    await expertsRepository.linkAgency(lone.id, solo.id);
+    await expertsRepository.linkAgency(viewer.id, team.id);
+    await expertsRepository.linkAgency(mate.id, team.id);
+
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id], lone.userId)
+    ).resolves.toEqual(new Set());
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id, team.id], viewer.userId)
+    ).resolves.toEqual(new Set([solo.id, team.id]));
+  });
+
+  it('arm 2: keeps an agency whose departed teammate delivered a project pinned to it', async () => {
+    const team = await agencyFactory();
+    const elsewhere = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    const departed = await expertDraftFactory();
+    await expertsRepository.linkAgency(viewer.id, team.id);
+    await expertsRepository.linkAgency(departed.id, team.id);
+    await engagementFactory({ expertProfileId: departed.id });
+    await expertsRepository.repointAgency(departed.id, {
+      fromAgencyId: team.id,
+      toAgencyId: elsewhere.id,
+    });
+
+    // No other profile links `team` any more; only the pinned project keeps it.
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([team.id], viewer.userId)
+    ).resolves.toEqual(new Set([team.id]));
+  });
+
+  it('excludes an agency-of-one whose pinned work is all the viewer’s', async () => {
+    const solo = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    await expertsRepository.linkAgency(viewer.id, solo.id);
+    await engagementFactory({ expertProfileId: viewer.id });
+    await caseEngagementFactory({ expertProfileId: viewer.id });
+
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([solo.id], viewer.userId)
+    ).resolves.toEqual(new Set());
+  });
+
+  it('excludes a soft-deleted pinned project and a case-only pin', async () => {
+    const deletedOnly = await agencyFactory();
+    const caseOnly = await agencyFactory();
+    const elsewhere = await agencyFactory();
+    const viewer = await expertDraftFactory();
+    const departedA = await expertDraftFactory();
+    const departedB = await expertDraftFactory();
+    await expertsRepository.linkAgency(departedA.id, deletedOnly.id);
+    await expertsRepository.linkAgency(departedB.id, caseOnly.id);
+    await engagementFactory({ expertProfileId: departedA.id, values: { deletedAt: new Date() } });
+    await caseEngagementFactory({ expertProfileId: departedB.id });
+    await expertsRepository.repointAgency(departedA.id, {
+      fromAgencyId: deletedOnly.id,
+      toAgencyId: elsewhere.id,
+    });
+    await expertsRepository.repointAgency(departedB.id, {
+      fromAgencyId: caseOnly.id,
+      toAgencyId: elsewhere.id,
+    });
+
+    await expect(
+      expertsRepository.findAgenciesWithOtherDelivery([deletedOnly.id, caseOnly.id], viewer.userId)
+    ).resolves.toEqual(new Set());
   });
 });

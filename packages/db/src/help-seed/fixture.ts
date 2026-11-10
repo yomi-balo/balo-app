@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { eq, inArray } from 'drizzle-orm';
-import type { Database } from '../client';
 import {
   availabilityRules,
   calendarConnections,
@@ -37,6 +36,17 @@ import {
   LEGACY_CLIENT_OWNER_ID,
   type HelpFixtureState,
 } from './constants';
+import {
+  deleteHelpWorld,
+  markCelebrationSeen,
+  seedAgencyWorld,
+  seedCaseFiles,
+  seedDashboardsWorld,
+  seedProjectsWorld,
+  seedRequestsWorld,
+  type HelpExecutor,
+  type HelpWorldContext,
+} from './world';
 
 export { HELP_CLIENT_EMAIL, HELP_EXPERT_EMAIL };
 
@@ -50,9 +60,10 @@ export { HELP_CLIENT_EMAIL, HELP_EXPERT_EMAIL };
  *
  * Rows are written with raw drizzle on purpose (the `seed.ts` exception): the test factories
  * randomise, and a screenshot fixture must be byte-stable.
+ *
+ * The project, request, dashboard, agency and case-file worlds live in `world.ts`. They are never
+ * part of the base: only their own states insert them, and `restoreBase` removes them first.
  */
-
-type HelpExecutor = Pick<Database, 'insert' | 'update' | 'delete' | 'select'>;
 
 /** Name test-login gives a user it creates; `reset` restores this. */
 const TEST_LOGIN_FIRST_NAME = 'E2E';
@@ -101,6 +112,7 @@ export async function resetHelpFixture(db: HelpExecutor): Promise<void> {
   // FK-safe order; every delete is by fixture id or by a fixture-owned parent key (the wallet,
   // the company). Meetings cascade to contexts + consultations;
   // engagements to case rows; the expert profile to connection, sub-calendars and payout details.
+  await deleteHelpWorld(db);
   await db
     .delete(rescheduleProposalOptions)
     .where(
@@ -161,6 +173,7 @@ async function handBackTestLoginUser(db: HelpExecutor, email: string): Promise<v
       activeCompanyId: null,
       avatarUrl: null,
       phoneVerifiedAt: null,
+      notificationsLastSeenAt: null,
       updatedAt: new Date(),
     })
     .where(eq(users.email, email));
@@ -444,6 +457,26 @@ export async function seedHelpFixture(db: HelpExecutor, anchor: Date): Promise<v
   await seedBookedConsultation(db, anchor, danaId);
 }
 
+/** The ids and clock the world states write with. */
+async function worldContext(
+  db: HelpExecutor,
+  anchor: Date,
+  priyaId: string
+): Promise<HelpWorldContext> {
+  const [dana] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, HELP_CLIENT_EMAIL));
+  const [salesforce] = await db
+    .select({ id: verticals.id })
+    .from(verticals)
+    .where(eq(verticals.slug, 'salesforce'));
+  if (dana === undefined || salesforce === undefined) {
+    throw new Error('Help fixture is not seeded - run `pnpm help:seed` first');
+  }
+  return { anchor, nowMs: Date.now(), danaId: dana.id, priyaId, salesforceId: salesforce.id };
+}
+
 async function requireSeeded(db: HelpExecutor): Promise<string> {
   const [profile] = await db
     .select({ userId: expertProfiles.userId })
@@ -473,11 +506,16 @@ async function restoreBase(db: HelpExecutor, anchor: Date): Promise<void> {
   const { start, end } = consultationWindow(anchor);
   const now = new Date();
 
+  await deleteHelpWorld(db);
+
   // The session sync flips activeMode to client while the expert profile is rejected, and
-  // /expert/* redirects away from expert pages until it is set back.
+  // /expert/* redirects away from expert pages until it is set back. The agency states move
+  // the notification seen cursor forward to the anchor; every other state starts from null.
+  // The go-live celebration flag goes back to null as well: `dashboards` stamps it, and so
+  // does any visit to Priya's /dashboard.
   await db
     .update(users)
-    .set({ activeMode: 'expert', updatedAt: now })
+    .set({ activeMode: 'expert', notificationsLastSeenAt: null, updatedAt: now })
     .where(eq(users.email, HELP_EXPERT_EMAIL));
   await db
     .update(expertProfiles)
@@ -488,6 +526,7 @@ async function restoreBase(db: HelpExecutor, anchor: Date): Promise<void> {
       decidedAt: FIXED_DECISION_TIME,
       approvedAt: FIXED_DECISION_TIME,
       searchable: true,
+      liveCelebrationSeenAt: null,
       updatedAt: now,
     })
     .where(eq(expertProfiles.id, IDS.expertProfile));
@@ -674,6 +713,70 @@ export async function applyHelpState(
       return;
     case 'auto-closed':
       await insertAutoClosedCase(db, anchor);
+      return;
+    default:
+      await applyWorldState(db, state, await worldContext(db, anchor, expertUserId));
+  }
+}
+
+type WorldState = Exclude<
+  HelpFixtureState,
+  | 'available'
+  | 'paused'
+  | 'proposal'
+  | 'held'
+  | 'calendar-pending'
+  | 'overnight'
+  | 'setup-incomplete'
+  | 'rejected'
+  | 'client-member'
+  | 'auto-closed'
+>;
+
+/** The states whose rows live in `world.ts`, applied on top of the restored base. */
+async function applyWorldState(
+  db: HelpExecutor,
+  state: WorldState,
+  ctx: HelpWorldContext
+): Promise<void> {
+  switch (state) {
+    case 'projects':
+      await seedProjectsWorld(db, ctx, 'normal', 'none', 'normal');
+      return;
+    case 'change-requested':
+      await seedProjectsWorld(db, ctx, 'normal', 'requested', 'absent');
+      return;
+    case 'change-draft':
+      await seedProjectsWorld(db, ctx, 'normal', 'draft', 'absent');
+      return;
+    case 'change-sent':
+      await seedProjectsWorld(db, ctx, 'normal', 'sent', 'sent');
+      return;
+    case 'change-approved':
+      await seedProjectsWorld(db, ctx, 'normal', 'approved', 'absent');
+      return;
+    case 'change-round':
+      await seedProjectsWorld(db, ctx, 'round', 'none', 'absent');
+      return;
+    case 'changes-made':
+      await seedProjectsWorld(db, ctx, 'changes-made', 'none', 'absent');
+      return;
+    case 'requests':
+      await seedRequestsWorld(db, ctx);
+      return;
+    case 'dashboards':
+      await insertProposal(db, ctx.anchor, ctx.priyaId);
+      await markCelebrationSeen(db);
+      await seedDashboardsWorld(db, ctx);
+      return;
+    case 'agency':
+      await seedAgencyWorld(db, ctx, false);
+      return;
+    case 'agency-multi':
+      await seedAgencyWorld(db, ctx, true);
+      return;
+    case 'case-files':
+      await seedCaseFiles(db, ctx);
       return;
     default: {
       const unhandled: never = state;

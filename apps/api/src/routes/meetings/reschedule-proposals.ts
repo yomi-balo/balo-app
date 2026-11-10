@@ -89,16 +89,19 @@ interface ResolvedProposeInput {
  *  `RescheduleProposalUnansweredPayload.expertPartyLabel`; every other label resolution in this
  *  ticket already uses the projected reads, and a full-row `findById` would carry
  *  `email`/`workosId`/`phone`/`platformRole` for two name fields nobody asked for. */
-async function resolveExpertPartyLabel(expertProfileId: string): Promise<string> {
+async function resolveExpertPartyLabel(
+  expertProfileId: string,
+  deliveringAgencyId: string | null
+): Promise<string> {
   const profile = await expertsRepository.findDisplayProfileById(expertProfileId);
   if (profile === undefined) {
     return 'Your expert';
   }
   const [expertUser, agency] = await Promise.all([
     usersRepository.findDisplayById(profile.userId),
-    profile.agencyId === null
+    deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(deliveringAgencyId),
   ]);
   return expertPartyDisplayName({
     type: profile.type,
@@ -260,7 +263,10 @@ async function resolveProposeInput(
   );
   if (options === null) return null;
 
-  const expertPartyLabel = await resolveExpertPartyLabel(expertProfileId);
+  const expertPartyLabel = await resolveExpertPartyLabel(
+    expertProfileId,
+    caseRow.deliveringAgencyId
+  );
 
   return {
     meetingId,

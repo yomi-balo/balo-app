@@ -1,17 +1,20 @@
-import { applyBaloFee, deriveMinuteRateCents, DEFAULT_BALO_FEE_BPS } from '../pricing';
+import { applyBaloFee, DEFAULT_BALO_FEE_BPS } from '../pricing';
 
 /**
- * BAL-478 (ADR-1040) — THE pre-connect session derivation, extracted VERBATIM from
- * `creditSessionsRepository.open` (`credit-sessions.ts:1058-1064`) so the authoritative in-txn
- * gate and the BAL-478 booking pre-check compute the same figure from the same arithmetic.
+ * BAL-478 (ADR-1040) — THE pre-connect session derivation, shared by `creditSessionsRepository.open`
+ * and the BAL-478 booking pre-check so the authoritative in-txn gate and the advisory booking
+ * gate compute the same figure from the same arithmetic.
  *
- * ⚠⚠ ONE DEFINITION, TWO CONSUMERS. Never inline `estimatedMinutes × deriveMinuteRateCents(
- * applyBaloFee(...))` at a call site again — that duplication is exactly what BAL-478's AC
- * ("do not invent a second estimator") forbids, and it is the arithmetic the money gate runs on.
+ * ⚠⚠ ONE DEFINITION, TWO CONSUMERS. Never inline `estimatedMinutes × applyBaloFee(...)` at a
+ * call site — that duplication is exactly what BAL-478's AC ("do not invent a second estimator")
+ * forbids, and it is the arithmetic the money gate runs on.
  *
- * ⚠ ROUND HOURLY, THEN DIVIDE (BAL-378 Decision Q4). `deriveMinuteRateCents(applyBaloFee(h, bps))`
- * is NOT interchangeable with `applyBaloFee(deriveMinuteRateCents(h), bps)` — at h=12345,
- * bps=2500 the two give 257 and 258 minor/minute. Pinned by `session-estimate.test.ts`.
+ * ⚠⚠ THE INPUT IS CENTS PER MINUTE. `expert_profiles.rate_cents` is the expert's raw per-minute
+ * rate (the settings Rate tab writes `ratePerMinuteCents`; seeds, search and the public profile
+ * all read it per minute). The client rate is that figure marked up ONCE by the fee —
+ * `applyBaloFee(rate, bps)` — which is exactly the number `publicDisplayRatePerMinute` quotes on
+ * the public profile and search cards at the default fee, so a client is billed the rate they
+ * were shown. Treating the column as per-hour bills ~1/60th of it.
  *
  * ⚠ SERVER-SIDE ONLY IN PRACTICE. `expertRateMinorPerMinute` is the RAW consultant rate and no
  * field here may be serialized to a client bundle or rendered — booking shows no rate anywhere
@@ -28,19 +31,18 @@ export interface SessionEstimate {
 }
 
 export function deriveSessionEstimate(input: {
-  readonly expertHourlyMinor: number;
+  /** `expert_profiles.rate_cents` — the raw consultant rate, integer cents PER MINUTE. */
+  readonly expertRateMinorPerMinute: number;
   readonly estimatedMinutes: number;
   /** Omitted ⇒ `DEFAULT_BALO_FEE_BPS`, exactly what `open()`'s `input.baloFeeBps ?? …` meant. */
   readonly baloFeeBps?: number;
 }): SessionEstimate {
   const baloFeeBps = input.baloFeeBps ?? DEFAULT_BALO_FEE_BPS;
-  const clientRateMinorPerMinute = deriveMinuteRateCents(
-    applyBaloFee(input.expertHourlyMinor, baloFeeBps)
-  );
+  const clientRateMinorPerMinute = applyBaloFee(input.expertRateMinorPerMinute, baloFeeBps);
   return {
     baloFeeBps,
     clientRateMinorPerMinute,
-    expertRateMinorPerMinute: deriveMinuteRateCents(input.expertHourlyMinor),
+    expertRateMinorPerMinute: input.expertRateMinorPerMinute,
     estimateMinor: input.estimatedMinutes * clientRateMinorPerMinute,
   };
 }

@@ -137,11 +137,16 @@ function meetsUsableFloor(value: ProposalDraftOutput): boolean {
  * Past the deadline every read derives the row as failed and `markSucceeded` refuses the write,
  * so a model call (or a late write) would only spend tokens on an answer nobody sees. This check
  * saves the paid call; the database-clock guard in `markSucceeded` is what keeps the outcome
- * correct. `createdAt` is the database clock and `Date.now()` the worker's; the skew is
- * negligible against a 90s budget.
+ * correct. `createdAt` is the database clock and `Date.now()` the worker's, and the two can
+ * disagree near the boundary: a save the database refuses while the row is still pending is
+ * failed as `deadline_exceeded` at step 7 of {@link runProposalDraftGeneration}.
  */
 function assertWithinDeadline(generationId: string, createdAt: Date, stage: string): void {
   if (Date.now() - createdAt.getTime() <= DRAFT_DEADLINE_MS) return;
+  abandonPastDeadline(generationId, stage);
+}
+
+function abandonPastDeadline(generationId: string, stage: string): never {
   log.warn({ generationId, stage }, 'Proposal draft abandoned — past the draft deadline');
   throw new ProposalDraftGenerationError(
     'deadline_exceeded',
@@ -163,7 +168,8 @@ async function isStillPending(generationId: string): Promise<boolean> {
  *  5. Call the model.
  *  6. Usable-output floor, then the deadline again (a slow call must not save a result the
  *     read already shows as failed).
- *  7. Persist, firing analytics only when this write won the compare-and-set.
+ *  7. Persist; a refused save on a still-pending row fails `deadline_exceeded`; fire analytics
+ *     only when this write won.
  *
  * Non-retryable classifications are thrown as `ProposalDraftGenerationError` (the job layer maps
  * them to BullMQ's `UnrecoverableError`); an invalid structured output is a plain error so the
@@ -210,7 +216,10 @@ export async function runProposalDraftGeneration(
     inputTokens: generation.usage.inputTokens,
     outputTokens: generation.usage.outputTokens,
   });
-  if (updated === undefined) return;
+  if (updated === undefined) {
+    if (!(await isStillPending(generationId))) return;
+    abandonPastDeadline(generationId, 'refused at save');
+  }
 
   const completedAtMs = (updated.completedAt ?? new Date()).getTime();
   trackServer(PROJECT_SERVER_EVENTS.PROPOSAL_DRAFT_GENERATED, {

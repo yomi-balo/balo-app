@@ -8,14 +8,17 @@ import {
   isRating,
   type InAppReviewSurface,
   type Rating,
+  type ReviewBodyVisibility,
 } from '@balo/shared/reviews';
 import { RatingInput } from '@/components/balo/rating-input';
 import { StarRow } from '@/components/expert/profile/rating-stars';
 import { StateSwap } from '@/components/balo/state-swap';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
 import { submitEngagementReviewAction } from '@/app/(dashboard)/engagements/[id]/_actions/submit-engagement-review';
+import { ReviewAttributionFields, isReviewerRoleAllowed } from './review-attribution-fields';
 
 /**
  * BAL-389 — the rating capture, in BAL-390's THREE states.
@@ -107,6 +110,15 @@ import { submitEngagementReviewAction } from '@/app/(dashboard)/engagements/[id]
  * `role="img"` + `aria-label` wrapper is what gives the read-only branches "Rated 3 out of 5"
  * as a single announcement instead of five silent glyphs.
  *
+ * ⚠⚠ BAL-628 — THE REVIEWER IS NAMED PUBLICLY, SO THE CAPTURE FORM SAYS HOW. Once a star is
+ * chosen, `ReviewAttributionFields` adds the note's public/private switch, an optional role, the
+ * "show our company" checkbox and a live line (with a Preview) stating exactly how the reviewer
+ * will be named. All three new values seed from `rating.capture.defaults` — an existing review's
+ * own values on a revision, otherwise the saved job title, the reviewer's last company choice and
+ * a public note — and "Keep it as it is" returns them to those seeds with the rest of the draft.
+ * The checkbox is absent for a company that may not be named, and what is SENT is
+ * `companyNameAllowed && showCompany`; the server forces it off regardless.
+ *
  * ⚠ DRAFT COPY — pending MJ sign-off, and `RATING_LABELS` (rendered by `RatingInput`) is
  * likewise draft-pending-MJ and used AS SHIPPED. Do not re-author the star labels here.
  */
@@ -136,6 +148,30 @@ type Branch = 'saved' | 'rated' | 'capture';
 
 /** Where focus should land as the next branch mounts. `null` = leave focus alone. */
 type FocusTarget = 'capture' | 'saved' | 'display' | null;
+
+/** The capture question: the ask on a first rating, the revise prompt on an existing one. */
+function captureQuestion(input: {
+  existingRating: number | null;
+  captureHeading: string | undefined;
+  noun: string;
+  counterpartyName: string;
+}): string {
+  if (input.existingRating !== null) {
+    return 'How was this one with ' + input.counterpartyName + '?';
+  }
+  return (
+    input.captureHeading ?? 'How was your ' + input.noun + ' with ' + input.counterpartyName + '?'
+  );
+}
+
+/**
+ * The saved job title the role field was seeded from, or `null`. Only a FIRST review seeds
+ * from `users.job_title`; a revision seeds from its own stored role, which is not "from your
+ * last review".
+ */
+function seededProfileRole(existingRating: number | null, seedRole: string): string | null {
+  return existingRating === null && seedRole.trim().length > 0 ? seedRole : null;
+}
 
 export function RatingBlock({
   rating,
@@ -175,11 +211,17 @@ export function RatingBlock({
   const seedRating: Rating | null =
     existingRating !== null && isRating(existingRating) ? existingRating : null;
   const seedNote = existingBody ?? '';
+  const { identity, defaults } = rating.capture;
 
   const noteId = useId();
   const errorId = useId();
   const [draft, setDraft] = useState<Rating | null>(seedRating);
   const [note, setNote] = useState<string>(seedNote);
+  const [bodyVisibility, setBodyVisibility] = useState<ReviewBodyVisibility>(
+    defaults.bodyVisibility
+  );
+  const [role, setRole] = useState<string>(defaults.role);
+  const [showCompany, setShowCompany] = useState<boolean>(defaults.showCompany);
   const [revising, setRevising] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   /**
@@ -209,10 +251,13 @@ export function RatingBlock({
   const keepAsIs = useCallback(() => {
     setDraft(seedRating);
     setNote(seedNote);
+    setBodyVisibility(defaults.bodyVisibility);
+    setRole(defaults.role);
+    setShowCompany(defaults.showCompany);
     setFailure(null);
     setFocusTarget('display');
     setRevising(false);
-  }, [seedNote, seedRating]);
+  }, [defaults, seedNote, seedRating]);
 
   /** Focus the roving-tabindex star — the ONE tab stop `RatingInput` exposes. */
   const captureRef = useCallback((node: HTMLDivElement | null) => {
@@ -230,10 +275,14 @@ export function RatingBlock({
     setBusy(true);
     setFailure(null);
     const body = note.trim();
+    const reviewerRole = role.trim();
     submitEngagementReviewAction({
       engagementId,
       rating: sent,
       body: body.length === 0 ? undefined : body.slice(0, REVIEW_BODY_MAX),
+      reviewerRole: reviewerRole.length === 0 ? undefined : reviewerRole,
+      showCompany: identity.companyNameAllowed && showCompany,
+      bodyVisibility,
       surface,
     })
       .then((result) => {
@@ -253,7 +302,17 @@ export function RatingBlock({
         setFailure('Something went wrong. Please try again.');
       })
       .finally(() => setBusy(false));
-  }, [draft, engagementId, note, onRated, surface]);
+  }, [
+    bodyVisibility,
+    draft,
+    engagementId,
+    identity.companyNameAllowed,
+    note,
+    onRated,
+    role,
+    showCompany,
+    surface,
+  ]);
 
   let branch: Branch = 'capture';
   if (sentRating !== null) {
@@ -262,10 +321,7 @@ export function RatingBlock({
     branch = 'rated';
   }
 
-  const heading =
-    existingRating === null
-      ? (captureHeading ?? 'How was your ' + noun + ' with ' + counterpartyName + '?')
-      : 'How was this one with ' + counterpartyName + '?';
+  const heading = captureQuestion({ existingRating, captureHeading, noun, counterpartyName });
 
   /**
    * ⚠ THE ONLY DIFFERENCE BETWEEN THE TWO READ-ONLY STATES, IN ONE PLACE. `rated_ok` displays
@@ -348,22 +404,37 @@ export function RatingBlock({
 
           {draft !== null && (
             <div className="mt-3 w-full">
-              <label htmlFor={noteId} className="sr-only">
-                Add a line about this {noun}
-              </label>
+              <Label htmlFor={noteId} className="text-foreground text-sm font-semibold">
+                Add a note <span className="text-muted-foreground font-normal">(optional)</span>
+              </Label>
               <Textarea
                 id={noteId}
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
-                rows={2}
+                rows={3}
                 maxLength={REVIEW_BODY_MAX}
-                placeholder="Add a line? (Optional)"
-                className="resize-none rounded-xl text-sm"
+                placeholder={`What would you tell another team thinking of working with ${counterpartyName}?`}
+                className="mt-2 resize-none rounded-xl text-sm"
               />
-              <div className="mt-2 flex flex-col gap-2">
+              <ReviewAttributionFields
+                identity={identity}
+                expertName={counterpartyName}
+                note={note}
+                draftRating={draft}
+                bodyVisibility={bodyVisibility}
+                onBodyVisibilityChange={setBodyVisibility}
+                role={role}
+                onRoleChange={setRole}
+                showCompany={showCompany}
+                onShowCompanyChange={setShowCompany}
+                profileRole={seededProfileRole(existingRating, defaults.role)}
+                surface={surface}
+                disabled={busy}
+              />
+              <div className="mt-4 flex flex-col gap-2">
                 <Button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || !isReviewerRoleAllowed(role)}
                   onClick={submit}
                   aria-describedby={failure === null ? undefined : errorId}
                   className="min-h-11 w-full gap-2 text-sm font-medium"

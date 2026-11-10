@@ -112,7 +112,7 @@ describe('toProposalDraftPatch', () => {
     );
   });
 
-  it('keeps the text of a tag the milestone narrowing discards', () => {
+  it('maps headings and blockquotes to paragraphs so their text stays separate', () => {
     const patch = toProposalDraftPatch({
       ...OUTPUT,
       milestones: [
@@ -120,7 +120,32 @@ describe('toProposalDraftPatch', () => {
         MILESTONE,
       ],
     });
-    expect(patch?.milestones[0]?.descriptionHtml).toBe('TitleQuoted');
+    expect(patch?.milestones[0]?.descriptionHtml).toBe('<p>Title</p><p>Quoted</p>');
+  });
+
+  it('maps div, h5 and h6 to paragraphs', () => {
+    const patch = toProposalDraftPatch({
+      ...OUTPUT,
+      milestones: [
+        { ...MILESTONE, descriptionHtml: '<div>A</div><h5>Five</h5><h6>Six</h6>' },
+        MILESTONE,
+      ],
+    });
+    expect(patch?.milestones[0]?.descriptionHtml).toBe('<p>A</p><p>Five</p><p>Six</p>');
+  });
+
+  it('leaves no empty paragraph behind a block wrapped around a paragraph', () => {
+    const patch = toProposalDraftPatch({
+      ...OUTPUT,
+      milestones: [
+        {
+          ...MILESTONE,
+          descriptionHtml: '<blockquote><p>Quoted</p></blockquote><div><p>A</p></div>',
+        },
+        MILESTONE,
+      ],
+    });
+    expect(patch?.milestones[0]?.descriptionHtml).toBe('<p>Quoted</p><p>A</p>');
   });
 
   it('strips scripts from both the overview and the milestone descriptions', () => {

@@ -41,7 +41,7 @@ export async function startMilestoneAction(input: {
     parsed.data,
     'pending',
     'Failed to start milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       const outcome = await runMilestoneTransition(() =>
         engagementMilestonesRepository.start({ milestoneId: milestone.id, userId: user.id })
       );
@@ -56,6 +56,7 @@ export async function startMilestoneAction(input: {
         engagement_id: engagement.id,
         milestone_id: updated.id,
         days_since_kickoff: Math.max(0, Math.floor((startedMs - kickoffMs) / DAY_MS)),
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 

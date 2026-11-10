@@ -10,6 +10,7 @@ import {
   engagementChangeOrderFactory,
   engagementFactory,
   engagementMilestoneFactory,
+  engagementTimeEntryFactory,
   proposalFactory,
   userFactory,
 } from '../test/factories';
@@ -19,6 +20,7 @@ import {
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
+  MilestoneHasLoggedTimeError,
 } from './engagement-milestones';
 import {
   MilestoneChangePendingError,
@@ -1126,5 +1128,61 @@ describe('engagementMilestonesRepository.listProposalContentEdits', () => {
     expect(await engagementMilestonesRepository.listProposalContentEdits([milestoneId])).toEqual([
       { milestoneId, kind: 'direct', before: { descriptionHtml: null } },
     ]);
+  });
+});
+
+describe('engagementMilestonesRepository.softDelete — logged time on T&M', () => {
+  async function seedTmMilestone(): Promise<{
+    engagementId: string;
+    milestoneId: string;
+    userId: string;
+  }> {
+    const { engagement } = await engagementFactory({
+      projectValues: { pricingMethod: 'tm', priceCents: 0, rateCents: 20_000, cadence: 'monthly' },
+    });
+    const { milestone } = await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { status: 'in_progress', estimatedMinutes: 480 },
+    });
+    const user = await userFactory();
+    return { engagementId: engagement.id, milestoneId: milestone.id, userId: user.id };
+  }
+
+  async function isLive(milestoneId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ deletedAt: engagementMilestones.deletedAt })
+      .from(engagementMilestones)
+      .where(eq(engagementMilestones.id, milestoneId));
+    return row?.deletedAt === null;
+  }
+
+  it('refuses a milestone with live time logged, writing nothing', async () => {
+    const { engagementId, milestoneId, userId } = await seedTmMilestone();
+    await engagementTimeEntryFactory({ milestone: { id: milestoneId, engagementId }, userId });
+
+    const attempt = engagementMilestonesRepository.softDelete({ milestoneId, userId });
+
+    await expect(attempt).rejects.toBeInstanceOf(MilestoneHasLoggedTimeError);
+    await expect(attempt).rejects.toMatchObject({ engagementId, milestoneId });
+    expect(await isLive(milestoneId)).toBe(true);
+    expect(await auditEventsForEntity(milestoneId)).toEqual([]);
+  });
+
+  it('⚠ POSITIVE CONTROL — removes a milestone with no time, or only removed time', async () => {
+    const empty = await seedTmMilestone();
+    const removedOnly = await seedTmMilestone();
+    await engagementTimeEntryFactory({
+      milestone: { id: removedOnly.milestoneId, engagementId: removedOnly.engagementId },
+      userId: removedOnly.userId,
+      values: { deletedAt: new Date() },
+    });
+
+    for (const seeded of [empty, removedOnly]) {
+      await engagementMilestonesRepository.softDelete({
+        milestoneId: seeded.milestoneId,
+        userId: seeded.userId,
+      });
+      expect(await isLive(seeded.milestoneId)).toBe(false);
+    }
   });
 });

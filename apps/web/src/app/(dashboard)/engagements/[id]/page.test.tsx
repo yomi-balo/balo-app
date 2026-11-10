@@ -36,6 +36,8 @@ const {
   mockListContentEdits,
   mockLoadProjectSettlement,
   mockHasCapability,
+  mockHasDeliveryCapability,
+  mockFindPublicUsernames,
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockFindIdByProjectRequestId: vi.fn(),
@@ -56,6 +58,8 @@ const {
   mockListContentEdits: vi.fn(),
   mockLoadProjectSettlement: vi.fn(),
   mockHasCapability: vi.fn(),
+  mockHasDeliveryCapability: vi.fn(),
+  mockFindPublicUsernames: vi.fn(),
 }));
 
 // `engagement-view.ts` value-imports `AUTO_ACCEPT_DAYS` from `@balo/db`; provide it
@@ -74,11 +78,15 @@ vi.mock('@balo/db', () => ({
   actionItemsRepository: {
     listByEngagement: mockListActionItems,
   },
+  expertsRepository: { findPublicUsernamesByProfileIds: mockFindPublicUsernames },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/authz', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/authz')>()),
   hasCapability: mockHasCapability,
+}));
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: mockHasDeliveryCapability,
 }));
 vi.mock('next/navigation', () => ({
   notFound: mockNotFound,
@@ -101,6 +109,7 @@ vi.mock('@/lib/engagement/change-order-settlement', () => ({
 
 import { deriveProjectSettlement } from '@balo/shared/engagements';
 import { makeOrder } from '@/test/change-order-fixtures';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import EngagementWorkspacePage, { generateMetadata } from './page';
 
 const ENGAGEMENT_ID = 'eng-1';
@@ -116,6 +125,8 @@ function engagement(
     id: ENGAGEMENT_ID,
     companyId: COMPANY_ID,
     expertProfileId: EXPERT_PROFILE_ID,
+    deliveringAgencyId: null,
+    deliveringAgency: null,
     projectRequestId: 'req-1',
     status: 'active',
     pricingMethod: 'fixed',
@@ -143,7 +154,6 @@ function engagement(
     milestones: [],
     expertProfile: {
       id: EXPERT_PROFILE_ID,
-      agencyId: null,
       type: 'independent',
       headline: 'Salesforce CPQ specialist',
       user: {
@@ -152,12 +162,12 @@ function engagement(
         lastName: 'Sharma',
         avatarUrl: null,
       },
-      agency: null,
     },
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: ENGAGEMENT_TITLE },
     acceptedBy: null,
     changeRequestedBy: null,
+    completionRequestedBy: null,
     changeRequestRounds: [],
     latestChangeRequest: null,
     changeRequestRoundCount: 0,
@@ -197,6 +207,8 @@ beforeEach(() => {
   mockListChangeOrders.mockResolvedValue([]);
   mockListContentEdits.mockResolvedValue([]);
   mockHasCapability.mockResolvedValue(true);
+  mockHasDeliveryCapability.mockResolvedValue(false);
+  mockFindPublicUsernames.mockResolvedValue(new Map());
   mockLoadProjectSettlement.mockResolvedValue(
     deriveProjectSettlement({
       acceptedPriceCents: 5_800_000,
@@ -240,6 +252,33 @@ describe('EngagementWorkspacePage (RSC) — auth + lens gating', () => {
       })
     );
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('admits an agency owner/admin (no lens, manage_engagement held) with the expert-side view and no staff money', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ id: 'user-agency-admin', companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockHasDeliveryCapability.mockResolvedValue(true);
+
+    await renderPage('request_detail');
+
+    expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-agency-admin' }),
+      'manage_engagement',
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ lens: 'expert', acting_as: 'agency_admin' })
+    );
+    expect(mockLoadProjectSettlement).not.toHaveBeenCalled();
+    expect(screen.queryByText('Balo staff only')).not.toBeInTheDocument();
   });
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
@@ -296,6 +335,83 @@ describe('EngagementWorkspacePage (RSC) — authorised lenses render the header 
   });
 });
 
+describe('EngagementWorkspacePage (RSC) — header line expert profile link', () => {
+  const PUBLIC = new Map([[EXPERT_PROFILE_ID, 'priya-sharma']]);
+
+  it('client lens links the expert name to the public profile the shared rule resolves', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID]);
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      '/experts/priya-sharma'
+    );
+  });
+
+  it('admin lens links the expert name too', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      '/experts/priya-sharma'
+    );
+  });
+
+  it('expert lens reads nothing and links no expert', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({
+        companyId: OTHER_COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        activeMode: 'expert',
+      })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockResolvedValue(PUBLIC);
+
+    await renderPage();
+    expect(mockFindPublicUsernames).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+  });
+
+  it('leaves the name unlinked when the profile is not public', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID]);
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+    expect(screen.getByText(/^Delivered by Priya Sharma/)).toBeInTheDocument();
+  });
+
+  it('a failed profile read logs a warning and renders the page with the name unlinked', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindPublicUsernames.mockRejectedValue(new Error('db down'));
+
+    await renderPage();
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Expert profile link unavailable for engagement header',
+      expect.objectContaining({
+        engagementId: ENGAGEMENT_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        error: 'db down',
+      })
+    );
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: new RegExp(ENGAGEMENT_TITLE, 'i') })
+    ).toBeInTheDocument();
+  });
+});
+
 describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
   it('fires engagement_workspace_viewed once with the resolved lens + status', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
@@ -312,6 +428,30 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
     });
   });
 
+  it('records acting_as delivering_expert for the delivering expert', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ id: 'user-expert', companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ lens: 'expert', acting_as: 'delivering_expert' })
+    );
+  });
+
+  it('omits acting_as for a platform admin observer', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ platformRole: 'admin', companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+    const [, props] = mockTrackServerAndFlush.mock.calls[0] ?? [];
+    expect(props).not.toHaveProperty('acting_as');
+  });
+
   it('whitelists the entry: ?from=inbox passes through', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     mockFindWithMilestones.mockResolvedValue(engagement());
@@ -321,6 +461,29 @@ describe('EngagementWorkspacePage (RSC) — analytics wiring', () => {
       'engagement_workspace_viewed',
       expect.objectContaining({ entry: 'inbox' })
     );
+  });
+
+  it('?from=agency records the agency entry and sends the back link to the agency lens', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement({ deliveringAgencyId: 'agency-1' }));
+
+    await renderPage('agency');
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'engagement_workspace_viewed',
+      expect.objectContaining({ entry: 'agency' })
+    );
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+      'href',
+      '/projects?lens=agency&agency=agency-1'
+    );
+  });
+
+  it('keeps the plain projects back link when the engagement has no agency', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage('agency');
+    expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute('href', '/projects');
   });
 
   it('collapses an unknown ?from to direct', async () => {
@@ -373,6 +536,16 @@ describe('EngagementWorkspacePage — generateMetadata (no existence/title leak)
     expect(result.title).not.toContain(ENGAGEMENT_TITLE);
   });
 
+  it('returns the REAL title for an agency owner/admin who holds manage_engagement', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockHasDeliveryCapability.mockResolvedValue(true);
+
+    expect((await meta()).title).toBe(`${ENGAGEMENT_TITLE} — Balo`);
+  });
+
   it('returns the GENERIC title when the engagement is missing', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindWithMilestones.mockResolvedValue(undefined);
@@ -403,6 +576,7 @@ describe('EngagementWorkspacePage (RSC) — readRatingCard wiring', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     });
 
     await renderPage();
@@ -470,6 +644,8 @@ describe('EngagementWorkspacePage (RSC) — change orders and the staff money vi
       acceptanceCriteria: null,
       valueCents: null,
       status: 'pending',
+      completedAt: null,
+      completedBy: null,
       contentEditedAt,
     });
     mockFindWithMilestones.mockResolvedValue(

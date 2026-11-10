@@ -48,7 +48,10 @@ const SEAL_ORDER_AS_SHIPPED: readonly string[] = [
 ];
 
 /** Tokens appended to `PLATFORM_CAPABILITY_SEAL_ORDER` after BAL-558 shipped, in append order. */
-const APPENDED_SINCE_BAL_558: readonly string[] = ['manage_party_domains'];
+const APPENDED_SINCE_BAL_558: readonly string[] = [
+  'manage_party_domains',
+  'manage_company_details',
+];
 
 const CAPABILITY_COMPARATOR = (a: string, b: string): number => a.localeCompare(b);
 
@@ -66,8 +69,8 @@ describe('PLATFORM_CAPABILITY_SEAL_ORDER — the frozen wire format', () => {
     ]);
   });
 
-  it('has exactly 20 entries (deliberate literal pin — adding a token is a conscious act)', () => {
-    expect(PLATFORM_CAPABILITY_SEAL_ORDER).toHaveLength(20);
+  it('has exactly 21 entries (deliberate literal pin — adding a token is a conscious act)', () => {
+    expect(PLATFORM_CAPABILITY_SEAL_ORDER).toHaveLength(21);
   });
 
   it('is exhaustive and unique over PLATFORM_CAPABILITIES', () => {
@@ -105,16 +108,17 @@ describe('encodeSealedPlatformCapabilities / decodeSealedPlatformCapabilities �
     expect(encodeSealedPlatformCapabilities(['manage_any_request_sourcing'])).toEqual([17]);
     expect(encodeSealedPlatformCapabilities(['manage_any_kickoff_gate'])).toEqual([18]);
     expect(encodeSealedPlatformCapabilities(['manage_party_domains'])).toEqual([19]);
+    expect(encodeSealedPlatformCapabilities(['manage_company_details'])).toEqual([20]);
     expect(decodeSealedPlatformCapabilities([17, 18])).toEqual([
       'manage_any_request_sourcing',
       'manage_any_kickoff_gate',
     ]);
   });
 
-  it('decodes the full encoded axis back to 20 tokens', () => {
+  it('decodes the full encoded axis back to 21 tokens', () => {
     const all = Object.values(PLATFORM_CAPABILITIES);
     expect(decodeSealedPlatformCapabilities(encodeSealedPlatformCapabilities(all))).toHaveLength(
-      20
+      21
     );
   });
 
@@ -136,7 +140,7 @@ describe('decodeSealedPlatformCapabilities — tri-state and fail-closed', () =>
   it('drops every malformed element and keeps only the valid index', () => {
     const result = decodeSealedPlatformCapabilities([
       0,
-      20,
+      21,
       -1,
       1.5,
       NaN,

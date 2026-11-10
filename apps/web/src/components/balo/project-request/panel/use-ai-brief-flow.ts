@@ -36,6 +36,14 @@ export function snapshotsDiffer(a: AiFieldSnapshot, b: AiFieldSnapshot): boolean
 
 const NO_UNMATCHED: { tags: string[]; products: string[] } = { tags: [], products: [] };
 
+/** Order-insensitive identity of a document set — "were these the files the brief came from?" */
+function documentSetKey(documents: ProjectDraft['documents']): string {
+  return documents
+    .map((doc) => doc.r2Key)
+    .sort((a, b) => a.localeCompare(b))
+    .join('\n');
+}
+
 /**
  * Everything an AI generation leaves behind that must survive a "set aside, then Undo" cycle
  * together: the snapshot `hasEditsSinceGenerate` compares against, the unmatched-label hints,
@@ -49,6 +57,11 @@ export interface AiGeneratedState {
   editedFields: readonly string[];
   /** BAL-592 — the prompt version of the generation that produced `snapshot`. */
   promptVersion: string | null;
+  /**
+   * The {@link documentSetKey} of the documents `snapshot` was generated from — `null` when that
+   * is unknown, which never matches, so an unknown origin always routes back through `upload`.
+   */
+  documentsKey: string | null;
 }
 
 export interface UseAiBriefFlowOptions {
@@ -80,7 +93,17 @@ export interface UseAiBriefFlowResult {
   aiProductSuggestion: AiProductSuggestion | null;
   regenerateConfirmOpen: boolean;
   setRegenerateConfirmOpen: (open: boolean) => void;
+  /**
+   * Picks the AI path from `start`. Lands on `review` when this draft already holds a brief
+   * generated from its CURRENT documents (the user went Back to "Change entry method" and chose
+   * AI again), so they keep that brief instead of having to regenerate it; otherwise `upload`.
+   */
   handleSelectAi: () => void;
+  /**
+   * True when the draft holds a brief generated from exactly its current documents — the case in
+   * which leaving the `upload` step back to `review` loses nothing.
+   */
+  hasBriefForCurrentDocuments: boolean;
   /**
    * ⚠ BAL-254 W2 — ABANDON any in-flight generation. The panel calls this from
    * `handleSelectManual` ("I'll write it myself" on the start step); this hook calls it itself
@@ -142,11 +165,19 @@ export function useAiBriefFlow({
     NO_UNMATCHED
   );
   const [lastPromptVersion, setLastPromptVersion] = useState<string | null>(null);
+  const [lastGeneratedDocumentsKey, setLastGeneratedDocumentsKey] = useState<string | null>(null);
+  // The documents the IN-FLIGHT generation was started from — read on success, since the user
+  // can add or remove a file between starting a generate and it landing.
+  const generatingDocumentsKeyRef = useRef<string | null>(null);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const isRegenerateRef = useRef(false);
   const generateStartedAtRef = useRef<number | null>(null);
   const failureTrackedRef = useRef(false);
   const editedFieldsFiredRef = useRef<Set<string>>(new Set());
+
+  const currentDocumentsKey = documentSetKey(draft.documents);
+  const hasBriefForCurrentDocuments =
+    lastGeneratedSnapshot !== null && lastGeneratedDocumentsKey === currentDocumentsKey;
 
   const handleSelectAi = useCallback(() => {
     track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
@@ -154,8 +185,8 @@ export function useAiBriefFlow({
       method: 'ai',
     });
     setField('source', 'ai');
-    setStep('upload');
-  }, [expertProfileId, entryPoint, setField, setStep]);
+    setStep(hasBriefForCurrentDocuments ? 'review' : 'upload');
+  }, [expertProfileId, entryPoint, setField, setStep, hasBriefForCurrentDocuments]);
 
   const currentAiSnapshot: AiFieldSnapshot = useMemo(
     () => ({ title: trimmedTitle, descriptionHtml, tagIds, productIds }),
@@ -172,6 +203,7 @@ export function useAiBriefFlow({
           unmatchedLabels,
           editedFields: [...editedFieldsFiredRef.current],
           promptVersion: lastPromptVersion,
+          documentsKey: lastGeneratedDocumentsKey,
         };
 
   const aiProductSuggestion: AiProductSuggestion | null =
@@ -182,6 +214,7 @@ export function useAiBriefFlow({
   const clearAiState = useCallback(() => {
     setLastGeneratedSnapshot(null);
     setLastPromptVersion(null);
+    setLastGeneratedDocumentsKey(null);
     setUnmatchedLabels(NO_UNMATCHED);
     editedFieldsFiredRef.current = new Set();
   }, []);
@@ -190,12 +223,14 @@ export function useAiBriefFlow({
     if (state === null) {
       setLastGeneratedSnapshot(null);
       setLastPromptVersion(null);
+      setLastGeneratedDocumentsKey(null);
       setUnmatchedLabels(NO_UNMATCHED);
       editedFieldsFiredRef.current = new Set();
       return;
     }
     setLastGeneratedSnapshot(state.snapshot);
     setLastPromptVersion(state.promptVersion);
+    setLastGeneratedDocumentsKey(state.documentsKey);
     setUnmatchedLabels(state.unmatchedLabels);
     editedFieldsFiredRef.current = new Set(state.editedFields);
   }, []);
@@ -227,6 +262,7 @@ export function useAiBriefFlow({
         productIds: patch.productIds,
       });
       setLastPromptVersion(patch.promptVersion);
+      setLastGeneratedDocumentsKey(generatingDocumentsKeyRef.current);
       editedFieldsFiredRef.current = new Set();
 
       const durationMs =
@@ -315,24 +351,32 @@ export function useAiBriefFlow({
     }
   }, [trimmedTitle, descriptionHtml, tagIds, productIds, lastGeneratedSnapshot, draft.source]);
 
-  const handleGenerateClick = useCallback(() => {
-    isRegenerateRef.current = false;
-    generateStartedAtRef.current = Date.now();
-    track(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
-      document_count: draft.documents.length,
-      is_regenerate: false,
-    });
-    // ⚠ `start` handles every EXPECTED failure itself and always resolves on a
-    // TERMINAL phase; this `.catch` only reports a bug that let a rejection escape that handling.
-    briefGeneration
-      .start({ kind: 'documents', documents: draft.documents })
-      .catch(reportUnexpectedBriefError);
-  }, [draft.documents, briefGeneration]);
+  // Every generate — first, retry or regenerate — starts here, so the analytics and the
+  // documents the result is recorded against cannot drift between paths.
+  const startGeneration = useCallback(
+    (isRegenerate: boolean) => {
+      isRegenerateRef.current = isRegenerate;
+      generateStartedAtRef.current = Date.now();
+      generatingDocumentsKeyRef.current = documentSetKey(draft.documents);
+      track(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
+        document_count: draft.documents.length,
+        is_regenerate: isRegenerate,
+      });
+      // ⚠ `start` handles every EXPECTED failure itself and always resolves on a
+      // TERMINAL phase; this `.catch` only reports a bug that let a rejection escape that handling.
+      briefGeneration
+        .start({ kind: 'documents', documents: draft.documents })
+        .catch(reportUnexpectedBriefError);
+    },
+    [draft.documents, briefGeneration]
+  );
 
+  // Retrying re-runs the attempt that failed as it was: no second confirm for a regenerate the
+  // user already accepted, and the same `is_regenerate`.
   const handleRetryGenerate = useCallback(() => {
     briefGeneration.dismissFailure();
-    handleGenerateClick();
-  }, [briefGeneration, handleGenerateClick]);
+    startGeneration(isRegenerateRef.current);
+  }, [briefGeneration, startGeneration]);
 
   // ⚠ `cancel`, NOT `dismissFailure` (BAL-254 W2). `dismissFailure` only resets the phase; it
   // leaves the interval running and `parseIdRef` set, so the generation this hook is walking away
@@ -351,17 +395,8 @@ export function useAiBriefFlow({
     // ⚠ Fired ONLY here — after any confirm dialog is ACCEPTED — so a cancelled confirm never
     // counts as a regenerate (design: "a trust signal about actual re-runs, not intent").
     track(PROJECT_EVENTS.PROJECT_AI_REGENERATE_CLICKED, { had_edits: hasEditsSinceGenerate });
-    isRegenerateRef.current = true;
-    generateStartedAtRef.current = Date.now();
-    track(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
-      document_count: draft.documents.length,
-      is_regenerate: true,
-    });
-    // See `handleGenerateClick` for why this `.catch` exists at all.
-    briefGeneration
-      .start({ kind: 'documents', documents: draft.documents })
-      .catch(reportUnexpectedBriefError);
-  }, [draft.documents, briefGeneration, hasEditsSinceGenerate]);
+    startGeneration(true);
+  }, [startGeneration, hasEditsSinceGenerate]);
 
   const handleRegenerateClick = useCallback(() => {
     if (hasEditsSinceGenerate) {
@@ -370,6 +405,17 @@ export function useAiBriefFlow({
     }
     runRegenerate();
   }, [hasEditsSinceGenerate, runRegenerate]);
+
+  // ⚠ The upload step's Generate is a REGENERATE once a brief exists — the user reached `upload`
+  // from review ("Change source documents") and the draft holds generated, possibly edited,
+  // fields. Treating it as a first generate replaced those edits with no "Keep my edits" chance.
+  const handleGenerateClick = useCallback(() => {
+    if (lastGeneratedSnapshot !== null) {
+      handleRegenerateClick();
+      return;
+    }
+    startGeneration(false);
+  }, [lastGeneratedSnapshot, handleRegenerateClick, startGeneration]);
 
   const handleConfirmRegenerate = useCallback(() => {
     setRegenerateConfirmOpen(false);
@@ -386,6 +432,7 @@ export function useAiBriefFlow({
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
+    hasBriefForCurrentDocuments,
     cancelGeneration,
     handleGenerateClick,
     handleRetryGenerate,

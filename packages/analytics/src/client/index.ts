@@ -164,6 +164,7 @@ export type {
   ExpertProfileEventMap,
   ExpertProfileSection,
   ExpertProfileCta,
+  ExpertProfileLinkSurface,
   ProfileViewport,
   ProjectEventMap,
   ProjectEntryMethod,

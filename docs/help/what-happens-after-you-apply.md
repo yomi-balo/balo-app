@@ -6,8 +6,8 @@ category:
   expert: getting-started
 order: 1
 published: true
-updated: 2026-10-18
-related: [rate-and-payouts, connecting-your-calendar, weekly-schedule]
+updated: 2026-11-10
+related: [applying-to-become-an-expert, rate-and-payouts, connecting-your-calendar, weekly-schedule]
 ---
 
 Once you submit your expert application, our team takes it from there — here's what to
@@ -34,7 +34,7 @@ When we review an application, it comes down to four things:
 ## If your application is approved
 
 You'll get an email letting you know you're in. The next step is finishing your expert setup in
-**Settings**. There are six steps:
+**Expert Settings**. There are six steps:
 
 - **Complete your profile**
 - **Verify your phone**
@@ -43,10 +43,10 @@ You'll get an email letting you know you're in. The next step is finishing your 
 - **Set your availability**
 - **Set up payouts**
 
-Until all six are done, Settings tells you that you're not visible to clients yet and shows which
-step is next, with a **Continue setup** button that takes you straight to it. Once everything is
-done, it changes to "You're appearing in search." It only takes a few minutes. The guides below
-walk through the longer steps.
+Until all six are done, **Expert Settings** tells you that you're not visible to clients yet and
+shows which step is next, with a **Continue setup** button that takes you straight to it. Once
+everything is done, it changes to "You're appearing in search." It only takes a few minutes. The
+guides below walk through the longer steps.
 
 ![The setup banner on Expert Settings, with the not-visible-yet message and the Continue setup button highlighted.](03)
 

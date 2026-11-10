@@ -25,6 +25,7 @@ const VIEW: ExpertProfileView = {
   topRated: false,
   ratingAverage: 4.8,
   ratingCount: 21,
+  reviews: null,
   competencies: [],
   certifications: [],
   languages: [{ name: 'English', flagEmoji: '🇬🇧' }],

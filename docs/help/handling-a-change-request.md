@@ -5,8 +5,8 @@ audience: [expert]
 category:
   expert: projects
 order: 3
-published: false
-updated: 2026-10-26
+published: true
+updated: 2026-10-31
 related: [writing-and-sending-a-proposal, proposing-a-change-to-a-live-project]
 ---
 
@@ -17,7 +17,11 @@ guide covers what you receive, how to work through it and how to send the projec
 
 You get an email with the client's note, word for word, and a notification in Balo that links to
 the project. The project goes back to active, and the project page shows a banner with the note at
-the top. If the client picked particular milestones, the banner names them.
+the top. If the client picked particular milestones, the banner names them. If you're part of an
+agency, its owners and admins are also notified in Balo when a client requests changes, and they
+can work through the request and mark the project ready again on its behalf.
+
+![The project page, with the change request banner highlighted, showing who asked for changes, their note word for word and the milestone that is back in progress.](01)
 
 ## Tagged and untagged requests
 
@@ -27,6 +31,8 @@ A client can attach their feedback to specific milestones, or leave it general.
   quoted on it. Any milestone they didn't pick stays completed.
 - **Untagged.** No milestones are reopened. Read the note, then reopen whatever needs work.
 
+![The delivery plan, with the client's note on the reopened Build and configure milestone highlighted, while the milestones they didn't pick stay completed.](02)
+
 ## Working through it
 
 Do the work in the milestones that came back. If the note points to a milestone that is still
@@ -35,6 +41,8 @@ again as usual. Wording fixes on a milestone are plain edits. If the feedback ca
 scope, such as an added milestone or a different price, send it as a change order instead. The
 client approves it first, and the new work has to be completed too before the project is ready to
 go back. See [Proposing a change to a live project](/help/proposing-a-change-to-a-live-project).
+
+![A completed milestone on the delivery plan, with its Move back to in progress button highlighted.](03)
 
 ## When the banner changes to "Changes made"
 
@@ -46,11 +54,15 @@ client's request for a change, a draft you made from one, or a change you've sen
 hasn't decided. For an untagged request, the same button is there
 and you choose when you're done.
 
+![The project page, with the Changes made banner highlighted, showing the client's original note and the Mark project ready again button.](04)
+
 ## Marking the project ready again
 
 Choose **Mark project ready again** and confirm. The client is told the project is ready for their
 review again, and the review window starts over from that moment. The client can then accept the
 project or ask for more changes.
+
+![The Mark project ready again window, with the Send for Northwind Industrial's review button highlighted.](05)
 
 ## Repeated rounds
 

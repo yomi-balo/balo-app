@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import userEvent from '@testing-library/user-event';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type {
@@ -282,6 +283,7 @@ const BASE = {
     closeReason: null,
     closedAtIso: null,
     counterpartyOrgLabel: 'CloudPeak',
+    counterpartyOrgHref: null,
     closedNote: null,
   },
   nudge: null,
@@ -313,14 +315,24 @@ const BASE = {
     orgLabel: 'CloudPeak',
     avatarUrl: null,
     initials: 'AO',
-    bookAgainHref: '/experts/amara-okafor',
+    profileHref: '/experts/amara-okafor',
     availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,
   },
-  people: [
-    { name: 'Dana Reyes', isViewer: true },
-    { name: 'Amara Okafor', isViewer: false },
+  peopleGroups: [
+    {
+      side: 'client',
+      label: 'Northwind Industrial',
+      people: [{ key: 'p0', name: 'You', isViewer: true }],
+      unnamedGuestCount: 0,
+    },
+    {
+      side: 'expert',
+      label: 'CloudPeak Consulting',
+      people: [{ key: 'p1', name: 'Amara Okafor', isViewer: false }],
+      unnamedGuestCount: 0,
+    },
   ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
   clientCompanyName: 'Northwind Industrial',
@@ -540,6 +552,7 @@ describe('CaseSurface — the in-app rating card', () => {
     engagementId: ENGAGEMENT_ID,
     state: { kind: 'none' },
     existingBody: null,
+    capture: buildReviewCaptureSeeds(),
   };
 
   it('shows the rating card on a CLOSED client view with a rating, and no "Mark resolved"', () => {
@@ -608,15 +621,14 @@ describe('CaseSurface — the lens is a discriminant all the way down', () => {
   it('renders the header and people for both lenses', () => {
     const { unmount } = render(<CaseSurface view={clientView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
-    // "You" is resolved SERVER-SIDE via `isViewer`; the client never compares ids. The viewer's
-    // own name must therefore NOT be rendered in the people list.
     expect(screen.getByText('You')).toBeInTheDocument();
-    expect(screen.queryByText('Dana Reyes')).not.toBeInTheDocument();
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
     unmount();
 
     render(<CaseSurface view={expertView()} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
     expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.getByText('Northwind Industrial')).toBeInTheDocument();
   });
 
   // BAL-589 — the "Convert to project" header action: client lens only, open or
@@ -1655,6 +1667,22 @@ describe('CaseSurface — follow-ups book in-page on an open case', () => {
     expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent(
       'request: 2 source: case_nudge'
     );
+  });
+
+  it('OPEN + no longer publicly listed: no in-page booking, and the nudge stops inviting one', () => {
+    render(
+      <CaseSurface
+        view={clientView({
+          party: { ...BASE.party, profileHref: null },
+          nudge: { kind: 'nothing_booked' },
+        })}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Book with Amara again' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book a consultation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /book/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+    expect(screen.getByText(/isn't available to book on Balo right now/)).toBeInTheDocument();
   });
 
   it('CLOSED + paused keeps the profile links (a new case lands on the paused card)', () => {

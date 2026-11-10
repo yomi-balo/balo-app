@@ -72,6 +72,11 @@ export interface ProvisionSoloInput {
   userId: string;
   expertProfileId: string;
   actorUserId: string;
+  /**
+   * The agency the profile links now, when the agency-of-one REPLACES it (the expert left that
+   * agency). Absent on the onboarding path, where the profile has no link yet.
+   */
+  replacesAgencyId?: string;
 }
 
 export interface ProvisionResult {
@@ -218,22 +223,41 @@ export const agenciesRepository = {
   },
 
   /**
-   * SOLO — a freemail / blocked / company-owned domain: the expert gets an
-   * independent agency-of-one (owner = self). One tx: `createOwnerAgency` →
-   * `linkAgency`. NO `party_domains` capture (a solo domain is never registered to
-   * an agency). The name is an internal payout-entity label only — the UI never
-   * surfaces it to the solo expert as "your agency".
+   * SOLO — the expert gets an independent agency-of-one (owner = self). Two callers:
+   *  - onboarding, for a freemail / blocked / company-owned domain: `createOwnerAgency` →
+   *    `linkAgency` (write-once, so a profile that already links an agency throws
+   *    `ExpertAgencyAlreadyLinkedError` and nothing is created);
+   *  - leaving an agency (`replacesAgencyId` set): `createOwnerAgency` → `repointAgency` from
+   *    the left agency to the new one, throwing when the profile no longer links it, so the
+   *    new agency rolls back with the caller.
+   * NO `party_domains` capture (a solo domain is never registered to an agency). The name is
+   * an internal payout-entity label only — the UI never surfaces it to the solo expert as
+   * "your agency". Runs on `exec` when given (the caller's transaction), else opens one.
    */
-  provisionSolo: async (input: ProvisionSoloInput): Promise<ProvisionResult> => {
-    return db.transaction(async (tx) => {
+  provisionSolo: async (input: ProvisionSoloInput, exec?: DbExecutor): Promise<ProvisionResult> => {
+    const run = async (tx: DbExecutor): Promise<ProvisionResult> => {
       const created = await createOwnerAgency(tx, {
         name: input.name,
         ownerUserId: input.userId,
         actorUserId: input.actorUserId,
       });
-      await expertsRepository.linkAgency(input.expertProfileId, created.agencyId, tx);
+      if (input.replacesAgencyId === undefined) {
+        await expertsRepository.linkAgency(input.expertProfileId, created.agencyId, tx);
+        return created;
+      }
+      const moved = await expertsRepository.repointAgency(
+        input.expertProfileId,
+        { fromAgencyId: input.replacesAgencyId, toAgencyId: created.agencyId },
+        tx
+      );
+      if (!moved) {
+        throw new Error(
+          `provisionSolo: expert profile ${input.expertProfileId} no longer links agency ${input.replacesAgencyId}`
+        );
+      }
       return created;
-    });
+    };
+    return exec ? run(exec) : db.transaction(run);
   },
 
   /**

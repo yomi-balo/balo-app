@@ -102,6 +102,8 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
     initials: initialsOf(expertUser.firstName, expertUser.lastName),
     company: null,
     headline: null,
+    // Set only by `hydrateReviewDoc` for the client audience; every other surface stays plain.
+    profileHref: null,
     // BAL-422 — `numeric` ⇒ string off the driver, so one shared parse.
     rating: parseRatingAverage(relationship.expertProfile.ratingAverage),
     ratingCount: relationship.expertProfile.ratingCount,
@@ -125,6 +127,10 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
  * it inline.
  *
  * ⚠ `null` RATING MEANS NO REVIEWS, NEVER 0.0, and the count travels with it everywhere.
+ *
+ * `publicUsername` is the expert's username ONLY when their public profile resolves (from
+ * `expertsRepository.findPublicUsernamesByProfileIds`). It becomes `expert.profileHref` on a
+ * `client` doc alone; the expert and admin audiences never link the header, whatever is passed.
  */
 export function hydrateReviewDoc(
   proposal: Proposal,
@@ -132,7 +138,8 @@ export function hydrateReviewDoc(
   installments: ProposalPaymentInstallment[],
   documents: ProposalDocument[],
   relationship: Relationship,
-  audience: ProposalAudience
+  audience: ProposalAudience,
+  publicUsername: string | null = null
 ): ProposalReviewDoc {
   // Client sees the grossed-up figure; expert + admin-base stay at the raw quote.
   const priceFn =
@@ -170,7 +177,11 @@ export function hydrateReviewDoc(
       sizeBytes: d.sizeBytes,
       kind: d.kind,
     })),
-    expert: expertIdentityOf(relationship),
+    expert: {
+      ...expertIdentityOf(relationship),
+      profileHref:
+        audience === 'client' && publicUsername !== null ? `/experts/${publicUsername}` : null,
+    },
   };
 
   // Admin lens ONLY: attach the fee/margin breakdown. Expert/client docs never get

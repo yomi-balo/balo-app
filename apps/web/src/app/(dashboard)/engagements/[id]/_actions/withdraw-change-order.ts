@@ -4,7 +4,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { engagementChangeOrdersRepository } from '@balo/db';
-import { deriveEngagementParties } from '@/lib/engagement/engagement-parties';
+import { deriveEngagementParties, expertSideActorLabel } from '@/lib/engagement/engagement-parties';
 import { trackServerAndFlush, ENGAGEMENT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -51,7 +51,7 @@ export async function withdrawChangeOrderAction(input: {
     { userId: user.id, changeOrderId: orderId },
     'Failed to withdraw change order',
     () => gateChangeOrderExpert(user, engagementId),
-    async (engagement) => {
+    async (engagement, authorized) => {
       const order = await engagementChangeOrdersRepository.withdraw({
         engagementId,
         orderId,
@@ -62,6 +62,7 @@ export async function withdrawChangeOrderAction(input: {
       trackServerAndFlush(ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN, {
         ...changeOrderLinesProps(order, engagement.pricingMethod, user.id),
         days_to_decision: daysToDecision(order, new Date()),
+        acting_as: authorized.actor.actingAs,
       });
 
       const parties = deriveEngagementParties(engagement);
@@ -69,7 +70,7 @@ export async function withdrawChangeOrderAction(input: {
       publishNotificationEvent('change_order.withdrawn', {
         ...payloadBase('withdrawn', order, engagement, parties),
         recipientId,
-        actorExpertLabel: parties.expertRetroFirstMention,
+        actorExpertLabel: expertSideActorLabel(engagement, parties, user),
         ...(await requesterPayload(order.requestedByUserId, recipientId, engagement.company.id)),
       }).catch(() => {
         // publishNotificationEvent logs internally.

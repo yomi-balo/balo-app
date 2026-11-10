@@ -149,7 +149,6 @@ async function seedApplication(
     projectLeadCountMin: 2,
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
     languages: [
       { languageId: t.langEn, proficiency: 'native' },
       { languageId: t.langFr, proficiency: 'intermediate' },

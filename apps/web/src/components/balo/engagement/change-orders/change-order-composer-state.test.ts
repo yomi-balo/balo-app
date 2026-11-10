@@ -11,6 +11,7 @@ import {
   rowState,
   rowsFor,
   withPrefillLine,
+  type ComposerLineDraft,
   type ComposerMilestone,
   type ComposerRow,
   type ComposerSavedLine,
@@ -215,6 +216,11 @@ describe('composerIssues', () => {
     lines: [{ op: 'add' as const, title: 'New' }],
     priceDeltaCents: 0,
     priceValid: true,
+    loggedValueCents: null,
+    nextCapCents: 100_000,
+    currency: 'aud',
+    milestones: MILESTONES,
+    loggedMinutesByMilestone: {} as Record<string, number>,
   };
 
   it('is empty for a coherent change', () => {
@@ -280,6 +286,83 @@ describe('composerIssues', () => {
     expect(composerIssues({ ...base, pricing: 'tm', lines: [], priceDeltaCents: 50_000 })).toEqual(
       []
     );
+  });
+
+  describe('cap below logged time', () => {
+    const tm = { ...base, pricing: 'tm' as const, lines: [], loggedValueCents: 60_000 };
+    const MESSAGE = "The cap can't go below A$600 — the value of the time already logged.";
+
+    it('refuses a decrease that lands below the logged value', () => {
+      expect(composerIssues({ ...tm, priceDeltaCents: -20_000, nextCapCents: 59_999 })).toEqual([
+        MESSAGE,
+      ]);
+    });
+
+    it('accepts a decrease that lands exactly on the logged value', () => {
+      expect(composerIssues({ ...tm, priceDeltaCents: -20_000, nextCapCents: 60_000 })).toEqual([]);
+    });
+
+    it('accepts a raise even when the cap stays below the logged value', () => {
+      expect(composerIssues({ ...tm, priceDeltaCents: 5_000, nextCapCents: 50_000 })).toEqual([]);
+    });
+
+    it('names the logged-time floor in the project currency, rounded up to a whole unit', () => {
+      expect(
+        composerIssues({
+          ...tm,
+          loggedValueCents: 60_050,
+          priceDeltaCents: -20_000,
+          nextCapCents: 1_000,
+        })
+      ).toEqual(["The cap can't go below A$601 — the value of the time already logged."]);
+    });
+
+    it('refuses removing a milestone with logged time', () => {
+      const remove = [{ op: 'remove' as const, milestoneId: 'm1', title: 'Build' }];
+      expect(
+        composerIssues({ ...tm, lines: remove, loggedMinutesByMilestone: { m1: 30 } })
+      ).toEqual(["Time has been logged on Build, so it can't be removed. Complete it instead."]);
+      expect(
+        composerIssues({ ...tm, lines: remove, loggedMinutesByMilestone: { m2: 30 } })
+      ).toEqual([]);
+    });
+
+    describe('an estimate below the time logged', () => {
+      // Discovery (m1) is estimated at 10 hours; 12 are logged on it.
+      const logged = { loggedMinutesByMilestone: { m1: 720 } };
+      const editTo = (estimatedMinutes: number): ComposerLineDraft[] => [
+        { op: 'edit', milestoneId: 'm1', title: 'Discovery', estimatedMinutes },
+      ];
+
+      it('refuses a new estimate below the time logged, naming the hours', () => {
+        expect(composerIssues({ ...tm, ...logged, lines: editTo(660) })).toEqual([
+          "The estimate for Discovery can't go below the 12 hrs already logged.",
+        ]);
+      });
+
+      it('accepts the time logged or more, and an estimate left as it was', () => {
+        expect(composerIssues({ ...tm, ...logged, lines: editTo(720) })).toEqual([]);
+        expect(composerIssues({ ...tm, ...logged, lines: editTo(600) })).toEqual([]);
+      });
+    });
+    it('skips scope-only orders and fixed price', () => {
+      expect(
+        composerIssues({
+          ...tm,
+          lines: [{ op: 'remove', milestoneId: 'm1', title: 'x' }],
+          priceDeltaCents: 0,
+          nextCapCents: 10_000,
+        })
+      ).toEqual([]);
+      expect(
+        composerIssues({
+          ...tm,
+          pricing: 'fixed',
+          priceDeltaCents: -20_000,
+          nextCapCents: 10_000,
+        })
+      ).toEqual([]);
+    });
   });
 });
 

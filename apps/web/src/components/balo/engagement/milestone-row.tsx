@@ -4,6 +4,9 @@ import { Badge } from '@/components/ui/badge';
 import { RICH_TEXT_CONTENT_CLASS } from '@/components/balo/rich-text/types';
 import { cn } from '@/lib/utils';
 import type { MilestoneNodeVariant, MilestoneNodeView } from '@/lib/engagement/engagement-view';
+import type { MilestoneTimeView, TimeEntryView } from '@/lib/engagement/time-view';
+import { HoursBar } from './time/hours-bar';
+import { TimeLogList } from './time/time-log-list';
 
 /** The signature blue→violet gradient used by completed nodes + filled connectors. */
 export const GRADIENT = 'bg-gradient-to-br from-primary to-violet-600';
@@ -61,13 +64,19 @@ interface MilestoneRowProps {
    * top-right of the row (design L804–809). Expert rail only; presentational here.
    */
   controls?: React.ReactNode;
+  /** Time-and-materials only: this milestone's hours bar and time log. */
+  time?: MilestoneTimeView;
+  /** Per-entry edit / delete controls inside the time log (the delivering expert only). */
+  timeControls?: (entry: TimeEntryView) => React.ReactNode;
 }
 
 /**
  * One milestone row on the delivery rail: node + gradient-fillable connector, title,
  * status pill, optional value pill, description, acceptance criteria ("Done when:"),
  * timing labels, and the success-tinted "Delivered:" completion note — plus an
- * optional `actions` slot at the foot. Approved change orders mark a milestone "Added by
+ * optional `actions` slot at the foot. On a time-and-materials project it also shows the
+ * milestone's hours bar and a collapsible time log (a native `<details>`, so the row stays
+ * server-safe). Approved change orders mark a milestone "Added by
  * approved change" / "Updated by approved change", and a milestone a sent change touches
  * carries a "Change pending" chip. When the latest change request tagged the milestone
  * (`node.feedback`), it carries a "Changes requested" chip and the client's note until the
@@ -87,6 +96,8 @@ export function MilestoneRow({
   isLast,
   actions,
   controls,
+  time,
+  timeControls,
 }: Readonly<MilestoneRowProps>): React.JSX.Element {
   const timing = [node.startedLabel, node.completedLabel].filter(
     (label): label is string => label !== null
@@ -189,6 +200,23 @@ export function MilestoneRow({
               {node.acceptanceCriteria}
             </span>
           </p>
+        )}
+
+        {time !== undefined && (time.estimatedMinutes !== null || time.loggedMinutes > 0) && (
+          <HoursBar time={time} />
+        )}
+
+        {time !== undefined && time.entries.length > 0 && (
+          <details className="group mt-1">
+            <summary className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex min-h-11 cursor-pointer items-center text-xs font-medium focus-visible:ring-2 focus-visible:outline-none">
+              {time.logToggleLabel}
+            </summary>
+            <TimeLogList time={time} renderEntryControls={timeControls} />
+          </details>
+        )}
+
+        {time !== undefined && time.emptyLabel !== null && time.entries.length === 0 && (
+          <p className="text-muted-foreground mt-2 text-xs leading-relaxed">{time.emptyLabel}</p>
         )}
 
         {node.proposalChanges.length > 0 && (

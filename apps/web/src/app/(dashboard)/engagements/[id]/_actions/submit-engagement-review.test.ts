@@ -31,16 +31,21 @@ vi.mock('@/lib/rate-limit/memory-window', () => ({
   checkMemoryLimit: (...a: unknown[]) => mockCheckLimit(...a),
 }));
 
-const { mockFindEngagement, mockUpsert, mockFindExpertUser } = vi.hoisted(() => ({
-  mockFindEngagement: vi.fn(),
-  mockUpsert: vi.fn(),
-  mockFindExpertUser: vi.fn(),
-}));
+const { mockFindEngagement, mockUpsert, mockFindExpertUser, mockFindCompany, mockSetJobTitle } =
+  vi.hoisted(() => ({
+    mockFindEngagement: vi.fn(),
+    mockUpsert: vi.fn(),
+    mockFindExpertUser: vi.fn(),
+    mockFindCompany: vi.fn(),
+    mockSetJobTitle: vi.fn(),
+  }));
 
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   reviewsRepository: { upsert: (...a: unknown[]) => mockUpsert(...a) },
   expertsRepository: { findUserIdByProfileId: (...a: unknown[]) => mockFindExpertUser(...a) },
+  companiesRepository: { findReviewAttributionById: (...a: unknown[]) => mockFindCompany(...a) },
+  usersRepository: { setJobTitle: (...a: unknown[]) => mockSetJobTitle(...a) },
 }));
 
 const mockTrack = vi.fn();
@@ -59,9 +64,24 @@ import {
   REVIEW_INVALID_REQUEST,
   REVIEW_NOT_SIGNED_IN,
 } from '@/lib/reviews/messages';
-import { submitEngagementReviewAction } from './submit-engagement-review';
+import {
+  submitEngagementReviewAction,
+  type SubmitEngagementReviewInput,
+} from './submit-engagement-review';
+
+/** The capture fields every call must carry; a case overrides what it is about. */
+const CAPTURE = { showCompany: false, bodyVisibility: 'private' } as const;
+
+const ALLOWED_COMPANY = {
+  name: 'Northwind Logistics',
+  isPersonal: false,
+  reviewNameHiddenAt: null,
+  industryName: null,
+};
 
 function primeHappyPath(): void {
+  mockFindCompany.mockResolvedValue(ALLOWED_COMPANY);
+  mockSetJobTitle.mockResolvedValue(undefined);
   mockRequireOnboarded.mockResolvedValue({ id: VIEWER_ID });
   mockFindEngagement.mockResolvedValue({
     id: ENGAGEMENT_ID,
@@ -87,6 +107,7 @@ describe('submitEngagementReviewAction', () => {
     primeHappyPath();
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       body: 'Unblocked us in one call',
@@ -102,6 +123,9 @@ describe('submitEngagementReviewAction', () => {
       body: 'Unblocked us in one call',
       surface: 'end_of_call',
       authMethod: 'session',
+      bodyVisibility: 'private',
+      showCompany: false,
+      reviewerRole: null,
     });
   });
 
@@ -110,6 +134,7 @@ describe('submitEngagementReviewAction', () => {
     async (surface) => {
       primeHappyPath();
       await submitEngagementReviewAction({
+        ...CAPTURE,
         engagementId: ENGAGEMENT_ID,
         rating: 4,
         surface,
@@ -127,10 +152,11 @@ describe('submitEngagementReviewAction', () => {
     primeHappyPath();
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 4,
       surface: 'email',
-    } as unknown as { engagementId: string; rating: number; surface: 'recap' });
+    } as unknown as SubmitEngagementReviewInput);
 
     expect(result).toEqual({ success: false, error: REVIEW_INVALID_REQUEST });
     expect(mockUpsert).not.toHaveBeenCalled();
@@ -149,6 +175,7 @@ describe('submitEngagementReviewAction', () => {
     mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: true, ratingCount: 7 });
 
     await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       body: 'Unblocked us in one call',
@@ -174,6 +201,7 @@ describe('submitEngagementReviewAction', () => {
   it('rate limits per (reviewer, engagement), not per IP', async () => {
     primeHappyPath();
     await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -191,6 +219,7 @@ describe('submitEngagementReviewAction', () => {
     mockCheckLimit.mockReturnValue(false);
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -207,6 +236,7 @@ describe('submitEngagementReviewAction', () => {
     mockRequireOnboarded.mockRejectedValue(new Error('Onboarding not completed'));
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -220,6 +250,7 @@ describe('submitEngagementReviewAction', () => {
   it('evaluates PARTICIPATE for the SIGNED-IN user against the engagement company', async () => {
     primeHappyPath();
     await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 3,
       surface: 'end_of_call',
@@ -235,6 +266,7 @@ describe('submitEngagementReviewAction', () => {
     mockHasCapability.mockResolvedValue(false);
 
     const denied = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -242,6 +274,7 @@ describe('submitEngagementReviewAction', () => {
 
     mockFindEngagement.mockResolvedValue(undefined);
     const missing = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -258,6 +291,7 @@ describe('submitEngagementReviewAction', () => {
     mockFindExpertUser.mockResolvedValue({ user: { id: VIEWER_ID } });
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       body: 'Superb',
@@ -284,6 +318,7 @@ describe('submitEngagementReviewAction', () => {
     mockUpsert.mockRejectedValue(new Error('deadlock detected'));
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: ENGAGEMENT_ID,
       rating: 5,
       surface: 'end_of_call',
@@ -292,10 +327,199 @@ describe('submitEngagementReviewAction', () => {
     expect(result).toEqual({ success: false, error: REVIEW_GENERIC_FAILURE });
   });
 
+  it.each(['end_of_call', 'recap', 'project_workspace', 'case_surface'] as const)(
+    'passes bodyVisibility, showCompany and reviewerRole to upsert from the %s surface',
+    async (surface) => {
+      primeHappyPath();
+
+      await submitEngagementReviewAction({
+        engagementId: ENGAGEMENT_ID,
+        rating: 5,
+        surface,
+        bodyVisibility: 'public',
+        showCompany: true,
+        reviewerRole: ' RevOps Lead ',
+      });
+
+      expect(mockUpsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          surface,
+          bodyVisibility: 'public',
+          showCompany: true,
+          reviewerRole: 'RevOps Lead',
+        })
+      );
+    }
+  );
+
+  it.each([
+    ['a personal company', { ...ALLOWED_COMPANY, isPersonal: true }],
+    ['a company whose name an admin hid', { ...ALLOWED_COMPANY, reviewNameHiddenAt: new Date() }],
+  ])('forces showCompany off for %s, whatever the client sent', async (_label, company) => {
+    primeHappyPath();
+    mockFindCompany.mockResolvedValue(company);
+
+    const result = await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      bodyVisibility: 'public',
+      showCompany: true,
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }));
+    expect(log.info).toHaveBeenCalledWith('Review company attribution forced off', {
+      engagementId: ENGAGEMENT_ID,
+      userId: VIEWER_ID,
+    });
+  });
+
+  it('forces showCompany off when the company cannot be read', async () => {
+    primeHappyPath();
+    mockFindCompany.mockResolvedValue(undefined);
+
+    const result = await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      bodyVisibility: 'public',
+      showCompany: true,
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }));
+  });
+
+  it.each(['CTO @Salesforce', 'CTO\u202E', 'CTO\nat Acme'])(
+    'rejects the reviewer role %j without writing',
+    async (role) => {
+      primeHappyPath();
+
+      const result = await submitEngagementReviewAction({
+        ...CAPTURE,
+        engagementId: ENGAGEMENT_ID,
+        rating: 5,
+        surface: 'recap',
+        reviewerRole: role,
+      });
+
+      expect(result).toEqual({ success: false, error: REVIEW_INVALID_REQUEST });
+      expect(mockUpsert).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts an ordinary reviewer role', async () => {
+    primeHappyPath();
+
+    const result = await submitEngagementReviewAction({
+      ...CAPTURE,
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      reviewerRole: 'Head of R&D',
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewerRole: 'Head of R&D' })
+    );
+  });
+
+  it('saves the role to the job title only after the review is written', async () => {
+    primeHappyPath();
+
+    await submitEngagementReviewAction({
+      ...CAPTURE,
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      reviewerRole: 'CTO',
+    });
+
+    expect(mockSetJobTitle).toHaveBeenCalledWith(VIEWER_ID, 'CTO');
+    const upsertOrder = mockUpsert.mock.invocationCallOrder[0] ?? Infinity;
+    const jobTitleOrder = mockSetJobTitle.mock.invocationCallOrder[0] ?? -Infinity;
+    expect(jobTitleOrder).toBeGreaterThan(upsertOrder);
+  });
+
+  it.each([undefined, '', '   '])('never saves a job title for the role %j', async (role) => {
+    primeHappyPath();
+
+    await submitEngagementReviewAction({
+      ...CAPTURE,
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      reviewerRole: role,
+    });
+
+    expect(mockSetJobTitle).not.toHaveBeenCalled();
+    expect(mockUpsert).toHaveBeenCalledWith(expect.objectContaining({ reviewerRole: null }));
+  });
+
+  it('still succeeds, and warns, when the job title save fails', async () => {
+    primeHappyPath();
+    mockSetJobTitle.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await submitEngagementReviewAction({
+      ...CAPTURE,
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      reviewerRole: 'CTO',
+    });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Reviewer job title save failed',
+      expect.objectContaining({ userId: VIEWER_ID, engagementId: ENGAGEMENT_ID })
+    );
+  });
+
+  it('tracks the capture properties without the role text', async () => {
+    primeHappyPath();
+
+    await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      bodyVisibility: 'public',
+      showCompany: true,
+      reviewerRole: 'Secret Role',
+    });
+
+    expect(mockTrack).toHaveBeenCalledWith(
+      'review_submitted',
+      expect.objectContaining({ body_visibility: 'public', show_company: true, has_role: true })
+    );
+    expect(JSON.stringify(mockTrack.mock.calls)).not.toContain('Secret Role');
+    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain('Secret Role');
+  });
+
+  it.each([
+    ['a role over 60 characters', { reviewerRole: 'x'.repeat(61) }],
+    ['an unknown visibility', { bodyVisibility: 'everyone' }],
+  ])('rejects %s without reading the database', async (_label, override) => {
+    primeHappyPath();
+
+    const result = await submitEngagementReviewAction({
+      ...CAPTURE,
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      surface: 'recap',
+      ...override,
+    } as unknown as SubmitEngagementReviewInput);
+
+    expect(result).toEqual({ success: false, error: REVIEW_INVALID_REQUEST });
+    expect(mockFindEngagement).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed engagement id without reading the database', async () => {
     primeHappyPath();
 
     const result = await submitEngagementReviewAction({
+      ...CAPTURE,
       engagementId: 'not-a-uuid',
       rating: 5,
       surface: 'end_of_call',

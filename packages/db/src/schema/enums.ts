@@ -1175,6 +1175,21 @@ export const reviewSurfaceEnum = pgEnum('review_surface', [
  */
 export const reviewAuthMethodEnum = pgEnum('review_auth_method', ['session', 'magic_link']);
 
+/**
+ * BAL-628 — who may read a review's note (`reviews.body`).
+ *   `public`  — shown on the expert's profile with the review.
+ *   `private` — sent to Balo only; never part of a public read.
+ *
+ * `@balo/shared/reviews` owns the TS union (`REVIEW_BODY_VISIBILITIES`) so client code can
+ * use it without importing `@balo/db`; `NewReview`'s inferred column type keeps the two in
+ * lockstep (see the note at the foot of `schema/reviews.ts`).
+ *
+ * A standalone `CREATE TYPE` in migration 0121, so using its labels as that migration's
+ * column default is safe; the one-transaction hazard binds only `ALTER TYPE … ADD VALUE`.
+ * APPEND-ONLY.
+ */
+export const reviewBodyVisibilityEnum = pgEnum('review_body_visibility', ['public', 'private']);
+
 // ── BAL-408 / ADR-1044 — the guest participation model (schema/guests.ts) ──────────────
 //
 // ALL FOUR ENUMS BELOW ARE STANDALONE `CREATE TYPE`s IN MIGRATION 0061, so every label

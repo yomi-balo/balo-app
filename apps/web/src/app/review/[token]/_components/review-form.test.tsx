@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from '@/test/axe';
-import { RATING_LABELS, type ReviewLandingContext } from '@balo/shared/reviews';
+import {
+  RATING_LABELS,
+  formatReviewAttribution,
+  type ReviewLandingContext,
+} from '@balo/shared/reviews';
+import { buildAttributionLine } from '@/components/balo/reviews/attribution-line';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -22,9 +28,54 @@ const CONTEXT: ReviewLandingContext = {
   expertPartyLabel: 'CloudPeak Consulting',
   expertGivenName: 'Amara',
   reviewerFirstName: 'Dana',
+  reviewerLastInitial: 'M',
+  reviewerJobTitle: null,
+  reviewerLastShowCompany: null,
+  clientCompanyNameAllowed: true,
+  clientIndustryName: null,
   title: 'Flow interview stuck on a record-triggered loop',
   concludedOnIso: '2026-08-03T00:00:00.000Z',
 };
+
+const EXISTING_BASE = {
+  bodyVisibility: 'public',
+  showCompany: true,
+  reviewerRole: null,
+} as const;
+
+/** The seeds fixture is the single source of the capture defaults the forms resolve from. */
+const SEEDS = buildReviewCaptureSeeds({
+  identity: {
+    engagementKind: 'case',
+    reviewerFirstName: 'Dana',
+    reviewerLastInitial: 'M',
+    companyName: 'Northwind Industrial',
+  },
+});
+
+function lineFor(input: {
+  role: string | null;
+  showCompany: boolean;
+  hasNote?: boolean;
+  bodyVisibility?: 'public' | 'private';
+  companyNameAllowed?: boolean;
+  industryName?: string | null;
+}): string {
+  return buildAttributionLine({
+    expertName: 'Amara',
+    attribution: formatReviewAttribution({
+      firstName: SEEDS.identity.reviewerFirstName,
+      lastInitial: SEEDS.identity.reviewerLastInitial,
+      role: input.role,
+      companyName: SEEDS.identity.companyName,
+      industryName: input.industryName ?? null,
+      showCompany: input.showCompany,
+      companyNameAllowed: input.companyNameAllowed ?? true,
+    }),
+    hasNote: input.hasNote ?? false,
+    bodyVisibility: input.bodyVisibility ?? 'public',
+  }).text;
+}
 
 function renderForm(
   overrides: Partial<React.ComponentProps<typeof ReviewForm>> = {}
@@ -76,7 +127,7 @@ describe('ReviewForm', () => {
     renderForm();
 
     expect(screen.getByRole('button', { name: 'Send my review' })).toBeDisabled();
-    expect(screen.queryByLabelText(/Anything you/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Add a note/)).not.toBeInTheDocument();
     expect(screen.getByText('Pick a star to send your review')).toBeInTheDocument();
   });
 
@@ -94,7 +145,7 @@ describe('ReviewForm', () => {
 
     await user.click(star(4));
 
-    expect(screen.getByLabelText(/Anything you/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Add a note/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send my review' })).toBeEnabled();
     expect(screen.getByText('Nothing is saved until you send it.')).toBeInTheDocument();
   });
@@ -111,11 +162,11 @@ describe('ReviewForm', () => {
     expect(screen.queryByText(/That's the star you tapped in the email/)).not.toBeInTheDocument();
   });
 
-  it('posts ONLY the token, the rating and the trimmed body — no ids of any kind', async () => {
+  it('posts ONLY the token, the review fields and the attribution choices — no ids of any kind', async () => {
     const user = userEvent.setup();
     renderForm({ prefill: 5 });
 
-    await user.type(screen.getByLabelText(/Anything you/), '  Fixed it in one call  ');
+    await user.type(screen.getByLabelText(/Add a note/), '  Fixed it in one call  ');
     await user.click(screen.getByRole('button', { name: 'Send my review' }));
 
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
@@ -123,6 +174,8 @@ describe('ReviewForm', () => {
       token: TOKEN,
       rating: 5,
       body: 'Fixed it in one call',
+      showCompany: true,
+      bodyVisibility: 'public',
     });
   });
 
@@ -130,17 +183,24 @@ describe('ReviewForm', () => {
     const user = userEvent.setup();
     renderForm({ prefill: 3 });
 
-    await user.type(screen.getByLabelText(/Anything you/), '   ');
+    await user.type(screen.getByLabelText(/Add a note/), '   ');
     await user.click(screen.getByRole('button', { name: 'Send my review' }));
 
-    await waitFor(() => expect(mockSubmit).toHaveBeenCalledWith({ token: TOKEN, rating: 3 }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith({
+        token: TOKEN,
+        rating: 3,
+        showCompany: true,
+        bodyVisibility: 'public',
+      })
+    );
   });
 
   it('shows the success state — rating echoed in words, body quoted — and does NOT toast', async () => {
     const user = userEvent.setup();
     renderForm({ prefill: 4 });
 
-    await user.type(screen.getByLabelText(/Anything you/), 'Calm and clear');
+    await user.type(screen.getByLabelText(/Add a note/), 'Calm and clear');
     await user.click(screen.getByRole('button', { name: 'Send my review' }));
 
     expect(
@@ -170,7 +230,12 @@ describe('ReviewForm', () => {
   it('after Change my review, the box quotes THIS SESSION — not the stale server prop', async () => {
     const user = userEvent.setup();
     renderForm({
-      existing: { rating: 3, body: 'Half of it landed', ratedOnIso: '2026-07-12T00:00:00.000Z' },
+      existing: {
+        rating: 3,
+        body: 'Half of it landed',
+        ratedOnIso: '2026-07-12T00:00:00.000Z',
+        ...EXISTING_BASE,
+      },
     });
 
     await user.click(star(5));
@@ -214,20 +279,25 @@ describe('ReviewForm', () => {
     });
     renderForm({ prefill: 2 });
 
-    await user.type(screen.getByLabelText(/Anything you/), 'Half of it landed');
+    await user.type(screen.getByLabelText(/Add a note/), 'Half of it landed');
     await user.click(screen.getByRole('button', { name: 'Send my review' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "We couldn't save your review just now."
     );
-    expect(screen.getByLabelText(/Anything you/)).toHaveValue('Half of it landed');
+    expect(screen.getByLabelText(/Add a note/)).toHaveValue('Half of it landed');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     expect(star(2)).toHaveAttribute('aria-checked', 'true');
   });
 
   it('shows the already-rated disclosure and switches the CTA to Update', () => {
     renderForm({
-      existing: { rating: 3, body: 'Half of it landed', ratedOnIso: '2026-07-12T00:00:00.000Z' },
+      existing: {
+        rating: 3,
+        body: 'Half of it landed',
+        ratedOnIso: '2026-07-12T00:00:00.000Z',
+        ...EXISTING_BASE,
+      },
     });
 
     expect(
@@ -236,31 +306,29 @@ describe('ReviewForm', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Update my review' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Anything you/)).toHaveValue('Half of it landed');
+    expect(screen.getByLabelText(/Add a note/)).toHaveValue('Half of it landed');
   });
 
   it('lets the emailed star override the existing rating', () => {
     renderForm({
       prefill: 5,
-      existing: { rating: 3, body: null, ratedOnIso: '2026-07-12T00:00:00.000Z' },
+      existing: {
+        rating: 3,
+        body: null,
+        ratedOnIso: '2026-07-12T00:00:00.000Z',
+        ...EXISTING_BASE,
+      },
     });
 
     expect(star(5)).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('discloses truthfully WHAT publishes and UNDER WHOSE NAME', () => {
+  it('discloses UNDER WHOSE NAME the review is sent, by first name only', () => {
     renderForm();
 
+    expect(screen.getByText('Dana')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /Your review is published on Amara's Balo expert profile — your rating, what you wrote, and your company name,/
-      )
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Your own name is not shown\./)).toBeInTheDocument();
-    expect(screen.getByText(/This link was sent to/)).toBeInTheDocument();
-    // The COMPANY-attribution half is truthful (D6) and stays exactly as it was.
-    expect(
-      screen.getByText(/recorded as Northwind Industrial's review of Amara/)
+      screen.getByText(/Whatever you send here is submitted under Dana’s name\./)
     ).toBeInTheDocument();
     expect(
       screen.getByText(/If this was forwarded to you, ask them to send it themselves\./)
@@ -269,23 +337,231 @@ describe('ReviewForm', () => {
     expect(screen.queryByText(/@/)).not.toBeInTheDocument();
   });
 
-  it('names a profile that EXISTS: the person, never the agency the party label carries', () => {
+  it('no longer carries the visibility paragraph the live line replaces', () => {
     renderForm();
 
-    // `listPublicByExpert` is keyed on `expert_profile_id`, and the only public profile
-    // route is `(marketing)/experts/[username]` — the INDIVIDUAL expert's page. There is
-    // no agency profile route anywhere, so "CloudPeak Consulting's Balo profile" would
-    // send a reviewer to a surface that does not exist, and would misdescribe whose page
-    // their words land on while they decide how frank to be.
-    const disclosure = screen.getByText(/Your review is published on/);
-    expect(disclosure).toHaveTextContent("Amara's Balo expert profile");
-    expect(disclosure).not.toHaveTextContent(/CloudPeak/);
+    expect(screen.queryByText(/Your review is published on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your own name is not shown/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/recorded as/)).not.toBeInTheDocument();
+  });
 
-    // …while the CONTEXT CARD still names the PARTY. That one is correct: it answers
-    // "what am I being asked about", and the client contracted with the agency.
+  it('falls back to "the person it was sent to" when there is no first name', () => {
+    renderForm({ context: { ...CONTEXT, reviewerFirstName: null, reviewerLastInitial: null } });
+
+    expect(screen.queryByText(/This link was sent to/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Whatever you send here is submitted under the name of the person it was sent to\./
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('still names the PARTY on the context card, and the person in the live line', () => {
+    renderForm({ prefill: 4 });
+
     expect(
       screen.getByText(/Case with CloudPeak Consulting, for Northwind Industrial/)
     ).toBeInTheDocument();
+    // The profile is the INDIVIDUAL expert's page, so the live line names Amara, not the agency.
+    const line = screen.getByText(lineFor({ role: null, showCompany: true }));
+    expect(line).not.toHaveTextContent(/CloudPeak/);
+  });
+
+  it('renders the live line exactly as the shared formatter builds it, and follows the role and the box', async () => {
+    const user = userEvent.setup();
+    renderForm({ prefill: 4 });
+
+    expect(screen.getByText(lineFor({ role: null, showCompany: true }))).toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: /Your role/ }), 'RevOps Lead');
+    expect(
+      screen.getByText(lineFor({ role: 'RevOps Lead', showCompany: true }))
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Show Northwind Industrial on the review' })
+    );
+    expect(
+      screen.getByText(lineFor({ role: 'RevOps Lead', showCompany: false }))
+    ).toBeInTheDocument();
+  });
+
+  it('falls back to role and industry when the company may not be named', () => {
+    renderForm({
+      prefill: 4,
+      context: {
+        ...CONTEXT,
+        clientCompanyNameAllowed: false,
+        clientIndustryName: 'Logistics',
+        reviewerJobTitle: 'RevOps Lead',
+      },
+    });
+
+    expect(
+      screen.getByText(
+        lineFor({
+          role: 'RevOps Lead',
+          showCompany: true,
+          companyNameAllowed: false,
+          industryName: 'Logistics',
+        })
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('prefills a first review from the landing context: saved role and last company choice', async () => {
+    const user = userEvent.setup();
+    renderForm({
+      prefill: 4,
+      context: { ...CONTEXT, reviewerJobTitle: 'Head of CRM', reviewerLastShowCompany: false },
+    });
+
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveValue('Head of CRM');
+    expect(
+      screen.getByRole('checkbox', { name: 'Show Northwind Industrial on the review' })
+    ).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Send my review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ reviewerRole: 'Head of CRM', showCompany: false })
+      )
+    );
+  });
+
+  it('labels the note "Add a note (optional)" with the public-reader placeholder', async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(star(4));
+
+    const note = screen.getByRole('textbox', { name: 'Add a note (optional)' });
+    expect(note).toHaveAttribute(
+      'placeholder',
+      'What would you tell another team thinking of working with Amara?'
+    );
+  });
+
+  it('flags an @ in the role inline and will not send until it is fixed', async () => {
+    const user = userEvent.setup();
+    renderForm({ prefill: 4 });
+
+    const field = screen.getByRole('textbox', { name: /Your role/ });
+    await user.type(field, 'CTO @Salesforce');
+
+    expect(
+      screen.getByText('Leave out the @, and tick the box below to show your company.')
+    ).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    const send = screen.getByRole('button', { name: 'Send my review' });
+    expect(send).toBeDisabled();
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await user.clear(field);
+    await user.type(field, 'CTO');
+    expect(send).toBeEnabled();
+  });
+
+  it('hides the saved-title helper when an existing review (not the job title) seeded the role', () => {
+    renderForm({
+      existing: {
+        rating: 3,
+        body: null,
+        ratedOnIso: '2026-07-12T00:00:00.000Z',
+        ...EXISTING_BASE,
+        reviewerRole: 'RevOps Lead',
+      },
+      context: { ...CONTEXT, reviewerJobTitle: 'RevOps Lead' },
+    });
+    expect(screen.queryByText(/From your last review/)).not.toBeInTheDocument();
+  });
+
+  it('shows the saved-title helper only until the seeded role is cleared', async () => {
+    const user = userEvent.setup();
+    renderForm({ prefill: 4, context: { ...CONTEXT, reviewerJobTitle: 'Head of CRM' } });
+    expect(screen.getByText(/From your last review/)).toBeInTheDocument();
+    await user.clear(screen.getByRole('textbox', { name: /Your role/ }));
+    expect(screen.queryByText(/From your last review/)).not.toBeInTheDocument();
+  });
+
+  it('renders no checkbox for a company that may not be named, and sends showCompany false', async () => {
+    const user = userEvent.setup();
+    renderForm({ prefill: 4, context: { ...CONTEXT, clientCompanyNameAllowed: false } });
+
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(lineFor({ role: null, showCompany: true, companyNameAllowed: false }))
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Send my review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ showCompany: false }))
+    );
+  });
+
+  it('sends all three attribution fields when RESUBMITTING over an existing review', async () => {
+    const user = userEvent.setup();
+    renderForm({
+      existing: {
+        rating: 3,
+        body: 'Half of it landed',
+        ratedOnIso: '2026-07-12T00:00:00.000Z',
+        bodyVisibility: 'private',
+        showCompany: false,
+        reviewerRole: 'Sales Director',
+      },
+    });
+
+    // The existing review's own values win over the job title and the last choice.
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveValue('Sales Director');
+    expect(
+      screen.getByRole('checkbox', { name: 'Show Northwind Industrial on the review' })
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole('button', { name: 'Show the note on Amara’s profile instead' })
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Update my review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith({
+        token: TOKEN,
+        rating: 3,
+        body: 'Half of it landed',
+        reviewerRole: 'Sales Director',
+        showCompany: false,
+        bodyVisibility: 'private',
+      })
+    );
+  });
+
+  it('sends a private note choice and caps the role at 60 characters', async () => {
+    const user = userEvent.setup();
+    renderForm({ prefill: 4 });
+
+    expect(screen.getByRole('textbox', { name: /Your role/ })).toHaveAttribute('maxlength', '60');
+
+    await user.type(screen.getByLabelText(/Add a note/), 'Between us');
+    await user.click(
+      screen.getByRole('button', { name: 'Send the note to Balo privately instead' })
+    );
+    expect(
+      screen.getByText(
+        lineFor({ role: null, showCompany: true, hasNote: true, bodyVisibility: 'private' })
+      )
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Send my review' }));
+    await waitFor(() =>
+      expect(mockSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ body: 'Between us', bodyVisibility: 'private' })
+      )
+    );
+  });
+
+  it('shows no attribution controls until a star is chosen', () => {
+    renderForm();
+
+    expect(screen.queryByRole('textbox', { name: /Your role/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
   });
 
   it('disables the stars and the button while the submit is in flight', async () => {

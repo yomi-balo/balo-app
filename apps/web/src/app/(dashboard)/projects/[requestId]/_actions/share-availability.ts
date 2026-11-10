@@ -105,7 +105,7 @@ export async function shareAvailabilityAction(
     const mayManage = await hasExpertDeliveryCapability(
       user,
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      expertProfileId,
+      { expertProfileId, agency: { from: 'expert_profile' } },
       { contextType: 'request_interaction', contextId: relationshipId }
     );
     if (!mayManage) {
@@ -149,7 +149,7 @@ export async function shareAvailabilityAction(
     });
 
     const [expertDisplay, calendarConnected] = await Promise.all([
-      resolveBookingExpertDisplay(expertProfileId),
+      resolveBookingExpertDisplay(expertProfileId, { from: 'expert_profile' }),
       resolveCalendarConnected(expertProfileId),
     ]);
     /**
@@ -184,6 +184,8 @@ export async function shareAvailabilityAction(
       expertPartyLabel: expertDisplay.partyLabel,
       sharedAtIso,
       previousSharedAtIso: previousSharedAt === null ? null : previousSharedAt.toISOString(),
+    }).catch(() => {
+      // publishNotificationEvent logs internally
     });
 
     return { ok: true, isReshare, calendarConnected, sharedAtIso };

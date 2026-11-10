@@ -56,6 +56,7 @@ function fixedDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc
       initials: 'PS',
       company: 'Acme',
       headline: 'CPQ Specialist',
+      profileHref: null,
       rating: 4.9,
       ratingCount: 12,
     },

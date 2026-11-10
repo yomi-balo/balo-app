@@ -45,6 +45,7 @@ vi.mock('@balo/db', () => ({
   ChangeOrderCoherenceError: class extends Error {},
   ChangeOrderNotFoundError: class extends Error {},
   ChangeOrderPendingError: class extends Error {},
+  TimeEntryWriteRefusedError: class extends Error {},
   InvalidChangeOrderTransitionError: class extends Error {},
   MilestonesIncompleteError: class extends Error {},
   InvalidEngagementTransitionError: class extends Error {},
@@ -123,6 +124,14 @@ describe('requestChangeOrderAction', () => {
       error: 'This engagement could not be found.',
     });
     expect(mockRequestByClient).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'not_a_party' })
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'engagement_not_found' })
+    );
   });
 
   it('refuses a caller without the participate capability on the engagement company', async () => {
@@ -135,6 +144,10 @@ describe('requestChangeOrderAction', () => {
       companyId: COMPANY_ID,
     });
     expect(mockRequestByClient).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'no_capability' })
+    );
   });
 
   it('refuses a project that is not active', async () => {
@@ -144,6 +157,10 @@ describe('requestChangeOrderAction', () => {
       error: "This project isn't active.",
     });
     expect(mockRequestByClient).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Change order denied',
+      expect.objectContaining({ reason: 'wrong_status' })
+    );
   });
 
   it('opens the request, tracks it without amounts, and publishes to the expert and admins', async () => {

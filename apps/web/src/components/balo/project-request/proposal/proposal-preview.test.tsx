@@ -37,6 +37,7 @@ const DOC = draftToReviewDoc(
       initials: 'DE',
       company: null,
       headline: null,
+      profileHref: null,
       rating: null,
       ratingCount: 0,
     },

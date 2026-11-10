@@ -156,7 +156,10 @@ export function CaseSurface({
     () => requestFollowUp('case_nudge'),
     [requestFollowUp]
   );
-  const bookFollowUpInPage = view.lens === 'client' && view.header.isOpen;
+  // In-page booking reads the public availability route, so it follows the same rule as the
+  // profile link: an expert who is no longer publicly listed is not bookable from here.
+  const bookFollowUpInPage =
+    view.lens === 'client' && view.header.isOpen && view.party.profileHref !== null;
 
   // Keyed by `meetingId#slot` so a closed dialog can restore focus to the control that opened
   // it — the row's own `DropdownMenu` has already unmounted by then, so Radix's own
@@ -394,7 +397,7 @@ export function CaseSurface({
               nudge={view.nudge}
               lens={view.lens}
               counterpartyLabel={counterpartyFirstName}
-              bookAgainHref={view.party.bookAgainHref}
+              profileHref={view.party.profileHref}
               onBookFollowUp={bookFollowUpInPage ? handleNudgeBookFollowUp : undefined}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
@@ -579,7 +582,7 @@ export function CaseSurface({
             </Reveal>
             <Reveal delay={0.3}>
               <CasePeopleCard
-                people={view.people}
+                groups={view.peopleGroups}
                 lens={view.lens}
                 clientCompanyName={view.clientCompanyName}
                 hasCaseScopeDomains={view.lens === 'client' && view.caseScopeDomains.length > 0}

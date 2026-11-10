@@ -583,6 +583,27 @@ describe('platformRoleHasCapability — MANAGE_PARTY_DOMAINS', () => {
   });
 });
 
+describe('platformRoleHasCapability — MANAGE_COMPANY_DETAILS', () => {
+  it.each(['admin', 'super_admin'])('grants MANAGE_COMPANY_DETAILS to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS)).toBe(
+      true
+    );
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_COMPANY_DETAILS to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS)).toBe(
+        false
+      );
+    }
+  );
+
+  it('maps MANAGE_COMPANY_DETAILS to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS).toBe('manage_company_details');
+  });
+});
+
 /**
  * BAL-558 — "pinned by a test asserting exactly that" (the ticket's AC): the two new tokens are
  * held by EXACTLY the actor set the deleted `requireAdmin()` admitted, `{admin, super_admin}` =

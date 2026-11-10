@@ -270,6 +270,22 @@ describe('submitApplicationAction', () => {
       });
     });
 
+    it('patches a session lacking the profile id and saves', async () => {
+      setupValidApplication();
+      await submitApplicationAction(PROFILE_ID);
+      expect((mockSessionObj.user as { expertProfileId?: string }).expertProfileId).toBe(
+        PROFILE_ID
+      );
+      expect(mockSave).toHaveBeenCalledOnce();
+    });
+
+    it('does not save when the session already holds the profile id', async () => {
+      setupValidApplication();
+      (mockSessionObj.user as { expertProfileId?: string }).expertProfileId = PROFILE_ID;
+      await submitApplicationAction(PROFILE_ID);
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
     it('returns success true', async () => {
       setupValidApplication();
       const result = await submitApplicationAction(PROFILE_ID);

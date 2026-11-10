@@ -492,6 +492,28 @@ describe('markFailed', () => {
     expect(await repo.findById(row.id)).toEqual(first);
   });
 
+  it('fails a pending row past the deadline, since the failure write has no deadline guard', async () => {
+    const { row } = await seedPending();
+    await backdate(row.id, 91);
+
+    const refused = await repo.markSucceeded({
+      generationId: row.id,
+      output: draftOutput(),
+      ...SUCCESS_AUDIT,
+    });
+    const failed = await repo.markFailed({
+      generationId: row.id,
+      failureReason: 'deadline_exceeded',
+    });
+
+    expect(refused).toBeUndefined();
+    expect(failed).toMatchObject({
+      id: row.id,
+      status: 'failed',
+      failureReason: 'deadline_exceeded',
+    });
+  });
+
   it('misses an unknown id', async () => {
     expect(
       await repo.markFailed({ generationId: randomUUID(), failureReason: 'unknown' })

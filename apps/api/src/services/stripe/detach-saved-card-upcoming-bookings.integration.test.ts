@@ -62,7 +62,7 @@ import { detachSavedCard } from './mandate.js';
 
 const MINUTE_MS = 60_000;
 /** Client 700 / minute at the default fee — a 30-minute booking reserves 21,000. */
-const EXPERT_HOURLY = 33_600;
+const EXPERT_RATE_PER_MIN = 560;
 const ONE_BOOKING_MINOR = 21_000;
 
 interface Ctx {
@@ -77,7 +77,7 @@ async function seedWallet(opts: { balanceMinor: number; mandate: boolean }): Pro
   const parties = await seedBookingParties();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, parties.expertProfileId));
   const [wallet] = await db
     .insert(creditWallets)

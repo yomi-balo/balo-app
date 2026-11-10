@@ -11,7 +11,9 @@ import { Form } from '@/components/ui/form';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { assessmentStepSchema, type AssessmentStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
+import { productHasRating } from '@/lib/expert/application-summary';
 import { AssessmentCard } from './assessment-card';
+import { ProficiencyScaleGuide } from './proficiency-scale-guide';
 import { StepHeading, slideUpVariant, stagger } from './design-system';
 
 const DIMENSION_EXPLANATION = [
@@ -40,10 +42,6 @@ const DIMENSION_EXPLANATION = [
 // ── Accordion helpers (module scope keeps the component's cognitive complexity low) ──
 
 type RatingRow = { productId: string; supportTypeId: string; proficiency: number };
-
-function productHasRating(ratings: RatingRow[], productId: string): boolean {
-  return ratings.some((r) => r.productId === productId && r.proficiency > 0);
-}
 
 // First incomplete in list order (mount auto-expand). null → nothing to open.
 function findFirstIncomplete(productIds: string[], ratings: RatingRow[]): string | null {
@@ -267,7 +265,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
           <StepHeading
             icon={Wrench}
             title="Rate your expertise"
-            subtitle="For each product, rate your ability across 4 support dimensions. Be honest -- clients rely on these ratings to find the right match."
+            subtitle="For each product, rate your ability across 4 support dimensions. Be honest — clients rely on these ratings to find the right match."
           />
         </div>
 
@@ -275,7 +273,7 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
         <Collapsible open={guideOpen} onOpenChange={setGuideOpen}>
           <div className="bg-muted/40 dark:bg-muted/20 border-border/50 rounded-xl border p-5">
             <div className="flex items-center justify-between">
-              <p className="text-foreground text-sm font-semibold">The 4 dimensions</p>
+              <p className="text-foreground text-sm font-semibold">How to rate</p>
               <CollapsibleTrigger asChild>
                 <Button variant="ghost" size="sm">
                   {guideOpen ? 'Hide' : 'Show guide'}
@@ -283,7 +281,10 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
               </CollapsibleTrigger>
             </div>
             <CollapsibleContent>
-              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <p className="text-muted-foreground mt-3.5 mb-2.5 text-[13px] font-semibold">
+                The 4 dimensions
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {DIMENSION_EXPLANATION.map((dim) => (
                   <div key={dim.label} className="flex items-start gap-2">
                     <dim.icon
@@ -297,14 +298,20 @@ export function StepAssessment({ headingRef }: Readonly<StepAssessmentProps>): R
                   </div>
                 ))}
               </div>
+              <div className="bg-border/60 mt-[18px] mb-3.5 h-px" />
+              <p className="text-muted-foreground mb-1.5 text-[13px] font-semibold">The scale</p>
+              <ProficiencyScaleGuide />
             </CollapsibleContent>
           </div>
         </Collapsible>
 
         {/* Progress counter */}
-        <div className="bg-muted rounded-lg px-4 py-2.5">
-          <p className="text-foreground text-sm font-medium">
-            {completedCount} of {selectedProductIds.length} products assessed
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+          <p className="text-muted-foreground text-[13px] font-medium">
+            {completedCount} of {selectedProductIds.length} products rated
+          </p>
+          <p className="text-muted-foreground text-[13px]">
+            Between two levels? Choose the lower one.
           </p>
         </div>
 

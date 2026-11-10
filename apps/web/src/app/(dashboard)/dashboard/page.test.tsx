@@ -205,6 +205,24 @@ describe('DashboardPage — company branch', () => {
     expect(precedes(banner, screen.getByTestId('company-your-move-slot'))).toBe(true);
   });
 
+  it('a pending applicant (client mode with an expertProfileId) gets the banner and no expert dashboard', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: 'u-1',
+      activeMode: 'client',
+      expertProfileId: 'ep-pending',
+    });
+    mockRequireUser.mockResolvedValue({ id: 'u-1', email: 'dana@northwind.test' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+
+    render(await DashboardPage());
+
+    expect(mockApplicationReviewBannerSlot).toHaveBeenCalledWith({
+      userId: 'u-1',
+      email: 'dana@northwind.test',
+    });
+    expect(screen.queryByTestId('expert-dashboard')).toBeNull();
+  });
+
   it('does not render the expert dashboard when activeMode is client', async () => {
     mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'client' });
     mockRequireUser.mockResolvedValue({ id: 'u-1' });

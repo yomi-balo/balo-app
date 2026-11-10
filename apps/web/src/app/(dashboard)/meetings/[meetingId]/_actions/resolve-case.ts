@@ -205,6 +205,7 @@ export async function resolveCaseAction(input: {
       meetingId,
       companyId,
       expertProfileId,
+      deliveringAgencyId: caseRow.deliveringAgencyId,
       caseTitle: capCaseTitle(caseRow.title),
       closedAt,
       recipientId: user.id,

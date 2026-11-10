@@ -32,7 +32,7 @@ export type StaffEditableApplicationStatus = (typeof STAFF_EDITABLE_APPLICATION_
  *
  * Section mapping (the planner's one definition of what falls where):
  * - `experience` — the experience scalars (`yearStartedSalesforce`, `projectCountMin`,
- *   `projectLeadCountMin`, the three MVP/CTA/trainer flags), plus languages and industries.
+ *   `projectLeadCountMin`, the MVP and CTA flags), plus languages and industries.
  * - `products` — products added or removed.
  * - `ratings` — ratings changed on a RETAINED product (a product that was also added or removed
  *   is reported under `products`, never double-counted into `ratings` too).
@@ -63,7 +63,6 @@ export interface StaffApplicationEdit {
     projectLeadCountMin: number;
     isSalesforceMvp: boolean;
     isSalesforceCta: boolean;
-    isCertifiedTrainer: boolean;
   }>;
   /** The FULL set of languages, when changed. */
   languages?: {

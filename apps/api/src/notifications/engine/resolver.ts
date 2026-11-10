@@ -5,6 +5,7 @@ import {
   proposalsRepository,
   partyMembershipsRepository,
   agenciesRepository,
+  engagementsRepository,
 } from '@balo/db';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import type { RuleContext } from './rules.js';
@@ -29,6 +30,7 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
   'project.proposal_accepted',
   'billing.details_confirmed',
   'engagement.milestone_completed',
+  'engagement.milestone_estimate_exceeded',
   'engagement.milestone_reverted',
   'engagement.scope_changed',
   'engagement.completion_requested',
@@ -273,6 +275,47 @@ async function hydrateBillingEmailChangeActor(
   }
 }
 
+/** BAL-631: engagement events that also notify the delivering expert's agency owners/admins. */
+const DELIVERING_AGENCY_FANOUT_EVENTS: ReadonlySet<string> = new Set([
+  'engagement.changes_requested',
+  'engagement.milestone_estimate_exceeded',
+  'engagement.cancelled',
+]);
+
+/**
+ * BAL-631: hydrate `data.deliveringAgencyAdminUserIds` (+ `data.deliveringAgencyName`) for the
+ * agency-oversight notices. The agency is the engagement's pin (`delivering_agency_id`), read from
+ * `payload.engagementId`, so a later change to the delivering profile's agency link cannot move the
+ * notice. The recipients are `listAdminUserIds('agency', ...)` (the MANAGE_MEMBERS holder set, never
+ * a role list written here) minus the delivering expert (who already gets their own notice) and
+ * minus the actor. A missing engagement or a NULL pin gets `[]`.
+ */
+async function hydrateDeliveringAgencyAdmins(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (!DELIVERING_AGENCY_FANOUT_EVENTS.has(event)) return;
+  const engagementId = payload.engagementId;
+  if (typeof engagementId !== 'string') return;
+  const engagement = await engagementsRepository.findById(engagementId);
+  if (engagement?.deliveringAgencyId == null) {
+    data.deliveringAgencyAdminUserIds = [];
+    return;
+  }
+  const agencyId = engagement.deliveringAgencyId;
+  const [adminIds, agency, profile] = await Promise.all([
+    partyMembershipsRepository.listAdminUserIds('agency', agencyId),
+    agenciesRepository.getSummaryById(agencyId),
+    expertsRepository.findDisplayProfileById(engagement.expertProfileId),
+  ]);
+  const excluded = new Set<string>();
+  if (profile !== undefined) excluded.add(profile.userId);
+  if (typeof payload.actorUserId === 'string') excluded.add(payload.actorUserId);
+  data.deliveringAgencyAdminUserIds = adminIds.filter((id) => !excluded.has(id));
+  if (agency !== undefined) data.deliveringAgencyName = agency.name;
+}
+
 export async function resolveContext(
   event: string,
   payload: Record<string, unknown>
@@ -355,6 +398,9 @@ export async function resolveContext(
 
   // BAL-604: project.track_passed admin recipients (extracted — see hydrateTrackPassedAdmins).
   await hydrateTrackPassedAdmins(event, payload, data);
+
+  // BAL-631: delivering-agency admin recipients (extracted — see hydrateDeliveringAgencyAdmins).
+  await hydrateDeliveringAgencyAdmins(event, payload, data);
 
   // BAL-289: project.proposal_accepted ALSO fans out to the non-selected experts —
   // the OTHER live 'submitted' proposals on the same request, excluding the accepted

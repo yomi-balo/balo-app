@@ -8,7 +8,7 @@ import {
   recordScheduleAudit,
   type ExpertProfile,
 } from '@balo/db';
-import { isValidTimezone } from '@balo/shared/timezone';
+import { canonicalTimezone } from '@balo/shared/timezone';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { invalidateExpertSlots } from '../../services/availability/expert-slots-cache.js';
@@ -30,11 +30,20 @@ const ruleSchema = z
     message: 'A range needs a different start and end time.',
   });
 
-// `isValidTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`
-// plus the special-cased 'UTC' (which Node omits). 'UTC' is the
+// `canonicalTimezone` accepts every zone from `Intl.supportedValuesOf('timeZone')`,
+// the current IANA names ICU lists only as aliases (e.g. 'Asia/Kolkata'), and the
+// special-cased 'UTC' (which Node omits). 'UTC' is the
 // `expert_profiles.timezone` column default, so it must validate — otherwise an
-// expert who never changes their timezone can't save their schedule.
-const timezoneSchema = z.string().refine(isValidTimezone, 'Invalid timezone');
+// expert who never changes their timezone can't save their schedule. Legacy names
+// ('US/Pacific') are stored as the zone they resolve to.
+const timezoneSchema = z.string().transform((tz, ctx) => {
+  const canonical = canonicalTimezone(tz);
+  if (canonical === null) {
+    ctx.issues.push({ code: 'custom', message: 'Invalid timezone', input: tz });
+    return z.NEVER;
+  }
+  return canonical;
+});
 
 // Bounds mirror the CHECK constraints on `expert_profiles` (BAL-234). No
 // booking-window field: the look-ahead horizon is platform config (BAL-398).
@@ -44,13 +53,13 @@ const bookingSettingsSchema = z.object({
   minimumNoticeMinutes: z.number().int().min(0).max(20160), // ≤ 14 days
 });
 
-const paramsSchema = z.object({ expertProfileId: z.string().uuid() });
+const paramsSchema = z.object({ expertProfileId: z.uuid() });
 
 // The acting user's id, threaded from the web server action for ADR-1030 audit
 // attribution ONLY (never authorization — the IDOR gate is the session-derived
 // expertProfileId in the web action). Optional so a caller that omits it records a
 // null-actor audit row rather than 400ing.
-const actorUserIdSchema = z.string().uuid().optional();
+const actorUserIdSchema = z.uuid().optional();
 
 const postBodySchema = z.object({
   timezone: timezoneSchema,
@@ -144,7 +153,7 @@ function toHHMM(time: string): string {
 
 // ── Routes ──────────────────────────────────────────────────────
 
-export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
+export function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/experts/:expertProfileId/schedule
    * Returns the expert's timezone, booking settings, and weekly rules.
@@ -252,6 +261,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
           });
         });
 
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true, timezone, bookingSettings, rules });
@@ -294,6 +304,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             expertProfileId,
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -345,6 +356,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             metadata: { oldTimezone, newTimezone: timezone },
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -410,4 +422,5 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
   );
+  return Promise.resolve();
 }

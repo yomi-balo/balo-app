@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Shield, User, Users, type LucideIcon } from 'lucide-react';
+import { Building2, Shield, User, Users, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import type { PortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens';
@@ -14,7 +14,7 @@ import type { PortfolioLens } from '@/lib/projects-inbox/resolve-portfolio-lens'
  * `router.replace` and fires `projects_inbox_lens_switched`.
  *
  * Tones mirror the detail page's `LENS_META`: client = primary blue, expert =
- * brand violet, admin = info cyan — so the three lenses read apart and match the
+ * brand violet, agency = success emerald, admin = info cyan — so the lenses read apart and match the
  * request-detail "Viewing as" line.
  */
 
@@ -26,6 +26,7 @@ interface LensSwitchProps {
 const LENS_META: Record<PortfolioLens, { label: string; icon: LucideIcon; activeTone: string }> = {
   client: { label: 'Client', icon: User, activeTone: 'text-primary' },
   expert: { label: 'Expert', icon: Shield, activeTone: 'text-violet-600 dark:text-violet-400' },
+  agency: { label: 'Agency', icon: Building2, activeTone: 'text-success' },
   admin: { label: 'Admin', icon: Users, activeTone: 'text-info' },
 };
 
@@ -42,6 +43,7 @@ export function LensSwitch({
       track(PROJECTS_INBOX_EVENTS.INBOX_LENS_SWITCHED, { from_lens: lens, to_lens: next });
       const params = new URLSearchParams(searchParams.toString());
       params.set('lens', next);
+      if (next !== 'agency') params.delete('agency');
       router.replace(`/projects?${params.toString()}`, { scroll: false });
     },
     [lens, router, searchParams]

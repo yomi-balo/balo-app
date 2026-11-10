@@ -219,18 +219,23 @@ export async function proposeRescheduleAction(
     const nowMs = Date.now();
 
     const [labels, recipientUserIds] = await Promise.all([
-      resolveNotificationLabels(companyId, expertProfileId).catch((error: unknown) => {
-        log.error('Failed to resolve reschedule_proposal.sent labels — publishing with fallbacks', {
-          meetingId,
-          engagementId,
-          error: errorMessage(error),
-        });
-        return {
-          clientCompanyName: 'your company',
-          expertPartyLabel: 'Your expert',
-          expertPersonLabel: 'Your expert',
-        };
-      }),
+      resolveNotificationLabels(companyId, expertProfileId, caseRow.deliveringAgencyId).catch(
+        (error: unknown) => {
+          log.error(
+            'Failed to resolve reschedule_proposal.sent labels — publishing with fallbacks',
+            {
+              meetingId,
+              engagementId,
+              error: errorMessage(error),
+            }
+          );
+          return {
+            clientCompanyName: 'your company',
+            expertPartyLabel: 'Your expert',
+            expertPersonLabel: 'Your expert',
+          };
+        }
+      ),
       clientPartyRecipientsRepository
         .resolveClientPartyRecipients({ meetingId, companyId })
         .then((resolved) => resolved.recipientUserIds)

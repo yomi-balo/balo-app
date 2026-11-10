@@ -97,12 +97,13 @@ function buildItem(opts: ItemOpts = {}): AdminProjectEngagementListItem {
     company: { id: 'company-1', name: companyName },
     expertProfile: {
       id: 'ep-1',
-      agencyId: agencyName === null ? null : 'agency-1',
       type: agencyName === null ? 'freelancer' : 'agency',
       headline: null,
       user: { id: 'u-1', firstName: expertFirstName, lastName: expertLastName, avatarUrl: null },
-      agency: agencyName === null ? null : { id: 'agency-1', name: agencyName, logoUrl: null },
     },
+    deliveringAgencyId: agencyName === null ? null : 'agency-1',
+    deliveringAgency:
+      agencyName === null ? null : { id: 'agency-1', name: agencyName, logoUrl: null },
     projectRequest: projectTitle === null ? null : { id: 'req-1', title: projectTitle },
     acceptedBy: acceptedBy === null ? null : { id: 'acc-1', platformRole: 'user', ...acceptedBy },
     cancelledBy:

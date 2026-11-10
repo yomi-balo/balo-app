@@ -34,6 +34,7 @@ import {
   type MeetingStatus,
 } from '../schema';
 import { caseHasLiveThread } from './_shared/case-thread';
+import { publicProfileUsernameSql } from './_shared/expert-profile-public';
 import type { ActionItemAssigneeParty } from './action-items';
 import type { CaseCloseReason } from './case-engagements';
 import { meetingVenueReadySql } from './meetings';
@@ -233,11 +234,18 @@ export interface CasesIndexCounterparty {
   readonly expertFirstName: string | null;
   readonly expertLastName: string | null;
   readonly expertAvatarUrl: string | null;
-  /** `null` until the expert claims one; the "Book again" href is hidden without it. */
+  /**
+   * The expert's username ONLY while their public page resolves (`expertProfileIsPublic`:
+   * searchable, approved, live owner), otherwise `null`. Unclaimed, hidden and suspended
+   * experts all read `null`, so the "Book again" href it builds never opens a 404.
+   */
   readonly expertUsername: string | null;
   readonly expertHeadline: string | null;
   readonly expertType: ExpertProfile['type'];
-  /** `null` ⇒ an INDEPENDENT expert. Also the input to `actorHasExpertSideVisibility`. */
+  /**
+   * The agency pinned on the engagement when it was created (not the expert profile's current
+   * link). `null` ⇒ no agency. Also the input to `actorHasExpertSideVisibility`.
+   */
   readonly agencyId: string | null;
   readonly agencyName: string | null;
 }
@@ -547,10 +555,12 @@ const COUNTERPARTY_COLUMNS = {
   expertFirstName: users.firstName,
   expertLastName: users.lastName,
   expertAvatarUrl: users.avatarUrl,
-  expertUsername: expertProfiles.username,
+  // Gated in SQL against the REAL `expert_profiles` join below; the fragment cannot be used
+  // against an `alias(expertProfiles, …)`.
+  expertUsername: publicProfileUsernameSql,
   expertHeadline: expertProfiles.headline,
   expertType: expertProfiles.type,
-  agencyId: expertProfiles.agencyId,
+  agencyId: engagements.deliveringAgencyId,
   agencyName: agencies.name,
 } as const;
 
@@ -607,7 +617,7 @@ function selectCaseSection(
       .innerJoin(companies, eq(companies.id, engagements.companyId))
       .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
       .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
-      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(agencies, eq(agencies.id, engagements.deliveringAgencyId))
       .leftJoin(agg, eq(agg.engagementId, engagements.id))
       .where(and(...scopedLiveCases(scope), input.keyset))
       .orderBy(...input.orderBy)

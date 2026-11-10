@@ -71,20 +71,20 @@ const BASE_INPUT: EnforceBookingFundingInput = {
   onCoveredHold: 'defer',
 };
 
-/** A$375/hr client rate over 30 minutes = A$187.50. */
+/** A$6.25/min client rate over 30 minutes = A$187.50. */
 const ESTIMATE_30_MINOR = 18_750;
 
 function noMandate(
   availableMinor: number,
   reservable: Extract<BookingFundingSnapshot, { kind: 'no_mandate' }>['reservable'] = [],
-  expertRateCents: number | null = 30_000
+  expertRateCents: number | null = 500
 ): BookingFundingSnapshot {
   return { kind: 'no_mandate', walletId: WALLET_ID, expertRateCents, availableMinor, reservable };
 }
 
-/** The pricing a refusal arm that returns before the balance reads carries (rate A$300/hr). */
+/** The pricing a refusal arm that returns before the balance reads carries (rate A$5.00/min). */
 const TOP_UP_PRICING = {
-  expertRateCents: 30_000,
+  expertRateCents: 500,
   availableMinor: 0,
   reservable: [],
   mandateActive: false,
@@ -128,7 +128,7 @@ const PLANNED_30_MIN = {
   scheduledStart: new Date('2026-09-23T10:00:00.000Z'),
   scheduledEnd: new Date('2026-09-23T10:30:00.000Z'),
   expertProfileId: EXPERT_PROFILE_ID,
-  expertRateCents: 30_000,
+  expertRateCents: 500,
 };
 
 function lastAnalytics(): Record<string, unknown> {
@@ -678,7 +678,7 @@ describe('the new refusal fields', () => {
   });
 
   it('the suggested top-up rounds the shortfall UP to the A$100 step once it passes the minimum', async () => {
-    // A$300/hr over 60 minutes = A$375.00 (37,500) with nothing available → A$400.
+    // A$5.00/min expert over 60 minutes = A$375.00 (37,500) with nothing available → A$400.
     mockReadSnapshot.mockResolvedValue(noMandate(0));
 
     const result = await enforceBookingFunding({ ...BASE_INPUT, slot: SLOT_60 });
@@ -714,7 +714,7 @@ describe('the new refusal fields', () => {
   it('a figure above the top-up maximum is returned as is — the caller decides what to do with it', async () => {
     mockReadSnapshot.mockResolvedValue({
       kind: 'no_wallet',
-      topUpPricing: { ...TOP_UP_PRICING, expertRateCents: 3_000_000 },
+      topUpPricing: { ...TOP_UP_PRICING, expertRateCents: 50_000 },
     });
 
     const result = await enforceBookingFunding(BASE_INPUT);

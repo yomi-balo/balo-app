@@ -11,6 +11,15 @@ describe('EarningsCard', () => {
     expect(screen.getAllByText('A$0.00')).toHaveLength(3);
   });
 
+  it('gives the payouts link a hover underline and a focus-visible ring', () => {
+    render(<EarningsCard />);
+    expect(screen.getByRole('link', { name: /view payouts/i })).toHaveClass(
+      'hover:underline',
+      'transition-colors',
+      'focus-visible:ring-2'
+    );
+  });
+
   it('links to the payouts settings tab', () => {
     render(<EarningsCard />);
     expect(screen.getByRole('link', { name: /view payouts/i })).toHaveAttribute(

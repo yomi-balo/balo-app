@@ -17,6 +17,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -88,7 +93,6 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
       user: { firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
       headline: null,
       type: 'freelancer',
     },
@@ -104,6 +108,7 @@ const INPUT = { engagementId: ENGAGEMENT_ID, orderedMilestoneIds: [M2, M1] };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue(EXPERT_CTX);
@@ -128,6 +133,7 @@ describe('reorderMilestonesAction', () => {
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
     expect(await reorderMilestonesAction(INPUT)).toEqual({
       success: false,

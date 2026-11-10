@@ -106,7 +106,7 @@ describe('canonicalCustomList', () => {
   it('restores the full axis to declaration order from any order', () => {
     const result = canonicalCustomList([...FULL_AXIS].reverse());
     expect(result).toEqual([...FULL_AXIS]);
-    expect(result).toHaveLength(20);
+    expect(result).toHaveLength(21);
   });
 });
 
@@ -211,7 +211,7 @@ describe('CHECK equivalence — users_platform_capabilities_staff_array, stated 
 
   it('every OTHER token may sit on any staff custom list', () => {
     const others = FULL_AXIS.filter((token) => token !== CAP.MANAGE_STAFF_CAPABILITIES);
-    expect(others).toHaveLength(19);
+    expect(others).toHaveLength(20);
     for (const role of ['admin', 'super_admin'] as const) {
       expect(others.every((token) => customListCanHold(role, token))).toBe(true);
     }
@@ -736,7 +736,7 @@ describe('staffAccessDraftGains (C7) — the one "does this draft add anything" 
       { role: 'super_admin', customList: null }
     );
     expect(gains.addedCapabilities.length).toBeGreaterThan(0);
-    expect(gains.addedCapabilities).toHaveLength(20);
+    expect(gains.addedCapabilities).toHaveLength(21);
     expect(gains.staffRoleGained).toBe(true);
   });
 

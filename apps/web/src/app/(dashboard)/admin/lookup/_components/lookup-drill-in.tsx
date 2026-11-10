@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ExternalLink, FileText, Globe } from 'lucide-react';
+import { Building2, ExternalLink, FileText, Globe } from 'lucide-react';
 import type { LookupSelection } from '../_lib/lookup-view';
 import {
   LOOKUP_TYPE_LABEL,
   resolveApplicationTarget,
+  resolveCompanyDetailsTarget,
   resolveDomainsTarget,
   resolveOpenTarget,
 } from '../_lib/lookup-view';
@@ -37,6 +38,9 @@ import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './look
  *
  * BAL-594 — companies and agencies also carry a Domains link (`/admin/domains/{type}/{id}`), again
  * plain navigation: domain changes happen on that page, never in the drill-in.
+ *
+ * BAL-630 — a company also carries a Company details link (`/admin/companies/{id}`), plain
+ * navigation again: industry and review-name changes happen on that page, never in the drill-in.
  */
 
 function noDestinationCopy(selection: LookupSelection): string {
@@ -80,6 +84,7 @@ export function LookupDrillIn({
   const target = resolveOpenTarget(selection);
   const applicationTarget = resolveApplicationTarget(selection);
   const domainsTarget = resolveDomainsTarget(selection);
+  const companyDetailsTarget = resolveCompanyDetailsTarget(selection);
   const [tab, setTab] = useState<LookupDrillInTab>('timeline');
   // BAL-555 fix round F2 — the initial tab is always "visited" (it fetches immediately on
   // mount today, and this preserves that), `money` joins only once the user actually selects
@@ -113,7 +118,10 @@ export function LookupDrillIn({
             </p>
             <p className="text-foreground mt-0.5 text-[14.5px] font-semibold">{selection.title}</p>
           </div>
-          {(target !== null || applicationTarget !== null || domainsTarget !== null) && (
+          {(target !== null ||
+            applicationTarget !== null ||
+            domainsTarget !== null ||
+            companyDetailsTarget !== null) && (
             <div className="flex shrink-0 items-center gap-2">
               {target !== null && (
                 <Link
@@ -140,6 +148,15 @@ export function LookupDrillIn({
                 >
                   <Globe className="size-3.5" aria-hidden="true" />
                   {domainsTarget.label}
+                </Link>
+              )}
+              {companyDetailsTarget !== null && (
+                <Link
+                  href={companyDetailsTarget.href}
+                  className="text-primary focus-visible:ring-ring inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded px-1 text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <Building2 className="size-3.5" aria-hidden="true" />
+                  {companyDetailsTarget.label}
                 </Link>
               )}
             </div>

@@ -29,8 +29,9 @@ import { readEngagementReview } from './read-engagement-review';
  *
  * ⚠ `engagementId` IS `meeting_contexts.context_id`, WHICH CARRIES NO FK. Callers must pass
  * an id their own loader has already authorized the viewer against — this function performs
- * no authorization of its own (mirrors `readEngagementReview`'s own docblock: the read is
- * keyed on the viewer's own review and reveals nothing else).
+ * no authorization of its own (mirrors `readEngagementReview`'s own docblock: besides the
+ * viewer's own review, the read returns the engagement's client company name, industry and
+ * review-name permission, so an unauthorized id would disclose another company's details).
  */
 export async function readRatingCard(input: {
   engagementId: string;
@@ -62,6 +63,7 @@ export async function readRatingCard(input: {
       engagementId,
       state: engagementReview.state,
       existingBody: engagementReview.review?.body ?? null,
+      capture: engagementReview.capture,
     };
   } catch (error) {
     log.error('Rating card read failed', {

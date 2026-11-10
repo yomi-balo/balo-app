@@ -16,6 +16,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -24,12 +29,14 @@ const {
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class MilestoneHasLoggedTimeError extends Error {}
   class ScopeChangeRequiresChangeOrderError extends Error {
     constructor(
       public readonly reason: string,
@@ -46,6 +53,7 @@ const {
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
     MilestoneChangePendingError,
+    MilestoneHasLoggedTimeError,
     ScopeChangeRequiresChangeOrderError,
   };
 });
@@ -60,6 +68,7 @@ vi.mock('@balo/db', () => ({
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 }));
 
@@ -108,8 +117,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
-      user: { firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       headline: null,
       type: 'freelancer',
     },
@@ -120,6 +128,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue(EXPERT_CTX);
@@ -166,6 +175,7 @@ describe('addMilestoneAction', () => {
   });
 
   it('returns ONLY_EXPERT for a non-expert lens', async () => {
+    mockHasExpertCapability.mockResolvedValue(false);
     mockResolveLens.mockReturnValue({ ...EXPERT_CTX, lens: 'admin' });
     expect(await addMilestoneAction(HAPPY)).toEqual({
       success: false,
@@ -202,6 +212,7 @@ describe('addMilestoneAction', () => {
     expect(mockTrack).toHaveBeenCalledWith('engagement_milestone_added', {
       engagement_id: ENGAGEMENT_ID,
       milestones_total: 2,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.scope_changed', {

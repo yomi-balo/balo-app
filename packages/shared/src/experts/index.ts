@@ -34,6 +34,13 @@ export {
 // picker, the applicant's review page and the staff review page (three drifting copies before).
 export { PROJECT_COUNT_RANGES, type ProjectCountRange, projectRangeLabel } from './project-ranges';
 
+// BAL-643 — the 0–10 self-assessment scale: one title and description per number.
+export {
+  PROFICIENCY_SCALE,
+  type ProficiencyScaleLevel,
+  proficiencyScaleLevel,
+} from './proficiency-scale';
+
 // BAL-593 — a Balo-staff edit of an expert application: the editable-status vocabulary, the
 // four edit sections and the delta the Server Action sends.
 export {

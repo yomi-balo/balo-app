@@ -399,6 +399,19 @@ export const PLATFORM_CAPABILITIES = {
    * `VIEW_PLATFORM_ADMIN`; every write action resolves this token itself, live.
    */
   MANAGE_PARTY_DOMAINS: 'manage_party_domains',
+  /**
+   * BAL-630 — set a company's industry and hide or show the company's name on public reviews
+   * (`companies.industry_id`, `companies.review_name_hidden_*`), the only writers of those columns.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the MANAGE_PARTY_DOMAINS argument.
+   * It is NOT `VIEW_PLATFORM_ADMIN` (reachability, not a per-surface grant) and NOT
+   * `MANAGE_PARTY_DOMAINS` (that token decides who joins a tenant; this one edits company
+   * profile data).
+   *
+   * Granted to BOTH staff roles via `PLATFORM_STAFF_BUNDLE`. The page read is reachable on
+   * `VIEW_PLATFORM_ADMIN`; every write action resolves this token itself, live.
+   */
+  MANAGE_COMPANY_DETAILS: 'manage_company_details',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -518,6 +531,10 @@ export const PLATFORM_CAPABILITY_LABELS: Readonly<
     name: 'Manage party domains',
     group: 'platform',
   },
+  [PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS]: {
+    name: 'Edit company details (industry, name on reviews)',
+    group: 'platform',
+  },
   [PLATFORM_CAPABILITIES.REDRIVE_JOB]: {
     name: 'Re-run a stuck recording or transcript job',
     group: 'platform',
@@ -600,6 +617,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING,
   PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE,
   PLATFORM_CAPABILITIES.MANAGE_PARTY_DOMAINS,
+  PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS,
 ];
 
 /**
@@ -802,6 +820,7 @@ export const PLATFORM_CAPABILITY_SEAL_ORDER: readonly PlatformCapability[] = Obj
   PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING, //        17 (BAL-558)
   PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE, //             18 (BAL-558)
   PLATFORM_CAPABILITIES.MANAGE_PARTY_DOMAINS, //                19 (BAL-594)
+  PLATFORM_CAPABILITIES.MANAGE_COMPANY_DETAILS, //              20 (BAL-630)
 ]);
 
 export type SealedPlatformCapabilityIndexes = number[];

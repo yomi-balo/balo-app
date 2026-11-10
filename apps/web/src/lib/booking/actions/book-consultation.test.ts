@@ -6,6 +6,7 @@ const mockMeetingFindByKey = vi.fn();
 const mockMeetingFindWithContexts = vi.fn();
 const mockCreate = vi.fn();
 const mockListOpenForCompanyAndExpert = vi.fn();
+const mockFindCaseByEngagementId = vi.fn();
 const mockListCapabilityEligibleCompanies = vi.fn();
 const mockFindNameById = vi.fn();
 const mockCountByActorAndActionSince = vi.fn();
@@ -42,6 +43,7 @@ vi.mock('@balo/db', () => ({
     findByBookingIdempotencyKey: (...args: unknown[]) => mockFindByBookingIdempotencyKey(...args),
     create: (...args: unknown[]) => mockCreate(...args),
     listOpenForCompanyAndExpert: (...args: unknown[]) => mockListOpenForCompanyAndExpert(...args),
+    findByEngagementId: (...args: unknown[]) => mockFindCaseByEngagementId(...args),
   },
   expertsRepository: {
     findNewWorkEligibility: (...args: unknown[]) => mockFindNewWorkEligibility(...args),
@@ -214,6 +216,7 @@ beforeEach(() => {
     partyLabel: 'Dana Okoro',
   });
   mockListOpenForCompanyAndExpert.mockResolvedValue({ openCases: [], resolvedCaseCount: 0 });
+  mockFindCaseByEngagementId.mockResolvedValue({ deliveringAgencyId: 'agency-pinned' });
   mockEnforceBookingFunding.mockResolvedValue({ ok: true });
   mockFindNewWorkEligibility.mockResolvedValue({ eligible: true });
 });
@@ -468,7 +471,10 @@ describe('bookConsultationAction', () => {
       expertProfileId: OTHER_EXPERT_PROFILE_ID,
     });
 
-    expect(mockResolveBookingExpertDisplay).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+    expect(mockResolveBookingExpertDisplay).toHaveBeenCalledWith(EXPERT_PROFILE_ID, {
+      from: 'engagement',
+      deliveringAgencyId: 'agency-pinned',
+    });
     expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
       'booking.confirmed',
       expect.objectContaining({ expertProfileId: EXPERT_PROFILE_ID })
@@ -478,6 +484,18 @@ describe('bookConsultationAction', () => {
       Record<string, unknown>,
     ];
     expect(payload.expertProfileId).not.toBe(OTHER_EXPERT_PROFILE_ID);
+  });
+
+  it('names no agency when the case pin cannot be read, never the expert current one', async () => {
+    mockFindCaseByEngagementId.mockRejectedValue(new Error('connection reset'));
+
+    const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+    expect(result.ok).toBe(true);
+    expect(mockResolveBookingExpertDisplay).toHaveBeenCalledWith(EXPERT_PROFILE_ID, {
+      from: 'engagement',
+      deliveringAgencyId: null,
+    });
   });
 
   // ── S2 regression: the window is the SERVER'S ────────────────────────────

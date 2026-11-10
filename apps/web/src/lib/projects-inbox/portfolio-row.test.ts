@@ -15,6 +15,9 @@ import {
   adminStallDays,
   rowMatchesFilter,
   tilesFromRows,
+  agencyRowMatches,
+  rankAgencyRows,
+  type AgencyRowView,
   type EngagementRowInput,
   type PortfolioRowView,
   type RequestThreadSignal,
@@ -955,5 +958,82 @@ describe('tilesFromRows + rowMatchesFilter', () => {
     expect(rows.filter((r) => rowMatchesFilter(r, 'in_progress')).map((r) => r.id)).toEqual(['b']);
     expect(rows.filter((r) => rowMatchesFilter(r, 'kicked')).map((r) => r.id)).toEqual(['c', 'd']);
     expect(rows.filter((r) => rowMatchesFilter(r, 'all'))).toHaveLength(4);
+  });
+});
+
+describe('deriveEngagementRow: agency lens', () => {
+  it('changes requested never asks anything of the agency and links with ?from=agency', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({ lens: 'agency', status: 'active', hasChangeRequest: true })
+    );
+    expect(res).toMatchObject({
+      needsYou: false,
+      moveKind: null,
+      clientMoveKind: null,
+      deliveryState: 'changes_requested',
+    });
+    expect(res.href).toMatch(/\?from=agency$/);
+  });
+
+  it('pending acceptance reads as awaiting the client with no completion move', () => {
+    const res = deriveEngagementRow(
+      makeEngagementInput({ lens: 'agency', status: 'pending_acceptance' })
+    );
+    expect(res).toMatchObject({
+      needsYou: false,
+      nudgeLabel: 'Awaiting client review',
+      clientMoveKind: null,
+      progressLabel: null,
+    });
+  });
+
+  it.each(['active', 'completed', 'cancelled'] as const)('%s never sets needsYou', (status) => {
+    expect(deriveEngagementRow(makeEngagementInput({ lens: 'agency', status })).needsYou).toBe(
+      false
+    );
+  });
+});
+
+function agencyRow(
+  id: string,
+  state: AgencyRowView['deliveryState'],
+  atIso: string
+): AgencyRowView {
+  return {
+    id,
+    href: `/engagements/${id}?from=agency`,
+    title: id,
+    companyName: 'Northwind',
+    deliveryState: state,
+    detailLabel: null,
+    changeRequestNote: null,
+    deliverer: {
+      expertProfileId: 'p1',
+      name: 'Priya Shah',
+      avatarUrl: null,
+      isViewer: false,
+      isFormerMember: false,
+    },
+    updatedRelative: 'today',
+    recencyAtIso: atIso,
+  };
+}
+
+describe('agency row helpers', () => {
+  it('ranks changes requested, then awaiting review, then in delivery, newest first within each', () => {
+    const ranked = rankAgencyRows([
+      agencyRow('d-old', 'in_delivery', '2026-06-01T00:00:00.000Z'),
+      agencyRow('p', 'pending_acceptance', '2026-06-02T00:00:00.000Z'),
+      agencyRow('c', 'changes_requested', '2026-05-01T00:00:00.000Z'),
+      agencyRow('d-new', 'in_delivery', '2026-06-10T00:00:00.000Z'),
+    ]);
+    expect(ranked.map((r) => r.id)).toEqual(['c', 'p', 'd-new', 'd-old']);
+  });
+
+  it('matches by deliveryState, with all matching everything', () => {
+    const row = agencyRow('a', 'pending_acceptance', '2026-06-01T00:00:00.000Z');
+    expect(agencyRowMatches(row, 'all')).toBe(true);
+    expect(agencyRowMatches(row, 'pending_acceptance')).toBe(true);
+    expect(agencyRowMatches(row, 'in_delivery')).toBe(false);
   });
 });

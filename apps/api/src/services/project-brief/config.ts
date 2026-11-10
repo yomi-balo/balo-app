@@ -5,6 +5,7 @@ export const DEFAULT_PROJECT_BRIEF_MODEL = 'claude-opus-5';
 
 /** ⚠ VISION-CAPABLE ONLY. Ruling B: the allow-list applies HERE and nowhere else. */
 export const PROJECT_BRIEF_MODEL_ALLOW_LIST = [
+  'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-opus-5',
   'claude-opus-4-8',

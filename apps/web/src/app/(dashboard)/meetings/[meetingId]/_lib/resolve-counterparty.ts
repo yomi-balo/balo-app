@@ -6,6 +6,7 @@ import {
   personDisplayName,
   personWithOrgLabel,
 } from '@balo/shared/parties';
+import { deliveringAgencyIdFor, type DeliveringAgencySource } from '@balo/shared/parties';
 import { expertCounterpartyLabels } from '@/lib/meetings/expert-counterparty';
 import type { RecapLens, RecapPartyView } from '@/lib/meetings/recap-view-types';
 
@@ -108,15 +109,15 @@ export async function resolveCounterparty(
   lens: RecapLens,
   profile: RecapExpertProfile | undefined,
   clientCompanyName: string,
-  ordinalLine: string | null
+  ordinalLine: string | null,
+  agencySource: DeliveringAgencySource
 ): Promise<CounterpartyLabels> {
+  const agencyId = deliveringAgencyIdFor(agencySource, profile?.agencyId ?? null);
   const [expertUser, agency] = await Promise.all([
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
-      ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+    agencyId === null ? Promise.resolve(undefined) : agenciesRepository.getSummaryById(agencyId),
   ]);
   const firstName = expertUser?.firstName ?? null;
   const lastName = expertUser?.lastName ?? null;
@@ -141,9 +142,10 @@ export async function resolveCounterparty(
   };
 
   if (lens === 'client') {
-    // ⚠ `expert_profiles.username` IS NULLABLE. A null username means NO CTA at all — never a
-    // disabled button, and never an href pointing at `/experts/null`.
-    const username = profile?.username ?? null;
+    // `publicProfileUsername` is null unless `/experts/{username}` resolves (a null username,
+    // an unapproved or unsearchable profile, or a suspended/deleted owner), so a null means no
+    // link and no CTA — never a disabled button, and never an href that 404s.
+    const username = profile?.publicProfileUsername ?? null;
     return {
       ...shared,
       party: {
@@ -153,7 +155,7 @@ export async function resolveCounterparty(
         avatarUrl: expertUser?.avatarUrl ?? null,
         initials: initialsOf(expertPerson),
         ordinalLine,
-        bookAgainHref: username === null ? null : '/experts/' + username,
+        profileHref: username === null ? null : '/experts/' + username,
         // BAL-422 — already parsed to a number by `findDisplayProfileById`.
         ratingAverage: profile?.ratingAverage ?? null,
         ratingCount: profile?.ratingCount ?? 0,
@@ -170,10 +172,11 @@ export async function resolveCounterparty(
       avatarUrl: null,
       initials: initialsOf(clientCompanyName),
       ordinalLine,
-      // ⚠ EVERY expert-side CTA the design listed (send proposal, private note, offer a new
+      // ⚠ The counterparty is a company, which has no profile page, so the name is never a
+      // link. EVERY expert-side CTA the design listed (send proposal, private note, offer a new
       // time) has NO live destination today, so the card renders none. It must read complete
       // with one action or with zero — a disabled CTA is worse than an absent one.
-      bookAgainHref: null,
+      profileHref: null,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
       // client COMPANY; the expert is not scoring the client, and companies carry no rating
       // aggregate at all. Hardcoded, not derived — do not "wire" these.

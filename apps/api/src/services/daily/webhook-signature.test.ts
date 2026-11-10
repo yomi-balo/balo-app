@@ -1,8 +1,10 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   DAILY_WEBHOOK_SIGNATURE_HEADER,
   DAILY_WEBHOOK_TIMESTAMP_HEADER,
   DAILY_WEBHOOK_TOLERANCE_MS,
+  isBase64Secret,
   signDailyWebhookForTest,
   verifyDailyWebhookSignature,
 } from './webhook-signature.js';
@@ -46,7 +48,7 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
   it('⚠ produces a BASE64 digest, not hex — pinned against an independent fixed vector', () => {
     const signature = headersFor()[DAILY_WEBHOOK_SIGNATURE_HEADER];
 
-    expect(signature).toBe('zVwFNQPyiHPmH63FPrudklOf81G7/0w7r1P9kxaGh8k=');
+    expect(signature).toBe('jiK+fEU2HgcVmZXsUW6xOLGbQsCJKthXDzLrnl06e2c=');
     // Base64 of a 32-byte digest is 44 chars with padding; hex would be 64.
     expect(signature).toHaveLength(44);
     expect(signature).toMatch(/^[A-Za-z0-9+/]+=*$/);
@@ -87,7 +89,7 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
   it('⚠ refuses a delivery whose timestamp header was swapped for a fresh one', () => {
     const headers = {
       ...headersFor(),
-      [DAILY_WEBHOOK_TIMESTAMP_HEADER]: String(Math.floor(NOW.getTime() / 1000) + 1),
+      [DAILY_WEBHOOK_TIMESTAMP_HEADER]: String(NOW.getTime() + 1),
     };
     expect(verifyDailyWebhookSignature(BODY, headers, SECRET, NOW)).toEqual({
       ok: false,
@@ -171,6 +173,35 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
     });
   });
 
+  /**
+   * ⚠⚠ THE UNIT PIN. Daily's `X-Webhook-Timestamp` is unix MILLISECONDS (captured from a real
+   * create-time verification ping). Every other test here round-trips through
+   * `signDailyWebhookForTest`, which agrees with the verifier on whatever unit both use — so
+   * only these two assertions catch a regression to seconds.
+   */
+  it('⚠ reads the timestamp as MILLISECONDS — the signer emits 13 digits', () => {
+    expect(headersFor()[DAILY_WEBHOOK_TIMESTAMP_HEADER]).toBe('1786701600000');
+  });
+
+  it('⚠ refuses a correctly signed delivery whose timestamp is in unix SECONDS', () => {
+    const seconds = String(NOW.getTime() / 1000);
+    const signature = createHmac('sha256', Buffer.from(SECRET, 'base64'))
+      .update(`${seconds}.`)
+      .update(BODY)
+      .digest('base64');
+    expect(
+      verifyDailyWebhookSignature(
+        BODY,
+        {
+          [DAILY_WEBHOOK_TIMESTAMP_HEADER]: seconds,
+          [DAILY_WEBHOOK_SIGNATURE_HEADER]: signature,
+        },
+        SECRET,
+        NOW
+      )
+    ).toEqual({ ok: false, reason: 'stale_timestamp' });
+  });
+
   it('accepts a delivery exactly at the tolerance boundary, in both directions', () => {
     const old = new Date(NOW.getTime() - DAILY_WEBHOOK_TOLERANCE_MS);
     const future = new Date(NOW.getTime() + DAILY_WEBHOOK_TOLERANCE_MS);
@@ -234,5 +265,17 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
     expect(
       verifyDailyWebhookSignature(BODY, signDailyWebhookForTest(BODY, plain, NOW), plain, NOW)
     ).toEqual({ ok: true });
+  });
+});
+
+describe('isBase64Secret', () => {
+  it('accepts padded and unpadded base64', () => {
+    expect(isBase64Secret(SECRET)).toBe(true);
+    expect(isBase64Secret(Buffer.from('ab').toString('base64'))).toBe(true);
+    expect(isBase64Secret('YWJj')).toBe(true);
+  });
+
+  it.each(['', 'not base64 !!!', 'YWJj$', 'a'])('rejects %j', (value) => {
+    expect(isBase64Secret(value)).toBe(false);
   });
 });

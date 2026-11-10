@@ -1,4 +1,4 @@
-import type { ProficiencyTone } from '@/lib/expert-profile/proficiency';
+import type { ReviewEntryRater } from '@/components/balo/reviews/review-entry';
 
 /** Section keys the StickyNav / scroll-spy operates on. */
 export type ProfileSectionKey = 'about' | 'expertise' | 'quickstarts' | 'work' | 'reviews';
@@ -10,10 +10,8 @@ export interface CompetencyView {
   name: string;
   /** 0–10 proficiency. */
   proficiency: number;
-  /** Human level label derived from proficiency. */
-  level: string;
-  /** Semantic tone for the level badge. */
-  tone: ProficiencyTone;
+  /** Scale title for the proficiency (`PROFICIENCY_SCALE`). */
+  title: string;
   /** Bar fill percentage (0–100). */
   pct: number;
 }
@@ -50,6 +48,24 @@ export interface WorkHistoryView {
    * server-side mapper) — safe to inject. `null` when the entry has none.
    */
   responsibilitiesHtml: string | null;
+}
+
+/**
+ * One reviewed engagement on the public profile, shaped for `ReviewEntry`. Carries only what
+ * the entry renders: no ids beyond the stable React key, no timestamps, no surname.
+ */
+export interface ProfileReviewEntryView {
+  /** The earliest review's id; a stable React key. */
+  key: string;
+  engagementKind: 'project' | 'case';
+  /** The engagement's rating: the mean of its raters. */
+  rating: number;
+  /** "Oct 2026". */
+  dateLabel: string;
+  topics: string[];
+  raters: ReviewEntryRater[];
+  /** The company every rater chose to show, or `null`. */
+  sharedCompanyName: string | null;
 }
 
 /**
@@ -148,4 +164,6 @@ export interface ExpertProfileView {
   languagesLabel: string;
   agency: AgencyView | null;
   workHistory: WorkHistoryView[];
+  /** One entry per reviewed engagement, newest first. `null` means the load failed. */
+  reviews: ProfileReviewEntryView[] | null;
 }

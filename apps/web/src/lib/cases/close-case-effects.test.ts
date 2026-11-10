@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
  * `cases/[engagementId]/_actions/resolve-case.test.ts`) drive this module through a whole
  * Server Action, which is the right shape for the ordering and the degradation claims. What
  * they cannot reach is the CONDITION set: the fallbacks on every optional read
- * (`company?.name ?? …`, `profile?.agencyId == null`, `agency?.name ?? null`), the
+ * (`company?.name ?? …`, `input.deliveringAgencyId === null`, `agency?.name ?? null`), the
  * `errorCodeOf` narrowing ladder, and both sides of the held-meeting predicate. Each of those
  * is a distinct branch that decides what a real email says, and each gets its own case here.
  *
@@ -93,6 +93,7 @@ function publishInput(over: Partial<PublishCaseClosedInput> = {}): PublishCaseCl
     meetingId: 'm0000000-0000-4000-8000-00000000000a',
     companyId: COMPANY_ID,
     expertProfileId: PROFILE_ID,
+    deliveringAgencyId: null,
     caseTitle: 'Flow interview loop',
     closedAt: CLOSED_AT,
     recipientId: REVIEWER_ID,
@@ -428,7 +429,7 @@ describe('publishCaseClosed — the party labels, one branch per optional read',
     expect(publishedPayload().expertPartyLabel).toBe('An expert');
   });
 
-  it('issues NO agency read for an INDEPENDENT expert (null agencyId)', async () => {
+  it('issues NO agency read for an INDEPENDENT expert (null pin)', async () => {
     await publishCaseClosed(publishInput());
 
     expect(mockFindUser).toHaveBeenCalledWith(EXPERT_USER_ID);
@@ -436,30 +437,32 @@ describe('publishCaseClosed — the party labels, one branch per optional read',
   });
 
   it('names the AGENCY when the profile is agency-typed and the agency resolves', async () => {
+    // The profile now links a different agency; the case's pin is what the notice names.
     mockFindProfile.mockResolvedValue({
       id: PROFILE_ID,
       userId: EXPERT_USER_ID,
-      agencyId: AGENCY_ID,
+      agencyId: 'a0000000-0000-4000-8000-0000000000ff',
       type: 'agency',
     });
     mockFindAgency.mockResolvedValue({ id: AGENCY_ID, name: 'CloudPeak' });
 
-    await publishCaseClosed(publishInput());
+    await publishCaseClosed(publishInput({ deliveringAgencyId: AGENCY_ID }));
 
     expect(mockFindAgency).toHaveBeenCalledWith(AGENCY_ID);
     expect(publishedPayload().expertPartyLabel).toBe('CloudPeak');
   });
 
   it('falls back to the PERSON when an agency-typed profile has no resolvable agency', async () => {
+    // The profile now links a different agency; the case's pin is what the notice names.
     mockFindProfile.mockResolvedValue({
       id: PROFILE_ID,
       userId: EXPERT_USER_ID,
-      agencyId: AGENCY_ID,
+      agencyId: 'a0000000-0000-4000-8000-0000000000ff',
       type: 'agency',
     });
     mockFindAgency.mockResolvedValue(undefined);
 
-    await publishCaseClosed(publishInput());
+    await publishCaseClosed(publishInput({ deliveringAgencyId: AGENCY_ID }));
 
     expect(mockFindAgency).toHaveBeenCalledWith(AGENCY_ID);
     expect(publishedPayload().expertPartyLabel).toBe('Amara Okafor');

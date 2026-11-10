@@ -634,8 +634,8 @@ describe('POST /api/auth/test-login — persona seam (BAL-548)', () => {
  * session. It does not, if `activeWorkspace` is missing: `checkSessionDrift` classifies an
  * absent pointer as the pre-BAL-494 bootstrap case and returns `sync-needed`, so
  * `(dashboard)/layout.tsx` burns the first navigation after `seedSession()` on a
- * `/api/auth/session-sync` round-trip that lands on `/dashboard` (that layout's `returnTo` reads
- * `headers().get('x-invoke-path')`, a header which does not exist in Next 16, so it always falls
+ * `/api/auth/session-sync` round-trip that landed on `/dashboard` (that layout's `returnTo` read
+ * `headers().get('x-invoke-path')`, a header which does not exist in Next 16, so it always fell
  * back to `/dashboard`). Three staff arms of `e2e/admin-shell.spec.ts` therefore landed on
  * `/dashboard` and read as a broken `VIEW_PLATFORM_ADMIN` gate — while the sealed cookie had
  * carried `platformRole: 'admin'` correctly the whole time.

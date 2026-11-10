@@ -116,23 +116,25 @@ export function projectEngagementTitle(
 /**
  * Derive every party / person string for an engagement from the hydrated read
  * model. `isAgencyExpert = expertProfile.type === 'agency'`; the person always comes
- * from `expertProfile.user` (gender-neutral full + first name).
+ * from `expertProfile.user` (gender-neutral full + first name) and the agency name from the
+ * engagement's pinned `deliveringAgency`, so a later change to the expert's agency link does
+ * not rename past work.
  *
  * ⚠ DELIBERATELY NOT WIDENED TO THE SUPERTYPE (BAL-417). Unlike
  * `resolveEngagementLens`, this reads HYDRATED RELATIONS (`expertProfile.user`,
- * `expertProfile.agency`, `company`), not flat supertype scalars — a
+ * `deliveringAgency`, `company`), not flat supertype scalars — a
  * `CaseEngagementRow` is a flat row with no relations and could not satisfy a
  * structural minimum anyway, and hand-writing one here would fork the repository's
  * `columns:` allow-list into a second place that will drift. Give it a case overload
  * only when BAL-421 supplies a hydrated case graph.
  */
 export function deriveEngagementParties(e: ProjectEngagementWithMilestones): EngagementParties {
-  const { user, agency, headline, type } = e.expertProfile;
+  const { user, headline, type } = e.expertProfile;
 
   return {
     ...deriveExpertPartyLabels({
       type,
-      agencyName: agency?.name ?? null,
+      agencyName: e.deliveringAgency?.name ?? null,
       firstName: user.firstName,
       lastName: user.lastName,
     }),
@@ -159,37 +161,108 @@ export function personAtCompany(
 }
 
 /**
+ * The header sub-line split around the expert person's name, so the name alone can render as a
+ * profile link. `prefix + expertPerson + suffix` reads as the whole line. `expertPerson` is null
+ * when the line names no expert person; `prefix` is then the whole line and `suffix` is empty.
+ */
+export interface EngagementHeaderLineParts {
+  prefix: string;
+  expertPerson: string | null;
+  suffix: string;
+}
+
+/**
  * The per-lens header sub-line under the engagement title.
  *  - client   → prospective "Delivered by …" naming the expert PARTY (+ person &
  *               headline in the parenthetical / suffix);
- *  - expert   → "For {clientCompanyName}";
+ *  - expert   → "For {clientCompanyName}" (names no expert person);
  *  - admin    → "{clientCompanyName} ↔ {expertParty} ({expertPerson})" (agency) |
  *               "{clientCompanyName} ↔ {expertPerson}" (independent).
+ * Only the expert PERSON is split out: an agency or client company name stays in the text.
  */
-export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties): string {
+export function engagementHeaderLine(
+  lens: EngagementLens,
+  p: EngagementParties
+): EngagementHeaderLineParts {
   if (lens === 'expert') {
-    return `For ${p.clientCompanyName}`;
+    return { prefix: `For ${p.clientCompanyName}`, expertPerson: null, suffix: '' };
   }
+  const expertPerson = p.expertPerson;
   if (lens === 'admin') {
     return p.isAgencyExpert
-      ? `${p.clientCompanyName} ↔ ${p.expertParty} (${p.expertPerson})`
-      : `${p.clientCompanyName} ↔ ${p.expertPerson}`;
+      ? { prefix: `${p.clientCompanyName} ↔ ${p.expertParty} (`, expertPerson, suffix: ')' }
+      : { prefix: `${p.clientCompanyName} ↔ `, expertPerson, suffix: '' };
   }
   // client lens — prospective, party-named.
+  const headline =
+    p.expertHeadline !== null && p.expertHeadline.trim() !== '' ? p.expertHeadline : null;
   if (p.isAgencyExpert) {
-    return p.expertHeadline !== null && p.expertHeadline.trim() !== ''
-      ? `Delivered by ${p.expertParty} (${p.expertPerson}, ${p.expertHeadline})`
-      : `Delivered by ${p.expertParty} (${p.expertPerson})`;
+    return {
+      prefix: `Delivered by ${p.expertParty} (`,
+      expertPerson,
+      suffix: headline === null ? ')' : `, ${headline})`,
+    };
   }
-  return p.expertHeadline !== null && p.expertHeadline.trim() !== ''
-    ? `Delivered by ${p.expertPerson} — ${p.expertHeadline}`
-    : `Delivered by ${p.expertPerson}`;
+  return {
+    prefix: 'Delivered by ',
+    expertPerson,
+    suffix: headline === null ? '' : ` — ${headline}`,
+  };
+}
+
+/**
+ * Retrospective label for a person acting on the expert side of an engagement. The delivering
+ * expert (or an unknown actor) reads exactly as {@link EngagementParties.expertRetroFirstMention};
+ * any other holder (an agency owner/admin) is named, "@ agency" on first mention. An unnamed
+ * actor falls back to the expert party so the label never renders a dangling `@`.
+ */
+export function expertSideActorLabel(
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile' | 'deliveringAgency'>,
+  parties: EngagementParties,
+  actor: { id: string; firstName: string | null; lastName: string | null } | null
+): string {
+  if (actor === null || actor.id === engagement.expertProfile.user.id) {
+    return parties.expertRetroFirstMention;
+  }
+  const name = (actor.firstName ?? '').trim() || (actor.lastName ?? '').trim();
+  if (name === '') {
+    return parties.expertParty;
+  }
+  const showsAgencyName =
+    parties.isAgencyExpert && (engagement.deliveringAgency?.name.trim() ?? '') !== '';
+  return showsAgencyName ? `${name} @ ${parties.expertParty}` : name;
+}
+
+/**
+ * Short retrospective label for the person who completed a milestone. The delivering expert
+ * (or a completer the row never recorded) reads as {@link EngagementParties.expertPersonShort};
+ * any other holder (an agency owner/admin) is named as {@link expertSideActorLabel} names them.
+ */
+export function milestoneCompleterLabel(
+  engagement: Pick<ProjectEngagementWithMilestones, 'expertProfile' | 'deliveringAgency'>,
+  parties: EngagementParties,
+  completer: { id: string; firstName: string | null; lastName: string | null } | null
+): string {
+  if (completer === null || completer.id === engagement.expertProfile.user.id) {
+    return parties.expertPersonShort;
+  }
+  return expertSideActorLabel(engagement, parties, completer);
+}
+
+/**
+ * Retrospective label for expert-side work with no single recorded actor. An agency engagement
+ * names the agency, since several of its people may have acted; an independent expert is the
+ * only one who can act, so they are named as {@link EngagementParties.expertRetroFirstMention}.
+ */
+export function expertSideRetroParty(parties: EngagementParties): string {
+  return parties.isAgencyExpert ? parties.expertParty : parties.expertRetroFirstMention;
 }
 
 /**
  * The retrospective person who performed an action-item write (BAL-329 attribution):
  *  - Balo staff → `'Balo'` (the platform actor label — Balo acts as a party, not a person);
- *  - expert     → the expert's "@ agency" first-mention;
+ *  - expert     → {@link expertSideActorLabel} (the delivering expert's "@ agency" first-mention,
+ *                 or the acting agency owner/admin named "@ agency");
  *  - client     → the acting person "@ company".
  *
  * ⚠ MOVED HERE FROM `_actions/action-item-action-shared.ts` BY BAL-404, AND THAT MOVE IS THE
@@ -206,13 +279,13 @@ export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties)
 export function deriveActorLabel(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
-  person: { firstName: string | null; lastName: string | null }
+  person: { id: string; firstName: string | null; lastName: string | null }
 ): string {
   if (lens === 'admin') {
     return 'Balo';
   }
   if (lens === 'expert') {
-    return deriveEngagementParties(engagement).expertRetroFirstMention;
+    return expertSideActorLabel(engagement, deriveEngagementParties(engagement), person);
   }
   return personAtCompany(person, engagement.company.name);
 }

@@ -5,7 +5,7 @@ import {
 } from './credit-format.js';
 import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
-import { pluralize } from './shared.js';
+import { optionalText, pluralize } from './shared.js';
 import { passedStageClause } from './project-track-passed-stage.js';
 import { partyDomainAddedBody, partyDomainsPath } from './party-domain-ownership.js';
 import { consultationClause } from './review-email-shared.js';
@@ -24,6 +24,7 @@ import { CASE_INACTIVITY_DAYS, joinTitles } from '@balo/shared/engagements';
 import { readMilestoneTitles } from './engagement-review-decision-emails.js';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
+import { timeEntryChangedSentence } from './engagement-time-entry-changed.js';
 
 interface InAppOutput {
   title: string;
@@ -271,10 +272,22 @@ function projectRequestNotice(
 }
 
 /** BAL-332 — the common in-app shape for a milestone notice, deep-linked to the workspace. */
-function engagementNotice(title: string, body: string, data: Record<string, unknown>): InAppOutput {
+function engagementNotice(
+  title: string,
+  body: string,
+  data: Record<string, unknown>,
+  actionUrlSuffix = ''
+): InAppOutput {
   const engagementId = data.engagementId as string | undefined;
-  return { title, body, actionUrl: engagementId ? `/engagements/${engagementId}` : undefined };
+  return {
+    title,
+    body,
+    actionUrl: engagementId ? `/engagements/${engagementId}${actionUrlSuffix}` : undefined,
+  };
 }
+
+/** BAL-631 — the query suffix agency-oversight notices append so the back link returns to the lens. */
+const FROM_AGENCY = '?from=agency';
 
 /** BAL-332 — "n/m" milestone progress from the payload counts; "" when either is absent. */
 function milestoneProgress(data: Record<string, unknown>): string {
@@ -883,6 +896,67 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-624 milestone over estimate — CLIENT owner. Hours only, never money.
+  'engagement-milestone-estimate-exceeded-client': (data) => {
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const logged = (data.loggedHoursLabel as string) ?? '';
+    const estimate = (data.estimatedHoursLabel as string) ?? '';
+    return engagementNotice(
+      'Milestone over estimate',
+      `'${milestone}' is at ${logged}; the estimate is ${estimate}.`,
+      data
+    );
+  },
+
+  // BAL-631 milestone over estimate — delivering agency's owners/admins.
+  'engagement-milestone-estimate-exceeded-agency': (data) => {
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const title = (data.projectTitle as string) ?? 'the project';
+    const logged = (data.loggedHoursLabel as string) ?? '';
+    const estimate = (data.estimatedHoursLabel as string) ?? '';
+    const expert = optionalText(data.deliveringExpertName);
+    const deliverer = expert ? ` ${expert} is delivering.` : '';
+    return engagementNotice(
+      'Milestone over estimate',
+      `'${milestone}' on '${title}' is at ${logged}; the estimate is ${estimate}.${deliverer}`,
+      data,
+      FROM_AGENCY
+    );
+  },
+
+  // BAL-624 milestone over estimate — ADMIN ops signal (project-scoped).
+  'engagement-milestone-estimate-exceeded-admin': (data) => {
+    const title = (data.projectTitle as string) ?? 'A project';
+    const milestone = (data.milestoneTitle as string) ?? 'a milestone';
+    const logged = (data.loggedHoursLabel as string) ?? '';
+    const estimate = (data.estimatedHoursLabel as string) ?? '';
+    return engagementNotice(
+      'Milestone over estimate',
+      `${title}: '${milestone}' is over its estimate (${logged} of ${estimate}).`,
+      data
+    );
+  },
+
+  // BAL-626 time entry changed by someone else — the entry's AUTHOR.
+  'engagement-time-entry-changed': (data) => {
+    const removed = data.change === 'removed';
+    const actor = (data.actorExpertLabel as string) ?? 'Someone on your team';
+    const hours = (data.hoursLabel as string) ?? '';
+    const date = (data.workedOnLabel as string) ?? '';
+    const title = (data.projectTitle as string) ?? 'your project';
+    return engagementNotice(
+      removed ? 'Time entry removed' : 'Time entry changed',
+      timeEntryChangedSentence({
+        actor,
+        change: removed ? 'removed' : 'edited',
+        workedOnLabel: date,
+        hoursLabel: hours,
+        projectTitle: title,
+      }),
+      data
+    );
+  },
+
   // BAL-332 (D2) milestone completed — ADMIN ops signal (project-scoped).
   'engagement-milestone-completed-admin': (data) => {
     const title = (data.projectTitle as string) ?? 'A project';
@@ -980,6 +1054,24 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     );
   },
 
+  // BAL-631 engagement cancelled — delivering agency's owners/admins.
+  'engagement-cancelled-agency': (data) => {
+    const title = (data.projectTitle as string) ?? 'The project';
+    const cancelledOn = (data.cancelledOn as string) ?? 'an earlier date';
+    const client = optionalText(data.clientCompanyName);
+    const expert = optionalText(data.deliveringExpertName);
+    const actor = optionalText(data.actorLabel);
+    const forClient = client ? ` for ${client}` : '';
+    const deliveredBy = expert ? `, delivered by ${expert},` : '';
+    const cancelledBy = actor ? ` Cancelled by ${actor}.` : '';
+    return engagementNotice(
+      'Project cancelled',
+      `'${title}'${forClient}${deliveredBy} was cancelled on ${cancelledOn}.${cancelledBy}`,
+      data,
+      FROM_AGENCY
+    );
+  },
+
   // BAL-338 (D7) client accepted — EXPERT (congrats). Retrospective person naming.
   'engagement-accepted-expert': (data) => {
     const actor = (data.actorClientLabel as string) ?? 'The client';
@@ -1014,6 +1106,20 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       'Changes requested',
       `${actor} requested changes on '${title}'${taggedClause}. Mark it ready again when it's fixed.`,
       data
+    );
+  },
+
+  // BAL-631 client requested changes — delivering agency's owners/admins.
+  'engagement-changes-requested-agency': (data) => {
+    const actor = (data.actorClientLabel as string) ?? 'The client';
+    const title = (data.projectTitle as string) ?? 'the project';
+    const expert = optionalText(data.deliveringExpertName);
+    const deliveredBy = expert ? `, delivered by ${expert}` : '';
+    return engagementNotice(
+      'Changes requested',
+      `${actor} requested changes on '${title}'${deliveredBy}. Open the project to see what's needed.`,
+      data,
+      FROM_AGENCY
     );
   },
 

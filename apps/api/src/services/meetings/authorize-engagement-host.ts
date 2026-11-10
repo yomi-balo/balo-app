@@ -6,13 +6,14 @@
  * Balo-staff mutations by `platformRole` (ADR-1035); THIS seam gates by **delivery
  * identity** on one already-resolved meeting context.
  *
- * Two tokens — `host_meetings` (live/in-meeting: Daily owner token, admit/deny, end
- * call) and `manage_engagement` (administrative: reschedule propose/withdraw,
- * expert-side cancel, request case resolution) — over ONE holder set and, crucially,
- * ONE resolver. `hasEngagementCapability` never branches on the token: it resolves the
- * host context, then hands both the context and the token to the pure core. A
+ * Three tokens — `host_meetings` (live/in-meeting: Daily owner token, admit/deny, end
+ * call), `manage_engagement` (administrative: reschedule propose/withdraw, expert-side
+ * cancel, request case resolution) and `log_time` (delivering expert only; no caller in
+ * this app) — over ONE resolver. Where holder sets differ they differ in the pure core's
+ * `ENGAGEMENT_ROLE_CAPABILITIES`. `hasEngagementCapability` never branches on the token: it
+ * resolves the host context, then hands both the context and the token to the pure core. A
  * per-token resolver is the thing ADR-1046 forbids, and `authorize-engagement-host.test.ts`
- * pins it by asserting both tokens produce identical repository call sequences.
+ * pins it by asserting every token produces identical repository call sequences.
  *
  * Structure mirrors `services/credit-session/authorize-session-*.ts` (service-local
  * async guard) — deliberately, per the ticket's scope fence.
@@ -97,6 +98,7 @@ import {
   type ResolvedHostContext,
 } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
+import type { DeliveringAgencySource } from '@balo/shared/parties';
 
 const log = createLogger('engagement-authz');
 
@@ -205,15 +207,21 @@ function denyMissingRow(
 async function hostContextForExpertProfile(
   expertProfileId: string,
   actorId: string,
-  subject: EngagementHostSubject
+  subject: EngagementHostSubject,
+  agencySource: DeliveringAgencySource
 ): Promise<ResolvedHostContext> {
-  const resolution = await buildHostContextForExpertProfile(expertProfileId, actorId, {
-    findExpertProfile: (id) => expertsRepository.findProfileById(id),
-    // ⚠ `actor` is the callback's PARAMETER, never a captured `actorId` — the
-    // confused-deputy defence documented on `HostContextReads`. Do not collapse it.
-    findAgencyRole: (agencyId, actor) =>
-      partyMembershipsRepository.getMemberRole('agency', agencyId, actor),
-  });
+  const resolution = await buildHostContextForExpertProfile(
+    expertProfileId,
+    actorId,
+    {
+      findExpertProfile: (id) => expertsRepository.findProfileById(id),
+      // ⚠ `actor` is the callback's PARAMETER, never a captured `actorId` — the
+      // confused-deputy defence documented on `HostContextReads`. Do not collapse it.
+      findAgencyRole: (agencyId, actor) =>
+        partyMembershipsRepository.getMemberRole('agency', agencyId, actor),
+    },
+    agencySource
+  );
 
   if (!resolution.ok) {
     return denyMissingRow(subject, actorId, 'expert_profile', expertProfileId);
@@ -312,7 +320,7 @@ async function hostContextForDiscoveryRequest(
     return null;
   }
 
-  return hostContextForExpertProfile(expertProfileId, actorId, subject);
+  return hostContextForExpertProfile(expertProfileId, actorId, subject, { from: 'expert_profile' });
 }
 
 /**
@@ -378,7 +386,10 @@ export async function resolveHostContext(
       if (engagement === undefined) {
         return denyMissingRow(subject, actorId, 'engagement');
       }
-      return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject);
+      return hostContextForExpertProfile(engagement.expertProfileId, actorId, subject, {
+        from: 'engagement',
+        deliveringAgencyId: engagement.deliveringAgencyId,
+      });
     }
 
     // ── Arm 6: request grain — the EXPLORATORY call, split by route. Extracted whole
@@ -424,7 +435,9 @@ export async function resolveHostContext(
         return denyMissingRow(subject, actorId, 'request_expert_relationship');
       }
       if (relationshipDeniesHosting(relationship)) return null;
-      return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject);
+      return hostContextForExpertProfile(relationship.expertProfileId, actorId, subject, {
+        from: 'expert_profile',
+      });
     }
 
     // ── Arm 8: NOT THIS AXIS. An admin meeting has no engagement and no delivering

@@ -38,7 +38,7 @@ type PgClient = ReturnType<typeof postgres>;
 const EMAIL_PREFIX = 'booking-funding-concurrency-';
 const MINUTE_MS = 60_000;
 /** Client 700 / minute at the default fee ⇒ a 30-minute booking reserves 21,000. */
-const EXPERT_HOURLY_700 = 33_600;
+const EXPERT_RATE_700 = 560;
 
 let aClient: PgClient;
 let bClient: PgClient;
@@ -96,7 +96,7 @@ async function seedUpcomingBooking(): Promise<Seed> {
 
   const [expert] = await wardenDb
     .insert(schema.expertProfiles)
-    .values({ userId: expertUserId, verticalId, type: 'freelancer', rateCents: EXPERT_HOURLY_700 })
+    .values({ userId: expertUserId, verticalId, type: 'freelancer', rateCents: EXPERT_RATE_700 })
     .returning({ id: schema.expertProfiles.id });
   if (expert === undefined) throw new Error('expert insert failed');
   seededExpertProfileIds.push(expert.id);

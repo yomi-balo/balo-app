@@ -4,13 +4,15 @@ import {
   deriveActorLabel,
   deriveEngagementParties,
   deriveExpertPartyLabels,
+  expertSideActorLabel,
   engagementHeaderLine,
   personAtCompany,
   projectEngagementTitle,
+  type EngagementHeaderLineParts,
 } from './engagement-parties';
 
 type ExpertProfile = ProjectEngagementWithMilestones['expertProfile'];
-type Agency = ExpertProfile['agency'];
+type Agency = ProjectEngagementWithMilestones['deliveringAgency'];
 
 function makeAgency(over: Partial<NonNullable<Agency>> = {}): NonNullable<Agency> {
   return { id: 'agency-1', name: 'CloudPeak Consulting', logoUrl: null, ...over };
@@ -26,19 +28,20 @@ function makeEngagement(opts: {
 }): ProjectEngagementWithMilestones {
   const expertProfile: ExpertProfile = {
     id: 'expert-1',
-    agencyId: opts.agency ? opts.agency.id : null,
     type: opts.type ?? (opts.agency ? 'agency' : 'freelancer'),
     headline: 'headline' in opts ? (opts.headline ?? null) : 'CPQ Specialist',
+    timezone: 'UTC',
     user: {
       id: 'user-priya',
       firstName: 'firstName' in opts ? (opts.firstName ?? null) : 'Priya',
       lastName: 'lastName' in opts ? (opts.lastName ?? null) : 'Sharma',
       avatarUrl: null,
     },
-    agency: opts.agency ?? null,
   };
   return {
     expertProfile,
+    deliveringAgencyId: opts.agency ? opts.agency.id : null,
+    deliveringAgency: opts.agency ?? null,
     company: { id: 'company-1', name: opts.companyName ?? 'Northwind Industrial' },
   } as ProjectEngagementWithMilestones;
 }
@@ -128,66 +131,168 @@ describe('personAtCompany', () => {
 describe('deriveActorLabel', () => {
   it('returns "Balo" for the admin lens (the platform actor label)', () => {
     const engagement = makeEngagement({ agency: null });
-    expect(deriveActorLabel(engagement, 'admin', { firstName: 'Dana', lastName: 'Lee' })).toBe(
-      'Balo'
-    );
+    expect(
+      deriveActorLabel(engagement, 'admin', { id: 'user-dana', firstName: 'Dana', lastName: 'Lee' })
+    ).toBe('Balo');
   });
 
   it('returns the expert retro first-mention for the expert lens (agency)', () => {
     const engagement = makeEngagement({ agency: makeAgency() });
-    expect(deriveActorLabel(engagement, 'expert', { firstName: 'Priya', lastName: 'Sharma' })).toBe(
-      'Priya @ CloudPeak Consulting'
-    );
+    expect(
+      deriveActorLabel(engagement, 'expert', {
+        id: 'user-priya',
+        firstName: 'Priya',
+        lastName: 'Sharma',
+      })
+    ).toBe('Priya @ CloudPeak Consulting');
+  });
+
+  it('names an agency owner/admin acting on the expert side, not the delivering expert', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(
+      deriveActorLabel(engagement, 'expert', {
+        id: 'user-charles',
+        firstName: 'Charles',
+        lastName: 'Admin',
+      })
+    ).toBe('Charles @ CloudPeak Consulting');
   });
 
   it('names the acting person "@ company" for the client lens', () => {
     const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
-    expect(deriveActorLabel(engagement, 'client', { firstName: 'Dana', lastName: 'Lee' })).toBe(
-      'Dana @ Northwind Industrial'
-    );
+    expect(
+      deriveActorLabel(engagement, 'client', {
+        id: 'user-dana',
+        firstName: 'Dana',
+        lastName: 'Lee',
+      })
+    ).toBe('Dana @ Northwind Industrial');
   });
 
   it('falls back to the company alone for the client lens when the person is unnamed', () => {
     const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
-    expect(deriveActorLabel(engagement, 'client', { firstName: null, lastName: null })).toBe(
-      'Northwind Industrial'
+    expect(
+      deriveActorLabel(engagement, 'client', { id: 'user-x', firstName: null, lastName: null })
+    ).toBe('Northwind Industrial');
+  });
+});
+
+describe('expertSideActorLabel', () => {
+  const priya = { id: 'user-priya', firstName: 'Priya', lastName: 'Sharma' };
+  const charles = { id: 'user-charles', firstName: 'Charles', lastName: 'Admin' };
+  const labelFor = (
+    engagement: ProjectEngagementWithMilestones,
+    actor: Parameters<typeof expertSideActorLabel>[2]
+  ): string => expertSideActorLabel(engagement, deriveEngagementParties(engagement), actor);
+
+  it('reads as the retro first-mention for the delivering expert (agency)', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(labelFor(engagement, priya)).toBe(
+      deriveEngagementParties(engagement).expertRetroFirstMention
+    );
+    expect(labelFor(engagement, priya)).toBe('Priya @ CloudPeak Consulting');
+  });
+
+  it('reads as the retro first-mention for the delivering expert (independent)', () => {
+    const engagement = makeEngagement({ agency: null });
+    expect(labelFor(engagement, priya)).toBe('Priya');
+  });
+
+  it('names an agency owner/admin "Person @ agency"', () => {
+    expect(labelFor(makeEngagement({ agency: makeAgency() }), charles)).toBe(
+      'Charles @ CloudPeak Consulting'
+    );
+  });
+
+  it('falls back to the last name, then to the expert party when the actor is unnamed', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(labelFor(engagement, { id: 'u', firstName: ' ', lastName: 'Admin' })).toBe(
+      'Admin @ CloudPeak Consulting'
+    );
+    expect(labelFor(engagement, { id: 'u', firstName: null, lastName: null })).toBe(
+      'CloudPeak Consulting'
+    );
+  });
+
+  it('names a non-delivering actor without "@" when the expert is independent', () => {
+    expect(labelFor(makeEngagement({ agency: null }), charles)).toBe('Charles');
+  });
+
+  it('omits "@" when the agency name is blank', () => {
+    const engagement = makeEngagement({ agency: makeAgency({ name: ' ' }) });
+    expect(labelFor(engagement, charles)).toBe('Charles');
+  });
+
+  it('reads as the retro first-mention for an unknown (null) actor', () => {
+    expect(labelFor(makeEngagement({ agency: makeAgency() }), null)).toBe(
+      'Priya @ CloudPeak Consulting'
     );
   });
 });
 
 describe('engagementHeaderLine', () => {
-  it('client (independent): "Delivered by {person} — {headline}"', () => {
+  const read = (parts: EngagementHeaderLineParts): string =>
+    `${parts.prefix}${parts.expertPerson ?? ''}${parts.suffix}`;
+
+  it('client (independent): "Delivered by {person} — {headline}", the person split out', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('client', p)).toBe('Delivered by Priya Sharma — CPQ Specialist');
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by Priya Sharma — CPQ Specialist');
+    expect(parts).toEqual({
+      prefix: 'Delivered by ',
+      expertPerson: 'Priya Sharma',
+      suffix: ' — CPQ Specialist',
+    });
   });
 
-  it('client (agency): "Delivered by {agency} ({person}, {headline})"', () => {
+  it('client (agency): "Delivered by {agency} ({person}, {headline})", the agency left in the text', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: makeAgency() }));
-    expect(engagementHeaderLine('client', p)).toBe(
-      'Delivered by CloudPeak Consulting (Priya Sharma, CPQ Specialist)'
-    );
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by CloudPeak Consulting (Priya Sharma, CPQ Specialist)');
+    expect(parts).toEqual({
+      prefix: 'Delivered by CloudPeak Consulting (',
+      expertPerson: 'Priya Sharma',
+      suffix: ', CPQ Specialist)',
+    });
+  });
+
+  it('client (agency, no headline): closes the parenthetical after the person', () => {
+    const p = deriveEngagementParties(makeEngagement({ agency: makeAgency(), headline: null }));
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by CloudPeak Consulting (Priya Sharma)');
+    expect(parts.suffix).toBe(')');
   });
 
   it('client (no headline): omits the specialty suffix', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null, headline: null }));
-    expect(engagementHeaderLine('client', p)).toBe('Delivered by Priya Sharma');
+    const parts = engagementHeaderLine('client', p);
+    expect(read(parts)).toBe('Delivered by Priya Sharma');
+    expect(parts.suffix).toBe('');
   });
 
-  it('expert: "For {clientCompanyName}"', () => {
+  it('expert: "For {clientCompanyName}", naming no expert person', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('expert', p)).toBe('For Northwind Industrial');
+    expect(engagementHeaderLine('expert', p)).toEqual({
+      prefix: 'For Northwind Industrial',
+      expertPerson: null,
+      suffix: '',
+    });
   });
 
   it('admin (independent): "{company} ↔ {person}"', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: null }));
-    expect(engagementHeaderLine('admin', p)).toBe('Northwind Industrial ↔ Priya Sharma');
+    expect(engagementHeaderLine('admin', p)).toEqual({
+      prefix: 'Northwind Industrial ↔ ',
+      expertPerson: 'Priya Sharma',
+      suffix: '',
+    });
   });
 
   it('admin (agency): "{company} ↔ {agency} ({person})"', () => {
     const p = deriveEngagementParties(makeEngagement({ agency: makeAgency() }));
-    expect(engagementHeaderLine('admin', p)).toBe(
-      'Northwind Industrial ↔ CloudPeak Consulting (Priya Sharma)'
-    );
+    const parts = engagementHeaderLine('admin', p);
+    expect(read(parts)).toBe('Northwind Industrial ↔ CloudPeak Consulting (Priya Sharma)');
+    expect(parts.expertPerson).toBe('Priya Sharma');
   });
 });
 
@@ -197,7 +302,7 @@ describe('deriveExpertPartyLabels (BAL-566 D8)', () => {
     const full = deriveEngagementParties(engagement);
     const extracted = deriveExpertPartyLabels({
       type: engagement.expertProfile.type,
-      agencyName: engagement.expertProfile.agency?.name ?? null,
+      agencyName: engagement.deliveringAgency?.name ?? null,
       firstName: engagement.expertProfile.user.firstName,
       lastName: engagement.expertProfile.user.lastName,
     });

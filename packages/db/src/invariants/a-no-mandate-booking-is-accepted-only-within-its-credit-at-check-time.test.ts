@@ -77,7 +77,7 @@ const API_GUARD = file(
 );
 
 const MINUTE_MS = 60_000;
-const RATES_CENTS_PER_HOUR: readonly number[] = [10_000, 25_000];
+const RATES_CENTS_PER_MINUTE: readonly number[] = [150, 400];
 const WINDOWS_MINUTES: readonly number[] = [15, 30, 60, 240];
 const AVAILABLES_MINOR: readonly number[] = [0, 20_000, 100_000];
 
@@ -121,7 +121,7 @@ const HOLD_WITH_FIGURE: HoldStatus = {
 };
 
 const PRICING: BookingTopUpPricing = {
-  expertRateCents: 33_600,
+  expertRateCents: 560,
   availableMinor: 0,
   reservable: [],
   mandateActive: false,
@@ -135,7 +135,7 @@ describe('INVARIANT: a no-mandate booking is accepted only when its credit cover
     for (const availableMinor of AVAILABLES_MINOR) {
       const reservable: ReservableCaseBooking[] = [];
       let offset = 60;
-      for (const rate of RATES_CENTS_PER_HOUR) {
+      for (const rate of RATES_CENTS_PER_MINUTE) {
         for (const minutes of WINDOWS_MINUTES) {
           const { start, end } = window(offset, minutes);
           offset += minutes + 30;
@@ -201,7 +201,7 @@ describe('INVARIANT: a no-mandate booking is accepted only when its credit cover
   });
 
   it('boundary: available − reserved === estimate is accepted', () => {
-    const rate = 33_600; // client 700 / minute at the default fee
+    const rate = 560; // client 700 / minute at the default fee
     const planned = window(60, 30);
     const reservable: ReservableCaseBooking[] = [
       {

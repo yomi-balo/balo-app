@@ -9,6 +9,7 @@ import {
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
   resolveEntityListNavEntry,
+  SUPPLEMENTAL_ROUTE_PARENTS,
   splitMobileNav,
   resolveMobileTabs,
   resolveMoreItems,
@@ -533,7 +534,14 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/admin', [{ label: 'Home', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
     ['/billing/top-up', [{ label: 'Top up', href: null }]],
-    ['/redeem', [{ label: 'Redeem a code', href: null }]],
+    // BAL-641 — `/redeem` carries a `Dashboard` parent; `/billing/top-up` above stays single-crumb.
+    [
+      '/redeem',
+      [
+        { label: 'Dashboard', href: '/dashboard' },
+        { label: 'Redeem a code', href: null },
+      ],
+    ],
     // BAL-503 — the three new Settings sections.
     ['/settings/company', [{ label: 'Company', href: null }]],
     ['/settings/billing', [{ label: 'Credits & billing', href: null }]],
@@ -643,10 +651,34 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/settings/notifications',
     ];
     for (const pathname of listRoutes) {
-      const [crumb] = resolveBreadcrumbTrail(pathname);
+      const crumb = resolveBreadcrumbTrail(pathname).at(-1);
+      expect(crumb).toBeDefined();
       expect(crumb?.href).toBeNull();
     }
   });
+
+  it("/redeem's parent crumb is the enabled dashboard registry entry, label and href", () => {
+    const dashboard = NAV_ENTRIES.find((e) => e.key === 'dashboard' && e.enabled);
+    expect(dashboard).toBeDefined();
+    const [parent] = resolveBreadcrumbTrail('/redeem');
+    expect(parent).toEqual({ label: dashboard?.label, href: dashboard?.href });
+  });
+
+  it('drift guard: SUPPLEMENTAL_ROUTE_PARENTS is non-empty', () => {
+    expect(Object.keys(SUPPLEMENTAL_ROUTE_PARENTS).length).toBeGreaterThan(0);
+  });
+
+  it.each(Object.entries(SUPPLEMENTAL_ROUTE_PARENTS))(
+    'drift guard: %s resolves to a labelled parent crumb (%s) then a null-href own crumb',
+    (route, parentHref) => {
+      const trail = resolveBreadcrumbTrail(route);
+      expect(trail).toHaveLength(2);
+      const [parent, current] = trail;
+      expect(parent?.href).toBe(parentHref);
+      expect(parent?.label.length).toBeGreaterThan(0);
+      expect(current?.href).toBeNull();
+    }
+  );
 
   it('drift guard: no supplemental route collides with an enabled registry href', () => {
     const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));

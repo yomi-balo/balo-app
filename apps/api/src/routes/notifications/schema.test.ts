@@ -863,6 +863,81 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('engagement.milestone_estimate_exceeded (BAL-624)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:estimate_exceeded:480',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      milestoneId: '550e8400-e29b-41d4-a716-446655440002',
+      recipientId: '550e8400-e29b-41d4-a716-446655440003',
+      expertPartyLabel: 'CloudPeak Consulting',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      milestoneTitle: 'Discovery',
+      loggedHoursLabel: '8.5 hrs',
+      estimatedHoursLabel: '8 hrs',
+    };
+
+    it('accepts a valid payload, with or without recipientId', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: valid,
+        }).success
+      ).toBe(true);
+      const { recipientId: _r, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: rest,
+        }).success
+      ).toBe(true);
+    });
+
+    it('rejects a non-uuid milestoneId and a missing hours label', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: { ...valid, milestoneId: 'not-a-uuid' },
+        }).success
+      ).toBe(false);
+      const { loggedHoursLabel: _l, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({
+          event: 'engagement.milestone_estimate_exceeded',
+          payload: rest,
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  describe('engagement.time_entry_changed (BAL-626)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440002:edited:1719705600000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      timeEntryId: '550e8400-e29b-41d4-a716-446655440002',
+      userId: '550e8400-e29b-41d4-a716-446655440003',
+      actorUserId: '550e8400-e29b-41d4-a716-446655440004',
+      change: 'edited',
+      actorExpertLabel: 'Priya @ CloudPeak',
+      projectTitle: 'CPQ implementation',
+      workedOnLabel: '14 Oct',
+      hoursLabel: '2.5 hrs',
+    };
+    const parse = (payload: unknown) =>
+      publishBodySchema.safeParse({ event: 'engagement.time_entry_changed', payload }).success;
+
+    it('accepts a valid payload for both changes', () => {
+      expect(parse(valid)).toBe(true);
+      expect(parse({ ...valid, change: 'removed' })).toBe(true);
+    });
+
+    it('rejects a bad change and a missing userId', () => {
+      expect(parse({ ...valid, change: 'deleted' })).toBe(false);
+      const { userId: _u, ...rest } = valid;
+      expect(parse(rest)).toBe(false);
+    });
+  });
+
   describe('engagement.milestone_completed (BAL-332)', () => {
     const valid = {
       correlationId: '550e8400-e29b-41d4-a716-446655440002:1719705600000',
@@ -2084,5 +2159,88 @@ describe('publishBodySchema — BAL-622 change orders', () => {
       expect(keys).toContain('expertPriceChangeLabel');
       expect(keys.filter((k) => /^client/i.test(k) && /price/i.test(k))).toEqual([]);
     });
+  });
+});
+
+describe('BAL-631 optional agency-notice fields', () => {
+  const ENG = '550e8400-e29b-41d4-a716-446655440001';
+  const USER = '550e8400-e29b-41d4-a716-446655440005';
+  const PROFILE = '550e8400-e29b-41d4-a716-446655440004';
+  const parse = (event: string, payload: Record<string, unknown>) =>
+    publishBodySchema.safeParse({ event, payload });
+
+  const changesRequested = {
+    correlationId: `${ENG}:changes_requested:1719705600000`,
+    engagementId: ENG,
+    expertProfileId: PROFILE,
+    actorClientLabel: 'Dana @ Northwind Industrial',
+    projectTitle: 'CPQ implementation',
+    note: 'Please fix the quote template.',
+    reviewDays: 7,
+    reviewCycle: 1,
+  };
+  const overEstimate = {
+    correlationId: `${ENG}:milestone_estimate_exceeded:1`,
+    engagementId: ENG,
+    milestoneId: '550e8400-e29b-41d4-a716-446655440006',
+    expertPartyLabel: 'CloudPeak',
+    actorExpertLabel: 'Priya @ CloudPeak',
+    projectTitle: 'CPQ implementation',
+    milestoneTitle: 'Data migration',
+    loggedHoursLabel: '14 hrs',
+    estimatedHoursLabel: '10 hrs',
+  };
+  const cancelled = {
+    correlationId: `${ENG}:cancelled`,
+    engagementId: ENG,
+    expertProfileId: PROFILE,
+    projectTitle: 'CPQ implementation',
+    cancelledOn: '9 Jul 2026',
+    reason: 'Client changed direction.',
+  };
+
+  it.each([
+    ['engagement.changes_requested', changesRequested],
+    ['engagement.milestone_estimate_exceeded', overEstimate],
+    ['engagement.cancelled', cancelled],
+  ])('%s parses without any of the new keys', (event, payload) => {
+    expect(parse(event, payload).success).toBe(true);
+  });
+
+  it.each([
+    [
+      'engagement.changes_requested',
+      changesRequested,
+      { actorUserId: USER, deliveringExpertName: 'Priya Shah' },
+    ],
+    [
+      'engagement.milestone_estimate_exceeded',
+      overEstimate,
+      { expertProfileId: PROFILE, actorUserId: USER, deliveringExpertName: 'Priya Shah' },
+    ],
+    [
+      'engagement.cancelled',
+      cancelled,
+      {
+        actorUserId: USER,
+        deliveringExpertName: 'Priya Shah',
+        clientCompanyName: 'Northwind Industrial',
+        actorLabel: 'MJ Okonkwo @ Balo',
+      },
+    ],
+  ])('%s parses with the new keys and keeps them', (event, base, extra) => {
+    const result = parse(event, { ...base, ...extra });
+    expect(result.success).toBe(true);
+    expect(result.data?.payload).toMatchObject(extra);
+  });
+
+  it('rejects a non-uuid actorUserId and an empty name', () => {
+    expect(parse('engagement.cancelled', { ...cancelled, actorUserId: 'not-a-uuid' }).success).toBe(
+      false
+    );
+    expect(
+      parse('engagement.changes_requested', { ...changesRequested, deliveringExpertName: '' })
+        .success
+    ).toBe(false);
   });
 });

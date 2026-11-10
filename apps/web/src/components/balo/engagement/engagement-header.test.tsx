@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 
 import { EngagementHeader } from './engagement-header';
-import type { EngagementHeaderView, StatusChipView } from '@/lib/engagement/engagement-view';
+import type {
+  EngagementHeaderLineView,
+  EngagementHeaderView,
+  StatusChipView,
+} from '@/lib/engagement/engagement-view';
 
 const statusChip: StatusChipView = {
   status: 'active',
@@ -11,9 +17,22 @@ const statusChip: StatusChipView = {
   icon: 'Layers',
 };
 
+const PROFILE_HREF = '/experts/priya-sharma';
+
+const agencyClientLine = (
+  overrides: Partial<EngagementHeaderLineView> = {}
+): EngagementHeaderLineView => ({
+  prefix: 'Delivered by CloudPeak Consulting (',
+  expertName: 'Priya Sharma',
+  suffix: ', CPQ Specialist)',
+  expertProfileHref: PROFILE_HREF,
+  tracksProfileClicks: true,
+  ...overrides,
+});
+
 const header = (overrides: Partial<EngagementHeaderView> = {}): EngagementHeaderView => ({
   engagementTitle: 'Salesforce revenue-cloud rollout',
-  headerLine: 'Delivered by CloudPeak Consulting',
+  headerLine: agencyClientLine(),
   statusChip,
   provenance: { requestId: 'req-1', href: '/projects/req-1' },
   terms: [
@@ -43,9 +62,113 @@ describe('EngagementHeader', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
-  it('renders the per-lens header line', () => {
-    render(<EngagementHeader header={header({ headerLine: 'For Northwind Industrial' })} />);
-    expect(screen.getByText('For Northwind Industrial')).toBeInTheDocument();
+  it('renders the per-lens header line as one sentence around the linked name', () => {
+    render(<EngagementHeader header={header()} />);
+    const line = screen.getByRole('link', { name: 'Priya Sharma' }).closest('p');
+    expect(line).toHaveTextContent(
+      /^Delivered by CloudPeak Consulting \(Priya Sharma, CPQ Specialist\)$/
+    );
+  });
+
+  it('reports a profile click as the delivery header', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    render(<EngagementHeader header={header()} />);
+    await user.click(screen.getByRole('link', { name: 'Priya Sharma' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'delivery_header',
+    });
+  });
+
+  it('admin lens: the link works but a staff click is not reported', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    render(
+      <EngagementHeader
+        header={header({
+          headerLine: agencyClientLine({
+            prefix: 'Northwind Industrial ↔ ',
+            suffix: '',
+            tracksProfileClicks: false,
+          }),
+        })}
+      />
+    );
+    await user.click(screen.getByRole('link', { name: 'Priya Sharma' }));
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('client lens (agency): links only the expert person, never the agency', () => {
+    render(<EngagementHeader header={header()} />);
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      PROFILE_HREF
+    );
+    expect(screen.queryByRole('link', { name: /CloudPeak/ })).not.toBeInTheDocument();
+  });
+
+  it('client lens (independent): links the person and leaves the headline outside the link', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          headerLine: agencyClientLine({ prefix: 'Delivered by ', suffix: ' — CPQ Specialist' }),
+        })}
+      />
+    );
+    const link = screen.getByRole('link', { name: 'Priya Sharma' });
+    expect(link).toHaveAttribute('href', PROFILE_HREF);
+    expect(link).toHaveTextContent(/^Priya Sharma$/);
+    expect(link.parentElement).toHaveTextContent('Delivered by Priya Sharma — CPQ Specialist');
+  });
+
+  it('admin lens: links the expert person, not the client company', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          headerLine: agencyClientLine({ prefix: 'Northwind Industrial ↔ ', suffix: '' }),
+        })}
+      />
+    );
+    expect(screen.getByRole('link', { name: 'Priya Sharma' })).toHaveAttribute(
+      'href',
+      PROFILE_HREF
+    );
+    expect(screen.queryByRole('link', { name: /Northwind/ })).not.toBeInTheDocument();
+  });
+
+  it('renders the name unlinked when the profile does not resolve (null href)', () => {
+    render(
+      <EngagementHeader
+        header={header({ headerLine: agencyClientLine({ expertProfileHref: null }) })}
+      />
+    );
+    expect(screen.queryByRole('link', { name: 'Priya Sharma' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Delivered by CloudPeak Consulting (Priya Sharma, CPQ Specialist)', {
+        selector: 'p',
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('expert lens: renders the client line with no expert link', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          headerLine: {
+            prefix: 'For Northwind Industrial',
+            expertName: null,
+            suffix: '',
+            expertProfileHref: null,
+            tracksProfileClicks: false,
+          },
+        })}
+      />
+    );
+    expect(screen.getByText('For Northwind Industrial', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual([
+      'Projects',
+      'View request',
+    ]);
   });
 
   it('folds the pill value into the accessible name (category + value)', () => {
@@ -77,5 +200,49 @@ describe('EngagementHeader', () => {
     expect(
       screen.getByRole('heading', { name: 'Salesforce revenue-cloud rollout' })
     ).toBeInTheDocument();
+  });
+
+  it('renders an actions slot beside the status chip', () => {
+    render(<EngagementHeader header={header()} actions={<button type="button">More</button>} />);
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+  });
+
+  it('renders the Receipt billing chip on time and materials', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          terms: [
+            { icon: 'Clock', label: 'Pricing', value: 'Time & materials' },
+            { icon: 'Receipt', label: 'Billing', value: 'Billed monthly' },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByLabelText('Billing: Billed monthly')).toBeInTheDocument();
+  });
+
+  it('renders a warning-toned chip in the warning colours, and a plain chip neutral', () => {
+    render(
+      <EngagementHeader
+        header={header({
+          terms: [
+            { icon: 'Clock', label: 'Pricing', value: 'Time & materials' },
+            {
+              icon: 'Clock',
+              label: 'Last delivery activity',
+              value: 'Quiet for 16 days · worth a check-in with Priya',
+              tone: 'warning',
+            },
+          ],
+        })}
+      />
+    );
+    const quiet = screen.getByLabelText(
+      'Last delivery activity: Quiet for 16 days · worth a check-in with Priya'
+    );
+    expect(quiet).toHaveClass('text-warning-strong', 'bg-warning/10');
+    const plain = screen.getByLabelText('Pricing: Time & materials');
+    expect(plain).toHaveClass('text-muted-foreground');
+    expect(plain).not.toHaveClass('text-warning-strong');
   });
 });

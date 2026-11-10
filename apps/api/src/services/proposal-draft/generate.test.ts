@@ -237,12 +237,47 @@ describe('runProposalDraftGeneration', () => {
     );
   });
 
-  it('fires no analytics and no success log when the compare-and-set lost', async () => {
-    markSucceeded.mockResolvedValue(undefined);
-    const { ai } = aiReturning(goodOutput);
-    await runProposalDraftGeneration(GEN_ID, { ai });
-    expect(trackServer).not.toHaveBeenCalled();
-    expect(logInfo).not.toHaveBeenCalled();
+  describe('when the database refuses the save', () => {
+    // Reads 1 and 2 are the worker's own checks; read 3 is the re-read after the refusal.
+    function refuseSaveThenRead(thirdRead: unknown): void {
+      markSucceeded.mockResolvedValue(undefined);
+      findGeneration
+        .mockResolvedValueOnce(pendingRow)
+        .mockResolvedValueOnce(pendingRow)
+        .mockResolvedValueOnce(thirdRead);
+    }
+
+    it('fails deadline_exceeded when the row is still pending', async () => {
+      refuseSaveThenRead(pendingRow);
+      const { ai } = aiReturning(goodOutput);
+      await expect(runProposalDraftGeneration(GEN_ID, { ai })).rejects.toMatchObject({
+        name: 'ProposalDraftGenerationError',
+        reason: 'deadline_exceeded',
+      });
+      expect(trackServer).not.toHaveBeenCalled();
+      expect(logWarn).toHaveBeenCalledWith(
+        { generationId: GEN_ID, stage: 'refused at save' },
+        'Proposal draft abandoned — past the draft deadline'
+      );
+    });
+
+    it('fires no analytics and no log when the row is already terminal', async () => {
+      refuseSaveThenRead({ ...pendingRow, status: 'succeeded' });
+      const { ai } = aiReturning(goodOutput);
+      await expect(runProposalDraftGeneration(GEN_ID, { ai })).resolves.toBeUndefined();
+      expect(trackServer).not.toHaveBeenCalled();
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+    });
+
+    it('returns quietly when the row was released', async () => {
+      refuseSaveThenRead(undefined);
+      const { ai } = aiReturning(goodOutput);
+      await expect(runProposalDraftGeneration(GEN_ID, { ai })).resolves.toBeUndefined();
+      expect(trackServer).not.toHaveBeenCalled();
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+    });
   });
 
   it('fails empty_output when the overview has no visible text', async () => {

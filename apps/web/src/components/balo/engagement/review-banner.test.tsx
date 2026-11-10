@@ -22,7 +22,7 @@ import { ReviewBanner } from './review-banner';
 const banner: ReviewBannerView = {
   title: 'Priya @ CloudPeak Consulting says the project is ready',
   body: 'Have a look through the milestones below, then accept the project or request changes.',
-  countdown: { autoOnDate: '11 Jul 2026', daysRemaining: 5, autoInLabel: 'Auto-accepts in 5 days' },
+  autoAcceptOn: '11 Jul 2026',
   clientDecision: {
     acceptModalBody: 'Accepting confirms the delivery as agreed.',
     requestChangesIntro: 'The project goes back to active with your note.',
@@ -42,13 +42,12 @@ const baseProps = {
 } as const;
 
 describe('ReviewBanner', () => {
-  it('renders the title, body, and informational countdown pill', () => {
+  it('renders the title and body', () => {
     render(<ReviewBanner {...baseProps} lens="client" />);
     expect(
       screen.getByText('Priya @ CloudPeak Consulting says the project is ready')
     ).toBeInTheDocument();
     expect(screen.getByText(/Have a look through the milestones below/)).toBeInTheDocument();
-    expect(screen.getByText('Auto-accepts in 5 days')).toBeInTheDocument();
   });
 
   it('quotes the previous change request under the body when there was one', () => {
@@ -71,8 +70,8 @@ describe('ReviewBanner', () => {
     expect(screen.queryByText(/Your last request/)).not.toBeInTheDocument();
   });
 
-  it('omits the countdown pill when countdown is null', () => {
-    render(<ReviewBanner {...baseProps} lens="client" banner={{ ...banner, countdown: null }} />);
+  it('shows no countdown pill', () => {
+    render(<ReviewBanner {...baseProps} lens="client" />);
     expect(screen.queryByText(/Auto-accepts in/)).not.toBeInTheDocument();
   });
 

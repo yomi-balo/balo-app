@@ -7,7 +7,7 @@ import { ChevronRight, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import { baloCardClassName } from '@/components/balo/card/balo-card';
-import type { ProjectsInboxLens } from '@/lib/analytics';
+import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import type { PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import { StageChip } from './stage-chip';
@@ -24,7 +24,7 @@ import { readTimeToFirstAction } from './projects-inbox-analytics';
 
 interface HeroCardProps {
   row: PortfolioRowView;
-  lens: ProjectsInboxLens;
+  lens: RequestLens;
   index: number;
 }
 

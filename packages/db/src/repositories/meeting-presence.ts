@@ -903,6 +903,39 @@ export const meetingPresenceRepository = {
   },
 
   /**
+   * BAL-633 — the distinct authenticated attendees of several meetings, with the side each sat
+   * on, for the case People card.
+   *
+   * Over LIVE rows with a `user_id`, so a guest-identity row and a no-identity row are both
+   * excluded. A user who joined under two parties (or twice) yields one row per distinct
+   * `(user_id, party)`. Rides `meeting_presence_meeting_party_idx`. Empty input returns `[]`
+   * with no query.
+   *
+   * ⚠ NO TENANCY OF ITS OWN (`meeting_presence` has no RLS). Pass only ids that came from an
+   * already-authorised read.
+   */
+  async listAuthenticatedAttendeesByMeetingIds(
+    meetingIds: readonly string[]
+  ): Promise<Array<{ userId: string; party: MeetingParticipantParty }>> {
+    if (meetingIds.length === 0) {
+      return [];
+    }
+    const rows = await db
+      .selectDistinct({ userId: meetingPresence.userId, party: meetingPresence.party })
+      .from(meetingPresence)
+      .where(
+        and(
+          inArray(meetingPresence.meetingId, [...meetingIds]),
+          isNotNull(meetingPresence.userId),
+          isNull(meetingPresence.deletedAt)
+        )
+      );
+    return rows.flatMap((row) =>
+      row.userId === null ? [] : [{ userId: row.userId, party: row.party }]
+    );
+  },
+
+  /**
    * BAL-474 (ADR-1040 Amendment 7 §E, D5.9) — WHO made a meeting's client side present: the
    * authenticated members, and — for each client-party GUEST — who invited them. The sessionless
    * terminal path reads this for a `held` meeting: when every client-party attendee was a guest

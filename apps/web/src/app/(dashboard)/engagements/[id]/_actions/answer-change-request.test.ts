@@ -126,9 +126,42 @@ describe('answerChangeRequestAction', () => {
     expect(mockHasExpertCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: CHARLES.id }),
       'manage_engagement',
-      'expert-1',
+      expect.objectContaining({
+        expertProfileId: 'expert-1',
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
+  });
+
+  it('names an agency admin as the answerer and tracks acting_as agency_admin', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'admin-1',
+      firstName: 'Dana',
+      lastName: 'Lee',
+      platformRole: 'user',
+      companyId: 'other-company',
+      expertProfileId: 'expert-2',
+    });
+    mockFindEngagement.mockResolvedValue(
+      makeProject({
+        deliveringAgencyId: 'agency-1',
+        deliveringAgency: { name: 'CloudPeak' },
+        expertProfile: {
+          id: 'expert-1',
+          type: 'agency',
+          headline: null,
+          timezone: 'UTC',
+          user: { id: CHARLES.id, firstName: 'Charles', lastName: 'Ng', avatarUrl: null },
+        },
+      } as never)
+    );
+    await answerChangeRequestAction(INPUT);
+    expect(mockTrack).toHaveBeenCalledWith(
+      'engagement_change_order_declined',
+      expect.objectContaining({ acting_as: 'agency_admin' })
+    );
+    expect(mockPublish.mock.calls[0]?.[1]).toMatchObject({ actorExpertLabel: 'Dana @ CloudPeak' });
   });
 
   it('refuses a party who does not hold the capability (an agency colleague, say)', async () => {
@@ -180,6 +213,7 @@ describe('answerChangeRequestAction', () => {
       distinct_id: CHARLES.id,
       days_to_decision: 2,
       answered_without_change_order: true,
+      acting_as: 'delivering_expert',
     });
     expect(mockPublish).toHaveBeenCalledWith('change_order.answered', {
       correlationId: `${ORDER_ID}:answered`,

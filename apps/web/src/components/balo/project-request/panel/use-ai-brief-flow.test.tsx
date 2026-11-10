@@ -289,6 +289,7 @@ describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (th
       unmatchedLabels: { tags: [], products: [] },
       editedFields: [],
       promptVersion: 'v2',
+      documentsKey: null,
     });
   });
 
@@ -392,6 +393,189 @@ describe('useAiBriefFlow — capturedAiState / clearAiState / restoreAiState (th
     act(() => view.result.current.flow.restoreAiState(null));
     expect(view.result.current.flow.capturedAiState).toBeNull();
     expect(view.result.current.flow.unmatchedLabels).toEqual({ tags: [], products: [] });
+  });
+});
+
+// "Change entry method" → AI again must not throw away a brief already generated from the SAME
+// documents — it returns to `review`; changed documents (or no brief yet) still go to `upload`.
+describe('useAiBriefFlow — re-picking the AI path keeps an existing brief', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  const SECOND_DOC = {
+    r2Key: 'project-documents/c/u/k2',
+    fileName: 'notes.pdf',
+    contentType: 'application/pdf' as const,
+    sizeBytes: 2000,
+  };
+
+  it('goes to upload when nothing has been generated yet', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleSelectAi());
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('goes straight to review when a brief exists for the current documents', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() => view.result.current.setDraftState((prev) => ({ ...prev, source: 'manual' })));
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('review');
+    expect(view.result.current.draft.source).toBe('ai');
+  });
+
+  it('ignores document order', () => {
+    const { view, setStep } = renderConnectedFlow({
+      ...DRAFT_WITH_DOC,
+      documents: [...DRAFT_WITH_DOC.documents, SECOND_DOC],
+    });
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents].reverse(),
+      }))
+    );
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('review');
+  });
+
+  it('goes to upload when the documents changed since the brief was generated', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents, SECOND_DOC],
+      }))
+    );
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('records the documents the generate STARTED from, not ones added while it ran', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() =>
+      view.result.current.setDraftState((prev) => ({
+        ...prev,
+        documents: [...prev.documents, SECOND_DOC],
+      }))
+    );
+    act(() => captured.onSucceeded?.(PATCH));
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('goes to upload when the documents a brief came from were never recorded', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => captured.onSucceeded?.(PATCH));
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+
+  it('goes to upload after clearAiState (a fresh request)', () => {
+    const { view, setStep } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    act(() => view.result.current.flow.clearAiState());
+    setStep.mockClear();
+
+    act(() => view.result.current.flow.handleSelectAi());
+
+    expect(setStep).toHaveBeenLastCalledWith('upload');
+  });
+});
+
+// The upload step's Generate, reached from review via "Change source documents", is a regenerate:
+// it must not replace edited fields without the "Keep my edits" confirm.
+describe('useAiBriefFlow — Generate once a brief exists', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  function generated(): ReturnType<typeof renderConnectedFlow> {
+    const harness = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => harness.view.result.current.flow.handleGenerateClick());
+    act(() => captured.onSucceeded?.(PATCH));
+    mockStart.mockClear();
+    vi.mocked(track).mockClear();
+    return harness;
+  }
+
+  it('a first Generate starts straight away as a non-regenerate', () => {
+    const { view } = renderConnectedFlow(DRAFT_WITH_DOC);
+    act(() => view.result.current.flow.handleGenerateClick());
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
+      document_count: 1,
+      is_regenerate: false,
+    });
+  });
+
+  it('with no edits, runs as a regenerate without a confirm', () => {
+    const { view } = generated();
+    act(() => view.result.current.flow.handleGenerateClick());
+    expect(view.result.current.flow.regenerateConfirmOpen).toBe(false);
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_AI_REGENERATE_CLICKED, {
+      had_edits: false,
+    });
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
+      document_count: 1,
+      is_regenerate: true,
+    });
+  });
+
+  it('⚠ with edits, opens the confirm instead of replacing them', () => {
+    const { view } = generated();
+    act(() =>
+      view.result.current.setDraftState((prev) => ({ ...prev, title: 'A hand-edited title' }))
+    );
+    act(() => view.result.current.flow.handleGenerateClick());
+    expect(view.result.current.flow.regenerateConfirmOpen).toBe(true);
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it('Try again re-runs a confirmed regenerate without asking again', () => {
+    const { view } = generated();
+    act(() =>
+      view.result.current.setDraftState((prev) => ({ ...prev, title: 'A hand-edited title' }))
+    );
+    act(() => view.result.current.flow.handleGenerateClick());
+    act(() => view.result.current.flow.handleConfirmRegenerate());
+    mockStart.mockClear();
+    vi.mocked(track).mockClear();
+
+    act(() => view.result.current.flow.handleRetryGenerate());
+
+    expect(view.result.current.flow.regenerateConfirmOpen).toBe(false);
+    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED, {
+      document_count: 1,
+      is_regenerate: true,
+    });
   });
 });
 

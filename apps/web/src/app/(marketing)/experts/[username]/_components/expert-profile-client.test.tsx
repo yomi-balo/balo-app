@@ -115,9 +115,9 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     ratingAverage: null,
     ratingCount: 0,
     competencies: [
-      { id: 's1', name: 'Apex', proficiency: 10, level: 'Expert', tone: 'success', pct: 100 },
-      { id: 's2', name: 'Flows', proficiency: 5, level: 'Intermediate', tone: 'warning', pct: 50 },
-      { id: 's3', name: 'LWC', proficiency: 2, level: 'Beginner', tone: 'muted', pct: 20 },
+      { id: 's1', name: 'Apex', proficiency: 10, title: 'Master', pct: 100 },
+      { id: 's2', name: 'Flows', proficiency: 5, title: 'Intermediate', pct: 50 },
+      { id: 's3', name: 'LWC', proficiency: 2, title: 'Basic awareness', pct: 20 },
     ],
     certifications: [
       { id: 'c1', name: 'Platform Developer I', logoUrl: 'https://cdn.test/pd1.png' },
@@ -152,6 +152,7 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
         responsibilitiesHtml: null,
       },
     ],
+    reviews: [],
     ...overrides,
   };
 }
@@ -329,7 +330,7 @@ describe('ExpertProfileClient — sparse profile', () => {
     // "4.8 (12) Rating" — no scale, and no noun on the denominator.
     expect(screen.getByText('Rated 4.8 out of 5 across 12 engagements')).toBeInTheDocument();
     // The section beneath agrees rather than contradicting it.
-    expect(screen.getByText('average across 12 engagements')).toBeInTheDocument();
+    expect(screen.getByText('from 12 engagements')).toBeInTheDocument();
     expect(screen.queryByText('Ratings come from completed work')).not.toBeInTheDocument();
   });
 

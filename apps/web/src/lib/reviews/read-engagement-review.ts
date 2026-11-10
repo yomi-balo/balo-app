@@ -1,10 +1,18 @@
 import 'server-only';
 
-import { engagementsRepository, reviewsRepository } from '@balo/db';
 import {
+  companiesRepository,
+  engagementsRepository,
+  reviewsRepository,
+  usersRepository,
+} from '@balo/db';
+import {
+  isCompanyNameAllowedOnReviews,
+  resolveCaptureDefaults,
   resolveEndOfCallReviewState,
   type EndOfCallReviewState,
   type Rating,
+  type ReviewCaptureSeeds,
   parsePrefillRating,
 } from '@balo/shared/reviews';
 
@@ -16,13 +24,21 @@ import {
  * decided in exactly one place. BAL-389 mounts the surface and calls this; BAL-390
  * ships the reader with tests and NO caller.
  *
- * ⚠ NO AUTHORIZATION HERE, AND NONE IS NEEDED. The read is keyed on the VIEWER's own
- * user id, so it can only ever return the viewer's own review — it reveals nothing
- * about anybody else and cannot be an existence oracle beyond what the caller already
- * knows. The WRITE path is where the capability gate lives (`applyReview`).
+ * ⚠ NO AUTHORIZATION HERE — THE CALLER MUST HAVE AUTHORIZED THE VIEWER AGAINST THE
+ * ENGAGEMENT. The review itself is keyed on the VIEWER's own user id, but `capture` reads
+ * the engagement's company name, industry and hidden flag by `engagementId` alone, so an
+ * unauthorized caller would get another company's details. Every caller gates on the client
+ * lens first, as `read-rating-card.ts` does. The WRITE path has its own capability gate
+ * (`applyReview`).
  *
  * ⚠ EXPLICIT PROJECTION. The `reviews` row is never returned wholesale: a client
  * component receives the rating, the body and a date, and nothing else.
+ *
+ * BAL-628 — it ALSO returns `capture`, the ONE seam that seeds the attribution controls on
+ * every in-app rating surface: who the reviewer is (first name + surname initial), the
+ * company and its industry, whether the company name may appear on reviews, and the initial
+ * values of the role / company / note-visibility controls. It FAILS CLOSED: an unreadable
+ * reviewer or company yields null names and `companyNameAllowed: false`, never a guess.
  */
 
 export interface EngagementReviewRead {
@@ -30,6 +46,8 @@ export interface EngagementReviewRead {
   review: { rating: Rating; body: string | null; ratedOnIso: string } | null;
   /** The three-state end-of-call resolution derived from that review. */
   state: EndOfCallReviewState;
+  /** Seeds for the reviewer-attribution controls (BAL-628). */
+  capture: ReviewCaptureSeeds;
 }
 
 /**
@@ -48,29 +66,53 @@ export async function readEngagementReview(
     return undefined;
   }
 
-  const existing = await reviewsRepository.findLive(
-    engagementId,
-    viewerUserId,
-    engagement.expertProfileId
-  );
-  if (existing === undefined) {
-    return { review: null, state: resolveEndOfCallReviewState(null) };
-  }
+  const [existing, reviewer, company, lastShowCompany] = await Promise.all([
+    reviewsRepository.findLive(engagementId, viewerUserId, engagement.expertProfileId),
+    usersRepository.findReviewerIdentityById(viewerUserId),
+    companiesRepository.findReviewAttributionById(engagement.companyId),
+    reviewsRepository.findLatestShowCompanyChoice(viewerUserId),
+  ]);
 
-  // `reviews.rating` is an integer column fenced by the DB CHECK `review_rating_range`,
-  // so this narrowing is total in practice; `null` would only mean a row wrote around
-  // the constraint, and the resolver's "no review" branch is the safe reading of that.
-  const rating = parsePrefillRating(String(existing.rating));
-  if (rating === null) {
-    return { review: null, state: resolveEndOfCallReviewState(null) };
+  // `reviews.rating` is an integer fenced by the DB CHECK `review_rating_range`, so this
+  // narrowing is total in practice. A stored rating outside 1–5 would mean a row wrote around
+  // that CHECK; it is read as "no review", for the capture defaults too.
+  const rating = existing === undefined ? null : parsePrefillRating(String(existing.rating));
+  const liveReview = existing !== undefined && rating !== null ? existing : null;
+
+  const capture: ReviewCaptureSeeds = {
+    identity: {
+      engagementKind: engagement.engagementType === 'case' ? 'case' : 'project',
+      reviewerFirstName: reviewer?.firstName ?? null,
+      reviewerLastInitial: reviewer?.lastInitial ?? null,
+      companyName: company?.name ?? null,
+      companyNameAllowed: company !== undefined && isCompanyNameAllowedOnReviews(company),
+      industryName: company?.industryName ?? null,
+    },
+    defaults: resolveCaptureDefaults({
+      existing:
+        liveReview === null
+          ? null
+          : {
+              reviewerRole: liveReview.reviewerRole,
+              showCompany: liveReview.showCompany,
+              bodyVisibility: liveReview.bodyVisibility,
+            },
+      jobTitle: reviewer?.jobTitle ?? null,
+      lastShowCompany: lastShowCompany ?? null,
+    }),
+  };
+
+  if (liveReview === null || rating === null) {
+    return { review: null, state: resolveEndOfCallReviewState(null), capture };
   }
 
   return {
     review: {
       rating,
-      body: existing.body,
-      ratedOnIso: (existing.lastEditedAt ?? existing.createdAt).toISOString(),
+      body: liveReview.body,
+      ratedOnIso: (liveReview.lastEditedAt ?? liveReview.createdAt).toISOString(),
     },
     state: resolveEndOfCallReviewState(rating),
+    capture,
   };
 }

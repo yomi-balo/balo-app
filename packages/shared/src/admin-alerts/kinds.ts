@@ -2,12 +2,12 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE twenty-row table (twenty registered kinds,
+ * BAL-548 / ADR-1055 — the kind registry: THE twenty-one-row table (twenty-one registered kinds,
  * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ ELEVEN FINDER KINDS, EIGHT EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * ⚠ TWELVE FINDER KINDS, EIGHT EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
  * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads;
  * `session.presence_stuck` is ONE kind consuming TWO (overrunning and unsettled).
  */
@@ -15,6 +15,7 @@ export const ADMIN_ALERT_KIND_KEYS = [
   'expert.application_pending',
   'project.repeat_change_request',
   'project.change_order_stale',
+  'project.over_estimate',
   'project.change_order_credit_required',
   'receivable.open',
   'session.settled_no_ledger_credit',
@@ -175,6 +176,14 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     finder: 'projectChangeOrderStale',
     cadence: '15m',
     closes: 'Closes itself once the change is approved, declined or withdrawn',
+    target: targetEngagement,
+  },
+  'project.over_estimate': {
+    group: 'marketplace',
+    finder: 'projectOverEstimate',
+    cadence: '15m',
+    closes:
+      'Closes itself once an approved change raises the estimate or the project leaves active',
     target: targetEngagement,
   },
   'project.change_order_credit_required': {

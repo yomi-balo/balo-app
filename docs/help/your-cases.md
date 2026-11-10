@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 1
 published: true
-updated: 2026-10-17
+updated: 2026-11-06
 related: [booking-a-consultation, joining-a-call, turning-a-case-into-a-project]
 ---
 
@@ -34,8 +34,8 @@ end, or until the call itself ends, whichever comes first.
 Every other open case shows as a card with what's happening next on it:
 
 - **A booked time** — the day and time of the next consultation.
-- **"Nothing booked"** — the case is open and waiting on a next step. **Book another** takes you
-  to the expert's profile to pick a time.
+- **"Nothing booked"** — the case is open and waiting on a next step. **Book another** opens the
+  case, where you can pick a time.
 - **"No consultation booked"** — nothing has been held on this case yet. **Book a time** gets it
   started.
 
@@ -67,7 +67,7 @@ If you use a screen reader, the row reads as a summary — "Consultations: 2 hel
 **Resolved** holds closed cases. Each says whether it was resolved or closed automatically after
 30 days with no consultations, bookings or messages, and how many consultations were held.
 Everything in a resolved case stays readable. **Book again** starts a new case with the same
-expert — the closed one stays as it is.
+expert, as long as they're still listed on Balo — the closed one stays as it is.
 
 Nothing here yet? **Book a consultation** takes you to expert search.
 
@@ -110,7 +110,7 @@ of them closes 30 days after it opened. It moves to **Resolved** as "Closed auto
 everything in it stays readable. A case never closes while a consultation is booked ahead or a
 call on it can still be joined. The expert delivering the case and the client company's owner
 are both told when it happens. Want to pick things up again? The client company can
-**Book again** any time — that starts a new case with the same expert, and the closed one stays
-as it is.
+**Book again** any time, as long as the expert is still listed on Balo — that starts a new case
+with the same expert, and the closed one stays as it is.
 
 ![The Resolved section of Cases, with a case marked as closed automatically highlighted.](03)

@@ -51,7 +51,7 @@ export async function removeMilestoneAction(
     engagementId,
     { milestoneId },
     'Failed to remove milestone',
-    async ({ user, engagement, milestone }) => {
+    async ({ user, actor, engagement, milestone }) => {
       if (milestone === undefined) {
         // Unreachable — the `{ milestoneId }` IDOR check guarantees the node.
         return { success: false, error: MILESTONE_GONE };
@@ -79,10 +79,12 @@ export async function removeMilestoneAction(
         milestone_id: removed.id,
         was_completed: wasCompleted,
         had_source_provenance: hadSourceProvenance,
+        acting_as: actor.actingAs,
         distinct_id: user.id,
       });
 
       await publishScopeChange(engagement, {
+        actor: user,
         changeKind: 'removed',
         milestoneId: removed.id,
         milestoneTitle: removed.title,

@@ -92,6 +92,7 @@ const OPEN_HEADER: CaseHeaderView = {
   closeReason: null,
   closedAtIso: null,
   counterpartyOrgLabel: 'CloudPeak',
+  counterpartyOrgHref: null,
   closedNote: null,
 };
 
@@ -163,14 +164,19 @@ const BASE = {
     orgLabel: 'CloudPeak',
     avatarUrl: null,
     initials: 'AO',
-    bookAgainHref: '/experts/amara',
+    profileHref: '/experts/amara',
     availableForWork: true,
     ratingAverage: 4.3,
     ratingCount: 2,
   },
-  people: [
-    { name: 'Dana Reyes', isViewer: true },
-    { name: 'Amara Okafor', isViewer: false },
+  peopleGroups: [
+    {
+      side: 'client' as const,
+      label: 'Northwind Industrial',
+      people: [{ key: 'p0', name: 'You', isViewer: true }],
+      unnamedGuestCount: 0,
+    },
+    { side: 'expert' as const, label: 'CloudPeak Consulting', people: [], unnamedGuestCount: 0 },
   ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
   clientCompanyName: 'Northwind Industrial',

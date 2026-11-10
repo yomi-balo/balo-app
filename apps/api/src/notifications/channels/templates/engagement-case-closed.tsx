@@ -148,8 +148,8 @@ export function CaseClosedEmail({
 
       <WhatHappensNowBlock>
         Every consultation, note and action item from this case stays in your workspace, whenever
-        you want them. If there&apos;s more to do, book again with {expertParty} any time — that
-        starts a new case.
+        you want them. If there&apos;s more to do, book again with {expertParty} any time, as long
+        as they&apos;re still listed on Balo — that starts a new case.
       </WhatHappensNowBlock>
 
       {reviewSection}

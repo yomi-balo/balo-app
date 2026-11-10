@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type {
   ClientEndOfCallView,
   ExpertEndOfCallView,
@@ -77,7 +78,12 @@ const CLIENT_VIEW: ClientEndOfCallView = {
   ...BASE,
   counterpartyName: 'Amara',
   lens: 'client',
-  rating: { engagementId: ENGAGEMENT_ID, state: { kind: 'none' }, existingBody: null },
+  rating: {
+    engagementId: ENGAGEMENT_ID,
+    state: { kind: 'none' },
+    existingBody: null,
+    capture: buildReviewCaptureSeeds(),
+  },
   resolve: {
     engagementId: ENGAGEMENT_ID,
     requesterLabel: null,

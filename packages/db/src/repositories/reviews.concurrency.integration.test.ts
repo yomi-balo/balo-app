@@ -389,6 +389,9 @@ function upsertInput(
     body: null,
     surface: 'end_of_call',
     authMethod: 'session',
+    bodyVisibility: 'public',
+    showCompany: true,
+    reviewerRole: null,
   };
 }
 

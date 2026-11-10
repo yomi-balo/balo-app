@@ -48,14 +48,14 @@ import {
  * Per ADR-1032 this was AUTHORED AND RUN RED before the tolerant open, the share read, the owner
  * check and the CAS stamps existed.
  *
- * Rates: expert 30,000 / h at a 40% fee ⇒ client 700 / min, expert 500 / min — the plan's worked
+ * Rates: expert 500 / min at a 40% fee ⇒ client 700 / min, expert 500 / min — the plan's worked
  * examples, exactly (asserted below via `deriveSessionEstimate`).
  */
 
-const EXPERT_HOURLY = 30_000;
+const EXPERT_RATE_PER_MIN = 500;
 const FEE_BPS = 4_000;
 const RATES = deriveSessionEstimate({
-  expertHourlyMinor: EXPERT_HOURLY,
+  expertRateMinorPerMinute: EXPERT_RATE_PER_MIN,
   estimatedMinutes: 1,
   baloFeeBps: FEE_BPS,
 });
@@ -76,7 +76,7 @@ async function setup(values: Partial<NewCreditWallet>): Promise<Ctx> {
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, expert.id));
   return { walletId: wallet.id, companyId, expertProfileId: expert.id, memberId: member.id };
 }

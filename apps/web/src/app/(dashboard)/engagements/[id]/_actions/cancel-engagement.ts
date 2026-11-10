@@ -90,6 +90,10 @@ export async function cancelEngagementAction(input: {
         projectTitle: deriveEngagementTitle(engagement, parties),
         cancelledOn: formatLongUtc(now),
         reason,
+        actorUserId: user.id,
+        clientCompanyName: parties.clientCompanyName,
+        deliveringExpertName: parties.expertPerson,
+        actorLabel: 'Balo',
       }).catch(() => {
         // publishNotificationEvent logs internally.
       });

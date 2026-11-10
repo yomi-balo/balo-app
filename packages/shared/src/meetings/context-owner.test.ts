@@ -31,6 +31,7 @@ const REQUEST_ID = '66666666-6666-4666-8666-666666666666';
 const RELATIONSHIP_ID = '77777777-7777-4777-8777-777777777777';
 const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+const AGENCY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_EXPERT_PROFILE_ID = '99999999-9999-4999-8999-999999999999';
 
 /** The five ENGAGEMENT-GRAIN labels. All five read `engagements`, hence one branch. */
@@ -54,6 +55,7 @@ function makeReads(overrides: Partial<MeetingContextOwnerReads> = {}): MeetingCo
     findEngagement: vi.fn().mockResolvedValue({
       companyId: COMPANY_ID,
       expertProfileId: EXPERT_PROFILE_ID,
+      deliveringAgencyId: AGENCY_ID,
     }),
     findProjectRequest: vi.fn().mockResolvedValue({
       companyId: COMPANY_ID,
@@ -76,7 +78,11 @@ describe('resolveContextOwner — engagement grain', () => {
         resolveContextOwner({ contextType, contextId: ENGAGEMENT_ID }, reads)
       ).resolves.toEqual({
         outcome: 'resolved',
-        owner: { companyId: COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID },
+        owner: {
+          companyId: COMPANY_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          deliveringAgency: { from: 'engagement', deliveringAgencyId: AGENCY_ID },
+        },
       });
     }
   });
@@ -86,6 +92,7 @@ describe('resolveContextOwner — engagement grain', () => {
       findEngagement: vi.fn().mockResolvedValue({
         companyId: COMPANY_ID,
         expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        deliveringAgencyId: AGENCY_ID,
       }),
     });
 
@@ -93,7 +100,11 @@ describe('resolveContextOwner — engagement grain', () => {
       resolveContextOwner({ contextType: 'project_call', contextId: ENGAGEMENT_ID }, reads)
     ).resolves.toEqual({
       outcome: 'resolved',
-      owner: { companyId: COMPANY_ID, expertProfileId: OTHER_EXPERT_PROFILE_ID },
+      owner: {
+        companyId: COMPANY_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'engagement', deliveringAgencyId: AGENCY_ID },
+      },
     });
     expect(reads.findEngagement).toHaveBeenCalledExactlyOnceWith(ENGAGEMENT_ID);
     expect(reads.findRelationship).not.toHaveBeenCalled();
@@ -119,6 +130,24 @@ describe('resolveContextOwner — engagement grain', () => {
   });
 });
 
+describe('resolveContextOwner — the delivering-agency source', () => {
+  it('a NULL engagement pin is carried as a NULL pin, not as an expert_profile source', async () => {
+    const reads = makeReads({
+      findEngagement: vi.fn().mockResolvedValue({
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgencyId: null,
+      }),
+    });
+
+    await expect(
+      resolveContextOwner({ contextType: 'case', contextId: ENGAGEMENT_ID }, reads)
+    ).resolves.toMatchObject({
+      owner: { deliveringAgency: { from: 'engagement', deliveringAgencyId: null } },
+    });
+  });
+});
+
 describe('resolveContextOwner — request grain (`project_discovery`)', () => {
   it('resolves the company and expert from the request itself, in ONE read', async () => {
     const reads = makeReads();
@@ -127,7 +156,11 @@ describe('resolveContextOwner — request grain (`project_discovery`)', () => {
       resolveContextOwner({ contextType: 'project_discovery', contextId: REQUEST_ID }, reads)
     ).resolves.toEqual({
       outcome: 'resolved',
-      owner: { companyId: COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID },
+      owner: {
+        companyId: COMPANY_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'expert_profile' },
+      },
     });
     expect(reads.findProjectRequest).toHaveBeenCalledExactlyOnceWith(REQUEST_ID);
     expect(reads.findEngagement).not.toHaveBeenCalled();
@@ -150,7 +183,11 @@ describe('resolveContextOwner — request grain (`project_discovery`)', () => {
       resolveContextOwner({ contextType: 'project_discovery', contextId: REQUEST_ID }, reads)
     ).resolves.toEqual({
       outcome: 'resolved',
-      owner: { companyId: COMPANY_ID, expertProfileId: null },
+      owner: {
+        companyId: COMPANY_ID,
+        expertProfileId: null,
+        deliveringAgency: { from: 'expert_profile' },
+      },
     });
   });
 
@@ -183,7 +220,11 @@ describe('resolveContextOwner — relationship grain (`request_interaction`)', (
     ).resolves.toEqual({
       outcome: 'resolved',
       // The expert is the RELATIONSHIP's, not the request's `EXPERT_PROFILE_ID`.
-      owner: { companyId: COMPANY_ID, expertProfileId: OTHER_EXPERT_PROFILE_ID },
+      owner: {
+        companyId: COMPANY_ID,
+        expertProfileId: OTHER_EXPERT_PROFILE_ID,
+        deliveringAgency: { from: 'expert_profile' },
+      },
     });
     expect(reads.findRelationship).toHaveBeenCalledExactlyOnceWith(RELATIONSHIP_ID);
     // TWO reads, and the second is keyed by the relationship's request pointer.

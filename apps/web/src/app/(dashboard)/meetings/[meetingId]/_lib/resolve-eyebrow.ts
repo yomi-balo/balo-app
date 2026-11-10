@@ -29,6 +29,19 @@ export function contextIsCase(contextType: RecapContextType): boolean {
   return contextType === 'case';
 }
 
+const ENGAGEMENT_GRAIN: ReadonlySet<RecapContextType> = new Set([
+  'case',
+  'project_kickoff',
+  'project_call',
+  'package_session',
+  'retainer_checkin',
+]);
+
+/** Engagement-grain contexts — the ones whose `contextId` IS an `engagements.id`. */
+export function contextIsEngagementGrain(contextType: RecapContextType): boolean {
+  return ENGAGEMENT_GRAIN.has(contextType);
+}
+
 /**
  * BAL-421 — the recap's back link to its case, or `null` when there is nowhere to go.
  *

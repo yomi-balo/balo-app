@@ -26,7 +26,10 @@ vi.mock('@/lib/logging', () => ({
   log: { error: (...a: unknown[]) => mockLogError(...a), warn: vi.fn(), info: vi.fn() },
 }));
 
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import { readRatingCard } from './read-rating-card';
+
+const CAPTURE = buildReviewCaptureSeeds();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -34,7 +37,11 @@ beforeEach(() => {
 
 describe('readRatingCard', () => {
   it('passes through the "none" state untouched, not requiring a held consultation', async () => {
-    mockReadEngagementReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+    mockReadEngagementReview.mockResolvedValue({
+      review: null,
+      state: { kind: 'none' },
+      capture: CAPTURE,
+    });
 
     const result = await readRatingCard({
       engagementId: ENGAGEMENT_ID,
@@ -47,6 +54,7 @@ describe('readRatingCard', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: CAPTURE,
     });
     expect(mockConsultationTimestamps).not.toHaveBeenCalled();
   });
@@ -55,6 +63,7 @@ describe('readRatingCard', () => {
     mockReadEngagementReview.mockResolvedValue({
       review: { rating: 5, body: 'Great work', ratedOnIso: NOW.toISOString() },
       state: { kind: 'rated_ok', rating: 5 },
+      capture: CAPTURE,
     });
 
     const result = await readRatingCard({
@@ -68,6 +77,7 @@ describe('readRatingCard', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'rated_ok', rating: 5 },
       existingBody: 'Great work',
+      capture: CAPTURE,
     });
   });
 
@@ -75,6 +85,7 @@ describe('readRatingCard', () => {
     mockReadEngagementReview.mockResolvedValue({
       review: { rating: 2, body: null, ratedOnIso: NOW.toISOString() },
       state: { kind: 'rated_low', rating: 2 },
+      capture: CAPTURE,
     });
 
     const result = await readRatingCard({
@@ -101,7 +112,11 @@ describe('readRatingCard', () => {
   });
 
   it('required + lastCompletedConsultationAt null returns null', async () => {
-    mockReadEngagementReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+    mockReadEngagementReview.mockResolvedValue({
+      review: null,
+      state: { kind: 'none' },
+      capture: CAPTURE,
+    });
     mockConsultationTimestamps.mockResolvedValue(
       new Map([
         [
@@ -126,7 +141,11 @@ describe('readRatingCard', () => {
   });
 
   it('required + missing from the map returns null', async () => {
-    mockReadEngagementReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+    mockReadEngagementReview.mockResolvedValue({
+      review: null,
+      state: { kind: 'none' },
+      capture: CAPTURE,
+    });
     mockConsultationTimestamps.mockResolvedValue(new Map());
 
     const result = await readRatingCard({
@@ -140,7 +159,11 @@ describe('readRatingCard', () => {
   });
 
   it('required + a Date returns the view', async () => {
-    mockReadEngagementReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+    mockReadEngagementReview.mockResolvedValue({
+      review: null,
+      state: { kind: 'none' },
+      capture: CAPTURE,
+    });
     mockConsultationTimestamps.mockResolvedValue(
       new Map([
         [
@@ -165,11 +188,16 @@ describe('readRatingCard', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' },
       existingBody: null,
+      capture: CAPTURE,
     });
   });
 
   it('not required never calls the consultation-timestamps repository', async () => {
-    mockReadEngagementReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+    mockReadEngagementReview.mockResolvedValue({
+      review: null,
+      state: { kind: 'none' },
+      capture: CAPTURE,
+    });
 
     await readRatingCard({
       engagementId: ENGAGEMENT_ID,

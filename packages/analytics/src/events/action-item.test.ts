@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ACTION_ITEM_SERVER_EVENTS } from './action-item';
+import { ACTION_ITEM_SERVER_EVENTS, type ActionItemServerEventMap } from './action-item';
 
 describe('ACTION_ITEM_SERVER_EVENTS', () => {
   it('exposes exactly the BAL-391 action-item server events', () => {
@@ -26,5 +26,22 @@ describe('ACTION_ITEM_SERVER_EVENTS', () => {
     for (const value of Object.values(ACTION_ITEM_SERVER_EVENTS)) {
       expect(value).toMatch(/^action_item_[a-z]+$/);
     }
+  });
+});
+
+describe('action-item acting_as typing', () => {
+  it('accepts acting_as on the expert side and allows omitting it', () => {
+    const withActing: ActionItemServerEventMap['action_item_removed'] = {
+      engagement_id: 'e',
+      action_item_id: 'a',
+      acting_as: 'agency_admin',
+      distinct_id: 'u',
+    };
+    const without: ActionItemServerEventMap['action_item_removed'] = {
+      engagement_id: 'e',
+      action_item_id: 'a',
+      distinct_id: 'u',
+    };
+    expect([withActing, without]).toHaveLength(2);
   });
 });

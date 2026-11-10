@@ -24,10 +24,7 @@ async function seedSession(): Promise<{
   const { wallet, companyId } = await creditWalletFactory({ values: { balanceMinor: 50_000 } });
   const member = await userFactory();
   const expert = await expertFactory();
-  await db
-    .update(expertProfiles)
-    .set({ rateCents: 12_000 })
-    .where(eq(expertProfiles.id, expert.id));
+  await db.update(expertProfiles).set({ rateCents: 200 }).where(eq(expertProfiles.id, expert.id));
   const res = await creditSessionsRepository.open({
     walletId: wallet.id,
     companyId,
@@ -58,10 +55,7 @@ async function seedAnotherSessionOnWallet(
     .where(eq(creditSessions.walletId, walletId));
   const member = await userFactory();
   const expert = await expertFactory();
-  await db
-    .update(expertProfiles)
-    .set({ rateCents: 12_000 })
-    .where(eq(expertProfiles.id, expert.id));
+  await db.update(expertProfiles).set({ rateCents: 200 }).where(eq(expertProfiles.id, expert.id));
   const res = await creditSessionsRepository.open({
     walletId,
     companyId,

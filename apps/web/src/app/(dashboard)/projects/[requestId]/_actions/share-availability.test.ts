@@ -100,6 +100,7 @@ const EXPECTED_PAYLOAD = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPublishNotificationEvent.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(USER);
   mockResolveConversationAccess.mockResolvedValue(ACCESS_OK);
   mockHasExpertDeliveryCapability.mockResolvedValue(true);
@@ -289,7 +290,7 @@ describe('shareAvailabilityAction', () => {
       expect(mockHasExpertDeliveryCapability).toHaveBeenCalledWith(
         USER,
         'manage_engagement',
-        EXPERT_PROFILE_ID,
+        { expertProfileId: EXPERT_PROFILE_ID, agency: { from: 'expert_profile' } },
         { contextType: 'request_interaction', contextId: RELATIONSHIP_ID }
       );
     });

@@ -59,7 +59,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * token window), so a fixed date would turn this suite red on a future calendar day.
  *
  * ⚠ RATES ARE DERIVED, NOT RESTATED. The system open passes no `baloFeeBps`, so the session is
- * priced at the DEFAULT fee: `deriveSessionEstimate` turns the fixture's expert hourly rate into
+ * priced at the DEFAULT fee: `deriveSessionEstimate` turns the fixture's expert per-minute rate into
  * the client and expert per-minute rates every money assertion uses.
  *
  * ⚠ LITERAL AUDIT ACTIONS. `credit_session.opened_on_behalf` and
@@ -170,10 +170,13 @@ const TIMERS = resolveMeetingTimers();
 const MISSED_CALL_MINUTES = TIMERS.missedCallTerminationMs / MS_PER_MINUTE;
 const IDLE_END_MINUTES = TIMERS.idleEndEmptyMs / MS_PER_MINUTE;
 
-/** The fixture expert's hourly rate. At the default fee this is 700/min client, 560/min expert. */
-const EXPERT_HOURLY_MINOR = 33_600;
+/** The fixture expert's per-minute rate. At the default fee this is 700/min client, 560/min expert. */
+const EXPERT_RATE_MINOR_PER_MINUTE = 560;
 const { clientRateMinorPerMinute: CLIENT_RATE, expertRateMinorPerMinute: EXPERT_RATE } =
-  deriveSessionEstimate({ expertHourlyMinor: EXPERT_HOURLY_MINOR, estimatedMinutes: 1 });
+  deriveSessionEstimate({
+    expertRateMinorPerMinute: EXPERT_RATE_MINOR_PER_MINUTE,
+    estimatedMinutes: 1,
+  });
 
 /** Comfortably more than any hold or consumption in this file (a 30-minute estimate is 21,000). */
 const FUNDED_BALANCE_MINOR = 50_000;
@@ -243,7 +246,7 @@ interface Scenario {
 async function seedScenario(fundedMinor: number | null = FUNDED_BALANCE_MINOR): Promise<Scenario> {
   const parties = await seedBookingParties();
   await expertsRepository.updateProfile(parties.expertProfileId, {
-    rateCents: EXPERT_HOURLY_MINOR,
+    rateCents: EXPERT_RATE_MINOR_PER_MINUTE,
   });
   const expert = await expertsRepository.findUserIdByProfileId(parties.expertProfileId);
   if (expert === undefined) {

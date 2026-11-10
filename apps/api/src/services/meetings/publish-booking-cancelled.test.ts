@@ -97,7 +97,7 @@ beforeEach(() => {
     agencyId: null,
     type: 'freelancer',
   });
-  mockFindCase.mockResolvedValue({ title: 'Flow automation review' });
+  mockFindCase.mockResolvedValue({ title: 'Flow automation review', deliveringAgencyId: null });
   mockFindUserDisplay.mockImplementation(async (id: string) =>
     id === EXPERT_USER_ID
       ? { id, firstName: 'Priya', lastName: 'Raman' }
@@ -295,19 +295,27 @@ describe('publishBookingCancelled — cancelledByLabel', () => {
     expect(published().cancelledByLabel).toBe('Dana Okoro @ Northwind Industrial');
   });
 
-  it('EXPERT arm: the PERSON with "@ agency"', async () => {
+  it('EXPERT arm: the PERSON with "@ agency", read from the case pin rather than the profile', async () => {
     mockFindDisplayProfile.mockResolvedValue({
       id: EXPERT_PROFILE_ID,
       userId: EXPERT_USER_ID,
-      agencyId: 'agency-1',
+      agencyId: 'agency-other',
       type: 'agency',
     });
-    mockGetAgencySummary.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
+    mockFindCase.mockResolvedValue({
+      title: 'Flow automation review',
+      deliveringAgencyId: 'agency-1',
+    });
+    mockGetAgencySummary.mockImplementation(async (id: string) => ({
+      id,
+      name: id === 'agency-1' ? 'CloudPeak' : 'Elsewhere',
+    }));
     mockFindUserDisplay.mockResolvedValue({ id: ACTOR_USER_ID, firstName: 'Sam', lastName: 'Lee' });
 
     await publishBookingCancelled(input({ cancelledBy: 'expert' }), log);
 
     expect(published().cancelledByLabel).toBe('Sam Lee @ CloudPeak');
+    expect(mockGetAgencySummary).not.toHaveBeenCalledWith('agency-other');
   });
 
   it('⚠ ADMIN arm: the literal "Balo support" — a staff member is NEVER named to the parties', async () => {

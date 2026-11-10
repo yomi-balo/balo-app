@@ -81,7 +81,7 @@ beforeEach(() => {
   mockTransaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
   mockFindByCompanyId.mockResolvedValue(wallet(null));
   mockReadHoldStatus.mockResolvedValue(NOT_ON_HOLD);
-  mockFindRateCentsById.mockResolvedValue({ rateCents: 33_600 });
+  mockFindRateCentsById.mockResolvedValue({ rateCents: 560 });
   mockGetAvailableForBooking.mockResolvedValue(30_000);
   mockListReservableCaseBookings.mockResolvedValue([]);
 });
@@ -111,7 +111,7 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
     expect(snapshot).toEqual({
       kind: 'no_mandate',
       walletId: WALLET_ID,
-      expertRateCents: 33_600,
+      expertRateCents: 560,
       availableMinor: 30_000,
       reservable: [],
     });
@@ -150,7 +150,7 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
       walletId: WALLET_ID,
       hold,
       topUpPricing: {
-        expertRateCents: 33_600,
+        expertRateCents: 560,
         availableMinor: 30_000,
         reservable: [],
         mandateActive: true,
@@ -174,7 +174,7 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
       walletId: WALLET_ID,
       hold,
       topUpPricing: {
-        expertRateCents: 33_600,
+        expertRateCents: 560,
         availableMinor: 30_000,
         reservable: rows,
         mandateActive: false,
@@ -210,7 +210,7 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
     expect(snapshot).toEqual({
       kind: 'no_wallet',
       topUpPricing: {
-        expertRateCents: 33_600,
+        expertRateCents: 560,
         availableMinor: 0,
         reservable: rows,
         mandateActive: false,

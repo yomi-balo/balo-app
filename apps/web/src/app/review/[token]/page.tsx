@@ -124,6 +124,9 @@ export default async function ReviewLandingPage({
               rating: existingRating,
               body: existing.body,
               ratedOnIso: (existing.lastEditedAt ?? existing.createdAt).toISOString(),
+              bodyVisibility: existing.bodyVisibility,
+              showCompany: existing.showCompany,
+              reviewerRole: existing.reviewerRole,
             }
       }
     />

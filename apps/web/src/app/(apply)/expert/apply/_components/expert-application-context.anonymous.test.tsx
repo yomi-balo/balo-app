@@ -132,7 +132,6 @@ const serverDraft = {
     trailheadUrl: null,
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
   },
   competencies: [],
   certifications: [],

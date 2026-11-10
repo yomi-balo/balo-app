@@ -3,6 +3,7 @@ import {
   uuid,
   integer,
   text,
+  boolean,
   timestamp,
   index,
   uniqueIndex,
@@ -10,7 +11,7 @@ import {
   foreignKey,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
-import { reviewSurfaceEnum, reviewAuthMethodEnum } from './enums';
+import { reviewSurfaceEnum, reviewAuthMethodEnum, reviewBodyVisibilityEnum } from './enums';
 import { engagements } from './engagements';
 import { users } from './users';
 import { expertProfiles } from './experts';
@@ -50,10 +51,12 @@ export const reviews = pgTable(
      * `proposal_share_links` / `expert_referral_invites` treatment: the actor must
      * survive their own departure from the company.
      *
-     * ⚠ D6: THE PUBLIC PROJECTION COLLAPSES TO THE CLIENT COMPANY. A published review
-     * is a PARTY statement, not a personal one — `reviewsRepository.listPublicByExpert`
-     * selects `companies.name` and an invariant test asserts this column can never
-     * appear in that projection. NEVER widen a public read to select it.
+     * ⚠ D6: A PUBLISHED REVIEW NAMES ITS REVIEWER by first name and surname initial
+     * (`formatReviewAttribution`, `@balo/shared/reviews`), with their role and — only when
+     * `show_company` is set and the company allows it — the client company. The name is
+     * resolved THROUGH this column server-side; the column itself is NEVER part of a
+     * public read, and an invariant test asserts it cannot appear in that projection.
+     * NEVER widen a public read to select it.
      */
     reviewerUserId: uuid('reviewer_user_id')
       .notNull()
@@ -81,6 +84,30 @@ export const reviews = pgTable(
      */
     body: text('body'),
 
+    /**
+     * Whether `body` may appear on a public surface (BAL-628). The DB default fails CLOSED
+     * (`private`): a row written without it — every pre-0121 row — never publishes its note.
+     * The write path always sends the reviewer's explicit choice; the capture form's own
+     * default is `public`.
+     */
+    bodyVisibility: reviewBodyVisibilityEnum('body_visibility').notNull().default('private'),
+
+    /**
+     * The reviewer's choice to show their client company on the review (BAL-628). Fails
+     * CLOSED (`false`) like `body_visibility`. `applyReview` forces it `false` for a
+     * personal company or one with `companies.review_name_hidden_at` set, whatever the
+     * client sends — so a `true` here is necessary but not sufficient for display: a public
+     * read must still re-check the company at READ time (an admin can hide it later).
+     */
+    showCompany: boolean('show_company').notNull().default(false),
+
+    /**
+     * The reviewer's role AS OF THIS REVIEW — a snapshot, deliberately not a join to
+     * `users.job_title`, so a later job change never rewrites a published attribution.
+     * NULL when they gave none. Bounded by `review_reviewer_role_length`.
+     */
+    reviewerRole: text('reviewer_role'),
+
     /** WHERE it was captured. */
     surface: reviewSurfaceEnum('surface').notNull(),
 
@@ -104,6 +131,19 @@ export const reviews = pgTable(
     check(
       'review_body_nonempty_when_present',
       sql`${t.body} IS NULL OR length(btrim(${t.body})) > 0`
+    ),
+    // Same shape for the role: NULL means "none given", never a blank string. 60 mirrors
+    // `REVIEWER_ROLE_MAX`; the caller's Zod (JS length ≥ Postgres `length`) is the stricter.
+    check(
+      'review_reviewer_role_length',
+      sql`${t.reviewerRole} IS NULL OR length(btrim(${t.reviewerRole})) BETWEEN 1 AND 60`
+    ),
+    // No `@` and no control characters: a role may not impersonate the `{Role} @{Company}`
+    // descriptor or smuggle line breaks into it. Mirrors `REVIEWER_ROLE_FORBIDDEN`; the Zod
+    // is the stricter (it also rejects Unicode format characters such as bidi overrides).
+    check(
+      'review_reviewer_role_charset',
+      sql`${t.reviewerRole} IS NULL OR ${t.reviewerRole} !~ '[@[:cntrl:]]'`
     ),
 
     // ── THE UPSERT ARBITER ───────────────────────────────────────────────────────
@@ -188,10 +228,10 @@ export const reviewsRelations = relations(reviews, ({ one }) => ({
 export type Review = typeof reviews.$inferSelect;
 export type NewReview = typeof reviews.$inferInsert;
 
-// NO schema-derived `ReviewSurface` / `ReviewAuthMethod` aliases are exported here, on
-// purpose. `@balo/shared/reviews` owns those two unions (BAL-389's CLIENT component must
-// import them without value-importing `@balo/db` — `reference_balo_db_client_bundle_footgun`),
-// and `reviewsRepository`'s input types use the shared ones. Because `NewReview`'s
-// inferred column types ARE the pgEnum literal unions, assigning a shared `ReviewSurface`
-// into an insert only compiles while the two agree — the lockstep guard is the type
-// checker, for free, with no duplicated union to drift.
+// NO schema-derived `ReviewSurface` / `ReviewAuthMethod` / `ReviewBodyVisibility` aliases
+// are exported here, on purpose. `@balo/shared/reviews` owns those unions (BAL-389's CLIENT
+// component must import them without value-importing `@balo/db` —
+// `reference_balo_db_client_bundle_footgun`), and `reviewsRepository`'s input types use the
+// shared ones. Because `NewReview`'s inferred column types ARE the pgEnum literal unions,
+// assigning a shared `ReviewSurface` into an insert only compiles while the two agree — the
+// lockstep guard is the type checker, for free, with no duplicated union to drift.

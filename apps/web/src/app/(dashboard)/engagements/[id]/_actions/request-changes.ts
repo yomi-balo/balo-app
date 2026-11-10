@@ -124,6 +124,8 @@ export async function requestProjectChangesAction(input: {
         engagementId,
         expertProfileId: engagement.expertProfileId,
         actorClientLabel,
+        actorUserId: user.id,
+        deliveringExpertName: parties.expertPerson,
         projectTitle: deriveEngagementTitle(engagement, parties),
         note,
         reviewDays: AUTO_ACCEPT_DAYS,

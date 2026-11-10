@@ -267,6 +267,12 @@ export const AUDIT_ACTION_SENTENCES: Record<
     `Billing email changed from ${readString(m, 'previous_email')} to ${readString(m, 'new_email')}`,
   'company.promoted_to_organization': (m) =>
     `Promoted to an organization on ${readString(m, 'domain')}`,
+  'company.industry_set': (m) => {
+    if (m.to === null) return 'Industry cleared';
+    return typeof m.toName === 'string' ? `Industry set to ${m.toName}` : 'Industry changed';
+  },
+  'company.review_name_hidden': () => 'Company name hidden on reviews',
+  'company.review_name_shown': () => 'Company name can show on reviews again',
 
   // A party admin's self-serve add also wrote `captured`, told apart by `source: 'admin_added'`.
   'party_domain.captured': (m) =>

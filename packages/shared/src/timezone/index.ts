@@ -426,13 +426,34 @@ export function deriveCountryFromTimezone(
 }
 
 /**
+ * Zones ICU still lists under an old city spelling (`Intl.supportedValuesOf('timeZone')` has
+ * `Asia/Calcutta`, not `Asia/Kolkata`), so a browser can report them and `canonicalTimezone`
+ * keeps them. Mapped to the current city name so labels never read "Calcutta time".
+ */
+const LEGACY_ZONE_CITIES: Readonly<Record<string, string>> = {
+  'America/Godthab': 'Nuuk',
+  'Asia/Calcutta': 'Kolkata',
+  'Asia/Katmandu': 'Kathmandu',
+  'Asia/Rangoon': 'Yangon',
+  'Asia/Saigon': 'Ho Chi Minh',
+  'Atlantic/Faeroe': 'Faroe',
+  'Europe/Kiev': 'Kyiv',
+  'Pacific/Enderbury': 'Kanton',
+  'Pacific/Ponape': 'Pohnpei',
+  'Pacific/Truk': 'Chuuk',
+};
+
+/**
  * Extract the city name from an IANA timezone string (e.g. "Australia/Sydney" -> "Sydney").
  * Handles nested paths like "America/Indiana/Indianapolis" -> "Indianapolis".
- * Replaces underscores with spaces.
+ * Replaces underscores with spaces. Old spellings use the current name
+ * ("Asia/Calcutta" -> "Kolkata").
  * Returns null for UTC or invalid formats.
  */
 export function extractCityFromTimezone(timezone: string | null | undefined): string | null {
   if (!timezone || timezone === 'UTC') return null;
+  const legacy = LEGACY_ZONE_CITIES[timezone];
+  if (legacy !== undefined) return legacy;
   const parts = timezone.split('/');
   const city = parts.at(-1);
   if (!city) return null;
@@ -449,13 +470,32 @@ export function extractCityFromTimezone(timezone: string | null | undefined): st
 const VALID_TIMEZONES = new Set<string>([...Intl.supportedValuesOf('timeZone'), 'UTC']);
 
 /**
- * True when `tz` is an IANA timezone identifier this platform accepts — any zone
- * from `Intl.supportedValuesOf('timeZone')` plus the special-cased `'UTC'` (which
- * Node omits from that list). Empty strings and unknown zones are false. Shared by
+ * The name to store for a zone a user picked or their browser reported, or null when it
+ * isn't one this platform accepts. A zone from `Intl.supportedValuesOf('timeZone')`, `'UTC'`,
+ * or a current IANA name in {@link TIMEZONE_TO_COUNTRY} that ICU lists only as an alias
+ * (`Asia/Kolkata`, `Europe/Kyiv`) is kept as given. Any other name `Intl` recognises is stored
+ * as the zone it resolves to (`US/Pacific` → `America/Los_Angeles`, `GB` → `Europe/London`,
+ * `Etc/UTC` → `UTC`), so the city and country helpers can read it. UTC offsets such as
+ * `+05:30` and unknown names are null.
+ */
+export function canonicalTimezone(tz: string): string | null {
+  if (VALID_TIMEZONES.has(tz)) return tz;
+  if (tz === '') return null;
+  try {
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
+    if (!VALID_TIMEZONES.has(resolved)) return null;
+    return Object.hasOwn(TIMEZONE_TO_COUNTRY, tz) ? tz : resolved;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when `tz` is a zone this platform accepts (see {@link canonicalTimezone}). Shared by
  * the API and web validation layers so the valid-zone set is defined in one place.
  */
 export function isValidTimezone(tz: string): boolean {
-  return VALID_TIMEZONES.has(tz);
+  return canonicalTimezone(tz) !== null;
 }
 
 // ── DST spring-forward gap detection (pure, Intl-only) ──────────────
@@ -612,6 +652,28 @@ export function getNextSpringForwardGap(timeZone: string, from: Date): SpringFor
   return null;
 }
 
+/** Number of 30-day steps past `from` that {@link zonesDiffer} compares offsets at. */
+const ZONE_COMPARE_SAMPLES = 12;
+const ZONE_COMPARE_STEP_MS = 30 * MS_PER_DAY;
+
+/**
+ * True when two zones keep different clock times at any sampled point in the year starting at
+ * `from`. Offsets are compared at `from` and every 30 days after it for a year, so zones that
+ * only agree for part of the year (Brisbane vs Sydney, equal in winter) still differ, while
+ * zones that always move together (Melbourne vs Sydney) and aliases of one zone (Asia/Kolkata
+ * vs Asia/Calcutta) do not. Because it samples rather than scans, a difference shorter than
+ * about 30 days (zones whose DST starts in different weeks) can be missed; that is accepted for
+ * a prompt. An invalid zone on either side is never a difference.
+ */
+export function zonesDiffer(a: string, b: string, from: Date): boolean {
+  if (a === b || !isValidTimezone(a) || !isValidTimezone(b)) return false;
+  for (let step = 0; step <= ZONE_COMPARE_SAMPLES; step++) {
+    const instant = new Date(from.getTime() + step * ZONE_COMPARE_STEP_MS);
+    if (tzOffsetMinutes(a, instant) !== tzOffsetMinutes(b, instant)) return true;
+  }
+  return false;
+}
+
 /**
  * True when a weekly wall-clock range would land in the timezone's upcoming spring-forward
  * gap. Only the transition's own weekday is considered (v1: single upcoming transition).
@@ -653,3 +715,16 @@ export * from './utc-date';
 //
 // `addBusinessDays` / `businessDaysBetween` — see `./business-days`.
 export * from './business-days';
+
+// ── Local calendar date (BAL-624) ────────────────────────────────
+
+/**
+ * The calendar date (`YYYY-MM-DD`) that `now` falls on in `timeZone`. Built from the zone's
+ * wall-clock parts rather than a locale's date format. A missing or unrecognised zone falls
+ * back to UTC, so the result is always a valid date.
+ */
+export function localIsoDate(now: Date, timeZone: string | null | undefined): string {
+  const zone = timeZone && isValidTimezone(timeZone) ? timeZone : 'UTC';
+  const { year, month, day } = tzWallClock(zone, now);
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}

@@ -1,5 +1,11 @@
 import { and, eq, isNull } from 'drizzle-orm';
-import { engagements, projectEngagements, type Engagement } from '../../schema';
+import {
+  engagementMilestones,
+  engagements,
+  projectEngagements,
+  type Engagement,
+  type EngagementMilestone,
+} from '../../schema';
 import {
   EngagementTypeMismatchError,
   type DbTx,
@@ -108,4 +114,56 @@ export async function lockActiveEngagement(
   }
 
   return engagement;
+}
+
+/**
+ * CONCURRENCY (document once, obeyed everywhere): every milestone transition locks
+ * the parent `engagements` row FOR UPDATE FIRST, THEN the milestone row. Holding
+ * the engagement lock is a single-writer gate over the whole engagement, so an
+ * engagement-level guard (e.g. "all milestones completed" in `requestCompletion`)
+ * cannot be raced by a concurrent milestone transition. LOCK ORDER EVERYWHERE:
+ * engagement row → then milestone row. Never the reverse (deadlock hazard). This
+ * mirrors `proposals.accept`'s documented "proposal first, then relationship".
+ */
+
+/**
+ * The shared lock dance for milestone-scoped transitions:
+ *   1. Unlocked read of the LIVE milestone → discover its `engagement_id`
+ *      (lock-order discovery only; the guards run against the FOR-UPDATE re-read).
+ *   2. Lock the engagement FOR UPDATE + assert active (`lockActiveEngagement`).
+ *   3. Re-read the milestone FOR UPDATE (under the engagement lock).
+ * Missing milestone at step 1 or 3 → `Error('Milestone not found')`.
+ */
+export async function lockEngagementAndMilestone(
+  tx: DbTx,
+  milestoneId: string
+): Promise<{ engagement: Engagement; milestone: EngagementMilestone }> {
+  const [discovered] = await tx
+    .select({ engagementId: engagementMilestones.engagementId })
+    .from(engagementMilestones)
+    .where(and(eq(engagementMilestones.id, milestoneId), isNull(engagementMilestones.deletedAt)));
+
+  if (discovered === undefined) {
+    throw new Error(`Milestone not found: ${milestoneId}`);
+  }
+
+  // `{ requireType: 'project' }` (BAL-417): milestones are a PROJECT-shaped concept.
+  // A Case is not milestone-shaped and `aggregateMilestoneProgress` must never count
+  // Case milestones, so the widening that `action_items` / `transcripts` deliberately
+  // allow is structurally BLOCKED here.
+  const engagement = await lockActiveEngagement(tx, discovered.engagementId, {
+    requireType: 'project',
+  });
+
+  const [milestone] = await tx
+    .select()
+    .from(engagementMilestones)
+    .where(and(eq(engagementMilestones.id, milestoneId), isNull(engagementMilestones.deletedAt)))
+    .for('update');
+
+  if (milestone === undefined) {
+    throw new Error(`Milestone not found: ${milestoneId}`);
+  }
+
+  return { engagement, milestone };
 }

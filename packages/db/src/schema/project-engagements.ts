@@ -232,17 +232,19 @@ export const projectEngagementsRelations = relations(projectEngagements, ({ one 
   // Retrospective actor attribution across delivery surfaces (query-time only over
   // existing FK columns; `restrict` FKs preserve attribution): the person who accepted
   // (NULL on the D7 auto path — BAL-331), the person who cancelled (BAL-335 admin
-  // oversight), and the person who requested changes (BAL-331). Consumers project
-  // name-only (+ platformRole) columns.
-  //
-  // There is deliberately NO `completionRequestedBy` relation — that column has never
-  // had one and no consumer needs it; adding it would be net-new API with zero callers.
+  // oversight), the person who requested changes (BAL-331), and the person who
+  // requested completion (NULL until requested, and again after a withdrawal or a
+  // change request). Consumers project name-only (+ platformRole) columns.
   acceptedBy: one(users, {
     fields: [projectEngagements.acceptedByUserId],
     references: [users.id],
   }),
   cancelledBy: one(users, {
     fields: [projectEngagements.cancelledByUserId],
+    references: [users.id],
+  }),
+  completionRequestedBy: one(users, {
+    fields: [projectEngagements.completionRequestedByUserId],
     references: [users.id],
   }),
   changeRequestedBy: one(users, {

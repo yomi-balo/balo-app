@@ -5,13 +5,9 @@ import { requireInternalAuth } from '../../lib/internal-auth.js';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { trackServer, AVAILABILITY_SERVER_EVENTS } from '@balo/analytics/server';
 import { findOverrideConflicts } from '../../services/availability/override-conflicts.js';
-import {
-  checkRateLimit,
-  RATE_LIMIT_DEADLINE_MS,
-  type RateLimitConfig,
-} from '../../lib/rate-limiter.js';
-import { getRedis } from '../../lib/redis.js';
-import { withDeadline } from '../../lib/with-deadline.js';
+import type { RateLimitConfig } from '../../lib/rate-limiter.js';
+import { enforceRateLimitFailOpen } from '../../lib/rate-limit-fail-open.js';
+import { invalidateExpertSlots } from '../../services/availability/expert-slots-cache.js';
 
 // ── Validation schemas ──────────────────────────────────────────
 
@@ -53,11 +49,11 @@ function withDateRangeRules<T extends { startDate: string; endDate: string }>(
   );
 }
 
-const listQuerySchema = z.object({ expertProfileId: z.string().uuid() });
+const listQuerySchema = z.object({ expertProfileId: z.uuid() });
 
 const createBodySchema = withDateRangeRules(
   z.object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     startDate: isoDate,
     endDate: isoDate,
     // Normalize empty/whitespace-only labels to `null` so a blank label never
@@ -72,16 +68,16 @@ const createBodySchema = withDateRangeRules(
 );
 
 const deleteBodySchema = z.object({
-  expertProfileId: z.string().uuid(),
-  overrideId: z.string().uuid(),
+  expertProfileId: z.uuid(),
+  overrideId: z.uuid(),
 });
 
 const conflictsQuerySchema = withDateRangeRules(
   z.object({
-    expertProfileId: z.string().uuid(),
+    expertProfileId: z.uuid(),
     // S1 — the calling session's own `users.id`, asserted against `expertProfiles.userId`
     // before this route's counterparty-identity payload (`clientCompanyName`) is read.
-    userId: z.string().uuid(),
+    userId: z.uuid(),
     startDate: isoDate,
     endDate: isoDate,
   })
@@ -110,41 +106,21 @@ const CONFLICTS_RATE_LIMIT: RateLimitConfig = {
 };
 
 /**
- * ⚠ R3 — BOUNDED VIA `withDeadline`, NOT A BARE `try/catch`. `getRedis()` sets
- * `maxRetriesPerRequest: null` (BullMQ requires it), and ioredis only fails pending commands
- * with an error when that option is a NUMBER — with `null`, a command issued during a Redis
- * outage is parked in the offline queue and NEVER SETTLES, so an unbounded `await` here would
- * hang the request rather than reach the `catch` below. See `with-deadline.ts`'s docblock for
- * the verified mechanism; six other routes in this app already wrap `checkRateLimit` for
- * exactly this reason.
- *
- * Genuinely fails OPEN once bounded — this is a WARNING read (D10), and refusing it entirely
- * would be new friction from an unrelated failure.
+ * Fails OPEN (see `enforceRateLimitFailOpen`) — this is a WARNING read (D10), and refusing it
+ * entirely would be new friction from an unrelated failure.
  */
-async function enforceConflictsRateLimit(
+function enforceConflictsRateLimit(
   request: FastifyRequest,
   reply: FastifyReply,
   userId: string
 ): Promise<boolean> {
-  try {
-    const result = await withDeadline(
-      () => checkRateLimit(getRedis(), CONFLICTS_RATE_LIMIT, userId),
-      { deadlineMs: RATE_LIMIT_DEADLINE_MS, label: 'override-conflicts rate limit' }
-    );
-    if (!result.allowed) {
-      reply
-        .header('Retry-After', String(result.ttlSeconds))
-        .status(429)
-        .send({ error: 'rate_limited', cooldownSeconds: result.ttlSeconds });
-      return true;
-    }
-  } catch (err: unknown) {
-    request.log.warn(
-      { userId, error: err instanceof Error ? err.message : String(err) },
-      'Override-conflict rate limit unavailable — failing open'
-    );
-  }
-  return false;
+  return enforceRateLimitFailOpen(
+    request,
+    reply,
+    CONFLICTS_RATE_LIMIT,
+    userId,
+    'Override-conflict rate limit'
+  );
 }
 
 // ── Conflicts DTO (allow-listed — no ids beyond the expert's own consultation row, no
@@ -172,7 +148,7 @@ function toDto(o: AvailabilityOverride): OverrideDto {
 
 // ── Routes ──────────────────────────────────────────────────────
 
-export async function availabilityOverridesRoutes(fastify: FastifyInstance): Promise<void> {
+export function availabilityOverridesRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/experts/availability-overrides?expertProfileId=...
    * Lists an expert's upcoming (non-elapsed, non-deleted) time-off blocks.
@@ -231,6 +207,7 @@ export async function availabilityOverridesRoutes(fastify: FastifyInstance): Pro
         });
 
         // Rebuild AFTER the row is committed so the resolver sees the new block.
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         trackServer(AVAILABILITY_SERVER_EVENTS.OVERRIDE_CREATED, {
@@ -284,6 +261,7 @@ export async function availabilityOverridesRoutes(fastify: FastifyInstance): Pro
           return reply.status(404).send({ error: 'Override not found' });
         }
 
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         trackServer(AVAILABILITY_SERVER_EVENTS.OVERRIDE_DELETED, {
@@ -397,4 +375,5 @@ export async function availabilityOverridesRoutes(fastify: FastifyInstance): Pro
       }
     }
   );
+  return Promise.resolve();
 }

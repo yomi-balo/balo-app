@@ -73,11 +73,12 @@ export function buildCertCategoryMap(
   return certCategoryMap;
 }
 
-export function buildDistinctions(profile: ApplicationProfile): string[] {
+export function buildDistinctions(
+  profile: Pick<ApplicationProfile, 'isSalesforceMvp' | 'isSalesforceCta'>
+): string[] {
   const distinctions: string[] = [];
   if (profile.isSalesforceMvp) distinctions.push('Salesforce MVP');
   if (profile.isSalesforceCta) distinctions.push('Salesforce CTA');
-  if (profile.isCertifiedTrainer) distinctions.push('Certified Trainer');
   return distinctions;
 }
 

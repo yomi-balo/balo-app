@@ -1,11 +1,16 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
-import { engagementChangeOrdersRepository, projectEngagementsRepository } from '@balo/db';
+import {
+  engagementChangeOrdersRepository,
+  engagementTimeEntriesRepository,
+  projectEngagementsRepository,
+} from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import { loggedValueCents } from '@balo/shared/engagements';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasExpertDeliveryCapability } from '@/lib/authz/engagement';
 import { log } from '@/lib/logging';
-import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
+import { resolveEngagementViewer } from '@/lib/engagement/resolve-engagement-viewer';
 import {
   deriveEngagementParties,
   projectEngagementTitle,
@@ -97,7 +102,7 @@ export default async function ChangeOrderComposerPage({
     notFound();
   }
 
-  const ctx = resolveEngagementLens(user, engagement);
+  const ctx = await resolveEngagementViewer(user, engagement);
   if (!ctx) {
     notFound();
   }
@@ -105,7 +110,10 @@ export default async function ChangeOrderComposerPage({
   const mayPropose = await hasExpertDeliveryCapability(
     user,
     ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-    engagement.expertProfileId,
+    {
+      expertProfileId: engagement.expertProfileId,
+      agency: { from: 'engagement', deliveringAgencyId: engagement.deliveringAgencyId },
+    },
     { contextType: 'project', contextId: id }
   );
   if (!mayPropose) {
@@ -118,7 +126,11 @@ export default async function ChangeOrderComposerPage({
     redirect(workspaceHref);
   }
 
-  const orders = await engagementChangeOrdersRepository.listForEngagement(id);
+  const isTm = engagement.pricingMethod === 'tm';
+  const [orders, loggedSums] = await Promise.all([
+    engagementChangeOrdersRepository.listForEngagement(id),
+    isTm ? engagementTimeEntriesRepository.sumsForEngagement(id, null) : Promise.resolve(null),
+  ]);
   const open = findOpenOrder(orders);
   if (open?.status === 'sent') {
     redirect(workspaceHref);
@@ -126,7 +138,8 @@ export default async function ChangeOrderComposerPage({
 
   const parties = deriveEngagementParties(engagement);
   const requestedHeading =
-    mapChangeOrdersToView(orders, engagement, ctx, parties, false).open?.requestedHeading ?? null;
+    mapChangeOrdersToView(orders, engagement, ctx, parties, false, { viewerUserId: user.id }).open
+      ?.requestedHeading ?? null;
   const projectTitle = projectEngagementTitle(
     engagement.projectRequest?.title ?? null,
     parties.expertPartyShort
@@ -172,6 +185,12 @@ export default async function ChangeOrderComposerPage({
         currency={engagement.currency}
         currentPriceCents={effectiveExpertPriceCents(engagement.priceCents, orders)}
         hourlyRateCents={engagement.rateCents}
+        loggedMinutesByMilestone={loggedSums?.byMilestone ?? {}}
+        loggedValueCents={
+          loggedSums === null
+            ? null
+            : loggedValueCents(loggedSums.totalMinutes, engagement.rateCents)
+        }
         milestones={milestones}
         order={order}
         prefillLine={prefillLineFor(prefill, milestones)}

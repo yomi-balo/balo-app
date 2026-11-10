@@ -364,7 +364,9 @@ export async function bookIntroCallAction(
 
     const expertProfileId = access.relationship.expertProfileId;
     const won = access.relationship.status === 'accepted';
-    const expertDisplay = await resolveBookingExpertDisplay(expertProfileId);
+    const expertDisplay = await resolveBookingExpertDisplay(expertProfileId, {
+      from: 'expert_profile',
+    });
     const joinPath = memberCallPath(meetingId);
 
     // Fire-and-forget — only reached on a real 201.

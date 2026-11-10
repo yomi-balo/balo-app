@@ -4,6 +4,7 @@ import { render, screen } from '@/test/utils';
 import type { MilestoneNodeView } from '@/lib/engagement/engagement-view';
 
 import { MilestoneRow } from './milestone-row';
+import { milestoneTimeView } from './time/fixtures';
 
 function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView {
   return {
@@ -208,5 +209,64 @@ describe('MilestoneRow', () => {
     render(<MilestoneRow node={makeNode()} isLast />);
     expect(screen.queryByText('Changed since proposal')).not.toBeInTheDocument();
     expect(screen.queryByText('What changed')).not.toBeInTheDocument();
+  });
+
+  describe('time and materials', () => {
+    it('renders the hours bar and a collapsible time log with its entries', () => {
+      render(<MilestoneRow node={makeNode()} isLast time={milestoneTimeView()} />);
+      expect(screen.getByText('4 of 8 hrs logged')).toBeInTheDocument();
+      expect(screen.getByText('Time log (1)')).toBeInTheDocument();
+      expect(screen.getByText('Mapped the discovery flows')).toBeInTheDocument();
+      expect(screen.getByText('Logged by Priya')).toBeInTheDocument();
+    });
+
+    it('renders the per-entry controls slot', () => {
+      render(
+        <MilestoneRow
+          node={makeNode()}
+          isLast
+          time={milestoneTimeView()}
+          timeControls={(entry) => <button type="button">Edit {entry.id}</button>}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Edit te-1' })).toBeInTheDocument();
+    });
+
+    it('shows the invitation, and no time log toggle, when nothing is logged yet', () => {
+      render(
+        <MilestoneRow
+          node={makeNode()}
+          isLast
+          time={milestoneTimeView({
+            loggedMinutes: 0,
+            entries: [],
+            logToggleLabel: 'Time log (0)',
+            authorsLabel: null,
+            emptyLabel: 'Log time as you work — Northwind sees every entry and its note.',
+            overNoticeSent: false,
+          })}
+        />
+      );
+      expect(screen.getByText(/Log time as you work/)).toBeInTheDocument();
+      expect(screen.queryByText('Time log (0)')).not.toBeInTheDocument();
+    });
+
+    it('renders no time surface without a time view, or for an unestimated untouched milestone', () => {
+      const { rerender } = render(<MilestoneRow node={makeNode()} isLast />);
+      expect(screen.queryByText(/hrs logged/)).not.toBeInTheDocument();
+      rerender(
+        <MilestoneRow
+          node={makeNode()}
+          isLast
+          time={milestoneTimeView({
+            estimatedMinutes: null,
+            loggedMinutes: 0,
+            entries: [],
+            authorsLabel: null,
+          })}
+        />
+      );
+      expect(screen.queryByText(/hrs logged/)).not.toBeInTheDocument();
+    });
   });
 });

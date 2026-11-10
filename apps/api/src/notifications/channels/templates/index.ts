@@ -39,9 +39,12 @@ import { ProjectTrackDeclinedEmail } from './project-track-declined.js';
 import { ProjectTrackPassedAdminEmail } from './project-track-passed-admin.js';
 import { ProjectTrackPassedClientEmail } from './project-track-passed-client.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
+import { EngagementMilestoneEstimateExceededClientEmail } from './engagement-milestone-estimate-exceeded.js';
+import { EngagementTimeEntryChangedEmail } from './engagement-time-entry-changed.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
 import { EngagementCancelledEmail } from './engagement-cancelled.js';
+import { EngagementCancelledAgencyEmail } from './engagement-cancelled-agency.js';
 import { ReviewReminderEmail } from './engagement-review-reminder.js';
 import { AutoAcceptedEmail } from './engagement-auto-accepted.js';
 import { AcceptedClientEmail } from './engagement-accepted-emails.js';
@@ -111,6 +114,7 @@ import {
 } from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
+import { optionalText } from './shared.js';
 import {
   MeetingGuestInvitedEmail,
   MeetingGuestLinkResentEmail,
@@ -194,6 +198,11 @@ function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/** The recipient's zone as injected by the email adapter; null when absent or not a string. */
+function readRecipientTimezone(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
 /** BAL-622 — the present pre-formatted change labels joined on one line; undefined when none. */
 function joinLabels(...labels: unknown[]): string | undefined {
   const present = labels.filter((l): l is string => typeof l === 'string' && l.length > 0);
@@ -241,6 +250,7 @@ function bookingCancelledClientTemplate(
       caseTitle: (data.caseTitle as string) ?? 'your case',
       scheduledStartIso: (data.scheduledStartIso as string) ?? '',
       durationMinutes: numberCount(data.durationMinutes),
+      recipientTimezone: readRecipientTimezone(data.recipientTimezone),
       cancelledBy,
       reason,
       caseUrl: `${BASE_URL}/cases/${engagementId}`,
@@ -972,6 +982,44 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     };
   },
 
+  // BAL-624 milestone over estimate — CLIENT owner email. Hours only, never money.
+  'engagement-milestone-estimate-exceeded-client': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const milestoneTitle = (data.milestoneTitle as string) ?? 'a milestone';
+    return {
+      component: React.createElement(EngagementMilestoneEstimateExceededClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: (data.actorExpertLabel as string) ?? 'Your expert',
+        milestoneTitle,
+        loggedHoursLabel: (data.loggedHoursLabel as string) ?? '',
+        estimatedHoursLabel: (data.estimatedHoursLabel as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(milestoneTitle)} has gone over its estimate on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
+  // BAL-626 time entry changed by someone else — the entry's AUTHOR email.
+  'engagement-time-entry-changed': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const removed = data.change === 'removed';
+    const actor = (data.actorExpertLabel as string) ?? 'Someone on your team';
+    return {
+      component: React.createElement(EngagementTimeEntryChangedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        actorExpertLabel: actor,
+        change: removed ? 'removed' : 'edited',
+        projectTitle,
+        workedOnLabel: (data.workedOnLabel as string) ?? '',
+        hoursLabel: (data.hoursLabel as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(actor)} ${removed ? 'removed' : 'changed'} your time entry on ${sanitizeSubjectTitle(projectTitle)}`,
+    };
+  },
+
   // BAL-333 (D3) delivery-plan scope changed — CLIENT owner email. Subject names the
   // project; the body (exact ticket copy) states the price is unchanged. `projectTitle`
   // feeds both the subject and the hero project-context line in the component.
@@ -1033,6 +1081,31 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(projectTitle)} has been cancelled`,
+    };
+  },
+
+  // BAL-631 engagement cancelled — the delivering agency's owners/admins. Subject names the
+  // project and, when the publisher supplied it, the client company.
+  'engagement-cancelled-agency': (data) => {
+    const projectTitle = (data.projectTitle as string) ?? 'your project';
+    const clientName = optionalText(data.clientCompanyName);
+    const subjectTitle = sanitizeSubjectTitle(projectTitle);
+    return {
+      component: React.createElement(EngagementCancelledAgencyEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle,
+        cancelledOn: (data.cancelledOn as string) ?? '',
+        engagementId: (data.engagementId as string) ?? '',
+        baseUrl: BASE_URL,
+        deliveringExpertName: optionalText(data.deliveringExpertName),
+        deliveringAgencyName: optionalText(data.deliveringAgencyName),
+        clientCompanyName: clientName,
+        actorLabel: optionalText(data.actorLabel),
+        reason: optionalText(data.reason),
+      }),
+      subject: clientName
+        ? `${subjectTitle} for ${sanitizeSubjectTitle(clientName)} has been cancelled`
+        : `${subjectTitle} has been cancelled`,
     };
   },
 
@@ -2263,6 +2336,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'your case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         isNewCase,
         priorConsultationCount: numberCount(data.priorConsultationCount),
         guestCount: numberCount(data.guestCount),
@@ -2290,6 +2364,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         isNewCase,
         priorConsultationCount: numberCount(data.priorConsultationCount),
         guestCount: numberCount(data.guestCount),
@@ -2320,6 +2395,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
         initiatedBy,
@@ -2355,6 +2431,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         cancelledBy,
         reason,
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
@@ -2380,6 +2457,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
         initiatedBy,
@@ -2404,6 +2482,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
         optionStartIsos,
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
       }),
@@ -2423,6 +2502,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         caseTitle: (data.caseTitle as string) ?? 'the case',
         originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
       }),
@@ -2470,6 +2550,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestTitle: (data.requestTitle as string) ?? 'your request',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         guestCount: numberCount(data.guestCount),
         provisioned: data.provisioned === true,
         joinUrl: `${BASE_URL}${joinPath}`,
@@ -2503,6 +2584,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestTitle: (data.requestTitle as string) ?? 'the request',
         scheduledStartIso: (data.scheduledStartIso as string) ?? '',
         durationMinutes: numberCount(data.durationMinutes),
+        recipientTimezone: readRecipientTimezone(data.recipientTimezone),
         guestCount: numberCount(data.guestCount),
         provisioned: data.provisioned === true,
         joinUrl: `${BASE_URL}${joinPath}`,

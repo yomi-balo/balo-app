@@ -97,22 +97,24 @@ const NO_PARTIES: EngagementParties = { clientCompanyName: null, expertPartyLabe
 /**
  * The delivering expert's party label. Agency-based → the agency's name; freelancer (or an
  * agency with a blank name) → the person's name — `expertPartyDisplayName`'s BAL-329 rule,
- * imported rather than re-derived.
+ * imported rather than re-derived. The agency is the engagement's pinned delivering agency.
  *
  * ⚠ `findNamesByIds` IS THE ONLY USER READ ON THIS PAGE, and that is deliberate: it projects
  * `first_name`/`last_name` ONLY. `usersRepository.findById` / `findWithCompany` hydrate the
  * FULL row — `workosId`, `email`, phone — into an RSC serving an unauthenticated external
  * visitor (memory `reference_drizzle_with_hydration_leaks_secrets`). Do not swap it.
  */
-async function resolveExpertPartyLabel(profile: {
-  type: 'freelancer' | 'agency';
-  agencyId: string | null;
-  userId: string;
-}): Promise<string> {
+async function resolveExpertPartyLabel(
+  profile: {
+    type: 'freelancer' | 'agency';
+    userId: string;
+  },
+  deliveringAgencyId: string | null
+): Promise<string> {
   const agency =
-    profile.agencyId === null
+    deliveringAgencyId === null
       ? undefined
-      : await agenciesRepository.getSummaryById(profile.agencyId);
+      : await agenciesRepository.getSummaryById(deliveringAgencyId);
   const [person] = await usersRepository.findNamesByIds([profile.userId]);
   return expertPartyDisplayName({
     type: profile.type,
@@ -160,7 +162,10 @@ async function resolveEngagementParties(
 
   return {
     clientCompanyName: company?.name ?? null,
-    expertPartyLabel: profile === undefined ? null : await resolveExpertPartyLabel(profile),
+    expertPartyLabel:
+      profile === undefined
+        ? null
+        : await resolveExpertPartyLabel(profile, engagement.deliveringAgencyId),
   };
 }
 

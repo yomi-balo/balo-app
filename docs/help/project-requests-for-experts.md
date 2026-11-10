@@ -5,8 +5,8 @@ audience: [expert]
 category:
   expert: projects
 order: 1
-published: false
-updated: 2026-10-26
+published: true
+updated: 2026-10-31
 related: [pausing-new-work]
 ---
 
@@ -19,14 +19,19 @@ A request a client sends straight to you opens with a choice: **Propose times** 
 **Pass on this project**. Once you've proposed times or sent the client a message, the request
 carries on like any other.
 
+![A request Northwind Industrial sent you directly, with the card asking you to take it on or pass, and its Propose times and Pass on this project buttons, highlighted.](01)
+
 ## Sharing files in the conversation
 
 A file you attach in the conversation goes to the client only. It isn't shared with other experts.
 
+![A project request with the conversation's message box on the left and the Files card on the right, with the note that a file shared from the conversation goes to the client only highlighted.](02)
+
 ## Passing on a project
 
 If a project isn't right for you, you can pass on it. Choose **Pass on this project**, just below
-your main action on the request, and confirm.
+your main action on the request, and confirm. You can pass until you send a proposal; once you've
+sent one, the option is no longer there.
 
 Here's what happens when you pass:
 
@@ -35,7 +40,10 @@ Here's what happens when you pass:
 - **The client may be told.** If the client can already see you on the request, they're told
   you're no longer available. If not, they aren't notified.
 - **Any draft proposal is withdrawn.**
-- **Your files stay readable.** Anything you had access to stays exactly as it was.
+- **You lose access to the request.** Opening it shows only that you passed, not the brief, the
+  conversation or its files.
 
 Passing can't be undone, and you can't rejoin the project yourself. If you change your mind, get in
 touch with the Balo team.
+
+![The right-hand column of a request whose proposal was asked for, with Pass on this project highlighted below Build proposal and your expression of interest, above the request's name.](03)

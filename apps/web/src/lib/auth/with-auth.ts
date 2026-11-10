@@ -1,11 +1,10 @@
 import 'server-only';
 
+import type { IronSession } from 'iron-session';
 import { getSession, type SessionData, type SessionUser } from './session';
 import { assertAccountLive } from './account-liveness';
 
-export interface AuthenticatedSession extends SessionData {
-  user: SessionUser;
-}
+export type AuthenticatedSession = IronSession<SessionData> & { user: SessionUser };
 
 type AuthenticatedAction<TArgs extends unknown[], TReturn> = (
   session: AuthenticatedSession,

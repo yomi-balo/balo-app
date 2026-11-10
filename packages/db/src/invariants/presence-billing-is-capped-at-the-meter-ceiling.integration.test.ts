@@ -34,7 +34,7 @@ import {
 const HOUR_MS = 60 * 60_000;
 const MINUTE_MS = 60_000;
 const FLOOR = 15;
-const EXPERT_HOURLY = 30_000;
+const EXPERT_RATE_PER_MIN = 500;
 
 interface Ctx {
   walletId: string;
@@ -50,7 +50,7 @@ async function setup(): Promise<Ctx> {
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, expert.id));
   return { walletId: wallet.id, companyId, expertProfileId: expert.id, memberId: member.id };
 }

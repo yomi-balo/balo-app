@@ -307,9 +307,11 @@ export function ExpertProfileClient({
             )}
             <section id="section-reviews" data-section="reviews" className={SECTION_SCROLL_MT}>
               <ReviewsSection
+                expertId={view.expertId}
                 firstName={view.firstName}
                 ratingAverage={view.ratingAverage}
                 ratingCount={view.ratingCount}
+                reviews={view.reviews}
               />
             </section>
           </div>

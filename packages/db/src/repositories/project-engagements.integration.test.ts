@@ -4,6 +4,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   agencies,
+  agencyMembers,
   auditEvents,
   companies,
   conversations,
@@ -24,6 +25,8 @@ import {
   type ProjectChangeRequest,
 } from '../schema';
 import {
+  agencyFactory,
+  agencyMemberFactory,
   caseEngagementFactory,
   engagementChangeOrderFactory,
   engagementFactory,
@@ -40,6 +43,7 @@ import type { ProposalFactoryResult } from '../test/factories';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
 import { expectCheckViolation } from '../test/helpers/expect-check-violation';
 import { engagementsRepository } from './engagements';
+import { expertsRepository } from './experts';
 import {
   projectEngagementsRepository,
   KickoffGatesIncompleteError,
@@ -332,6 +336,48 @@ describe('projectEngagementsRepository.create — the seam proof', () => {
       .from(projectEngagements)
       .where(eq(projectEngagements.engagementId, engagement.id));
     expect(survivorChild?.sourceProposalId).toBeNull();
+  });
+
+  it("BAL-632 — create() pins the agency-linked expert's agency on the row it writes", async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBe(agency.id);
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBe(agency.id);
+  });
+
+  it('BAL-632 — create() gives an expert with no agency link a NULL pin', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+
+    const engagement = await projectEngagementsRepository.create({
+      companyId,
+      expertProfileId: expert.id,
+      pricingMethod: 'fixed',
+      priceCents: 400_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBeNull();
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBeNull();
   });
 });
 
@@ -773,6 +819,31 @@ describe('projectEngagementsRepository.findByProjectRequestId (BAL-331 deep-link
 });
 
 describe('projectEngagementsRepository.materializeFromKickoff — accept→approve writer', () => {
+  it("BAL-632 — pins the agency-linked expert's agency on the engagement it materialises", async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const agency = await agencyFactory();
+    await expertsRepository.linkAgency(source.expertProfileId, agency.id);
+
+    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 500_000,
+      baloFeeBps: 2500,
+    });
+
+    expect(engagement.deliveringAgencyId).toBe(agency.id);
+    const [parent] = await db
+      .select({ deliveringAgencyId: engagements.deliveringAgencyId })
+      .from(engagements)
+      .where(eq(engagements.id, engagement.id));
+    expect(parent?.deliveringAgencyId).toBe(agency.id);
+  });
+
   it('happy path: advances the request to kickoff_approved AND materialises the engagement with snapshotted terms', async () => {
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
 
@@ -1961,7 +2032,7 @@ describe('engagement transitions — missing engagement (advanceProjectDelivery 
 });
 
 describe('projectEngagementsRepository.findWithMilestones', () => {
-  it('returns live milestones ordered (soft-deleted excluded) + freelancer agency=null', async () => {
+  it('returns live milestones ordered (soft-deleted excluded) + unlinked expert deliveringAgency=null', async () => {
     const { engagementId } = await seedActiveEngagement();
     await engagementMilestoneFactory({ engagementId, values: { title: 'B', sortOrder: 1 } });
     await engagementMilestoneFactory({ engagementId, values: { title: 'A', sortOrder: 0 } });
@@ -1973,12 +2044,13 @@ describe('projectEngagementsRepository.findWithMilestones', () => {
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagementId);
     expect(hydrated).toBeDefined();
     expect(hydrated?.milestones.map((m) => m.title)).toEqual(['A', 'B']); // sort_order asc, soft-deleted gone
-    // The engagementFactory expert is a freelancer → agency is null; user present.
+    // The engagementFactory expert has no agency link → a NULL pin → no agency; user present.
     expect(hydrated?.expertProfile.user).toBeDefined();
-    expect(hydrated?.expertProfile.agency).toBeNull();
+    expect(hydrated?.deliveringAgencyId).toBeNull();
+    expect(hydrated?.deliveringAgency).toBeNull();
   });
 
-  it('agency expert → expertProfile.agency name is present', async () => {
+  it('agency expert → the pinned deliveringAgency name is present', async () => {
     const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
     if (agency === undefined) throw new Error('agency insert failed');
     const expert = await expertDraftFactory({ type: 'agency' });
@@ -1989,11 +2061,15 @@ describe('projectEngagementsRepository.findWithMilestones', () => {
 
     const { engagement } = await engagementFactory({ expertProfileId: expert.id });
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
-    expect(hydrated?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
-    expect(hydrated?.expertProfile.agency?.logoUrl).toBeDefined(); // null is fine — key present, projected
+    expect(hydrated?.deliveringAgencyId).toBe(agency.id);
+    expect(hydrated?.deliveringAgency?.name).toBe('Cloud Consulting Co');
+    expect(hydrated?.deliveringAgency?.logoUrl).toBeDefined(); // null is fine — key present, projected
     // SECURITY (BAL-330 review): the projected shape must NOT leak secrets/PII.
     expect(hydrated?.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(hydrated?.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(hydrated?.deliveringAgency).not.toHaveProperty('stripeConnectId');
+    // The profile carries no agency of its own: only the pin names one.
+    expect(hydrated?.expertProfile).not.toHaveProperty('agency');
+    expect(hydrated?.expertProfile).not.toHaveProperty('agencyId');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('workosId');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('email');
     expect(hydrated?.expertProfile.user).not.toHaveProperty('phone');
@@ -2050,6 +2126,59 @@ describe('projectEngagementsRepository.findWithMilestones — BAL-331 additive p
 
     const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
     expect(hydrated?.projectRequest).toBeNull();
+  });
+
+  it('completionRequestedBy is null when unset', async () => {
+    const { engagement } = await engagementFactory();
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(hydrated?.completionRequestedBy).toBeNull();
+  });
+
+  it('hydrates completionRequestedBy as a name-only projection (PII-safe)', async () => {
+    const requester = await userFactory({ firstName: 'Charles', lastName: 'Admin' });
+    const { engagement } = await engagementFactory({
+      projectValues: { completionRequestedByUserId: requester.id },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+
+    expect(hydrated?.completionRequestedBy).toEqual({
+      id: requester.id,
+      firstName: 'Charles',
+      lastName: 'Admin',
+    });
+  });
+
+  it("hydrates each milestone's completedBy as a name-only projection (PII-safe)", async () => {
+    const completer = await userFactory({ firstName: 'Dana', lastName: 'Owner' });
+    const { engagement } = await engagementFactory();
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: {
+        status: 'completed',
+        completedAt: new Date(),
+        completedByUserId: completer.id,
+      },
+    });
+    await engagementMilestoneFactory({
+      engagementId: engagement.id,
+      values: { sortOrder: 1 },
+    });
+
+    const hydrated = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    const [completed, pending] = hydrated?.milestones ?? [];
+
+    expect(Object.keys(completed?.completedBy ?? {}).sort()).toEqual([
+      'firstName',
+      'id',
+      'lastName',
+    ]);
+    expect(completed?.completedBy).toEqual({
+      id: completer.id,
+      firstName: 'Dana',
+      lastName: 'Owner',
+    });
+    expect(pending?.completedBy).toBeNull();
   });
 
   it('acceptedBy / changeRequestedBy are null when unset', async () => {
@@ -2138,6 +2267,93 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     expect(rows.map((r) => r.id)).toEqual([mine.engagement.id]);
   });
 
+  it('agency scope returns engagements pinned to the agency, never another agency or a case', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const otherAgency = await agencyFactory();
+    const expertA = await expertDraftFactory();
+    const expertB = await expertDraftFactory();
+    const outsider = await expertDraftFactory();
+    const otherAgencyExpert = await expertDraftFactory();
+    for (const [expert, linkedAgency] of [
+      [expertA, agency],
+      [expertB, agency],
+      [otherAgencyExpert, otherAgency],
+    ] as const) {
+      await expertsRepository.linkAgency(expert.id, linkedAgency.id);
+      await agencyMemberFactory({
+        agencyId: linkedAgency.id,
+        userId: expert.userId,
+        role: 'expert',
+      });
+    }
+    const a = await engagementFactory({ companyId, expertProfileId: expertA.id });
+    const b = await engagementFactory({
+      companyId,
+      expertProfileId: expertB.id,
+      projectValues: { deliveryStatus: 'completed' },
+    });
+    await engagementFactory({ companyId, expertProfileId: outsider.id });
+    await engagementFactory({ companyId, expertProfileId: otherAgencyExpert.id });
+    await caseEngagementFactory({ companyId, expertProfileId: expertA.id });
+
+    const rows = await projectEngagementsRepository.listPortfolio({ agencyId: agency.id });
+    expect(rows.map((r) => r.id).sort()).toEqual([a.engagement.id, b.engagement.id].sort());
+  });
+
+  it('agency scope still lists an engagement whose expert has left the agency membership', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+    const member = await agencyMemberFactory({
+      agencyId: agency.id,
+      userId: expert.userId,
+      role: 'expert',
+    });
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+    await db
+      .update(agencyMembers)
+      .set({ deletedAt: new Date() })
+      .where(eq(agencyMembers.id, member.id));
+
+    const rows = await projectEngagementsRepository.listPortfolio({ agencyId: agency.id });
+    expect(rows.map((r) => r.id)).toEqual([engagement.id]);
+  });
+
+  it('agency scope follows the pin: a project pinned to A stays with A after the expert moves to B', async () => {
+    const companyId = await seedCompanyId();
+    const pinned = await agencyFactory();
+    const moved = await agencyFactory();
+    const expert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const { engagement } = await engagementFactory({ companyId, expertProfileId: expert.id });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const pinnedRows = await projectEngagementsRepository.listPortfolio({ agencyId: pinned.id });
+    const movedRows = await projectEngagementsRepository.listPortfolio({ agencyId: moved.id });
+    expect(pinnedRows.map((r) => r.id)).toEqual([engagement.id]);
+    expect(movedRows).toEqual([]);
+
+    const counts = await projectEngagementsRepository.countLiveByAgency([pinned.id, moved.id]);
+    expect(counts.get(pinned.id)).toBe(1);
+    expect(counts.has(moved.id)).toBe(false);
+
+    const workspace = await projectEngagementsRepository.findWithMilestones(engagement.id);
+    expect(workspace?.deliveringAgency?.name).toBe(pinned.name);
+    expect(workspace?.expertProfile).not.toHaveProperty('agency');
+
+    const adminRow = (await projectEngagementsRepository.listAllWithProgress()).find(
+      (r) => r.id === engagement.id
+    );
+    expect(adminRow?.deliveringAgency?.name).toBe(pinned.name);
+  });
+
   it('platform scope returns engagements spanning ≥2 companies', async () => {
     const companyA = await seedCompanyId();
     const companyB = await seedCompanyId();
@@ -2193,19 +2409,19 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     expect(row?.lastActivityAt?.getTime()).toBe(activatedAt.getTime());
   });
 
-  it('hydrates a freelancer counterpart (agency null, person + company names present)', async () => {
+  it('hydrates a freelancer counterpart (deliveringAgency null, person + company names present)', async () => {
     const companyId = await seedCompanyId();
     const { engagement } = await engagementFactory({ companyId });
 
     const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
     expect(row?.expertProfile.type).toBe('freelancer');
-    expect(row?.expertProfile.agency).toBeNull();
+    expect(row?.deliveringAgency).toBeNull();
     expect(typeof row?.expertProfile.user.firstName).toBe('string');
     expect(row?.company.name).toBeDefined();
   });
 
-  it('hydrates an agency counterpart (agency name present)', async () => {
+  it('hydrates an agency counterpart (pinned deliveringAgency name present)', async () => {
     const [agency] = await db.insert(agencies).values({ name: 'Cloud Consulting Co' }).returning();
     if (agency === undefined) throw new Error('agency insert failed');
     const expert = await expertDraftFactory({ type: 'agency' });
@@ -2218,7 +2434,8 @@ describe('projectEngagementsRepository.listPortfolio', () => {
 
     const rows = await projectEngagementsRepository.listPortfolio({ companyId });
     const row = rows.find((r) => r.id === engagement.id);
-    expect(row?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
+    expect(row?.deliveringAgencyId).toBe(agency.id);
+    expect(row?.deliveringAgency?.name).toBe('Cloud Consulting Co');
   });
 
   it('hydrates the projectRequest title (source proposal) and null for a retainer', async () => {
@@ -2250,14 +2467,15 @@ describe('projectEngagementsRepository.listPortfolio', () => {
     if (row === undefined) throw new Error('expected the seeded engagement row');
 
     // The expertProfile graph carries ONLY the allow-listed keys.
-    expect(new Set(Object.keys(row.expertProfile))).toEqual(
-      new Set(['id', 'agencyId', 'type', 'user', 'agency'])
+    expect(new Set(Object.keys(row.expertProfile))).toEqual(new Set(['id', 'type', 'user']));
+    expect(new Set(Object.keys(row.deliveringAgency ?? {}))).toEqual(
+      new Set(['id', 'name', 'logoUrl'])
     );
     expect(row.expertProfile.user).not.toHaveProperty('workosId');
     expect(row.expertProfile.user).not.toHaveProperty('email');
     expect(row.expertProfile.user).not.toHaveProperty('phone');
     expect(row.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(row.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(row.deliveringAgency).not.toHaveProperty('stripeConnectId');
     expect(row.company).not.toHaveProperty('stripeConnectId');
   });
 
@@ -2387,16 +2605,16 @@ describe('projectEngagementsRepository.listAllWithProgress', () => {
     // Company + expert person display fields are hydrated.
     expect(solo?.company.name).toBe('Freelance Client Co');
     expect(solo?.expertProfile.user?.firstName).toBe('Test');
-    // Independent expert → agency is null (the caller falls back to the person).
-    expect(solo?.expertProfile.agency).toBeNull();
-    // Agency expert → agency object present (name + projected logoUrl key).
-    expect(withAgency?.expertProfile.agency?.name).toBe('Cloud Consulting Co');
-    expect(withAgency?.expertProfile.agency).toHaveProperty('logoUrl');
+    // Unlinked expert → NULL pin → no agency (the caller falls back to the person).
+    expect(solo?.deliveringAgency).toBeNull();
+    // Agency expert → the pinned agency object present (name + projected logoUrl key).
+    expect(withAgency?.deliveringAgency?.name).toBe('Cloud Consulting Co');
+    expect(withAgency?.deliveringAgency).toHaveProperty('logoUrl');
 
     // SECURITY (mirrors findEngagementWithMilestones): the projected shape must NOT
     // leak secrets/PII.
     expect(withAgency?.expertProfile).not.toHaveProperty('stripeConnectId');
-    expect(withAgency?.expertProfile.agency).not.toHaveProperty('stripeConnectId');
+    expect(withAgency?.deliveringAgency).not.toHaveProperty('stripeConnectId');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('workosId');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('email');
     expect(withAgency?.expertProfile.user).not.toHaveProperty('phone');
@@ -2830,6 +3048,8 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
         'completedMilestones',
         'completionRequestedAt',
         'createdAt',
+        'deliveringAgency',
+        'deliveringAgencyId',
         'expertProfile',
         'expertProfileId',
         'id',
@@ -2843,9 +3063,7 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
       ].sort()
     );
     expect(Object.keys(row.company).sort()).toEqual(['id', 'name'].sort());
-    expect(Object.keys(row.expertProfile).sort()).toEqual(
-      ['agency', 'agencyId', 'id', 'type', 'user'].sort()
-    );
+    expect(Object.keys(row.expertProfile).sort()).toEqual(['id', 'type', 'user'].sort());
     expect(Object.keys(row.expertProfile.user).sort()).toEqual(
       ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
     );
@@ -2875,6 +3093,8 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
         'completionRequestedAt',
         'createdAt',
         'currency',
+        'deliveringAgency',
+        'deliveringAgencyId',
         'effectivePriceCents',
         'expertProfile',
         'expertProfileId',
@@ -2893,7 +3113,7 @@ describe('BAL-417 — the consumer-facing ROOT allow-lists are PINNED', () => {
     );
     expect(row).not.toHaveProperty('baloFeeBps');
     expect(Object.keys(row.expertProfile).sort()).toEqual(
-      ['agency', 'agencyId', 'headline', 'id', 'type', 'user'].sort()
+      ['headline', 'id', 'type', 'user'].sort()
     );
     expect(Object.keys(row.expertProfile.user).sort()).toEqual(
       ['avatarUrl', 'firstName', 'id', 'lastName'].sort()
@@ -3041,9 +3261,11 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     expect(found.companyId).toBe(seeded.companyId);
     expect(found.expertProfileId).toBe(seeded.expertProfileId);
     expect(found.anchorAt.toISOString()).toBe(ANCHOR.toISOString());
+    expect(found.deliveringAgencyId).toBeNull();
     expect(Object.keys(found).sort()).toEqual([
       'anchorAt',
       'companyId',
+      'deliveringAgencyId',
       'engagementId',
       'engagementKind',
       'expertProfileId',
@@ -3052,6 +3274,27 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     // `closeReason` is the CASE arm's field alone — a project has no close reason, and
     // inventing one would put a specific claim in the +7d nudge on no evidence.
     expect(found.closeReason).toBeUndefined();
+  });
+
+  it("carries the engagement's pinned agency, not the expert profile's current one", async () => {
+    const expert = await expertDraftFactory();
+    const pinned = await agencyFactory();
+    const current = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const seeded = await engagementFactory({
+      expertProfileId: expert.id,
+      projectValues: { deliveryStatus: 'completed', acceptedAt: ANCHOR, acceptanceMethod: 'auto' },
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: current.id,
+      })
+    ).toBe(true);
+
+    const candidates = await projectEngagementsRepository.listAcceptedBetween(AFTER, ANCHOR);
+    const found = candidates.find((c) => c.engagementId === seeded.engagement.id);
+    expect(found?.deliveringAgencyId).toBe(pinned.id);
   });
 
   it('is HALF-OPEN: an anchor exactly at `until` is INCLUDED, one exactly at `after` is EXCLUDED', async () => {
@@ -3530,5 +3773,50 @@ describe('projectEngagementsRepository.requestCompletion — an open change orde
 
     const advanced = await projectEngagementsRepository.requestCompletion({ engagementId, userId });
     expect(advanced.status).toBe('pending_acceptance');
+  });
+});
+
+describe('projectEngagementsRepository.countLiveByAgency', () => {
+  it('returns an empty Map for no ids', async () => {
+    await expect(projectEngagementsRepository.countLiveByAgency([])).resolves.toEqual(new Map());
+  });
+
+  it('counts active and pending_acceptance only, grouped by agency', async () => {
+    const companyId = await seedCompanyId();
+    const agency = await agencyFactory();
+    const otherAgency = await agencyFactory();
+    const emptyAgency = await agencyFactory();
+    const expert = await expertDraftFactory();
+    const otherExpert = await expertDraftFactory();
+    await expertsRepository.linkAgency(expert.id, agency.id);
+    await expertsRepository.linkAgency(otherExpert.id, otherAgency.id);
+
+    for (const deliveryStatus of [
+      'active',
+      'pending_acceptance',
+      'completed',
+      'cancelled',
+    ] as const) {
+      await engagementFactory({
+        companyId,
+        expertProfileId: expert.id,
+        projectValues: { deliveryStatus },
+      });
+    }
+    await engagementFactory({
+      companyId,
+      expertProfileId: expert.id,
+      values: { deletedAt: new Date() },
+    });
+    await engagementFactory({ companyId, expertProfileId: otherExpert.id });
+
+    const counts = await projectEngagementsRepository.countLiveByAgency([
+      agency.id,
+      otherAgency.id,
+      emptyAgency.id,
+    ]);
+    expect(counts.get(agency.id)).toBe(2);
+    expect(counts.get(otherAgency.id)).toBe(1);
+    expect(counts.has(emptyAgency.id)).toBe(false);
   });
 });

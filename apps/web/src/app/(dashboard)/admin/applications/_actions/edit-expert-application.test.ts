@@ -215,6 +215,15 @@ describe('editExpertApplicationAction — Zod refusals', () => {
     expect(mockEditApplicationAsStaff).toHaveBeenCalled();
   });
 
+  it('rejects an experience delta carrying isCertifiedTrainer', async () => {
+    const result = await editExpertApplicationAction({
+      expertProfileId: PROFILE_ID,
+      edit: { experience: { isCertifiedTrainer: true } as Record<string, boolean> },
+    });
+    expect(result.success).toBe(false);
+    expect(mockEditApplicationAsStaff).not.toHaveBeenCalled();
+  });
+
   it('rejects an experience count outside the PROJECT_COUNT_RANGES vocabulary', async () => {
     const result = await editExpertApplicationAction({
       expertProfileId: PROFILE_ID,

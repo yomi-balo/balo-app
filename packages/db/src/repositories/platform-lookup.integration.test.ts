@@ -281,6 +281,25 @@ describe('platformLookupRepository.search — expert profiles', () => {
     expect(publishedHit?.sub).toContain('searchable');
   });
 
+  it('FINDS an approved, searchable expert whose owner is suspended but withholds publicExpertUsername', async () => {
+    // MUTATION: map `publicExpertUsername` from username/searchable/approvedAt again (no owner
+    // status check) and the suspended expert gets an Open link the public page 404s.
+    const token = uniqueToken('Suspendexp');
+    const user = await userFactory({ firstName: 'Suspended', lastName: token });
+    const expert = await expertFactory({ userId: user.id });
+    await db
+      .update(expertProfiles)
+      .set({ username: `suspended-${token}`, searchable: true })
+      .where(eq(expertProfiles.id, expert.id));
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'expert' && r.id === expert.id);
+
+    expect(hit).toBeDefined();
+    expect(hit?.publicExpertUsername).toBeNull();
+  });
+
   it('marks a draft application unreviewable, a submitted or approved one reviewable', async () => {
     // MUTATION: map `expertApplicationReviewable` to a constant (or drop the `draft` test) and
     // one of the expectations below fails.
@@ -379,7 +398,7 @@ describe('platformLookupRepository.search — project requests', () => {
 
 // ── 12: credit sessions — the money-safe projection ──────────────────────────────────
 
-const EXPERT_HOURLY = 12_000;
+const EXPERT_RATE_PER_MIN = 200;
 
 /** Seed one openable credit session. There is no credit-session factory. */
 async function seedSession(paymentIntentId: string): Promise<{
@@ -392,7 +411,7 @@ async function seedSession(paymentIntentId: string): Promise<{
   const expert = await expertFactory();
   await db
     .update(expertProfiles)
-    .set({ rateCents: EXPERT_HOURLY })
+    .set({ rateCents: EXPERT_RATE_PER_MIN })
     .where(eq(expertProfiles.id, expert.id));
 
   const opened = await creditSessionsRepository.open({

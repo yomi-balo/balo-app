@@ -23,7 +23,8 @@ By default, Admin's bundle covers:
 - **Money** — set the Balo fee on a project, create and manage promo codes.
 - **Queues** — close alert-queue items, approve or decline expert applications, correct an
   expert's application.
-- **Platform** — open the Balo admin area.
+- **Platform** — open the Balo admin area, manage company and agency email domains, edit a
+  company's industry and whether its name shows on reviews.
 
 ## Only super admins
 

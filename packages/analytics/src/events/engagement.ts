@@ -38,6 +38,9 @@ export const ENGAGEMENT_SERVER_EVENTS = {
   CHANGE_ORDER_APPROVED: 'engagement_change_order_approved',
   CHANGE_ORDER_DECLINED: 'engagement_change_order_declined',
   CHANGE_ORDER_WITHDRAWN: 'engagement_change_order_withdrawn',
+  // BAL-624 time logged on a time-and-materials project (minutes and hours only, never money).
+  TIME_LOGGED: 'engagement_time_logged',
+  MILESTONE_ESTIMATE_EXCEEDED: 'engagement_milestone_estimate_exceeded',
 } as const;
 
 /**
@@ -60,6 +63,10 @@ export const ENGAGEMENT_EVENTS = {
   COMPLETION_BLOCKED_VIEW: 'engagement_completion_blocked_view',
   /** A plain milestone write needed the client's approval, so the expert was pointed at a change order. */
   SCOPE_CHANGE_REDIRECTED: 'engagement_scope_change_redirected',
+  /** The "More actions" menu opened the cancel-project dialog. */
+  CANCEL_DIALOG_OPENED: 'engagement_cancel_dialog_opened',
+  /** The cancel-project dialog was closed without cancelling. */
+  CANCEL_DIALOG_KEPT: 'engagement_cancel_dialog_kept',
 } as const;
 
 export interface EngagementEventMap {
@@ -75,6 +82,16 @@ export interface EngagementEventMap {
     /** `refused` = the write was attempted and declined; `pre_empted` = the UI explained it up front. */
     trigger: 'refused' | 'pre_empted';
   };
+  [ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED]: {
+    engagement_id: string;
+    delivery_status: 'active' | 'pending_acceptance';
+  };
+  [ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT]: {
+    engagement_id: string;
+    delivery_status: 'active' | 'pending_acceptance';
+    /** `button` = the Keep button; `dismiss` = Escape or an overlay click. */
+    via: 'button' | 'dismiss';
+  };
 }
 
 /** Viewer lens on the delivery workspace (admin is the observer archetype). */
@@ -86,7 +103,7 @@ export type EngagementWorkspaceLens = 'client' | 'expert' | 'admin';
  * inbox row (D6); `direct` = a bare URL visit / bookmark (default; also the
  * fallback when `?from` is absent or not whitelisted).
  */
-export type EngagementWorkspaceEntry = 'request_detail' | 'inbox' | 'direct';
+export type EngagementWorkspaceEntry = 'request_detail' | 'inbox' | 'direct' | 'agency';
 
 /** Who started a change order: a client request, or the expert proposing one unprompted. */
 export type ChangeOrderInitiator = 'client' | 'expert';
@@ -109,6 +126,9 @@ interface ChangeOrderLinesProps extends ChangeOrderEventBase {
   initiated_by: ChangeOrderInitiator;
 }
 
+/** Which expert-side capacity acted: the delivering expert, or an agency owner/admin on their behalf. Carried by every event an agency owner/admin can fire. */
+export type ExpertSideActingAs = 'delivering_expert' | 'agency_admin';
+
 /** A change-order event that closes the order, so it records the time taken to decide. */
 interface ChangeOrderDecidedProps extends ChangeOrderLinesProps {
   /** Whole days since `sent_at`, int >=0. */
@@ -118,18 +138,21 @@ interface ChangeOrderDecidedProps extends ChangeOrderLinesProps {
 export interface EngagementServerEventMap {
   [ENGAGEMENT_SERVER_EVENTS.WORKSPACE_VIEWED]: {
     engagement_id: string;
-    lens: EngagementWorkspaceLens;
     entry: EngagementWorkspaceEntry;
     /** `Engagement['status']` — active | pending_acceptance | completed | cancelled. */
     engagement_status: string;
     /** User UUID (server-event distinct-id convention). */
     distinct_id: string;
-  };
+  } & (
+    | { lens: Extract<EngagementWorkspaceLens, 'expert'>; acting_as: ExpertSideActingAs }
+    | { lens: Exclude<EngagementWorkspaceLens, 'expert'> }
+  );
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_STARTED]: {
     engagement_id: string;
     milestone_id: string;
     /** Whole days from kickoff (`activatedAt ?? createdAt`) to the start, int ≥0. */
     days_since_kickoff: number;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_COMPLETED]: {
@@ -139,6 +162,7 @@ export interface EngagementServerEventMap {
     cycle_time_days: number;
     /** Whether the expert captured a delivery note. */
     has_completion_note: boolean;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_REVERTED]: {
@@ -146,12 +170,14 @@ export interface EngagementServerEventMap {
     milestone_id: string;
     /** Whole hours from the PRE-revert `completedAt` to now, int ≥0 (0 when absent). */
     hours_since_completed: number;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_ADDED]: {
     engagement_id: string;
     /** Live milestone count AFTER the add. */
     milestones_total: number;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_EDITED]: {
@@ -159,6 +185,7 @@ export interface EngagementServerEventMap {
     milestone_id: string;
     /** Descriptive fields changed this edit, e.g. ['title','acceptance_criteria']. */
     fields_changed: string[];
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.MILESTONE_REMOVED]: {
@@ -166,6 +193,7 @@ export interface EngagementServerEventMap {
     milestone_id: string;
     was_completed: boolean;
     had_source_provenance: boolean;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.COMPLETION_REQUESTED]: {
@@ -182,12 +210,14 @@ export interface EngagementServerEventMap {
     is_resubmission: boolean;
     /** Live change-request rounds before this request (0 on a first submission). */
     prior_change_rounds: number;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.COMPLETION_WITHDRAWN]: {
     engagement_id: string;
     /** Whole hours from the PRE-withdraw `completionRequestedAt` to now, int ≥0 (0 when absent). */
     hours_in_review: number;
+    acting_as: ExpertSideActingAs;
     distinct_id: string;
   };
   [ENGAGEMENT_SERVER_EVENTS.CANCELLED]: {
@@ -236,11 +266,40 @@ export interface EngagementServerEventMap {
   [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_REQUESTED]: ChangeOrderEventBase & {
     initiated_by: 'client';
   };
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT]: ChangeOrderLinesProps;
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED]: ChangeOrderDecidedProps;
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED]: ChangeOrderDecidedProps & {
-    /** True when the expert answered a request without proposing a change order. */
-    answered_without_change_order: boolean;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_SENT]: ChangeOrderLinesProps & {
+    acting_as: ExpertSideActingAs;
   };
-  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_APPROVED]: ChangeOrderDecidedProps;
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_DECLINED]: ChangeOrderDecidedProps &
+    (
+      | {
+          /** The expert answered a request without proposing a change order. */
+          answered_without_change_order: true;
+          acting_as: ExpertSideActingAs;
+        }
+      | { answered_without_change_order: false }
+    );
+  [ENGAGEMENT_SERVER_EVENTS.CHANGE_ORDER_WITHDRAWN]: ChangeOrderDecidedProps & {
+    acting_as: ExpertSideActingAs;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.TIME_LOGGED]: {
+    engagement_id: string;
+    milestone_id: string;
+    minutes: number;
+    /** True when this entry took the milestone past its estimate for the first time. */
+    crossed_estimate: boolean;
+    /** Logged time as a whole percentage of the estimate; null when the estimate is null or 0. */
+    milestone_pct_of_estimate: number | null;
+    acting_as: ExpertSideActingAs;
+    distinct_id: string;
+  };
+  [ENGAGEMENT_SERVER_EVENTS.MILESTONE_ESTIMATE_EXCEEDED]: {
+    engagement_id: string;
+    milestone_id: string;
+    /** Live milestones now over their estimate, this one included. */
+    milestones_over_count: number;
+    /** Absent on the client change-order-approval path. */
+    acting_as?: ExpertSideActingAs;
+    distinct_id: string;
+  };
 }

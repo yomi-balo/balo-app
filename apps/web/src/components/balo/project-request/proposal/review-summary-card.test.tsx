@@ -38,6 +38,7 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
       initials: 'PS',
       company: 'Acme',
       headline: 'CPQ',
+      profileHref: null,
       rating: 4.9,
       ratingCount: 12,
     },
@@ -179,6 +180,7 @@ describe('ReviewSummaryCard', () => {
             initials: 'PS',
             company: null,
             headline: 'CPQ',
+            profileHref: null,
             // ⚠ UNRATED: null, and `ratingCount` 0 — the card must render NEITHER, never 0.0.
             rating: null,
             ratingCount: 0,

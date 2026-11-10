@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { axe } from '@/test/axe';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/test/utils';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { RecapFileRowView, RecapResolveView } from '@/lib/meetings/recap-view-types';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
@@ -96,6 +97,7 @@ const RATING: EndOfCallRatingView = {
   engagementId: 'e1',
   state: { kind: 'none' },
   existingBody: null,
+  capture: buildReviewCaptureSeeds(),
 };
 
 /**

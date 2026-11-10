@@ -153,9 +153,23 @@ vi.mock('@/lib/reviews/read-rating-card', () => ({
   readRatingCard: (...a: unknown[]) => mockReadRatingCard(...a),
 }));
 
+const PEOPLE_GROUPS = [
+  {
+    side: 'client' as const,
+    label: 'Northwind Industrial',
+    people: [{ key: 'p0', name: 'You', isViewer: true }],
+    unnamedGuestCount: 0,
+  },
+];
+const mockLoadCasePeople = vi.fn();
+vi.mock('./load-case-people', () => ({
+  loadCasePeople: (...a: unknown[]) => mockLoadCasePeople(...a),
+}));
+
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import { loadCase } from './load-case';
 import { log } from '@/lib/logging';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────
@@ -218,7 +232,8 @@ const FAT_PROFILE = {
   agencyId: null,
   type: 'freelancer',
   headline: 'Salesforce CPQ specialist',
-  username: 'amara',
+  // Already gated by `findDisplayProfileById`: non-null only when `/experts/amara` resolves.
+  publicProfileUsername: 'amara',
   rateCents: 33_700,
   // BAL-422 — already a NUMBER here: `findDisplayProfileById` parses the `numeric` column.
   ratingAverage: 4.3,
@@ -227,6 +242,7 @@ const FAT_PROFILE = {
 
 const OPEN_CASE = {
   engagementId: ENGAGEMENT_ID,
+  deliveringAgencyId: null,
   title: 'Flow interview loop',
   description: '<p>We need the approval flow reviewed.</p>',
   createdAt: new Date('2026-07-01T09:00:00Z'),
@@ -277,6 +293,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.listProductIds.mockResolvedValue([]);
   m.findNewWorkEligibility.mockResolvedValue({ eligible: true });
   mockReadRatingCard.mockResolvedValue(null);
+  mockLoadCasePeople.mockResolvedValue(PEOPLE_GROUPS);
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -663,7 +680,7 @@ describe('loadCase — the counterparty, per lens', () => {
       orgLabel: null,
       avatarUrl: null,
       initials: 'AO',
-      bookAgainHref: '/experts/amara',
+      profileHref: '/experts/amara',
       availableForWork: true,
       // ⚠ BAL-422 — the client lens carries the delivering expert's REAL aggregate. Note
       // this is a `toEqual`, so it ALSO pins that `rateCents` (on FAT_PROFILE) never
@@ -694,20 +711,32 @@ describe('loadCase — the counterparty, per lens', () => {
     expect(view.party.ratingCount).toBe(0);
   });
 
-  /** ⚠ `expert_profiles.username` IS NULLABLE — a null username means NO CTA, never
-   *  `/experts/null` and never a disabled button. */
-  it('emits NO book-again CTA when the expert has no username', async () => {
-    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, username: null });
+  /** ⚠ `publicProfileUsername` is null whenever `/experts/{username}` would 404 (no username,
+   *  unapproved, unsearchable, or a suspended/deleted owner) — then NOTHING links there: not
+   *  the name, not the org line, and no book-again CTA. */
+  it('links NOTHING to the profile when the public profile does not resolve', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, publicProfileUsername: null });
     const view = await loadOrThrow();
-    expect(view.party.bookAgainHref).toBeNull();
+    expect(view.party.profileHref).toBeNull();
+    expect(view.header.counterpartyOrgHref).toBeNull();
+  });
+
+  it('CLIENT lens links the org line for an INDEPENDENT expert — the label IS the person', async () => {
+    const view = await loadOrThrow();
+    expect(view.header.counterpartyOrgLabel).toBe('Amara Okafor');
+    expect(view.header.counterpartyOrgHref).toBe('/experts/amara');
   });
 
   it('shows the AGENCY as the org label when the expert delivers through one', async () => {
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
     const view = await loadOrThrow();
     expect(view.party.orgLabel).toBe('CloudPeak');
     expect(view.header.counterpartyOrgLabel).toBe('CloudPeak');
+    // An agency has no page: the org line stays unlinked while the person still links.
+    expect(view.header.counterpartyOrgHref).toBeNull();
+    expect(view.party.profileHref).toBe('/experts/amara');
   });
 
   /**
@@ -721,6 +750,7 @@ describe('loadCase — the counterparty, per lens', () => {
    */
   it('⚠ names the AGENCY as the prospective party label for an agency-delivered case', async () => {
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
 
     const view = await loadOrThrow();
@@ -750,6 +780,13 @@ describe('loadCase — the counterparty, per lens', () => {
    * membership (ADR-1029) and survive individual departures; there is no `created_by_user_id`
    * on an engagement to name a single client person from anyway.
    */
+  it('EXPERT lens never links the client COMPANY in the header', async () => {
+    seed({ access: { lens: 'expert' } });
+    const view = await loadOrThrow();
+    expect(view.header.counterpartyOrgLabel).toBe('Northwind Industrial');
+    expect(view.header.counterpartyOrgHref).toBeNull();
+  });
+
   it('EXPERT lens names the client COMPANY, with no forward CTA', async () => {
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
@@ -759,7 +796,7 @@ describe('loadCase — the counterparty, per lens', () => {
       orgLabel: null,
       avatarUrl: null,
       initials: 'NI',
-      bookAgainHref: null,
+      profileHref: null,
       availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). FAT_PROFILE carries 4.3/2 and
       // NEITHER value survives this branch — the expert is not scoring the client, and the
@@ -787,25 +824,37 @@ describe('loadCase — the counterparty, per lens', () => {
     expect(view.party.initials).toBe('AE');
   });
 
+  it('names the agency the case is PINNED to, not the one the profile links now', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-new', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-pinned' });
+    m.findAgency.mockResolvedValue({ id: 'agency-pinned', name: 'Pinned Partners' });
+
+    const view = await loadOrThrow();
+
+    expect(m.findAgency).toHaveBeenCalledWith('agency-pinned');
+    expect(m.findAgency).not.toHaveBeenCalledWith('agency-new');
+    expect(view.party.orgLabel).toBe('Pinned Partners');
+  });
+
   it('resolves no agency at all for an INDEPENDENT expert', async () => {
     await loadOrThrow();
     expect(m.findAgency).not.toHaveBeenCalled();
   });
 
-  it('names the viewer and the counterparty in the people list', async () => {
+  it('hands the people groups through from loadCasePeople and passes it the case inputs', async () => {
     const view = await loadOrThrow();
-    expect(view.people).toEqual([
-      { name: 'Dana Whitfield', isViewer: true },
-      { name: 'Amara Okafor', isViewer: false },
-    ]);
-  });
-
-  it('falls back to "You" when the viewer has no name on file', async () => {
-    m.findUser.mockImplementation((id: string) =>
-      Promise.resolve(id === USER_ID ? undefined : { firstName: 'Amara', lastName: 'Okafor' })
-    );
-    const view = await loadOrThrow();
-    expect(view.people).toContainEqual({ name: 'You', isViewer: true });
+    expect(view.peopleGroups).toBe(PEOPLE_GROUPS);
+    expect(mockLoadCasePeople).toHaveBeenCalledTimes(1);
+    expect(mockLoadCasePeople).toHaveBeenCalledWith({
+      lens: 'client',
+      viewerUserId: USER_ID,
+      deliveringExpertUserId: EXPERT_USER_ID,
+      deliveringAgencyId: null,
+      clientPartyLabel: 'Northwind Industrial',
+      expertPartyLabel: 'Amara Okafor',
+      meetingIds: ['m1'],
+      upcomingMeetingIds: [],
+    });
   });
 });
 
@@ -2084,6 +2133,7 @@ describe('loadCase — actor attribution (BAL-567)', () => {
   function seedAgencyDelivery(): void {
     m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
     m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findCase.mockResolvedValue({ ...OPEN_CASE, deliveringAgencyId: 'agency-1' });
   }
 
   it('CLIENT lens — the DELIVERING expert is named by first name alone', async () => {
@@ -2438,6 +2488,7 @@ describe('loadCase — the in-app rating card', () => {
       engagementId: ENGAGEMENT_ID,
       state: { kind: 'none' as const },
       existingBody: null,
+      capture: buildReviewCaptureSeeds(),
     };
     mockReadRatingCard.mockResolvedValue(RATING_VIEW);
 

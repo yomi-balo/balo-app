@@ -231,7 +231,7 @@ function Reschedule({
               href={href}
               aria-label={`Choose ${formatYourMoveDayTime(iso, clock.timeZone)} on the case page`}
               onClick={() => onNavigate('card')}
-              className="bg-primary/10 text-primary focus-visible:ring-ring flex h-11 items-center justify-between rounded-lg px-[11px] text-[13px] font-semibold no-underline focus-visible:ring-2 focus-visible:outline-none"
+              className="bg-primary/10 text-primary hover:bg-primary/20 focus-visible:ring-ring flex h-11 items-center justify-between rounded-lg px-[11px] text-[13px] font-semibold no-underline transition-colors focus-visible:ring-2 focus-visible:outline-none"
             >
               {formatYourMoveDayTime(iso, clock.timeZone)}
               <ChevronRight className="size-[15px]" aria-hidden="true" />

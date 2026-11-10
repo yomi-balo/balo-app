@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const HOVER_OPEN_DELAY_MS = 300;
 
 const TERM_TRIGGER_CLASS =
-  'cursor-help rounded-sm underline decoration-dotted decoration-muted-foreground/60 underline-offset-[3px] focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none';
+  'cursor-help rounded-sm underline decoration-dotted decoration-muted-foreground/60 underline-offset-[3px] transition-colors hover:text-primary hover:decoration-primary focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none';
 
 interface TrackTermPopoverProps {
   readonly term: string;

@@ -902,6 +902,63 @@ describe('notificationRules', () => {
       });
     });
 
+    it('milestone_estimate_exceeded: client email + in-app, admins in-app, no expert rule', () => {
+      const rules = notificationRules['engagement.milestone_estimate_exceeded'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(4);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      for (const rule of clientRules) {
+        expect(rule.template).toBe('engagement-milestone-estimate-exceeded-client');
+      }
+      expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const adminRules = rules!.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules).toHaveLength(1);
+      expect(adminRules[0]).toMatchObject({
+        channel: 'in-app',
+        template: 'engagement-milestone-estimate-exceeded-admin',
+        timing: 'immediate',
+      });
+
+      expect(rules!.some((r) => r.recipient === 'expert')).toBe(false);
+
+      // BAL-631: the delivering agency's owners/admins, in-app only.
+      expect(rules!.filter((r) => r.recipient === 'delivering_agency_admins')).toEqual([
+        {
+          channel: 'in-app',
+          recipient: 'delivering_agency_admins',
+          template: 'engagement-milestone-estimate-exceeded-agency',
+          timing: 'immediate',
+        },
+      ]);
+    });
+
+    it('time_entry_changed: author-only email + in-app, never-self guard', () => {
+      const rules = notificationRules['engagement.time_entry_changed'];
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('self');
+        expect(rule.template).toBe('engagement-time-entry-changed');
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      const ctx = (actorUserId: string) => ({
+        event: 'engagement.time_entry_changed',
+        payload: { actorUserId, userId: 'author-1' },
+        data: {},
+      });
+      for (const rule of rules!) {
+        expect(rule.condition?.(ctx('admin-1'))).toBe(true);
+        expect(rule.condition?.(ctx('author-1'))).toBe(false);
+      }
+    });
+
     it('milestone_reverted: client + admins, in-app ONLY, one shared template', () => {
       const rules = notificationRules['engagement.milestone_reverted'];
       expect(rules).toBeDefined();
@@ -995,24 +1052,55 @@ describe('notificationRules', () => {
       expect(rules!.some((r) => r.channel !== 'in-app')).toBe(false);
     });
 
-    it('cancelled: client + expert email + in-app, one shared template, no admin recipient', () => {
+    it('cancelled: client + expert email + in-app on one shared template, agency admins on their own, no platform admin recipient', () => {
       const rules = notificationRules['engagement.cancelled'];
       expect(rules).toBeDefined();
-      expect(rules).toHaveLength(4);
+      expect(rules).toHaveLength(6);
       for (const rule of rules!) {
-        expect(rule.template).toBe('engagement-cancelled');
+        expect(rule.template).toBe(
+          rule.recipient === 'delivering_agency_admins'
+            ? 'engagement-cancelled-agency'
+            : 'engagement-cancelled'
+        );
         expect(rule.timing).toBe('immediate');
       }
       expect(rules!.map((r) => r.recipient).sort((a, b) => a.localeCompare(b))).toEqual([
         'client',
         'client',
+        'delivering_agency_admins',
+        'delivering_agency_admins',
         'expert',
         'expert',
       ]);
+      // BAL-631: the agency admins get email + in-app.
+      expect(
+        rules!
+          .filter((r) => r.recipient === 'delivering_agency_admins')
+          .map((r) => r.channel)
+          .sort((a, b) => a.localeCompare(b))
+      ).toEqual(['email', 'in-app']);
       // Both parties get email + in-app; admins are never a recipient (they are the actor).
       expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
-      expect(rules!.filter((r) => r.channel === 'email')).toHaveLength(2);
-      expect(rules!.filter((r) => r.channel === 'in-app')).toHaveLength(2);
+      expect(rules!.filter((r) => r.channel === 'email')).toHaveLength(3);
+      expect(rules!.filter((r) => r.channel === 'in-app')).toHaveLength(3);
+    });
+  });
+
+  describe('BAL-631 changes_requested agency rule', () => {
+    it('keeps the expert + admin rules and appends an in-app-only delivering_agency_admins rule', () => {
+      const rules = notificationRules['engagement.changes_requested'];
+      if (rules === undefined) throw new Error('engagement.changes_requested has no rules');
+      expect(rules).toHaveLength(4);
+      expect(rules.filter((r) => r.recipient === 'delivering_agency_admins')).toEqual([
+        {
+          channel: 'in-app',
+          recipient: 'delivering_agency_admins',
+          template: 'engagement-changes-requested-agency',
+          timing: 'immediate',
+        },
+      ]);
+      expect(rules.filter((r) => r.recipient === 'expert')).toHaveLength(2);
+      expect(rules.filter((r) => r.recipient === 'admin_users')).toHaveLength(1);
     });
   });
 

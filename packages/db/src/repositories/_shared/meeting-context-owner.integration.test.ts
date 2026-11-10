@@ -2,12 +2,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
 import {
+  agencyFactory,
   caseEngagementFactory,
   expertDraftFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
 } from '../../test/factories';
 import { companiesRepository } from '../companies';
+import { expertsRepository } from '../experts';
 import {
   meetingContextsRepository,
   MeetingPrimaryContextRepointedError,
@@ -46,8 +48,32 @@ describe('resolveMeetingContextOwner — engagement grain', () => {
     for (const contextType of ENGAGEMENT_GRAIN_LABELS) {
       await expect(
         resolveMeetingContextOwner({ contextType, contextId: engagement.id })
-      ).resolves.toEqual({ companyId, expertProfileId });
+      ).resolves.toEqual({
+        companyId,
+        expertProfileId,
+        deliveringAgency: { from: 'engagement', deliveringAgencyId: null },
+      });
     }
+  });
+
+  it("carries the engagement's pinned agency, not the expert profile's current one", async () => {
+    const expert = await expertDraftFactory();
+    const pinned = await agencyFactory();
+    const moved = await agencyFactory();
+    await expertsRepository.linkAgency(expert.id, pinned.id);
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+    expect(
+      await expertsRepository.repointAgency(expert.id, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const owner = await resolveMeetingContextOwner({
+      contextType: 'case',
+      contextId: engagement.id,
+    });
+    expect(owner?.deliveringAgency).toEqual({ from: 'engagement', deliveringAgencyId: pinned.id });
   });
 
   /**
@@ -98,6 +124,7 @@ describe('resolveMeetingContextOwner — request grain (`project_discovery`)', (
     ).resolves.toEqual({
       companyId: request.companyId,
       expertProfileId: request.expertProfileId,
+      deliveringAgency: { from: 'expert_profile' },
     });
   });
 
@@ -116,7 +143,11 @@ describe('resolveMeetingContextOwner — request grain (`project_discovery`)', (
       contextId: request.id,
     });
 
-    expect(owner).toEqual({ companyId: request.companyId, expertProfileId: null });
+    expect(owner).toEqual({
+      companyId: request.companyId,
+      expertProfileId: null,
+      deliveringAgency: { from: 'expert_profile' },
+    });
   });
 
   it('answers undefined for an unknown request id, and for a SOFT-DELETED request', async () => {
@@ -154,7 +185,11 @@ describe('resolveMeetingContextOwner — relationship grain (`request_interactio
         contextType: 'request_interaction',
         contextId: relationship.id,
       })
-    ).resolves.toEqual({ companyId: request.companyId, expertProfileId: otherExpert.id });
+    ).resolves.toEqual({
+      companyId: request.companyId,
+      expertProfileId: otherExpert.id,
+      deliveringAgency: { from: 'expert_profile' },
+    });
   });
 
   it('answers undefined for an unknown relationship id', async () => {

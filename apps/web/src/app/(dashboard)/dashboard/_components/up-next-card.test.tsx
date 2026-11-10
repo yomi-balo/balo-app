@@ -54,6 +54,69 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('UpNextCard — hover states', () => {
+  it('gives every footer link a hover underline and a focus-visible ring', () => {
+    const data: UpNextData = { kind: 'ready', rows: [row()] };
+    render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    for (const { label } of FOOTER_LINKS) {
+      expect(screen.getByRole('link', { name: label })).toHaveClass(
+        'hover:underline',
+        'transition-colors',
+        'focus-visible:ring-2',
+        'min-h-11'
+      );
+    }
+  });
+
+  it('adds no hover to the static card root', () => {
+    const data: UpNextData = { kind: 'ready', rows: [row()] };
+    const { container } = render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    const root = container.querySelector('section');
+    expect(root).not.toBeNull();
+    expect(root?.className).not.toContain('hover:');
+  });
+
+  const SOON = new Date(NOW.getTime() + MIN).toISOString();
+  const LATER = new Date(NOW.getTime() + 30 * MIN).toISOString();
+
+  function rowWrapper(container: HTMLElement): HTMLElement {
+    const wrapper = container.querySelector('[data-up-next-row]');
+    expect(wrapper).not.toBeNull();
+    return wrapper as HTMLElement;
+  }
+
+  it.each([
+    ['featured', SOON, 'hover:bg-success/20'],
+    ['default', LATER, 'hover:bg-muted/50'],
+  ])('a %s row with an href hovers on its wrapper', (variant, scheduledStart, hoverClass) => {
+    const data: UpNextData = { kind: 'ready', rows: [row({ scheduledStart })] };
+    const { container } = render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    const wrapper = rowWrapper(container);
+    expect(wrapper).toHaveAttribute('data-up-next-row', variant);
+    expect(wrapper).toHaveClass(hoverClass, 'transition-colors');
+  });
+
+  it.each([
+    ['featured', SOON],
+    ['default', LATER],
+  ])('a %s row with href null gains no hover', (variant, scheduledStart) => {
+    const data: UpNextData = { kind: 'ready', rows: [row({ href: null, scheduledStart })] };
+    const { container } = render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    expect(container.querySelector('a[href^="/cases/"]')).toBeNull();
+    const wrapper = rowWrapper(container);
+    expect(wrapper).toHaveAttribute('data-up-next-row', variant);
+    expect(wrapper.className).not.toContain('hover:');
+  });
+});
+
 describe('UpNextCard — rendering rows', () => {
   it('renders rows in the order given, with title and counterparty', () => {
     const data: UpNextData = {

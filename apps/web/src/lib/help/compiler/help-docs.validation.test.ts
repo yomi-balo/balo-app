@@ -9,6 +9,43 @@ import { validateHelpDocs } from './validate';
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../../../../..');
 
 const EXPECTED_FILES = [
+  'agency-projects.md',
+  'applying-to-become-an-expert.md',
+  'approving-a-change-to-your-project.md',
+  'booking-a-consultation.md',
+  'buying-credit.md',
+  'connecting-your-calendar.md',
+  'dashboard-up-next.md',
+  'dashboard-your-move-for-clients.md',
+  'dashboard-your-move.md',
+  'editing-milestones-after-acceptance.md',
+  'handling-a-change-request.md',
+  'joining-a-call.md',
+  'logging-time-on-a-time-and-materials-project.md',
+  'pausing-new-work.md',
+  'project-requests-for-experts.md',
+  'proposing-a-change-to-a-live-project.md',
+  'rate-and-payouts.md',
+  'rating-your-expert.md',
+  'redeeming-a-promo-code.md',
+  'requesting-a-project.md',
+  'reviewing-a-finished-project.md',
+  'sharing-files-with-invited-experts.md',
+  'travelling-or-moving.md',
+  'turning-a-case-into-a-project.md',
+  'understanding-the-hours-on-your-project.md',
+  'weekly-schedule.md',
+  'what-happens-after-you-apply.md',
+  'writing-and-sending-a-proposal.md',
+  'your-cases.md',
+  'your-live-status.md',
+  'your-reviews.md',
+];
+
+/** Publishing is a reviewed decision: flipping a guide means adding it here too. */
+const PUBLISHED_FILES = [
+  'agency-projects.md',
+  'applying-to-become-an-expert.md',
   'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
@@ -25,27 +62,15 @@ const EXPECTED_FILES = [
   'rate-and-payouts.md',
   'redeeming-a-promo-code.md',
   'requesting-a-project.md',
-  'reviewing-a-finished-project.md',
   'sharing-files-with-invited-experts.md',
+  'travelling-or-moving.md',
   'turning-a-case-into-a-project.md',
+  'understanding-the-hours-on-your-project.md',
   'weekly-schedule.md',
   'what-happens-after-you-apply.md',
   'writing-and-sending-a-proposal.md',
   'your-cases.md',
   'your-live-status.md',
-];
-
-/** Publishing is a reviewed decision: flipping a guide means adding it here too. */
-const PUBLISHED_FILES = [
-  'booking-a-consultation.md',
-  'buying-credit.md',
-  'connecting-your-calendar.md',
-  'joining-a-call.md',
-  'pausing-new-work.md',
-  'rate-and-payouts.md',
-  'weekly-schedule.md',
-  'what-happens-after-you-apply.md',
-  'your-cases.md',
 ];
 
 describe('docs/help', () => {

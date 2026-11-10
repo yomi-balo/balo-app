@@ -86,10 +86,13 @@ const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const OPENED_ON_BEHALF_ACTION = 'credit_session.opened_on_behalf';
 
-/** The fixture expert's hourly rate; at the default fee, 700/min to the client and 560/min to the expert. */
-const EXPERT_HOURLY_MINOR = 33_600;
+/** The fixture expert's per-minute rate; at the default fee, 700/min to the client and 560/min to the expert. */
+const EXPERT_RATE_MINOR_PER_MINUTE = 560;
 const { clientRateMinorPerMinute: CLIENT_RATE, expertRateMinorPerMinute: EXPERT_RATE } =
-  deriveSessionEstimate({ expertHourlyMinor: EXPERT_HOURLY_MINOR, estimatedMinutes: 1 });
+  deriveSessionEstimate({
+    expertRateMinorPerMinute: EXPERT_RATE_MINOR_PER_MINUTE,
+    estimatedMinutes: 1,
+  });
 const FUNDED_BALANCE_MINOR = 50_000;
 const BOOKED_WINDOW_MINUTES = 30;
 const HELD_MINUTES = 20;
@@ -117,7 +120,7 @@ interface Scenario {
 async function seedScenario(): Promise<Scenario> {
   const parties = await seedBookingParties();
   await expertsRepository.updateProfile(parties.expertProfileId, {
-    rateCents: EXPERT_HOURLY_MINOR,
+    rateCents: EXPERT_RATE_MINOR_PER_MINUTE,
   });
   const expert = await expertsRepository.findUserIdByProfileId(parties.expertProfileId);
   if (expert === undefined) {

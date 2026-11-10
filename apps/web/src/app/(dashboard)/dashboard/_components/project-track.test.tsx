@@ -136,6 +136,31 @@ describe('ProjectTrack', () => {
     });
   });
 
+  it.each([
+    ['Label a, Title a: your move', 'hover:bg-primary/20'],
+    ['Label b, Title b: waiting on client', 'hover:bg-accent'],
+    ['Label d, Title d: in progress', 'hover:bg-muted-foreground/20'],
+  ])('gives the "%s" token a hover and a focus-visible ring', (name, hoverClass) => {
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    const link = screen.getByRole('link', { name });
+    expect(link).toHaveClass(hoverClass, 'transition-colors', 'focus-visible:ring-2');
+  });
+
+  it('adds no hover to the stage nodes or the legend dots', () => {
+    const { container } = render(<ProjectTrack view={EXPERT_VIEW} />);
+    const nodes = container.querySelectorAll('[data-tone]');
+    expect(nodes.length).toBeGreaterThan(0);
+    for (const node of nodes) {
+      expect(node.className).not.toContain('hover:');
+    }
+    const legend = screen.getByRole('list', { name: 'Legend' });
+    const dots = legend.querySelectorAll('span[aria-hidden="true"]');
+    expect(dots.length).toBeGreaterThan(0);
+    for (const dot of dots) {
+      expect(dot.className).not.toContain('hover:');
+    }
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<ProjectTrack view={EXPERT_VIEW} />);
     expect(await axe(container)).toHaveNoViolations();
@@ -168,6 +193,15 @@ describe('desktop stage and legend explanations', () => {
       }
       unmount();
     }
+  });
+
+  it('gives the desktop term trigger a hover and a focus-visible ring', () => {
+    render(<ProjectTrack view={EXPERT_VIEW} />);
+    expect(screen.getByRole('button', { name: 'Invited' })).toHaveClass(
+      'hover:text-primary',
+      'transition-colors',
+      'focus-visible:ring-2'
+    );
   });
 
   it('opens with Enter and Space', async () => {

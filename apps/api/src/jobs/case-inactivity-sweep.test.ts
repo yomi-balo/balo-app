@@ -148,6 +148,7 @@ function caseRow(over: Partial<CaseEngagementRow> = {}): Partial<CaseEngagementR
     expertProfileId: 'ep-1',
     createdAt: new Date(NOW.getTime() - (CASE_INACTIVITY_DAYS + 1) * DAY_MS),
     title: 'Flow interview loop',
+    deliveringAgencyId: null,
     closedAt: null,
     ...over,
   };
@@ -721,6 +722,27 @@ describe('case-inactivity sweep — the post-commit notice', () => {
       closeReason: 'auto_inactive',
       reviewToken: undefined,
     });
+  });
+
+  it('names the agency the case is pinned to, not the profile’s current agency', async () => {
+    const pinned = caseRow({ id: 'eng-1', deliveringAgencyId: 'ag-pin' });
+    mockListOpenCreatedBefore.mockResolvedValue([pinned]);
+    mockClose.mockResolvedValue({ ...pinned, closedAt: NOW });
+    mockFindDisplayProfileById.mockResolvedValue({
+      id: 'ep-1',
+      userId: 'u-ex',
+      agencyId: 'ag-other',
+      type: 'agency',
+    });
+    mockGetAgencySummary.mockImplementation(async (id: string) =>
+      id === 'ag-pin' ? { id, name: 'Pinned Agency' } : { id, name: 'Other Agency' }
+    );
+
+    await runCaseInactivitySweep(NOW);
+
+    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload).toMatchObject({ expertPartyLabel: 'Pinned Agency' });
+    expect(mockGetAgencySummary).not.toHaveBeenCalledWith('ag-other');
   });
 
   it('owner-miss publishes with recipientId absent, plus a warn — not a failure', async () => {

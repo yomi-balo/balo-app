@@ -14,12 +14,14 @@ import {
   type StaffAccessSaveRefusal,
   type StaffAccessSaveRequest,
 } from '@balo/shared/authz';
+import { surnameInitial } from '@balo/shared/reviews';
 import { db } from '../client';
 import {
   users,
   companies,
   companyMembers,
   expertProfiles,
+  availabilityRules,
   type User,
   type NewUser,
   type Company,
@@ -118,6 +120,86 @@ export const usersRepository = {
     return db.query.users.findFirst({
       where: and(eq(users.workosId, workosId), isNull(users.deletedAt)),
     });
+  },
+
+  /**
+   * What the dashboard layout needs to compare a viewer's device zone with their saved zones:
+   * `users.timezone` for everyone and, when the session names an expert profile, that profile's
+   * schedule zone, approval, "Available for new work" switch and weekly rules. Projected columns
+   * only, so no profile field beyond those four ever leaves the repository.
+   *
+   * `expertProfileId` comes from the session. The join also requires `expert_profiles.user_id =
+   * users.id`, so a profile the user does not own reads as `expert: null` rather than leaking
+   * another expert's schedule. `expert_profiles` has no `deleted_at`, so there is no soft-delete
+   * term on the join; users and rules are filtered on theirs.
+   *
+   * One query for clients and unapproved experts; a second (the rules) only for an approved
+   * expert. Returns null when the user does not exist or is soft-deleted.
+   */
+  findTimezoneContext: async (
+    userId: string,
+    expertProfileId: string | undefined
+  ): Promise<{
+    savedTimezone: string | null;
+    expert: {
+      expertProfileId: string;
+      timezone: string;
+      approved: boolean;
+      availableForWork: boolean;
+      rules: Array<{ dayOfWeek: number; startTime: string; endTime: string }>;
+    } | null;
+  } | null> => {
+    const [row] = await db
+      .select({
+        savedTimezone: users.timezone,
+        profileId: expertProfiles.id,
+        profileTimezone: expertProfiles.timezone,
+        approvedAt: expertProfiles.approvedAt,
+        availableForWork: expertProfiles.availableForWork,
+      })
+      .from(users)
+      .leftJoin(
+        expertProfiles,
+        expertProfileId === undefined
+          ? sql`false`
+          : and(eq(expertProfiles.id, expertProfileId), eq(expertProfiles.userId, users.id))
+      )
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .limit(1);
+
+    if (row === undefined) return null;
+    if (row.profileId === null || row.profileTimezone === null || row.availableForWork === null) {
+      return { savedTimezone: row.savedTimezone, expert: null };
+    }
+
+    const approved = row.approvedAt !== null;
+    const rules = approved
+      ? await db
+          .select({
+            dayOfWeek: availabilityRules.dayOfWeek,
+            startTime: availabilityRules.startTime,
+            endTime: availabilityRules.endTime,
+          })
+          .from(availabilityRules)
+          .where(
+            and(
+              eq(availabilityRules.expertProfileId, row.profileId),
+              isNull(availabilityRules.deletedAt)
+            )
+          )
+          .orderBy(asc(availabilityRules.dayOfWeek), asc(availabilityRules.startTime))
+      : [];
+
+    return {
+      savedTimezone: row.savedTimezone,
+      expert: {
+        expertProfileId: row.profileId,
+        timezone: row.profileTimezone,
+        approved,
+        availableForWork: row.availableForWork,
+        rules,
+      },
+    };
   },
 
   /**
@@ -725,6 +807,20 @@ export const usersRepository = {
   },
 
   /**
+   * BAL-628 — save the role a reviewer typed back to their profile, so their next review
+   * prefills it. The caller passes a trimmed, non-empty role; an empty one never reaches
+   * here (it must never CLEAR a saved title). Guards on `deleted_at IS NULL` so a request
+   * path never touches a soft-deleted user's row; a missing or deleted user is a silent
+   * no-op.
+   */
+  setJobTitle: async (userId: string, jobTitle: string): Promise<void> => {
+    await db
+      .update(users)
+      .set({ jobTitle, updatedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)));
+  },
+
+  /**
    * BAL-360: adopt a NEW workosId onto an existing LIVE user row (identity re-link),
    * writing an immutable audit row in the SAME transaction (ADR-1030). Guards on
    * deleted_at IS NULL — the caller resolved a live email match. Throws if the row
@@ -885,6 +981,37 @@ export const usersRepository = {
       .where(and(eq(users.id, id), isNull(users.deletedAt)))
       .limit(1);
     return row;
+  },
+
+  /**
+   * BAL-628 — the REVIEWER-IDENTITY projection: first name, surname INITIAL and saved job
+   * title, for the review capture line and the `/review/{token}` landing form.
+   *
+   * ⚠ THE FULL SURNAME NEVER LEAVES THIS FUNCTION. It is read only to derive the initial
+   * (`surnameInitial`, `@balo/shared/reviews`), because the landing form is unauthenticated
+   * and a reviewer is named publicly by initial only. No email, no id — the same projected
+   * posture as {@link usersRepository.findDisplayById}.
+   *
+   * Excludes soft-deleted users.
+   */
+  findReviewerIdentityById: async (
+    id: string
+  ): Promise<
+    { firstName: string | null; lastInitial: string | null; jobTitle: string | null } | undefined
+  > => {
+    const [row] = await db
+      .select({ firstName: users.firstName, lastName: users.lastName, jobTitle: users.jobTitle })
+      .from(users)
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .limit(1);
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      firstName: row.firstName,
+      lastInitial: surnameInitial(row.lastName),
+      jobTitle: row.jobTitle,
+    };
   },
 
   /**

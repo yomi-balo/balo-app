@@ -1,11 +1,15 @@
 import 'server-only';
 
+import { cache } from 'react';
 import { engagementsRepository, expertsRepository, partyMembershipsRepository } from '@balo/db';
 import {
   buildHostContextForExpertProfile,
   hostContextGrants,
+  actorAdministersDeliveringAgency,
   type EngagementCapability,
+  type HostContextReads,
 } from '@balo/shared/authz';
+import type { DeliveringAgencySource } from '@balo/shared/parties';
 import { log } from '@/lib/logging';
 
 /**
@@ -33,6 +37,11 @@ import { log } from '@/lib/logging';
  * NO FK and NO RLS, so resolving the context's owning party and checking membership is still
  * the CALLER'S obligation. On the case surface that obligation is discharged by
  * `resolveCaseAccess` BEFORE this is ever called — never after, and never instead.
+ * ONE exception (ADR-1046 §7, "Delivery pages are outside the visibility rule in v1",
+ * BAL-626): `resolveEngagementViewer` admits a null-lens viewer to `/engagements/[id]` and its
+ * change-order page on `MANAGE_ENGAGEMENT`, because the page has already loaded the
+ * `engagements` row and so resolved the owning party itself. No other surface may do this
+ * without an ADR amendment.
  *
  * ⚠ AND IT SAYS NOTHING ABOUT ENGAGEMENT LIFECYCLE. `findById` filters `deleted_at` only;
  * `engagements.status` is never consulted. The delivering expert of a COMPLETED case still
@@ -117,8 +126,64 @@ export async function hasEngagementCapability(
     capability,
     // `engagements.expert_profile_id` is NOT NULL on the supertype for ALL engagement types
     // (BAL-417), so the five labels share one path and there is nothing to defend here.
-    engagement.expertProfileId,
+    {
+      expertProfileId: engagement.expertProfileId,
+      agency: { from: 'engagement', deliveringAgencyId: engagement.deliveringAgencyId },
+    },
     { contextType: subject.contextType, contextId: subject.contextId }
+  );
+}
+
+const hostContextReads: HostContextReads = {
+  findExpertProfile: (id) => expertsRepository.findProfileById(id),
+  // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
+  // defence documented on `HostContextReads`. Do not collapse it to one argument.
+  findAgencyRole: (agencyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
+};
+
+/**
+ * Request-deduped host-context assembly (two repository reads). One render asks the
+ * expert-side question from several places (metadata, viewer resolution, time logging), so
+ * they share one build. Keyed on the two primitive strings; `actorId` stays an explicit
+ * argument and is never captured, so a result is only ever reused for the same actor.
+ */
+const buildHostContext = cache(
+  (
+    expertProfileId: string,
+    actorId: string,
+    sourceKind: DeliveringAgencySource['from'],
+    deliveringAgencyId: string | null
+  ) =>
+    buildHostContextForExpertProfile(
+      expertProfileId,
+      actorId,
+      hostContextReads,
+      sourceKind === 'engagement'
+        ? { from: 'engagement', deliveringAgencyId }
+        : { from: 'expert_profile' }
+    )
+);
+
+/**
+ * The delivery a capability question is asked of: the delivering expert profile plus where the
+ * delivering agency comes from. An engagement-grain subject carries the engagement's pin; a
+ * request-grain subject (no engagement row yet) reads the profile's current agency.
+ */
+export interface ExpertDelivery {
+  readonly expertProfileId: string;
+  readonly agency: DeliveringAgencySource;
+}
+
+function buildHostContextFor(
+  delivery: ExpertDelivery,
+  actorId: string
+): ReturnType<typeof buildHostContext> {
+  return buildHostContext(
+    delivery.expertProfileId,
+    actorId,
+    delivery.agency.from,
+    delivery.agency.from === 'engagement' ? delivery.agency.deliveringAgencyId : null
   );
 }
 
@@ -152,16 +217,11 @@ export async function hasEngagementCapability(
 export async function hasExpertDeliveryCapability(
   actor: { id: string },
   capability: EngagementCapability,
-  expertProfileId: string,
+  delivery: ExpertDelivery,
   logContext: { contextType: string; contextId: string }
 ): Promise<boolean> {
-  const resolution = await buildHostContextForExpertProfile(expertProfileId, actor.id, {
-    findExpertProfile: (id) => expertsRepository.findProfileById(id),
-    // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
-    // defence documented on `HostContextReads`. Do not collapse it to one argument.
-    findAgencyRole: (agencyId, actorId) =>
-      partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
-  });
+  const { expertProfileId } = delivery;
+  const resolution = await buildHostContextFor(delivery, actor.id);
 
   if (!resolution.ok) {
     log.warn('Engagement host context denied — the delivering expert profile is missing', {
@@ -174,4 +234,28 @@ export async function hasExpertDeliveryCapability(
   }
 
   return hostContextGrants(resolution.hostContext, actor, capability);
+}
+
+/**
+ * Does `actor` hold agency owner/admin (`MANAGE_MEMBERS`) in the agency of this delivering
+ * `expert_profiles.id`? Unlike {@link hasExpertDeliveryCapability} it does NOT short-circuit on
+ * the delivering expert: an expert who owns their agency administers it. An independent
+ * expert has no agency, so is `false`. A missing profile fails closed.
+ */
+export async function administersDeliveringAgency(
+  actor: { id: string },
+  delivery: ExpertDelivery
+): Promise<boolean> {
+  const { expertProfileId } = delivery;
+  const resolution = await buildHostContextFor(delivery, actor.id);
+
+  if (!resolution.ok) {
+    log.warn('Agency administration check denied — the delivering expert profile is missing', {
+      actorId: actor.id,
+      expertProfileId,
+    });
+    return false;
+  }
+
+  return actorAdministersDeliveringAgency(resolution.hostContext, actor);
 }

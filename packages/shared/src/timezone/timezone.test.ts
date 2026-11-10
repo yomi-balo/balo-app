@@ -4,6 +4,7 @@ import {
   deriveCountryFromTimezone,
   extractCityFromTimezone,
   isValidTimezone,
+  canonicalTimezone,
   getNextSpringForwardGap,
   isWallClockInSpringForwardGap,
 } from './index';
@@ -145,6 +146,26 @@ describe('extractCityFromTimezone', () => {
     expect(extractCityFromTimezone('America/Argentina/Buenos_Aires')).toBe('Buenos Aires');
   });
 
+  it.each([
+    ['Asia/Calcutta', 'Kolkata'],
+    ['Asia/Saigon', 'Ho Chi Minh'],
+    ['Europe/Kiev', 'Kyiv'],
+    ['Asia/Katmandu', 'Kathmandu'],
+    ['Asia/Rangoon', 'Yangon'],
+    ['America/Godthab', 'Nuuk'],
+    ['Atlantic/Faeroe', 'Faroe'],
+    ['Pacific/Enderbury', 'Kanton'],
+    ['Pacific/Ponape', 'Pohnpei'],
+    ['Pacific/Truk', 'Chuuk'],
+  ])('names the current city for the legacy zone %s', (zone, city) => {
+    expect(extractCityFromTimezone(zone)).toBe(city);
+  });
+
+  it('gives the same city for a legacy zone and its current name', () => {
+    expect(extractCityFromTimezone('Asia/Kolkata')).toBe(extractCityFromTimezone('Asia/Calcutta'));
+    expect(extractCityFromTimezone('Europe/Kyiv')).toBe(extractCityFromTimezone('Europe/Kiev'));
+  });
+
   it('replaces underscores with spaces', () => {
     expect(extractCityFromTimezone('America/New_York')).toBe('New York');
     expect(extractCityFromTimezone('Asia/Ho_Chi_Minh')).toBe('Ho Chi Minh');
@@ -179,6 +200,46 @@ describe('isValidTimezone', () => {
 
   it('rejects an empty string', () => {
     expect(isValidTimezone('')).toBe(false);
+  });
+
+  it.each(['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh', 'Etc/UTC'])(
+    'accepts %s, a current IANA name ICU lists only as an alias',
+    (zone) => {
+      expect(isValidTimezone(zone)).toBe(true);
+    }
+  );
+
+  it('rejects a UTC offset', () => {
+    expect(isValidTimezone('+05:30')).toBe(false);
+  });
+});
+
+describe('canonicalTimezone', () => {
+  it.each(['UTC', 'Australia/Melbourne', 'Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh'])(
+    'keeps %s as given',
+    (zone) => {
+      expect(canonicalTimezone(zone)).toBe(zone);
+    }
+  );
+
+  it.each([
+    ['US/Pacific', 'America/Los_Angeles'],
+    ['Australia/ACT', 'Australia/Sydney'],
+    ['GB', 'Europe/London'],
+    ['Japan', 'Asia/Tokyo'],
+    ['Etc/UTC', 'UTC'],
+  ])('stores the legacy name %s as %s', (legacy, resolved) => {
+    expect(canonicalTimezone(legacy)).toBe(resolved);
+  });
+
+  it('gives the city and country helpers a name they can read', () => {
+    const stored = canonicalTimezone('US/Pacific') ?? '';
+    expect(extractCityFromTimezone(stored)).toBe('Los Angeles');
+    expect(deriveCountryFromTimezone(stored)?.countryCode).toBe('US');
+  });
+
+  it.each(['', '+05:30', 'Not/AZone'])('is null for %j', (zone) => {
+    expect(canonicalTimezone(zone)).toBeNull();
   });
 });
 

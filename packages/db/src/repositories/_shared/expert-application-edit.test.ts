@@ -52,7 +52,7 @@ describe('planStaffApplicationEdit — experience', () => {
 
   it('plans nothing when every provided field already matches', () => {
     const plan = planStaffApplicationEdit(snapshot(), {
-      experience: { isCertifiedTrainer: true, isSalesforceMvp: false },
+      experience: { isSalesforceCta: false, isSalesforceMvp: false },
     });
 
     expect(plan.experience).toBeNull();

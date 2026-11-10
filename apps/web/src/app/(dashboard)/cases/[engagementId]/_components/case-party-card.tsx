@@ -5,9 +5,15 @@ import Link from 'next/link';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
+import { cn } from '@/lib/utils';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import type { BookingFlowExpert } from '@/components/booking';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
@@ -111,15 +117,21 @@ export function CasePartyCard({
 
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
-      <div className="flex items-start gap-3">
-        <Avatar size="lg" className="flex-none">
-          {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
-          <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-            {party.initials}
-          </AvatarFallback>
-        </Avatar>
+      <div className={cn('flex items-start gap-3', EXPERT_PROFILE_ROW)}>
+        <ExpertProfileAvatarLink href={party.profileHref} surface="case_party_card">
+          <Avatar size="lg" className="flex-none">
+            {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}
+            <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+              {party.initials}
+            </AvatarFallback>
+          </Avatar>
+        </ExpertProfileAvatarLink>
         <div className="min-w-0">
-          <p className="text-foreground text-sm font-semibold">{party.name}</p>
+          <p className="text-foreground text-sm font-semibold">
+            <ExpertProfileLink href={party.profileHref} surface="case_party_card">
+              {party.name}
+            </ExpertProfileLink>
+          </p>
           {party.headline !== null && (
             <p className="text-muted-foreground mt-0.5 text-xs leading-snug">{party.headline}</p>
           )}
@@ -135,28 +147,28 @@ export function CasePartyCard({
       </div>
 
       {/*
-        ⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `bookAgainHref` is
-        `/experts/{username}` and `expert_profiles.username` is NULLABLE, so a null username
-        means NO link rather than one to `/experts/null`. The in-page path (`onBookFollowUp`)
+        ⚠ ONLY A LIVE DESTINATION RENDERS, NEVER A DISABLED CTA. `profileHref` is
+        `/experts/{username}` only when that public profile resolves, so a null means NO link
+        rather than one that 404s. The in-page path (`onBookFollowUp`)
         never uses the href, so it renders regardless. The expert lens never has either: only a
         client can book.
       */}
-      {(onBookFollowUp !== undefined || party.bookAgainHref !== null) && (
+      {(onBookFollowUp !== undefined || party.profileHref !== null) && (
         <div className="mt-4">
-          {onBookFollowUp !== undefined ? (
-            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
-              <Video className="h-4 w-4" aria-hidden="true" />
-              Book with {counterpartyFirstName} again
-            </Button>
-          ) : (
-            party.bookAgainHref !== null && (
+          {onBookFollowUp === undefined ? (
+            party.profileHref !== null && (
               <Button asChild className="min-h-11 w-full gap-2">
-                <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
+                <Link href={`${party.profileHref}?book=1&src=book_again`} onClick={onBookAnother}>
                   <Video className="h-4 w-4" aria-hidden="true" />
                   Book with {counterpartyFirstName} again
                 </Link>
               </Button>
             )
+          ) : (
+            <Button type="button" className="min-h-11 w-full gap-2" onClick={handleBookFollowUp}>
+              <Video className="h-4 w-4" aria-hidden="true" />
+              Book with {counterpartyFirstName} again
+            </Button>
           )}
           {!isOpen && (
             <p className="text-muted-foreground mt-2 text-center text-xs leading-relaxed">
@@ -167,8 +179,9 @@ export function CasePartyCard({
       )}
 
       {/* BAL-400 (D4a entry point 3) — the next-available-slot quick-pick strip. Client lens,
-          open case only; silently renders nothing without ready availability. */}
-      {lens === 'client' && isOpen && (
+          open case, publicly listed expert only; silently renders nothing without ready
+          availability. */}
+      {lens === 'client' && isOpen && party.profileHref !== null && (
         <CaseSlotQuickPick
           engagementId={engagementId}
           caseTitle={caseTitle}

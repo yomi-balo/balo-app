@@ -62,13 +62,13 @@ import type {
   CaseHeaderView,
   CaseNudgeView,
   CasePartyView,
-  CasePersonView,
   CaseProjectConversionView,
   CaseRescheduleProposalView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
 import { mapCaseConsultations } from './map-case-consultations';
 import { loadCaseFiles, type CaseFileMeetingRef } from './load-case-files';
+import { loadCasePeople } from './load-case-people';
 
 /**
  * BAL-421 — THE CASE SURFACE'S SINGLE LOADER. Assembles one lens-aware payload from the
@@ -436,6 +436,11 @@ interface CounterpartyLabels {
   /** The org line under the case title: the agency (client lens) or the company (expert). */
   counterpartyOrgLabel: string;
   /**
+   * `party.profileHref` when `counterpartyOrgLabel` names the independent expert themselves
+   * (client lens, no agency); otherwise `null` — an agency or a company is never linked.
+   */
+  counterpartyOrgHref: string | null;
+  /**
    * BAL-567 — the delivering expert's AGENCY name, or `null` for an INDEPENDENT expert.
    *
    * ⚠ THE RAW AGENCY, NOT `counterpartyOrgLabel`. That one coalesces to `expertPartyShort` on
@@ -450,8 +455,8 @@ interface CounterpartyLabels {
 /**
  * The rail's party card, both lenses.
  *
- * CLIENT LENS → the delivering EXPERT: avatar, person name, headline, agency, and the one
- * live forward destination (`/experts/{username}`).
+ * CLIENT LENS → the delivering EXPERT: avatar, person name, headline, agency, and their public
+ * profile (`/experts/{username}`) — the name link and the one live forward destination.
  *
  * EXPERT LENS → the client PARTY, i.e. THE COMPANY.
  *
@@ -478,15 +483,16 @@ interface CounterpartyLabels {
 async function resolveCounterparty(
   lens: 'client' | 'expert',
   profile: Awaited<ReturnType<typeof expertsRepository.findDisplayProfileById>>,
+  deliveringAgencyId: string | null,
   clientCompanyName: string
 ): Promise<CounterpartyLabels> {
   const [expertUser, agency, resolverSettings] = await Promise.all([
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(deliveringAgencyId),
     // CLIENT LENS ONLY: the expert's own pause switch is never read for the expert lens.
     lens === 'client' && profile !== undefined
       ? expertsRepository.findResolverSettings(profile.id)
@@ -509,9 +515,11 @@ async function resolveCounterparty(
   });
 
   if (lens === 'client') {
-    // ⚠ `expert_profiles.username` IS NULLABLE. A null username means NO CTA at all — never a
-    // disabled button, and never an href pointing at `/experts/null`.
-    const username = profile?.username ?? null;
+    // `publicProfileUsername` is null unless `/experts/{username}` resolves (a null username,
+    // an unapproved or unsearchable profile, or a suspended/deleted owner), so a null means no
+    // link and no CTA — never a disabled button, and never an href that 404s.
+    const username = profile?.publicProfileUsername ?? null;
+    const profileHref = username === null ? null : '/experts/' + username;
     return {
       expertPartyShort,
       counterpartyName: expertPerson,
@@ -520,6 +528,8 @@ async function resolveCounterparty(
       // independent. Already resolved by `expertPartyDisplayName` above; reused, never re-derived.
       counterpartyPartyLabel: expertPartyShort,
       counterpartyOrgLabel: agencyLabel ?? expertPartyShort,
+      // Without an agency the org line IS the expert's own name, so it links to their profile.
+      counterpartyOrgHref: agencyLabel === null ? profileHref : null,
       agencyLabel,
       party: {
         name: expertPerson,
@@ -527,7 +537,7 @@ async function resolveCounterparty(
         orgLabel: agencyLabel,
         avatarUrl: expertUser?.avatarUrl ?? null,
         initials: initialsOf(expertPerson),
-        bookAgainHref: username === null ? null : '/experts/' + username,
+        profileHref,
         // An unreadable profile reads as available, so the CTA keeps today's profile link.
         availableForWork: resolverSettings?.availableForWork ?? true,
         // BAL-422 — already parsed to a number by `findDisplayProfileById`.
@@ -545,6 +555,7 @@ async function resolveCounterparty(
     // (see this function's docblock on the deliberate departure from the design fixture).
     counterpartyPartyLabel: clientCompanyName,
     counterpartyOrgLabel: clientCompanyName,
+    counterpartyOrgHref: null,
     // The delivering expert's agency, on the EXPERT lens too — see the field's docblock.
     agencyLabel,
     party: {
@@ -553,9 +564,9 @@ async function resolveCounterparty(
       orgLabel: null,
       avatarUrl: null,
       initials: initialsOf(clientCompanyName),
-      // ⚠ NO expert-side CTA. "Book another" is the CLIENT's action (only a client can book),
-      // and every other expert-side forward action the design considered has no destination.
-      bookAgainHref: null,
+      // ⚠ NO expert-side link or CTA. The counterparty is a company, which has no profile page,
+      // and "Book another" is the CLIENT's action (only a client can book).
+      profileHref: null,
       availableForWork: true,
       // ⚠⚠ NOTHING EVALUATIVE ON THE EXPERT LENS (BAL-422). The counterparty here is the
       // client COMPANY; the expert does not score the client, and companies carry no rating
@@ -655,7 +666,6 @@ export const loadCase = cache(
       messagePage,
       conversationFileRows,
       earningsAggregate,
-      viewer,
       projectConversion,
     ] = await Promise.all([
       meetingContextsRepository.listMeetingsForContext('case', engagementId),
@@ -676,7 +686,6 @@ export const loadCase = cache(
       lens === 'expert'
         ? creditSessionsRepository.sumExpertEarningsForEngagement(engagementId)
         : Promise.resolve(null),
-      usersRepository.findDisplayById(userId),
       // BAL-589 — CLIENT LENS ONLY, the `projectConversion` precedent's own mirror of
       // the `earnings` read immediately above.
       resolveProjectConversionIfClient(lens, engagementId, expertProfileId),
@@ -707,7 +716,7 @@ export const loadCase = cache(
       liveProposals,
       clientSideEverPresentByMeetingId,
     ] = await Promise.all([
-      resolveCounterparty(lens, profile, clientCompanyName),
+      resolveCounterparty(lens, profile, caseRow.deliveringAgencyId, clientCompanyName),
       loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
       readTranscriptMeetingIds(meetings),
       // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
@@ -777,39 +786,50 @@ export const loadCase = cache(
     const invitableMeetingIds = derivedStates
       .filter((row) => caseConsultationIsUpcoming(row.state))
       .map((row) => row.meetingId);
-    const [guestCountRows, caseScopeDomains, rating, mayToggleActionItems] = await Promise.all([
-      invitableMeetingIds.length === 0
-        ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
-        : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
-      /**
-       * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare strings
-       * at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
-       * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on the
-       * expert lens there is nothing a domain match could widen and the composer must not
-       * estimate otherwise. It is the VIEWER'S OWN company's domains, never the counterparty's.
-       * ⚠ GATED ON THE SAME `invitableMeetingIds` TERM AS THE GUEST COUNT ABOVE — a case with
-       * nothing upcoming has no invite affordance for a domain list to serve, so this must not
-       * run on a closed case or one with only past consultations either.
-       * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
-       * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides which
-       * sentence renders.
-       */
-      lens === 'client' && invitableMeetingIds.length > 0
-        ? partyDomainsRepository
-            .listByParty('company', companyId)
-            .then((rows) => rows.map((row) => row.domain))
-        : Promise.resolve<string[]>([]),
-      readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
-      // Rides this batch rather than awaiting on its own after it.
-      resolveMayToggleActionItems({
-        isOpen: caseRow.closedAt === null,
-        itemCount: actionItems.length,
-        userId,
-        lens,
-        engagementId,
-        companyId,
-      }),
-    ]);
+    const [guestCountRows, caseScopeDomains, rating, mayToggleActionItems, peopleGroups] =
+      await Promise.all([
+        invitableMeetingIds.length === 0
+          ? Promise.resolve<Array<{ meetingId: string; count: number }>>([])
+          : meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds),
+        /**
+         * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare strings
+         * at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
+         * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on the
+         * expert lens there is nothing a domain match could widen and the composer must not
+         * estimate otherwise. It is the VIEWER'S OWN company's domains, never the counterparty's.
+         * ⚠ GATED ON THE SAME `invitableMeetingIds` TERM AS THE GUEST COUNT ABOVE — a case with
+         * nothing upcoming has no invite affordance for a domain list to serve, so this must not
+         * run on a closed case or one with only past consultations either.
+         * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
+         * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides which
+         * sentence renders.
+         */
+        lens === 'client' && invitableMeetingIds.length > 0
+          ? partyDomainsRepository
+              .listByParty('company', companyId)
+              .then((rows) => rows.map((row) => row.domain))
+          : Promise.resolve<string[]>([]),
+        readClosedCaseRating({ lens, closedAt: caseRow.closedAt, engagementId, userId, now }),
+        // Rides this batch rather than awaiting on its own after it.
+        resolveMayToggleActionItems({
+          isOpen: caseRow.closedAt === null,
+          itemCount: actionItems.length,
+          userId,
+          lens,
+          engagementId,
+          companyId,
+        }),
+        loadCasePeople({
+          lens,
+          viewerUserId: userId,
+          deliveringExpertUserId: profile?.userId ?? null,
+          deliveringAgencyId: caseRow.deliveringAgencyId,
+          clientPartyLabel: clientCompanyName,
+          expertPartyLabel: labels.expertPartyShort,
+          meetingIds: meetings.map((meeting) => meeting.id),
+          upcomingMeetingIds: invitableMeetingIds,
+        }),
+      ]);
     const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
 
     const actionItemCountByMeetingId = countByMeetingId(actionItems, (item) => item.meetingId);
@@ -965,18 +985,9 @@ export const loadCase = cache(
       closeReason: caseRow.closeReason,
       closedAtIso: caseRow.closedAt?.toISOString() ?? null,
       counterpartyOrgLabel: labels.counterpartyOrgLabel,
+      counterpartyOrgHref: labels.counterpartyOrgHref,
       closedNote: resolveClosedNote(caseRow),
     };
-
-    const viewerName = personDisplayName(
-      viewer?.firstName ?? null,
-      viewer?.lastName ?? null,
-      'You'
-    );
-    const people: CasePersonView[] = [
-      { name: viewerName, isViewer: true },
-      { name: labels.counterpartyName, isViewer: false },
-    ];
 
     const base = {
       counterpartyPartyLabel: labels.counterpartyPartyLabel,
@@ -1013,7 +1024,7 @@ export const loadCase = cache(
       files: fileResult.files,
       filesTruncated: fileResult.truncated,
       party: labels.party,
-      people,
+      peopleGroups,
     };
 
     // ⚠⚠ THE LENS IS A DISCRIMINANT. The client arm is CONSTRUCTED WITHOUT an `earnings`

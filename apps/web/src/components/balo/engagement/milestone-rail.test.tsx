@@ -4,6 +4,7 @@ import { render, screen, within } from '@/test/utils';
 import type { MilestoneNodeView } from '@/lib/engagement/engagement-view';
 
 import { MilestoneRail } from './milestone-rail';
+import { milestoneTimeView } from './time/fixtures';
 
 function makeNode(overrides: Partial<MilestoneNodeView> = {}): MilestoneNodeView {
   return {
@@ -201,5 +202,32 @@ describe('MilestoneRail', () => {
     if (delivered !== null) {
       expect(within(delivered).getByText(/Artifact attached\./)).toBeInTheDocument();
     }
+  });
+
+  it('passes each row its hours and renders the totals below the list', () => {
+    render(
+      <MilestoneRail
+        milestones={[makeNode({ id: 'a' }), makeNode({ id: 'b', title: 'Build' })]}
+        time={{
+          byMilestoneId: { a: milestoneTimeView({ milestoneId: 'a' }) },
+          totals: {
+            loggedLabel: '4 of 16 hrs logged',
+            fillPercent: 25,
+            over: false,
+            period: { hoursLabel: '4 hrs', detail: '1 Oct – 31 Oct · invoiced on 1 Nov' },
+          },
+          overEstimateBanner: null,
+          clientCompanyName: 'Northwind Industrial',
+        }}
+      />
+    );
+    expect(screen.getByText('4 of 8 hrs logged')).toBeInTheDocument();
+    expect(screen.getByText('4 of 16 hrs logged')).toBeInTheDocument();
+    expect(screen.getByText(/invoiced on 1 Nov/)).toBeInTheDocument();
+  });
+
+  it('renders no totals on fixed price', () => {
+    render(<MilestoneRail milestones={[makeNode()]} />);
+    expect(screen.queryByText(/this billing period/)).not.toBeInTheDocument();
   });
 });

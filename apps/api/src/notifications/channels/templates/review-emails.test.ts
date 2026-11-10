@@ -436,7 +436,7 @@ describe('engagement-case-closed-client — the fused close email', () => {
         caseClosedData({ closeReason, reviewToken: undefined })
       );
       expect(html).toContain(
-        "If there's more to do, book again with CloudPeak Consulting any time — that starts a new case."
+        "If there's more to do, book again with CloudPeak Consulting any time, as long as they're still listed on Balo — that starts a new case."
       );
       expect(html).not.toContain('Opening a new case');
     }
@@ -554,7 +554,7 @@ describe('engagement-case-closed-expert — the RECORD-only expert half (BAL-572
   it('says the client can book again, which starts a new case — never "open a new case"', async () => {
     const html = await renderCopy('engagement-case-closed-expert', caseClosedExpertData());
     expect(html).toContain(
-      "If there's more to do, Northwind Industrial can book again any time — that starts a new case."
+      "If there's more to do, Northwind Industrial can book again any time, as long as you're still listed on Balo — that starts a new case."
     );
     expect(html).not.toContain('open a new case');
   });
@@ -637,6 +637,12 @@ describe('docs/help/your-cases.md', () => {
 
   it('says booking again starts a new case', () => {
     expect(readCasesHelpDoc()).toContain('starts a new case');
+  });
+
+  it('carries the same "still listed" condition on booking again as both case-closed emails', () => {
+    expect(readCasesHelpDoc()).toContain(
+      '**Book again** any time, as long as the expert is still listed on Balo'
+    );
   });
 
   it.each(['no completed consultation for 30 days', 'fresh case', 'most recently active'])(

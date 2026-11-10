@@ -64,6 +64,11 @@ import {
   meetingFactory,
   userFactory,
 } from '../test/factories';
+import {
+  PUBLIC_PROFILE_MATRIX,
+  seedPublicProfileCase,
+} from '../test/helpers/public-profile-matrix';
+import { expertsRepository } from './experts';
 import { partyMembershipsRepository } from './party-memberships';
 import { referenceDataRepository } from './reference-data';
 import {
@@ -1262,4 +1267,84 @@ describe('casesIndexRepository — column hygiene', () => {
     expect(independentRow.agencyId).toBeNull();
     expect(independentRow.agencyName).toBeNull();
   });
+
+  it('names the agency pinned on the engagement, not the expert profile’s current one', async () => {
+    const company = await companyFactory();
+    const pinned = await agencyFactory({ name: 'Pinned Partners' });
+    const moved = await agencyFactory({ name: 'Moved Partners' });
+    const expert = await seedAgencyExpert(pinned.id);
+    const caseId = await seedCase({
+      companyId: company.id,
+      expertProfileId: expert.profileId,
+      title: 'Pinned case',
+    });
+    expect(
+      await expertsRepository.repointAgency(expert.profileId, {
+        fromAgencyId: pinned.id,
+        toAgencyId: moved.id,
+      })
+    ).toBe(true);
+
+    const rows = (
+      await casesIndexRepository.listOpenCases(
+        { side: 'company', companyId: company.id },
+        { limit: 24 }
+      )
+    ).rows;
+    const row = rows.find((candidate) => candidate.engagementId === caseId);
+    expect(row?.agencyId).toBe(pinned.id);
+    expect(row?.agencyName).toBe('Pinned Partners');
+  });
+});
+
+/**
+ * `expertUsername` builds the card's "Book again" href, so it is the username ONLY while
+ * `/experts/{username}` resolves (`expertProfileIsPublic`). Unclaimed, hidden, unapproved and
+ * suspended or deleted experts all read null, on both lists. The case itself stays listed.
+ */
+describe('casesIndexRepository — expertUsername is gated on the public profile', () => {
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: the open row carries the username iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const company = await companyFactory();
+      const { profile, username } = await seedPublicProfileCase(apply);
+      const caseId = await seedCase({ companyId: company.id, expertProfileId: profile.id });
+
+      const rows = (
+        await casesIndexRepository.listOpenCases(
+          { side: 'company', companyId: company.id },
+          { limit: 24 }
+        )
+      ).rows;
+
+      expect(rows.map((row) => row.engagementId)).toEqual([caseId]);
+      expect(rows[0]?.expertUsername).toBe(isPublic ? username : null);
+    }
+  );
+
+  it.each(PUBLIC_PROFILE_MATRIX)(
+    '$label: the resolved row carries the username iff the public page resolves',
+    async ({ apply, isPublic }) => {
+      const company = await companyFactory();
+      const closer = await userFactory();
+      await companyMemberFactory({ companyId: company.id, userId: closer.id });
+      const { profile, username } = await seedPublicProfileCase(apply);
+      const caseId = await seedCase({
+        companyId: company.id,
+        expertProfileId: profile.id,
+        closedAt: new Date(),
+        closedByUserId: closer.id,
+      });
+
+      const rows = (
+        await casesIndexRepository.listResolvedCases(
+          { side: 'company', companyId: company.id },
+          { limit: 20 }
+        )
+      ).rows;
+
+      expect(rows.map((row) => row.engagementId)).toEqual([caseId]);
+      expect(rows[0]?.expertUsername).toBe(isPublic ? username : null);
+    }
+  );
 });

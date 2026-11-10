@@ -148,6 +148,54 @@ export interface PortfolioDTO {
   closedRows: PortfolioRowView[];
 }
 
+/** The agency lens tile filters. `all` is the Live tile. */
+export type AgencyFilter = 'all' | 'changes_requested' | 'in_delivery' | 'pending_acceptance';
+
+/** The delivering expert on an agency row. */
+export interface AgencyDeliverer {
+  expertProfileId: string;
+  name: string;
+  avatarUrl: string | null;
+  /** The viewer delivers this engagement themselves. */
+  isViewer: boolean;
+  /** The expert has no live membership in the agency any more (their link persists). */
+  isFormerMember: boolean;
+}
+
+/** One agency-lens row. Oversight only: never `needsYou`, never unread. */
+export interface AgencyRowView {
+  id: string;
+  href: string;
+  title: string;
+  companyName: string;
+  deliveryState: EngagementDeliveryState;
+  /** "3 of 5 milestones" | "Auto-accepts {date}" | null. */
+  detailLabel: string | null;
+  changeRequestNote: string | null;
+  deliverer: AgencyDeliverer;
+  updatedRelative: string;
+  recencyAtIso: string;
+}
+
+/** Agency-lens DTO. Fully serialisable. */
+export interface AgencyPortfolioDTO {
+  lens: 'agency';
+  allowedLenses: PortfolioLens[];
+  agency: { id: string; name: string };
+  /** Every agency the viewer oversees, for the picker (live counts only when 2+). */
+  agencies: Array<{ id: string; name: string; liveCount: number }>;
+  rows: AgencyRowView[];
+  finishedRows: AgencyRowView[];
+  tiles: {
+    changesRequested: number;
+    inDelivery: number;
+    pendingAcceptance: number;
+    live: number;
+    expertCount: number;
+  };
+  isEmpty: boolean;
+}
+
 /** One admin triage hero card (`status === 'requested'`). */
 export interface AdminTriageCard {
   id: string;
@@ -632,7 +680,7 @@ type EngagementRowStatus = PortfolioProjectEngagementView['status'];
 export interface EngagementRowInput {
   engagementId: string;
   status: EngagementRowStatus;
-  lens: 'client' | 'expert';
+  lens: 'client' | 'expert' | 'agency';
   hasChangeRequest: boolean;
   counterpartName: string;
   totalMilestones: number;
@@ -670,7 +718,7 @@ function assertNeverStatus(status: never): never {
  * is OFF so it is a plain string.
  */
 export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDeriv {
-  const href = `/engagements/${input.engagementId}?from=inbox`;
+  const href = `/engagements/${input.engagementId}?from=${input.lens === 'agency' ? 'agency' : 'inbox'}`;
   const progressLabel =
     input.totalMilestones > 0
       ? `${input.completedMilestones} of ${input.totalMilestones} milestones`
@@ -711,6 +759,17 @@ export function deriveEngagementRow(input: EngagementRowInput): EngagementRowDer
       };
     }
     case 'pending_acceptance': {
+      if (input.lens === 'agency') {
+        return {
+          needsYou: false,
+          nudgeLabel: 'Awaiting client review',
+          href,
+          progressLabel: null,
+          moveKind: null,
+          clientMoveKind: null,
+          deliveryState: 'pending_acceptance',
+        };
+      }
       if (input.lens === 'client') {
         const nudgeLabel =
           input.autoAcceptLabel === null
@@ -784,4 +843,29 @@ export function tilesFromRows(rows: ReadonlyArray<PortfolioRowView>): PortfolioD
   const kicked = rows.filter((r) => r.stage === 'kicked').length;
   const inProgress = rows.filter((r) => !r.needsYou && r.stage !== 'kicked').length;
   return { needs, inProgress, kicked, total: rows.length };
+}
+
+// ── Agency lens helpers (client-safe) ──────────────────────────────
+
+/** Group order on the agency lens: lower ranks first. */
+export const AGENCY_STATE_RANK: Record<EngagementDeliveryState, number> = {
+  changes_requested: 0,
+  pending_acceptance: 1,
+  in_delivery: 2,
+  completed: 3,
+  cancelled: 3,
+};
+
+/** Whether an agency row belongs to a tile filter slice. Keys on `deliveryState` only. */
+export function agencyRowMatches(row: AgencyRowView, filter: AgencyFilter): boolean {
+  return filter === 'all' || row.deliveryState === filter;
+}
+
+/** Changes requested, then awaiting review, then in delivery; newest activity first within each. */
+export function rankAgencyRows(rows: ReadonlyArray<AgencyRowView>): AgencyRowView[] {
+  return [...rows].sort((a, b) => {
+    const byState = AGENCY_STATE_RANK[a.deliveryState] - AGENCY_STATE_RANK[b.deliveryState];
+    if (byState !== 0) return byState;
+    return Date.parse(b.recencyAtIso) - Date.parse(a.recencyAtIso);
+  });
 }

@@ -12,6 +12,11 @@ export type {
   SeedBillingEmailResult,
   SetBillingEmailInput,
   SetBillingEmailResult,
+  CompanyAdminDetails,
+  SetCompanyIndustryInput,
+  SetCompanyIndustryResult,
+  SetCompanyReviewNameHiddenInput,
+  SetCompanyReviewNameHiddenResult,
 } from './companies';
 export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
 export type {
@@ -23,7 +28,7 @@ export type {
   ProvisionResult,
   TransferOwnershipInput,
 } from './agencies';
-export { expertsRepository, isUniqueViolation } from './experts';
+export { expertsRepository, isUniqueViolation, ExpertAgencyAlreadyLinkedError } from './experts';
 // BAL-549 — the application-decision value exports. `PENDING_APPLICATION_STATUSES` is the ONE
 // definition of "pending" both Server Actions and the list read share (orchestrator D4);
 // `APPLICATION_REVIEW_FILTERS` is the `/admin/applications` chip vocabulary.
@@ -330,6 +335,7 @@ export {
   InvalidMilestoneTransitionError,
   EngagementNotActiveError,
   MilestoneReorderMismatchError,
+  MilestoneHasLoggedTimeError,
   type EngagementMilestoneStatus,
   type MilestoneEditBefore,
   type MilestoneContentEditRow,
@@ -360,6 +366,21 @@ export {
   ScopeChangeRequiresChangeOrderError,
 } from './_shared/change-order-guards';
 export type { EngagementChangeOrder, EngagementChangeOrderLine } from '../schema';
+// ── Time logged on a time-and-materials project ────────────────────────────
+export {
+  engagementTimeEntriesRepository,
+  loggedMinutesTx,
+  milestoneIdsWithLoggedTimeTx,
+  TimeEntryWriteRefusedError,
+  type TimeEntryRefusal,
+  type TimeEntryWriteResult,
+  type TimeEntryListRow,
+  type TimeEntryAuthorScope,
+  type TimeEntrySums,
+  type OverEstimateAlertRow,
+  type EstimateExceededMilestone,
+} from './engagement-time-entries';
+export type { EngagementTimeEntry, NewEngagementTimeEntry } from '../schema';
 export {
   actionItemsRepository,
   ACTION_ITEM_STATUS_TRANSITIONS,
@@ -507,6 +528,7 @@ export type {
   FindOrCreateMembershipResult,
   SoftRemoveMembershipResult,
   PartyJoinSettings,
+  EligibleAgency,
 } from './party-memberships';
 export {
   clientPartyRecipientsRepository,
@@ -765,6 +787,13 @@ export {
   // BAL-581 — the venue repair producer's / `meeting.unprovisioned` finder's read.
   type ListUnprovisionedScheduledInput,
   type UnprovisionedScheduledMeeting,
+  // BAL-518 — the Daily domain cutover's venue read / clear.
+  type LiveMeetingStatus,
+  type ListScheduledVenueTargetsInput,
+  type ScheduledVenueTarget,
+  type ListNonTargetLiveVenuesInput,
+  type NonTargetLiveVenue,
+  type ClearScheduledVenuesInput,
   // BAL-586 — the `meeting.stranded` finder's read.
   type ListStrandedLiveInput,
   type StrandedLiveMeeting,
@@ -958,6 +987,7 @@ export {
   type DecideMeetingGuestAdmissionInput,
   type MeetingGuestWithMeeting,
   type MeetingGuestPublic,
+  type GuestRosterNameRow,
   type LinkConvertedUserInput,
   type ConvertedGuestLink,
   // BAL-442 — the self-service lobby re-entry arm's read projection and write input.

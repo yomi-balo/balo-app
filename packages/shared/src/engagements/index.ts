@@ -108,6 +108,12 @@ export * from './change-requests';
  */
 export * from './change-orders';
 
+/**
+ * Time-entry helpers (`currentBillingPeriod`, `estimateCrossed`, `hoursLabel`, the entry limits),
+ * re-exported so `@balo/shared/engagements` stays ONE subpath.
+ */
+export * from './time-entries';
+
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;
 

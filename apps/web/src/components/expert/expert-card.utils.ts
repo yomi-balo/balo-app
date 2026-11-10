@@ -245,11 +245,6 @@ const DISTINCTIONS = [
     label: 'CTA',
     cls: 'text-violet-600 dark:text-violet-400 bg-violet-500/10 border-violet-500/30',
   },
-  {
-    key: 'isCertifiedTrainer',
-    label: 'Certified Trainer',
-    cls: 'text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
-  },
 ] as const;
 
 export function getDistinctionList(

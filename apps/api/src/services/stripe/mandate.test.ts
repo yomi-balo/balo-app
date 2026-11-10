@@ -1087,7 +1087,7 @@ describe('mandate', () => {
           scheduledStart: start,
           scheduledEnd: new Date(start.getTime() + 30 * 60_000),
           expertProfileId: 'expert_1',
-          expertRateCents: 33_600,
+          expertRateCents: 560,
         };
       }
       function mandateSnapshot(

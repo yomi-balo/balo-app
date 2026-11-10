@@ -28,6 +28,13 @@ export const users = pgTable(
     // Profile
     firstName: text('first_name'),
     lastName: text('last_name'),
+    /**
+     * BAL-628 — the user's role ("RevOps Lead"), free text. It PREFILLS the role field when
+     * they review an expert, and a review saves a non-empty role back here on a best-effort
+     * basis. The published attribution never reads it: `reviews.reviewer_role` is the
+     * per-review snapshot.
+     */
+    jobTitle: text('job_title'),
     avatarUrl: text('avatar_url'),
     platformRole: platformRoleEnum('platform_role').default('user').notNull(),
     /**

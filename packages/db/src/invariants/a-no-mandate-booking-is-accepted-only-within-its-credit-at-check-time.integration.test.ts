@@ -31,10 +31,10 @@ import { creditSessionsRepository } from '../repositories/credit-sessions';
  */
 
 const MINUTE_MS = 60_000;
-/** Client 700 / minute at the DEFAULT fee (`deriveSessionEstimate`: 33,600 → 42,000 / h). */
-const EXPERT_HOURLY_700 = 33_600;
+/** Client 700 / minute at the DEFAULT fee (`deriveSessionEstimate`: expert 560 / min). */
+const EXPERT_RATE_700 = 560;
 /** Client 125 / minute at the default fee — a cheap second expert for the rate-rise case. */
-const EXPERT_HOURLY_125 = 6_000;
+const EXPERT_RATE_125 = 100;
 
 interface Company {
   companyId: string;
@@ -99,7 +99,7 @@ async function checkBooking(
 describe('INVARIANT (integration): a no-mandate booking is accepted only within its credit at check time', () => {
   it('an upcoming booking reserves its estimate; opening its session moves the hold into available — never counted twice; a live call is subtracted once', async () => {
     const company = await noMandateCompany(30_000);
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
 
     // A — a 30-minute Case consultation at 700 / minute ⇒ estimate 21,000, booked and upcoming.
     const a = await bookCase(company, expertProfileId, 120, 30);
@@ -170,8 +170,8 @@ describe('INVARIANT (integration): a no-mandate booking is accepted only within 
 
   it("a rate rise raises an upcoming booking's reservation on the next check (§I.4)", async () => {
     const company = await noMandateCompany(30_000);
-    const expensiveExpert = await expertAt(EXPERT_HOURLY_700);
-    const cheapExpert = await expertAt(EXPERT_HOURLY_125);
+    const expensiveExpert = await expertAt(EXPERT_RATE_700);
+    const cheapExpert = await expertAt(EXPERT_RATE_125);
 
     await bookCase(company, expensiveExpert, 120, 30); // reserves 21,000 at today's rate
     const b = window(240, 30); // 30 × 125 = 3,750 with the cheap expert
@@ -180,7 +180,7 @@ describe('INVARIANT (integration): a no-mandate booking is accepted only within 
     // The expensive expert doubles their rate ⇒ the upcoming booking now reserves 42,000.
     await db
       .update(expertProfiles)
-      .set({ rateCents: EXPERT_HOURLY_700 * 2 })
+      .set({ rateCents: EXPERT_RATE_700 * 2 })
       .where(eq(expertProfiles.id, expensiveExpert));
     expect(await checkBooking(company, cheapExpert, b)).toMatchObject({
       ok: false,

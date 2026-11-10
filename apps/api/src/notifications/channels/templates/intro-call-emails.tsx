@@ -1,7 +1,7 @@
 import type { CallKind } from '@balo/shared/notifications';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { CaseBillingReceiptEmail } from './case-billing-emails.js';
-import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
+import { formatMeetingWindowWithDuration } from './meeting-guest-emails.js';
 
 /**
  * BAL-283 — the three `conversation.availability_shared` / `conversation.intro_call_booked`
@@ -101,6 +101,8 @@ export interface IntroCallBookedEmailProps {
   readonly requestTitle: string;
   readonly scheduledStartIso: string;
   readonly durationMinutes: number;
+  /** The recipient's own zone; absent, invalid or UTC ⇒ the email renders in UTC. */
+  readonly recipientTimezone?: string | null;
   readonly guestCount: number;
   /** False ⇒ the Daily room is not up yet; the join link is withheld, never promised. */
   readonly provisioned: boolean;
@@ -130,12 +132,17 @@ export function introCallBookedSubject(
 
 function introCallBodyLines(props: Readonly<IntroCallBookedEmailProps>): string[] {
   const { recipient, counterpartyLabel, requestTitle, guestCount, callKind } = props;
-  const window = formatMeetingWindowUtc(props.scheduledStartIso) || 'the scheduled time';
+  const when = formatMeetingWindowWithDuration(
+    props.scheduledStartIso,
+    props.durationMinutes,
+    props.recipientTimezone,
+    'the scheduled time'
+  );
 
   const intro =
     recipient === 'client'
-      ? `Your ${callNoun(callKind)} with ${counterpartyLabel} is confirmed for ${window} (${props.durationMinutes} min).`
-      : `${counterpartyLabel} booked ${withArticle(callKind)} with you for ${window} (${props.durationMinutes} min).`;
+      ? `Your ${callNoun(callKind)} with ${counterpartyLabel} is confirmed for ${when}.`
+      : `${counterpartyLabel} booked ${withArticle(callKind)} with you for ${when}.`;
 
   const freeLine =
     callKind === 'call'

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { log } from '@/lib/logging';
+import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { RecapContextType } from '@/lib/meetings/end-of-call-view-types';
 
 const MEETING_ID = 'a0000000-0000-4000-8000-000000000001';
@@ -17,6 +18,7 @@ const mockFindTranscript = vi.fn();
 const mockFindCompany = vi.fn();
 const mockFindProfile = vi.fn();
 const mockFindCase = vi.fn();
+const mockFindEngagement = vi.fn();
 const mockCreditSessions = vi.fn();
 const mockFindNames = vi.fn();
 const mockFindClosureSubject = vi.fn();
@@ -25,6 +27,7 @@ vi.mock('@balo/db', () => ({
   transcriptsRepository: { findByMeetingId: (...a: unknown[]) => mockFindTranscript(...a) },
   companiesRepository: { findNameById: (...a: unknown[]) => mockFindCompany(...a) },
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => mockFindProfile(...a) },
+  engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   caseEngagementsRepository: {
     findByEngagementId: (...a: unknown[]) => mockFindCase(...a),
     findClosureSubject: (...a: unknown[]) => mockFindClosureSubject(...a),
@@ -110,8 +113,14 @@ function seed(): void {
     closeReason: null,
     resolutionRequestedAt: null,
     resolutionRequestedByUserId: null,
+    deliveringAgencyId: 'ag-pinned',
   });
-  mockReadReview.mockResolvedValue({ review: null, state: { kind: 'none' } });
+  mockFindEngagement.mockResolvedValue(undefined);
+  mockReadReview.mockResolvedValue({
+    review: null,
+    state: { kind: 'none' },
+    capture: buildReviewCaptureSeeds(),
+  });
   mockCounterparty.mockResolvedValue({
     party: {},
     expertPersonLabel: 'Amara Okafor @ CloudPeak',
@@ -532,9 +541,14 @@ describe('loadEndOfCall — the CLIENT arm', () => {
   beforeEach(seed);
 
   it('carries the rating state THROUGH UNTOUCHED from the resolver', async () => {
+    const capture = buildReviewCaptureSeeds({
+      identity: { reviewerFirstName: 'Priya', companyNameAllowed: false },
+      defaults: { role: 'RevOps Lead', showCompany: false, bodyVisibility: 'private' },
+    });
     mockReadReview.mockResolvedValue({
       review: { rating: 3, body: 'Nearly there.', ratedOnIso: '2026-08-01T00:00:00.000Z' },
       state: { kind: 'rated_low', rating: 3 },
+      capture,
     });
     const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
     expect(view?.lens).toBe('client');
@@ -544,6 +558,7 @@ describe('loadEndOfCall — the CLIENT arm', () => {
         engagementId: ENGAGEMENT_ID,
         state: { kind: 'rated_low', rating: 3 },
         existingBody: 'Nearly there.',
+        capture,
       },
     });
     expect(mockReadReview).toHaveBeenCalledWith(ENGAGEMENT_ID, USER_ID);
@@ -553,6 +568,7 @@ describe('loadEndOfCall — the CLIENT arm', () => {
     mockReadReview.mockResolvedValue({
       review: { rating: 5, body: null, ratedOnIso: '2026-08-01T00:00:00.000Z' },
       state: { kind: 'rated_ok', rating: 5 },
+      capture: buildReviewCaptureSeeds(),
     });
     const view = await loadEndOfCall(MEETING_ID, USER_ID, NOW);
     expect(view).toMatchObject({ lens: 'client', rating: { existingBody: null } });
@@ -566,7 +582,67 @@ describe('loadEndOfCall — the CLIENT arm', () => {
       'client',
       expect.anything(),
       'Northwind Industrial',
-      null
+      null,
+      { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+    );
+  });
+
+  it('names the agency from the engagement pin where the case row is not read (expert lens)', async () => {
+    mockResolveAccess.mockResolvedValue(access({ lens: 'expert' }));
+    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, deliveringAgencyId: 'ag-pinned' });
+
+    await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+
+    expect(mockFindEngagement).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(mockCounterparty).toHaveBeenCalledWith(
+      'expert',
+      expect.anything(),
+      'Northwind Industrial',
+      null,
+      { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+    );
+  });
+
+  it('names the engagement pin on an engagement-grain non-case meeting, not the profile', async () => {
+    mockFindProfile.mockResolvedValue({
+      id: PROFILE_ID,
+      userId: 'u-expert',
+      agencyId: 'ag-profile',
+    });
+    mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, deliveringAgencyId: 'ag-pinned' });
+    for (const contextType of [
+      'project_kickoff',
+      'project_call',
+      'package_session',
+      'retainer_checkin',
+    ]) {
+      mockCounterparty.mockClear();
+      mockResolveAccess.mockResolvedValue(
+        access({ subject: { contextType, contextId: ENGAGEMENT_ID } })
+      );
+      await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+      expect(mockCounterparty, contextType).toHaveBeenCalledWith(
+        'client',
+        expect.anything(),
+        'Northwind Industrial',
+        null,
+        { from: 'engagement', deliveringAgencyId: 'ag-pinned' }
+      );
+    }
+  });
+
+  it('keeps the expert profile source on a request-grain meeting and reads no engagement', async () => {
+    mockResolveAccess.mockResolvedValue(
+      access({ subject: { contextType: 'project_discovery', contextId: 'req-1' } })
+    );
+    await loadEndOfCall(MEETING_ID, USER_ID, NOW);
+    expect(mockFindEngagement).not.toHaveBeenCalled();
+    expect(mockCounterparty).toHaveBeenCalledWith(
+      'client',
+      expect.anything(),
+      'Northwind Industrial',
+      null,
+      { from: 'expert_profile' }
     );
   });
 

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { EngagementMilestone, ProjectEngagementWithMilestones } from '@balo/db';
-import { engagementMilestoneFixture } from '@/test/fixtures/engagement-milestone';
+import type { ProjectEngagementWithMilestones } from '@balo/db';
+import {
+  engagementMilestoneFixture,
+  type WorkspaceMilestoneFixture,
+} from '@/test/fixtures/engagement-milestone';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const MILESTONE_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -18,6 +21,11 @@ vi.mock('@/lib/engagement/resolve-engagement-lens', () => ({
   resolveEngagementLens: (...a: unknown[]) => mockResolveLens(...a),
 }));
 
+const mockHasExpertCapability = vi.fn();
+vi.mock('@/lib/authz/engagement', () => ({
+  hasExpertDeliveryCapability: (...a: unknown[]) => mockHasExpertCapability(...a),
+}));
+
 const {
   mockFindEngagement,
   mockFindOwner,
@@ -26,12 +34,14 @@ const {
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 } = vi.hoisted(() => {
   class EngagementNotActiveError extends Error {}
   class InvalidMilestoneTransitionError extends Error {}
   class MilestoneReorderMismatchError extends Error {}
   class MilestoneChangePendingError extends Error {}
+  class MilestoneHasLoggedTimeError extends Error {}
   class ScopeChangeRequiresChangeOrderError extends Error {
     constructor(
       public readonly reason: string,
@@ -48,6 +58,7 @@ const {
     InvalidMilestoneTransitionError,
     MilestoneReorderMismatchError,
     MilestoneChangePendingError,
+    MilestoneHasLoggedTimeError,
     ScopeChangeRequiresChangeOrderError,
   };
 });
@@ -62,6 +73,7 @@ vi.mock('@balo/db', () => ({
   InvalidMilestoneTransitionError,
   MilestoneReorderMismatchError,
   MilestoneChangePendingError,
+  MilestoneHasLoggedTimeError,
   ScopeChangeRequiresChangeOrderError,
 }));
 
@@ -100,7 +112,7 @@ const EXPERT_CTX = {
   isDeliveringExpert: true,
 };
 
-function milestone(overrides: Partial<EngagementMilestone> = {}): EngagementMilestone {
+function milestone(overrides: Partial<WorkspaceMilestoneFixture> = {}): WorkspaceMilestoneFixture {
   return engagementMilestoneFixture({
     id: MILESTONE_ID,
     title: 'Discovery',
@@ -117,8 +129,7 @@ function engagement(overrides: Partial<ProjectEngagementWithMilestones> = {}) {
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
     expertProfile: {
-      user: { firstName: 'Priya', lastName: 'Sharma' },
-      agency: null,
+      user: { id: 'user-1', firstName: 'Priya', lastName: 'Sharma' },
       headline: null,
       type: 'freelancer',
     },
@@ -131,6 +142,7 @@ const INPUT = { engagementId: ENGAGEMENT_ID, milestoneId: MILESTONE_ID };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHasExpertCapability.mockResolvedValue(true);
   mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
   mockFindEngagement.mockResolvedValue(engagement());
   mockResolveLens.mockReturnValue(EXPERT_CTX);
@@ -139,6 +151,14 @@ beforeEach(() => {
 });
 
 describe('removeMilestoneAction', () => {
+  it('refuses a milestone with logged time and tells the expert to complete it', async () => {
+    mockSoftDelete.mockRejectedValue(new MilestoneHasLoggedTimeError('x'));
+    expect(await removeMilestoneAction(INPUT)).toEqual({
+      success: false,
+      error: "Time has been logged on this milestone, so it can't be removed. Complete it instead.",
+    });
+  });
+
   it('rejects when not signed in', async () => {
     mockRequireUser.mockRejectedValue(new Error('Unauthorized'));
     expect(await removeMilestoneAction(INPUT)).toEqual({
@@ -168,6 +188,7 @@ describe('removeMilestoneAction', () => {
       milestone_id: MILESTONE_ID,
       was_completed: false,
       had_source_provenance: false,
+      acting_as: 'delivering_expert',
       distinct_id: 'user-1',
     });
     expect(mockPublish).toHaveBeenCalledWith('engagement.scope_changed', {

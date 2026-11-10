@@ -35,7 +35,9 @@ function view(
   orders: Parameters<typeof mapChangeOrdersToView>[0],
   lens: EngagementLens,
   engagement = makeProject(),
-  canDecide = true
+  canDecide = true,
+  loggedMinutesByMilestone: Record<string, number> = {},
+  viewerUserId: string | null = null
 ): ReturnType<typeof mapChangeOrdersToView> {
   return mapChangeOrdersToView(
     orders,
@@ -43,7 +45,7 @@ function view(
     ctxFor(lens),
     deriveEngagementParties(engagement),
     canDecide,
-    NOW
+    { now: NOW, loggedMinutesByMilestone, viewerUserId }
   );
 }
 
@@ -341,6 +343,66 @@ describe('mapChangeOrdersToView — time and materials', () => {
     });
   });
 
+  describe('the hours already logged on an estimate edit', () => {
+    // ms-2 goes from 6 to 8 hours.
+    const editOf = (v: ReturnType<typeof view>): unknown =>
+      v.open?.lines.find((l) => l.op === 'edit')?.loggedLabel;
+
+    it('shows them on a sent order, to the client and the expert', () => {
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 300 }))).toBe(
+        '5 hrs logged so far'
+      );
+      expect(editOf(view([sentTm], 'expert', tm, true, { 'ms-2': 300 }))).toBe(
+        '5 hrs logged so far'
+      );
+    });
+
+    it('notes when the time logged is at or past the new estimate', () => {
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 480 }))).toBe(
+        '8 hrs logged so far · already past the new estimate'
+      );
+      expect(editOf(view([sentTm], 'client', tm, true, { 'ms-2': 630 }))).toBe(
+        '10.5 hrs logged so far · already past the new estimate'
+      );
+    });
+
+    it('is absent on the add line, and when nothing is logged on the milestone', () => {
+      const v = view([sentTm], 'client', tm, true, { 'ms-1': 120 });
+      expect(v.open?.lines.map((l) => l.loggedLabel)).toEqual([null, null]);
+    });
+
+    it('is absent when the edit leaves the estimate unchanged', () => {
+      const unchanged = makeOrder({
+        ...sentTm,
+        lines: [
+          makeLine({
+            op: 'edit',
+            engagementMilestoneId: 'ms-2',
+            title: 'Renamed',
+            estimatedMinutes: 360,
+            beforeTitle: 'Old',
+            beforeEstimatedMinutes: 360,
+          }),
+        ],
+      });
+      expect(editOf(view([unchanged], 'client', tm, true, { 'ms-2': 300 }))).toBeNull();
+    });
+
+    it('is absent on a fixed-price project', () => {
+      const fixedProject = makeProject({ milestones: tm.milestones });
+      expect(editOf(view([sentTm], 'client', fixedProject, true, { 'ms-2': 300 }))).toBeNull();
+    });
+
+    it.each([
+      ['approved', { status: 'approved' as const, decidedAt: NOW, decidedByUserId: DANA.id }],
+      ['withdrawn', { status: 'withdrawn' as const, withdrawnAt: NOW }],
+    ])('is absent once the order is %s', (_, decided) => {
+      const v = view([makeOrder({ ...sentTm, ...decided })], 'client', tm, true, { 'ms-2': 300 });
+      expect(v.open).toBeNull();
+      expect(v.history[0]?.lines.find((l) => l.op === 'edit')?.loggedLabel).toBeNull();
+    });
+  });
+
   it('formats hours with at most one decimal', () => {
     expect(formatHours(90)).toBe('1.5 hrs');
     expect(signedHours(-60)).toBe('-1 hr');
@@ -389,10 +451,17 @@ describe('mapChangeOrdersToView — outcomes, history and answers', () => {
       tone: 'slate',
       text: 'Charles answered your request: “It is already in scope.”',
     });
+    const own = view([answered], 'expert', makeProject(), true, {}, CHARLES.id);
+    expect(own.history[0]?.answerText).toBe('You answered: “It is already in scope.”');
+    expect(own.outcome).toBeNull();
+  });
+
+  it('names the person, not "You", when the expert-side viewer is not who answered', () => {
+    const other = view([answered], 'expert', makeProject(), true, {}, 'user-someone-else');
+    expect(other.history[0]?.answerText).toBe('Charles answered: “It is already in scope.”');
     expect(view([answered], 'expert').history[0]?.answerText).toBe(
-      'You answered: “It is already in scope.”'
+      'Charles answered: “It is already in scope.”'
     );
-    expect(view([answered], 'expert').outcome).toBeNull();
   });
 
   it('approved: warm outcome for both parties, naming the party then the person', () => {
@@ -487,7 +556,7 @@ describe('mapChangeOrdersToView — footnote and admin line', () => {
       ctxFor('admin'),
       deriveEngagementParties(engagement),
       true,
-      new Date(nowIso)
+      { now: new Date(nowIso) }
     ).adminStateLine;
     expect(line?.includes("It's in the pending-actions queue.")).toBe(inQueue);
   });

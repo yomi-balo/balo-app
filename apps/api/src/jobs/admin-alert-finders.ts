@@ -8,6 +8,7 @@ import {
   calendarRepository,
   calendarSubscriptionsRepository,
   engagementChangeOrdersRepository,
+  engagementTimeEntriesRepository,
   type OpenReceivableAlertRow,
   type AdminAlertFinding,
 } from '@balo/db';
@@ -16,7 +17,7 @@ import {
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
 import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
-import { changeOrderStaleCutoff } from '@balo/shared/engagements';
+import { changeOrderStaleCutoff, hoursLabel } from '@balo/shared/engagements';
 import { businessDaysBetween } from '@balo/shared/timezone';
 import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
@@ -196,6 +197,38 @@ async function projectChangeOrderStale(
           ['Expert', expertLabel],
           ['Sent', sentOn],
           ['Business days waiting', String(waiting)],
+        ],
+      },
+    };
+  });
+
+  return { findings, batchFilled };
+}
+
+// ── project.over_estimate ────────────────────────────────────────────────
+
+async function projectOverEstimate(ctx: AdminAlertFinderContext): Promise<AdminAlertFinderOutcome> {
+  const rows = await engagementTimeEntriesRepository.listOverEstimateForAlerts(ctx.limit);
+  const batchFilled = rows.length === ctx.limit;
+
+  const findings: AdminAlertFinding[] = rows.map((row) => {
+    const person = personName(row.expertFirstName, row.expertLastName);
+    const expertLabel = row.agencyName === null ? person : `${person} @ ${row.agencyName}`;
+    const projectTitle = row.projectTitle ?? 'Project';
+    const logged = hoursLabel(row.loggedMinutes);
+    const estimate = hoursLabel(row.estimatedMinutes);
+    return {
+      entityType: 'engagement',
+      entityId: row.engagementId,
+      detail: {
+        title: 'A project has gone over its estimate',
+        entityLabel: `${projectTitle} · ${row.clientCompanyName}`,
+        evidence: `${expertLabel} has logged ${logged}; the estimate is ${estimate}.`,
+        facts: [
+          ['Client', row.clientCompanyName],
+          ['Expert', expertLabel],
+          ['Logged', logged],
+          ['Estimate', estimate],
         ],
       },
     };
@@ -773,6 +806,7 @@ async function sessionPresenceStuck(
 export const ADMIN_ALERT_FINDERS: Readonly<Record<string, AdminAlertFinder>> = {
   expertApplicationPending,
   projectChangeOrderStale,
+  projectOverEstimate,
   receivableOpen,
   sessionSettledNoLedgerCredit,
   recordingFailed,

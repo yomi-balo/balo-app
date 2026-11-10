@@ -17,6 +17,7 @@ import {
   type BookingReplayClassification,
   type BookingReplayProbe,
 } from '@balo/shared/meetings';
+import type { DeliveringAgencySource } from '@balo/shared/parties';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
@@ -518,6 +519,24 @@ async function writeCase(
 }
 
 /**
+ * The agency source for the booked case's confirmation label: the case's pinned delivering
+ * agency. A failed read degrades to a NULL pin (no agency named) rather than the expert's
+ * current agency, so the label can never name an agency that did not deliver the case.
+ */
+async function resolveCaseAgencySource(engagementId: string): Promise<DeliveringAgencySource> {
+  try {
+    const caseRow = await caseEngagementsRepository.findByEngagementId(engagementId);
+    return { from: 'engagement', deliveringAgencyId: caseRow?.deliveringAgencyId ?? null };
+  } catch (error) {
+    log.warn('Case agency read failed after booking; degrading to a neutral label', {
+      engagementId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { from: 'engagement', deliveringAgencyId: null };
+  }
+}
+
+/**
  * ⚠⚠ THE PRE-WRITE HALF OF CASE RESOLUTION. Every arm here resolves an identity and WRITES
  * NOTHING — that is what makes ONE funding gate (in `resolveCase` below) able to cover all
  * three arms with a single call site instead of three copies of the rule.
@@ -932,7 +951,9 @@ async function completeBooking(params: {
       });
       return undefined;
     }),
-    resolveBookingExpertDisplay(expertProfileId),
+    resolveCaseAgencySource(engagementId).then((agencySource) =>
+      resolveBookingExpertDisplay(expertProfileId, agencySource)
+    ),
   ]);
 
   log.info('Consultation booked', {

@@ -327,16 +327,6 @@ export const PENDING_STALE_CANCEL_MINUTES = 30;
 export const SETTLEMENT_RECONCILE_MAX_AGE_MINUTES = 20 * 60;
 
 /**
- * A per-HOUR minor-unit rate → the per-MINUTE minor-unit drawdown rate:
- * `round(hourlyRateCents / 60)` (half-away-from-zero, integer minor units). Applied to the
- * marked-up client hourly (→ `clientRateMinorPerMinute`) AND the raw expert hourly (→
- * `expertRateMinorPerMinute`) at `open`. Round hourly-then-divide (BAL-378 Decision Q4).
- */
-export function deriveMinuteRateCents(hourlyRateCents: number): number {
-  return Math.round(hourlyRateCents / 60);
-}
-
-/**
  * Rolling-expiry dormancy reminder bands, in days pre-expiry (widest → nearest). The
  * daily dormancy sweep (BAL-380) matches a wallet's absolute `expires_at` against each
  * band's 1-day window; the cron cadence equals the band width so every wallet crosses

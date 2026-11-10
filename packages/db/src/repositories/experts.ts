@@ -12,6 +12,7 @@ import {
   like,
   isNotNull,
   isNull,
+  exists,
   sql,
   type SQL,
 } from 'drizzle-orm';
@@ -40,7 +41,7 @@ import {
   type StaffEditSnapshot,
 } from './_shared/expert-application-edit';
 import { consultationCountExpression } from './_shared/consultation-count';
-import { expertOwnerIsLive } from './_shared/expert-owner-live';
+import { expertProfileIsPublic, publicProfileUsernameSql } from './_shared/expert-profile-public';
 import { recordScheduleAudit } from './_shared/schedule-audit';
 import {
   consultations,
@@ -65,6 +66,21 @@ import {
 import { generateBaseUsername, pickNextAvailable } from './username-utils';
 
 const log = createLogger('experts-repository');
+
+/**
+ * Thrown by `expertsRepository.linkAgency` when the profile already links a DIFFERENT agency:
+ * the onboarding link is write-once. Rolls the enclosing agency-resolution transaction back;
+ * the web caller reports it as `already_linked` with `existingAgencyId`.
+ */
+export class ExpertAgencyAlreadyLinkedError extends Error {
+  constructor(
+    public readonly expertProfileId: string,
+    public readonly existingAgencyId: string
+  ) {
+    super(`Expert profile ${expertProfileId} is already linked to agency ${existingAgencyId}`);
+    this.name = 'ExpertAgencyAlreadyLinkedError';
+  }
+}
 
 /**
  * Why an expert cannot take on new work (a new consultation case, a `direct` project request,
@@ -528,7 +544,6 @@ export interface ProfileStepWrite {
   linkedinUrl?: string | null;
   isSalesforceMvp?: boolean;
   isSalesforceCta?: boolean;
-  isCertifiedTrainer?: boolean;
   languages: SyncLanguageInput[];
   industryIds: string[];
 }
@@ -1041,6 +1056,12 @@ export const expertsRepository = {
    *
    * ⚠ NULL MEANS NO REVIEWS, NEVER 0.0. Every consumer null-gates on `ratingAverage` (never on
    * `ratingCount`), because 0.0 is unrepresentable on a 1..5 scale and must never render.
+   *
+   * ⚠ `publicProfileUsername` IS GATED, NOT THE RAW COLUMN. It is the username only while
+   * `/experts/{username}` resolves (`expertProfileIsPublic`: searchable, approved, live owner),
+   * otherwise null, so a party card's profile and "Book again" links never point at a 404.
+   * Searchability flips on its own and owners get suspended, so a bare `username !== null`
+   * check is not enough. The raw column is deliberately not projected.
    */
   async findDisplayProfileById(expertProfileId: string): Promise<
     | {
@@ -1049,7 +1070,7 @@ export const expertsRepository = {
         agencyId: string | null;
         type: ExpertProfile['type'];
         headline: string | null;
-        username: string | null;
+        publicProfileUsername: string | null;
         ratingAverage: number | null;
         ratingCount: number;
       }
@@ -1062,7 +1083,7 @@ export const expertsRepository = {
         agencyId: expertProfiles.agencyId,
         type: expertProfiles.type,
         headline: expertProfiles.headline,
-        username: expertProfiles.username,
+        publicProfileUsername: publicProfileUsernameSql,
         ratingAverage: expertProfiles.ratingAverage,
         ratingCount: expertProfiles.ratingCount,
       })
@@ -1073,6 +1094,31 @@ export const expertsRepository = {
       return undefined;
     }
     return { ...row, ratingAverage: parseRatingAverage(row.ratingAverage) };
+  },
+
+  /**
+   * The usernames of those `expertProfileIds` whose public page `/experts/{username}` resolves,
+   * keyed by profile id: ONE query for a whole page of experts. A profile that is unclaimed,
+   * unapproved, not searchable or owned by a soft-deleted / suspended / inactive user is absent
+   * from the map, so the caller renders the name without a link. Unknown ids are absent too.
+   *
+   * The gate is `expertProfileIsPublic`, the rule `findPublicProfileByUsername` applies, so the
+   * href built from a returned username cannot 404 on visibility. `expert_profiles` has no
+   * `deleted_at`. Empty input returns an empty map without a query.
+   */
+  async findPublicUsernamesByProfileIds(
+    expertProfileIds: readonly string[]
+  ): Promise<Map<string, string>> {
+    if (expertProfileIds.length === 0) return new Map();
+    const rows = await db
+      .select({ id: expertProfiles.id, username: expertProfiles.username })
+      .from(expertProfiles)
+      .where(and(inArray(expertProfiles.id, [...expertProfileIds]), expertProfileIsPublic));
+    const usernames = new Map<string, string>();
+    for (const row of rows) {
+      if (row.username !== null) usernames.set(row.id, row.username);
+    }
+    return usernames;
   },
 
   /**
@@ -1126,13 +1172,20 @@ export const expertsRepository = {
   },
 
   /**
-   * BAL-356: link an expert draft/profile to its payout agency by setting
-   * `agency_id`. A single UPDATE — `expert_profiles` has no `deletedAt`, so only a
-   * not-found guard applies (no soft-delete predicate). Executor-aware: the three
-   * agency-resolution write paths (join / provision / solo) call this INSIDE their
-   * `db.transaction`, so the link commits or rolls back with the agency + membership
-   * writes. Throws when no row matches so the orchestrating tx rolls back rather
-   * than silently linking a phantom profile.
+   * Link an expert profile to its payout agency on the onboarding path (join / provision /
+   * solo). WRITE-ONCE: the UPDATE only matches a profile whose `agency_id` is still NULL.
+   * Moving an existing link goes only through `repointAgency`.
+   *
+   * When nothing updates, the profile's committed `agency_id` decides:
+   *  - no profile → throws, so the orchestrating tx rolls back rather than linking a phantom;
+   *  - the same agency → returns (an idempotent resume or double-click of `joinExisting`);
+   *  - a different agency → throws `ExpertAgencyAlreadyLinkedError`, which rolls back the
+   *    enclosing `joinExisting` / `provision` / `provisionSolo` transaction, so a lost race
+   *    leaves no orphan agency.
+   *
+   * Executor-aware: the agency-resolution paths call this inside their `db.transaction`, so the
+   * link commits or rolls back with the agency and membership writes. `expert_profiles` has no
+   * `deletedAt`, so no soft-delete predicate applies.
    */
   async linkAgency(
     expertProfileId: string,
@@ -1143,11 +1196,114 @@ export const expertsRepository = {
     const [row] = await exec
       .update(expertProfiles)
       .set({ agencyId, updatedAt: new Date() })
-      .where(eq(expertProfiles.id, expertProfileId))
+      .where(and(eq(expertProfiles.id, expertProfileId), isNull(expertProfiles.agencyId)))
       .returning({ id: expertProfiles.id });
-    if (row === undefined) {
+    if (row !== undefined) {
+      return;
+    }
+    const [existing] = await exec
+      .select({ agencyId: expertProfiles.agencyId })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId))
+      .limit(1);
+    if (existing === undefined) {
       throw new Error(`Expert profile not found: ${expertProfileId}`);
     }
+    if (existing.agencyId === agencyId) {
+      return;
+    }
+    if (existing.agencyId === null) {
+      throw new Error(`Expert profile ${expertProfileId} agency link changed during linkAgency`);
+    }
+    throw new ExpertAgencyAlreadyLinkedError(expertProfileId, existing.agencyId);
+  },
+
+  /**
+   * Move an existing agency link: sets `agency_id` to `toAgencyId` only while it still equals
+   * `fromAgencyId`. The one writer that moves a non-NULL link (the leave-agency flow). Returns
+   * whether a row changed; `false` means the profile no longer points at `fromAgencyId` (or does
+   * not exist), and the caller decides whether that is an error.
+   */
+  async repointAgency(
+    expertProfileId: string,
+    move: { readonly fromAgencyId: string; readonly toAgencyId: string },
+    executor?: DbExecutor
+  ): Promise<boolean> {
+    const exec = executor ?? db;
+    const rows = await exec
+      .update(expertProfiles)
+      .set({ agencyId: move.toAgencyId, updatedAt: new Date() })
+      .where(
+        and(eq(expertProfiles.id, expertProfileId), eq(expertProfiles.agencyId, move.fromAgencyId))
+      )
+      .returning({ id: expertProfiles.id });
+    return rows.length > 0;
+  },
+
+  /**
+   * The id of `userId`'s expert profile while it links `agencyId`, row-locked (`FOR UPDATE`) on
+   * the caller's transaction so a concurrent link or repoint waits for it. `undefined` when the
+   * user has no profile or it links another agency (or none).
+   */
+  async findProfileIdLinkedToAgencyForUpdate(
+    userId: string,
+    agencyId: string,
+    executor: DbExecutor
+  ): Promise<string | undefined> {
+    const [row] = await executor
+      .select({ id: expertProfiles.id })
+      .from(expertProfiles)
+      .where(and(eq(expertProfiles.userId, userId), eq(expertProfiles.agencyId, agencyId)))
+      .limit(1)
+      .for('update');
+    return row?.id;
+  },
+
+  /**
+   * Of `agencyIds`, the agencies with delivery by someone other than `excludeUserId`, in ONE
+   * query. An agency qualifies when EITHER
+   *  1. an expert profile of another user links it (`expert_profiles.agency_id`), OR
+   *  2. a live project engagement pinned to it (the engagement's delivering agency) is delivered
+   *     by another user's profile.
+   * Arm 2 keeps a departed teammate's work visible after their profile is repointed away.
+   * Requiring another person in both arms keeps an agency-of-one out: all of its links and pinned
+   * work are the viewer's own. An empty input returns an empty Set without querying.
+   */
+  async findAgenciesWithOtherDelivery(
+    agencyIds: string[],
+    excludeUserId: string
+  ): Promise<Set<string>> {
+    if (agencyIds.length === 0) {
+      return new Set();
+    }
+    const otherLinkedProfile = db
+      .select({ one: sql`1` })
+      .from(expertProfiles)
+      .where(
+        and(eq(expertProfiles.agencyId, agencies.id), ne(expertProfiles.userId, excludeUserId))
+      );
+    const otherPinnedDelivery = db
+      .select({ one: sql`1` })
+      .from(engagements)
+      .innerJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      .where(
+        and(
+          eq(engagements.deliveringAgencyId, agencies.id),
+          eq(engagements.engagementType, 'project'),
+          isNull(engagements.deletedAt),
+          ne(expertProfiles.userId, excludeUserId)
+        )
+      );
+    const rows = await db
+      .select({ id: agencies.id })
+      .from(agencies)
+      .where(
+        and(
+          inArray(agencies.id, agencyIds),
+          or(exists(otherLinkedProfile), exists(otherPinnedDelivery))
+        )
+      );
+    return new Set(rows.map((row) => row.id));
   },
 
   /**
@@ -1283,11 +1439,13 @@ export const expertsRepository = {
    * non-searchable profiles, and owners that are soft-deleted, suspended or inactive,
    * resolve to undefined (→ 404). Username match is exact (the unique username index).
    *
-   * Owner liveness is `expertOwnerIsLive` (`_shared/expert-owner-live.ts`), the SQL twin of
-   * `userRowIsLive`, shared with `findPublicVisibility` and search so the public surfaces
-   * cannot disagree on who is visible. This read also backs the public front page's curated
-   * spotlight, so a suspended expert drops off it too. The fragment is a raw `sql` EXISTS for
-   * the relational-alias reason its docblock records.
+   * The gate is `expertProfileIsPublic` (`_shared/expert-profile-public.ts`), whose owner term is
+   * `expertOwnerIsLive`, the SQL twin of `userRowIsLive`. It is shared with `findPublicVisibility`,
+   * search and every gated profile href (`findDisplayProfileById`,
+   * `findPublicUsernamesByProfileIds`, the cases index), so a link and the page it opens cannot
+   * disagree on who is visible. This read also backs the public front page's curated spotlight,
+   * so a suspended expert drops off it too. The fragment's columns sit in raw `sql` for the
+   * relational-alias reason its docblock records.
    *
    * `availableForWork` is projected but does NOT gate visibility: an expert who has paused new
    * work keeps a public profile, which renders the paused alternatives instead of booking.
@@ -1298,12 +1456,7 @@ export const expertsRepository = {
    */
   async findPublicProfileByUsername(username: string) {
     return db.query.expertProfiles.findFirst({
-      where: and(
-        eq(expertProfiles.username, username),
-        eq(expertProfiles.searchable, true),
-        isNotNull(expertProfiles.approvedAt),
-        expertOwnerIsLive
-      ),
+      where: and(eq(expertProfiles.username, username), expertProfileIsPublic),
       // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
       // public view-model + page consume. Keeps sensitive columns
       // (stripeConnectId, internal flags) out of the RSC by construction — not
@@ -1384,9 +1537,9 @@ export const expertsRepository = {
 
   /**
    * BAL-236 / BAL-591 — is this profile publicly visible, and if so, is the expert taking on new
-   * work? Visible means approved AND searchable AND a live owner (`expertOwnerIsLive`), the same
+   * work? Visible is `expertProfileIsPublic` (approved AND searchable AND a live owner), the same
    * rule `findPublicProfileByUsername` (above) and `buildWhereConditions` (`expert-search.ts`)
-   * apply. Do not write a fourth visibility rule. Returns null when not visible.
+   * apply. Do not write another visibility rule. Returns null when not visible.
    *
    * `availableForWork` rides along so the public slot route can answer a paused expert without
    * a second read; it does not affect visibility.
@@ -1405,14 +1558,7 @@ export const expertsRepository = {
     const [row] = await db
       .select({ availableForWork: expertProfiles.availableForWork })
       .from(expertProfiles)
-      .where(
-        and(
-          eq(expertProfiles.id, expertProfileId),
-          eq(expertProfiles.searchable, true),
-          isNotNull(expertProfiles.approvedAt),
-          expertOwnerIsLive
-        )
-      )
+      .where(and(eq(expertProfiles.id, expertProfileId), expertProfileIsPublic))
       .limit(1);
     return row ?? null;
   },
@@ -1896,7 +2042,6 @@ export const expertsRepository = {
           linkedinUrl: data.linkedinUrl,
           isSalesforceMvp: data.isSalesforceMvp,
           isSalesforceCta: data.isSalesforceCta,
-          isCertifiedTrainer: data.isCertifiedTrainer,
         },
         tx
       );

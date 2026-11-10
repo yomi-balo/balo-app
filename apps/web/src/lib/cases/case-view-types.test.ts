@@ -105,6 +105,7 @@ const BASE = {
     closeReason: null,
     closedAtIso: null,
     counterpartyOrgLabel: 'CloudPeak',
+    counterpartyOrgHref: null,
     closedNote: null,
   },
   nudge: null,
@@ -136,7 +137,7 @@ const BASE = {
     orgLabel: 'CloudPeak',
     avatarUrl: null,
     initials: 'AO',
-    bookAgainHref: null,
+    profileHref: null,
     availableForWork: true,
     ratingAverage: null,
     ratingCount: 0,
@@ -146,7 +147,14 @@ const BASE = {
   // two typed assignments below are the whole point of this file, so the fixture has to be
   // genuinely assignable — freezing it would make them fail for a reason unrelated to the
   // invariant being pinned.
-  people: [{ name: 'Dana Reyes', isViewer: true }],
+  peopleGroups: [
+    {
+      side: 'client' as const,
+      label: 'Northwind Industrial',
+      people: [{ key: 'p0', name: 'You', isViewer: true }],
+      unnamedGuestCount: 0,
+    },
+  ],
   counterpartyPartyLabel: 'CloudPeak Consulting',
   clientCompanyName: 'Northwind Industrial',
 };

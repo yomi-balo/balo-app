@@ -1,5 +1,5 @@
-import type { EndOfCallRecapState, RecapContextType, RecapLens } from '@balo/analytics/events';
-import type { EndOfCallReviewState } from '@balo/shared/reviews';
+import type { EndOfCallRecapState, RecapContextType } from '@balo/analytics/events';
+import type { EndOfCallReviewState, ReviewCaptureSeeds } from '@balo/shared/reviews';
 import type { CaseClosureNames } from '@balo/shared/credit';
 
 /**
@@ -52,6 +52,12 @@ export interface EndOfCallRatingView {
    * than inventing a state or a string.
    */
   existingBody: string | null;
+  /**
+   * BAL-628 — the seeds for the reviewer-attribution controls (who the reviewer is, the company
+   * and whether it may be named, and the initial role / company / note-visibility values).
+   * Passed through untouched from `readEngagementReview`; client-safe plain data.
+   */
+  capture: ReviewCaptureSeeds;
 }
 
 /** The resolve half of the client arm. `null` on every non-`case` context. */
@@ -166,4 +172,5 @@ export type ClientEndOfCallView = Extract<EndOfCallView, { lens: 'client' }>;
 /** The EXPERT-lens arm. It has no rating and no resolve field to reference. */
 export type ExpertEndOfCallView = Extract<EndOfCallView, { lens: 'expert' }>;
 
-export type { EndOfCallRecapState, RecapContextType, RecapLens };
+export type { EndOfCallRecapState, RecapContextType };
+export type { RecapLens } from '@balo/analytics/events';

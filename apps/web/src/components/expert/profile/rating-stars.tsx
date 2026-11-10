@@ -1,9 +1,8 @@
 import { Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// reusable primitive — not mounted in v1 (reviews deferred). Shipped so a future
-// reviews feature has a ready, token-driven rating display. Rating/review data is
-// null-gated everywhere on the profile, so these never render in this ticket.
+// Token-driven rating display. `StarRow` draws the five-star rows on review entries;
+// `RatingStars` draws a single proportional star beside a numeric rating (summary, distribution).
 
 interface RatingStarsProps {
   /** 0–5 rating. */
@@ -48,7 +47,7 @@ interface StarRowProps {
 
 /**
  * A full five-star row filled to `rating`, again via an overlay-width clip.
- * Used on individual reviews in a future reviews feature.
+ * Used on individual review entries.
  */
 export function StarRow({
   rating,

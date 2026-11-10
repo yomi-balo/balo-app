@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import type { SessionUser } from '@/lib/auth/session';
-import type { AdminPortfolioDTO, PortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
+import type {
+  AdminPortfolioDTO,
+  AgencyPortfolioDTO,
+  PortfolioDTO,
+} from '@/lib/projects-inbox/portfolio-row';
 import type {
   PortfolioLens,
   ResolvedPortfolioLens,
@@ -12,6 +16,9 @@ const {
   mockGetCurrentUser,
   mockRedirect,
   mockLogError,
+  mockLogWarn,
+  mockLoadOversightAgencies,
+  mockLoadAgencyPortfolio,
   mockResolvePortfolioLens,
   mockLoadClientPortfolio,
   mockLoadExpertPortfolio,
@@ -23,6 +30,9 @@ const {
     throw new Error('NEXT_REDIRECT');
   }),
   mockLogError: vi.fn(),
+  mockLogWarn: vi.fn(),
+  mockLoadOversightAgencies: vi.fn(),
+  mockLoadAgencyPortfolio: vi.fn(),
   mockResolvePortfolioLens: vi.fn(),
   mockLoadClientPortfolio: vi.fn(),
   mockLoadExpertPortfolio: vi.fn(),
@@ -34,7 +44,13 @@ vi.mock('next/navigation', () => ({
   redirect: mockRedirect,
   useRouter: () => ({ push: vi.fn() }),
 }));
-vi.mock('@/lib/logging', () => ({ log: { error: mockLogError } }));
+vi.mock('@/lib/logging', () => ({ log: { error: mockLogError, warn: mockLogWarn } }));
+vi.mock('@/lib/projects-inbox/agency-oversight', () => ({
+  loadOversightAgencies: mockLoadOversightAgencies,
+}));
+vi.mock('@/lib/projects-inbox/agency-portfolio-view', () => ({
+  loadAgencyPortfolio: mockLoadAgencyPortfolio,
+}));
 
 // The lens resolver is pure and has its own unit tests; here we drive the page's
 // branch selection by controlling its return value directly.
@@ -54,13 +70,29 @@ vi.mock('@/lib/projects-inbox/portfolio-view', () => ({
 // orchestration, not a render test of the shell/analytics island (each has its
 // own colocated suite).
 vi.mock('./_components/projects-inbox-shell', () => ({
-  ProjectsInboxShell: ({ dto }: { dto: PortfolioDTO | AdminPortfolioDTO }) => (
+  ProjectsInboxShell: ({ dto }: { dto: PortfolioDTO | AdminPortfolioDTO | AgencyPortfolioDTO }) => (
     <div data-testid="inbox-shell" data-lens={dto.lens} />
   ),
 }));
 vi.mock('./_components/projects-inbox-analytics', () => ({
-  ProjectsInboxAnalytics: ({ lens }: { lens: PortfolioLens }) => (
-    <div data-testid="inbox-analytics" data-lens={lens} />
+  ProjectsInboxAnalytics: ({
+    lens,
+    needsCount,
+    inProgressCount,
+    totalCount,
+  }: {
+    lens: PortfolioLens;
+    needsCount: number;
+    inProgressCount: number;
+    totalCount: number;
+  }) => (
+    <div
+      data-testid="inbox-analytics"
+      data-lens={lens}
+      data-needs={needsCount}
+      data-in-progress={inProgressCount}
+      data-total={totalCount}
+    />
   ),
 }));
 
@@ -123,13 +155,14 @@ function resolved(lens: PortfolioLens, allowedLenses: PortfolioLens[]): Resolved
   return { lens, allowedLenses };
 }
 
-async function renderPage(lens?: string) {
-  const ui = await ProjectsPage({ searchParams: Promise.resolve({ lens }) });
+async function renderPage(lens?: string, agency?: string) {
+  const ui = await ProjectsPage({ searchParams: Promise.resolve({ lens, agency }) });
   return render(ui);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLoadOversightAgencies.mockResolvedValue([]);
 });
 
 describe('ProjectsPage (RSC) — auth gate', () => {
@@ -156,7 +189,9 @@ describe('ProjectsPage (RSC) — lens → loader dispatch', () => {
     await renderPage();
 
     // The raw `?lens=` is forwarded to the resolver untouched.
-    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, undefined);
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, undefined, {
+      canOverseeAgency: false,
+    });
     expect(mockLoadClientPortfolio).toHaveBeenCalledTimes(1);
     expect(mockLoadClientPortfolio).toHaveBeenCalledWith(viewer, ['client']);
     expect(mockLoadExpertPortfolio).not.toHaveBeenCalled();
@@ -173,7 +208,9 @@ describe('ProjectsPage (RSC) — lens → loader dispatch', () => {
 
     await renderPage('expert');
 
-    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'expert');
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'expert', {
+      canOverseeAgency: false,
+    });
     expect(mockLoadExpertPortfolio).toHaveBeenCalledTimes(1);
     // The expert loader receives a viewer narrowed to a concrete expertProfileId.
     expect(mockLoadExpertPortfolio).toHaveBeenCalledWith(
@@ -207,7 +244,9 @@ describe('ProjectsPage (RSC) — lens → loader dispatch', () => {
 
     await renderPage('admin');
 
-    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'admin');
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'admin', {
+      canOverseeAgency: false,
+    });
     expect(mockLoadAdminPortfolio).toHaveBeenCalledTimes(1);
     // The admin loader takes only the allowedLenses (platform-wide; no per-user arg).
     expect(mockLoadAdminPortfolio).toHaveBeenCalledWith(['client', 'admin']);
@@ -226,7 +265,9 @@ describe('ProjectsPage (RSC) — lens → loader dispatch', () => {
 
     await renderPage('admin'); // not allowed for a plain user
 
-    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'admin');
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'admin', {
+      canOverseeAgency: false,
+    });
     expect(mockLoadClientPortfolio).toHaveBeenCalledTimes(1);
     expect(mockLoadAdminPortfolio).not.toHaveBeenCalled();
     expect(mockLoadExpertPortfolio).not.toHaveBeenCalled();
@@ -272,5 +313,67 @@ describe('ProjectsPage (RSC) — load error boundary', () => {
       'Failed to load projects inbox',
       expect.objectContaining({ userId: viewer.id, lens: 'admin' })
     );
+  });
+});
+
+describe('ProjectsPage (RSC) — agency lens', () => {
+  const AGENCY = { id: 'ag-1', name: 'Cloudline Partners' };
+  const AGENCIES = [AGENCY];
+
+  function agencyDto(): AgencyPortfolioDTO {
+    return {
+      lens: 'agency',
+      allowedLenses: ['client', 'agency'],
+      agency: AGENCY,
+      agencies: [{ ...AGENCY, liveCount: 0 }],
+      rows: [],
+      finishedRows: [],
+      tiles: { changesRequested: 2, inDelivery: 3, pendingAcceptance: 1, live: 6, expertCount: 2 },
+      isEmpty: false,
+    };
+  }
+
+  it('passes oversight to the resolver and loads ONLY the agency portfolio', async () => {
+    const viewer = user();
+    mockGetCurrentUser.mockResolvedValue(viewer);
+    mockLoadOversightAgencies.mockResolvedValue(AGENCIES);
+    mockResolvePortfolioLens.mockReturnValue(resolved('agency', ['client', 'agency']));
+    mockLoadAgencyPortfolio.mockResolvedValue(agencyDto());
+
+    await renderPage('agency', 'ag-1');
+
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'agency', {
+      canOverseeAgency: true,
+    });
+    expect(mockLoadAgencyPortfolio).toHaveBeenCalledWith(viewer, AGENCIES, 'ag-1', [
+      'client',
+      'agency',
+    ]);
+    expect(mockLoadClientPortfolio).not.toHaveBeenCalled();
+    expect(screen.getByTestId('inbox-shell')).toHaveAttribute('data-lens', 'agency');
+    const analytics = screen.getByTestId('inbox-analytics');
+    expect(analytics).toHaveAttribute('data-lens', 'agency');
+    expect(analytics).toHaveAttribute('data-needs', '2');
+    expect(analytics).toHaveAttribute('data-in-progress', '3');
+    expect(analytics).toHaveAttribute('data-total', '6');
+  });
+
+  it('still renders the client lens when the oversight lookup fails', async () => {
+    const viewer = user();
+    mockGetCurrentUser.mockResolvedValue(viewer);
+    mockLoadOversightAgencies.mockRejectedValue(new Error('db down'));
+    mockResolvePortfolioLens.mockReturnValue(resolved('client', ['client']));
+    mockLoadClientPortfolio.mockResolvedValue(clientDto());
+
+    await renderPage('agency');
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Agency oversight lookup failed',
+      expect.objectContaining({ userId: viewer.id, error: 'db down' })
+    );
+    expect(mockResolvePortfolioLens).toHaveBeenCalledWith(viewer, 'agency', {
+      canOverseeAgency: false,
+    });
+    expect(screen.getByTestId('inbox-shell')).toHaveAttribute('data-lens', 'client');
   });
 });

@@ -987,6 +987,7 @@ export const caseEngagementsRepository = {
         engagementId: engagements.id,
         companyId: engagements.companyId,
         expertProfileId: engagements.expertProfileId,
+        deliveringAgencyId: engagements.deliveringAgencyId,
         anchorAt: caseEngagements.closedAt,
         title: caseEngagements.title,
         // BAL-390 — carried so the +7d nudge can distinguish a deliberate `resolved`
@@ -1030,6 +1031,7 @@ export const caseEngagementsRepository = {
           engagementKind: 'case' as const,
           companyId: row.companyId,
           expertProfileId: row.expertProfileId,
+          deliveringAgencyId: row.deliveringAgencyId,
           anchorAt: row.anchorAt,
           title: row.title,
           // `close_reason` is NOT NULL for any closed row under

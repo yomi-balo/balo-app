@@ -433,9 +433,9 @@ async function sendNotice(closedRow: CaseEngagementRow, now: Date): Promise<void
     profile === undefined
       ? Promise.resolve(undefined)
       : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
+    closedRow.deliveringAgencyId === null
       ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
+      : agenciesRepository.getSummaryById(closedRow.deliveringAgencyId),
   ]);
 
   const siblings = await meetingContextsRepository.listMeetingsForContext('case', closedRow.id);

@@ -79,6 +79,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 
 // Must use resetModules to clear the cached brevoClient between tests
+import { render } from '@react-email/render';
 import { processEmailJob, devEmailSendIsBlocked } from './email.adapter.js';
 
 const SMTP_ENV_KEYS = [
@@ -348,6 +349,100 @@ describe('processEmailJob', () => {
     await processEmailJob(makeJob(basePayload));
 
     expect(mockSendTransacEmail).toHaveBeenCalled();
+  });
+});
+
+describe('processEmailJob — recipient timezone seam (BAL-635)', () => {
+  const zonedPayload = (over: Partial<DeliveryPayload> = {}): DeliveryPayload => ({
+    recipientId: 'user-1',
+    template: 'booking-confirmed-expert',
+    event: 'engagement.booked',
+    data: {},
+    payload: {},
+    ...over,
+  });
+
+  function renderedTimezone(): unknown {
+    const [element] = vi.mocked(render).mock.calls[0] ?? [];
+    const props = (element as { props?: Record<string, unknown> } | undefined)?.props;
+    return props?.recipientTimezone;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.BREVO_API_KEY = 'test-key';
+    process.env.DEV_ALLOW_REAL_EMAIL = 'true';
+  });
+
+  afterEach(() => {
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  });
+
+  it("passes the user row's timezone to the template, read at send time", async () => {
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+      timezone: 'Australia/Melbourne',
+    });
+
+    await processEmailJob(makeJob(zonedPayload()));
+
+    expect(renderedTimezone()).toBe('Australia/Melbourne');
+  });
+
+  it('passes null when the user row has no timezone', async () => {
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+      timezone: null,
+    });
+
+    await processEmailJob(makeJob(zonedPayload()));
+
+    expect(renderedTimezone()).toBeNull();
+  });
+
+  it.each([
+    ['Australia/Melbourne', 'Australia/Melbourne'],
+    [null, null],
+  ])(
+    'a payload or data recipientTimezone can never override the user zone (user zone %j)',
+    async (userZone, expected) => {
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        email: 'alice@example.com',
+        firstName: 'Alice',
+        timezone: userZone,
+      });
+
+      await processEmailJob(
+        makeJob(
+          zonedPayload({
+            data: { recipientTimezone: 'Europe/Paris' },
+            payload: { recipientTimezone: 'Europe/London' },
+          })
+        )
+      );
+
+      expect(renderedTimezone()).toBe(expected);
+    }
+  );
+
+  it('gives a literal recipientEmail (ops inbox) no zone and skips the user lookup', async () => {
+    await processEmailJob(
+      makeJob(
+        zonedPayload({
+          recipientEmail: 'ops@balo.expert',
+          payload: { recipientTimezone: 'Europe/London' },
+        })
+      )
+    );
+
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(renderedTimezone()).toBeNull();
   });
 });
 

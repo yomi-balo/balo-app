@@ -30,6 +30,9 @@ import { deriveProposalChanges, type ProposalContentChange } from './proposal-co
 import {
   deriveEngagementParties,
   engagementHeaderLine,
+  expertSideActorLabel,
+  expertSideRetroParty,
+  milestoneCompleterLabel,
   personAtCompany,
   projectEngagementTitle,
   type EngagementParties,
@@ -56,10 +59,10 @@ export type { EngagementParties } from './engagement-parties';
  * carries state + navigational hrefs only.
  */
 
-/** Web-side stall threshold (D0's `QUIET_THRESHOLD_DAYS` is a comment, not exported). */
-export const DELIVERY_QUIET_THRESHOLD_DAYS = 14;
-
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whole days without delivery activity after which the admin chip flags the project. */
+export const DELIVERY_QUIET_THRESHOLD_DAYS = 14;
 
 /**
  * The workspace's status union. Re-pointed at the schema-derived
@@ -90,7 +93,8 @@ export type ViewIcon =
   | 'CalendarDays'
   | 'FileText'
   | 'Target'
-  | 'Flag';
+  | 'Flag'
+  | 'Receipt';
 
 export interface StatusChipView {
   status: EngagementWorkspaceStatus;
@@ -106,6 +110,8 @@ export interface TermsStripItem {
   label: string;
   /** Display text, e.g. "Fixed price · A$58,000". */
   value: string;
+  /** Present only when the pill needs attention; absent renders it neutral. */
+  tone?: 'warning';
 }
 
 export interface ProvenanceLinkView {
@@ -114,10 +120,29 @@ export interface ProvenanceLinkView {
   href: string;
 }
 
+/**
+ * The per-lens sub-line under the title, split so the expert person's name alone can link to
+ * their public profile. Reads as `prefix + expertName + suffix`.
+ */
+export interface EngagementHeaderLineView {
+  prefix: string;
+  /** The expert person's name; null when the line names none (the expert lens names the client). */
+  expertName: string | null;
+  suffix: string;
+  /**
+   * `/experts/{username}` when the expert's public profile resolves, else null. Always null when
+   * `expertName` is null, so the line never carries a link it cannot render.
+   */
+  expertProfileHref: string | null;
+  /** Whether a click on the profile link is reported to analytics — client lens only, so staff
+   *  clicks on the admin lens stay out of the client-usage event. */
+  tracksProfileClicks: boolean;
+}
+
 export interface EngagementHeaderView {
   engagementTitle: string;
   /** Per-lens sub-line (parties util). */
-  headerLine: string;
+  headerLine: EngagementHeaderLineView;
   statusChip: StatusChipView;
   /** Optional — retainers have no source request. */
   provenance: ProvenanceLinkView | null;
@@ -201,15 +226,6 @@ export interface MilestoneNodeView {
   removalNeedsChangeOrder: boolean;
 }
 
-export interface CountdownView {
-  /** Formatted auto-accept date, e.g. "11 Jul 2026". */
-  autoOnDate: string;
-  /** Whole days remaining, clamped >= 0 (informational — no action in D1). */
-  daysRemaining: number;
-  /** Full pill label, e.g. "Auto-accepts in 5 days" / "Auto-accepts in 1 day" / "Auto-accepts today". */
-  autoInLabel: string;
-}
-
 /**
  * BAL-338 (D7) — the client's project-level decision copy, pre-derived server-side so
  * the client action island stays a primitive-props surface (never value-imports
@@ -232,8 +248,8 @@ export interface ReviewClientDecisionView {
 export interface ReviewBannerView {
   title: string;
   body: string;
-  /** Null only if the request timestamp is somehow absent (guarded). */
-  countdown: CountdownView | null;
+  /** Formatted auto-accept date, e.g. "11 Jul 2026"; null only if the request timestamp is absent. */
+  autoAcceptOn: string | null;
   /** Client-lens only: the accept / request-changes decision copy; null for expert/admin. */
   clientDecision: ReviewClientDecisionView | null;
   /** Client lens, after a change request: the previous round's note. Null otherwise. */
@@ -302,12 +318,12 @@ export interface EmptyStateView {
   icon: ViewIcon;
 }
 
-export interface AdminOversightView {
-  /** "Last delivery activity: 2d ago". */
-  lastActivityLabel: string;
-  stalled: boolean;
-  /** Contextual nudge when stalled; null otherwise. */
-  stalledNote: string | null;
+/** The cancel-project dialog's pre-derived copy; non-null while the project can still be cancelled. */
+export interface CancelDialogView {
+  body: string;
+  reasonHint: string;
+  /** Pending acceptance only: what the review in progress means for the cancellation. */
+  reviewNote: string | null;
 }
 
 export interface CompletionCardView {
@@ -343,7 +359,8 @@ export interface EngagementWorkspaceView {
   completedBanner: CompletedBannerView | null;
   cancelledBanner: CancelledBannerView | null;
   emptyState: EmptyStateView | null;
-  adminOversight: AdminOversightView | null;
+  /** Non-null for an active or pending-acceptance project; the page decides who may open it. */
+  cancelDialog: CancelDialogView | null;
   /** Expert-lens + active only: the "Finish the project" card (D4); null otherwise. */
   completionCard: CompletionCardView | null;
   /** Time-and-materials: new milestones need the client's approval, so "Add milestone" is hidden. */
@@ -384,16 +401,6 @@ function formatRelativeDays(from: Date, now: Date): string {
   return `${days}d ago`;
 }
 
-/**
- * The full auto-accept pill label. The final day (0 days remaining) reads
- * "Auto-accepts today" — never the awkward "Auto-accepts in 0 days"; every other
- * value keeps the singular/plural "Auto-accepts in N day(s)".
- */
-function autoAcceptPillLabel(daysRemaining: number): string {
-  if (daysRemaining === 0) return 'Auto-accepts today';
-  return `Auto-accepts in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
-}
-
 // ── Derivations ──────────────────────────────────────────────────────────────
 
 function deriveStatusChip(status: EngagementWorkspaceStatus): StatusChipView {
@@ -409,10 +416,6 @@ function deriveStatusChip(status: EngagementWorkspaceStatus): StatusChipView {
   }
 }
 
-function cadenceLabel(cadence: NonNullable<ProjectEngagementWithMilestones['cadence']>): string {
-  return cadence === 'monthly' ? 'Monthly retainer' : 'Fortnightly retainer';
-}
-
 /**
  * Terms-strip "timeframe" is derived honestly (the proposal's "~10 weeks" is NOT
  * snapshotted, so it is not reproducible): a retainer cadence humanises to
@@ -421,7 +424,11 @@ function cadenceLabel(cadence: NonNullable<ProjectEngagementWithMilestones['cade
  */
 function deriveTimeframeItem(engagement: ProjectEngagementWithMilestones): TermsStripItem | null {
   if (engagement.cadence !== null) {
-    return { icon: 'Clock', label: 'Timeframe', value: cadenceLabel(engagement.cadence) };
+    return {
+      icon: 'Clock',
+      label: 'Timeframe',
+      value: engagement.cadence === 'monthly' ? 'Monthly retainer' : 'Fortnightly retainer',
+    };
   }
   const totalMinutes = engagement.milestones.reduce(
     (sum, m) =>
@@ -443,6 +450,28 @@ function deriveTermsStrip(
   lens: EngagementLens,
   changeOrders: readonly ChangeOrderWithLines[]
 ): TermsStripItem[] {
+  const kickedOffAt = engagement.activatedAt ?? engagement.createdAt;
+  const kickedOff: TermsStripItem = {
+    icon: 'CalendarDays',
+    label: 'Kicked off',
+    value: `Kicked off ${formatShortDate(kickedOffAt)}`,
+  };
+  // Time and materials bills hours worked, so the strip states the method and the billing
+  // cadence and never an amount.
+  if (engagement.pricingMethod === 'tm') {
+    const items: TermsStripItem[] = [
+      { icon: 'DollarSign', label: 'Pricing', value: pricingMethodLabel('tm') },
+    ];
+    if (engagement.cadence !== null) {
+      items.push({
+        icon: 'Receipt',
+        label: 'Billing',
+        value: `Billed ${engagement.cadence}`,
+      });
+    }
+    items.push(kickedOff);
+    return items;
+  }
   // The EFFECTIVE price: the accepted price plus every approved change order's delta.
   // Client sees the marked-up (grossed-up) figure, derived on read from the snapshotted
   // `baloFeeBps`; expert & admin see the RAW payout quote.
@@ -465,12 +494,7 @@ function deriveTermsStrip(
   const timeframe = deriveTimeframeItem(engagement);
   if (timeframe !== null) items.push(timeframe);
 
-  const kickedOffAt = engagement.activatedAt ?? engagement.createdAt;
-  items.push({
-    icon: 'CalendarDays',
-    label: 'Kicked off',
-    value: `Kicked off ${formatShortDate(kickedOffAt)}`,
-  });
+  items.push(kickedOff);
   return items;
 }
 
@@ -515,6 +539,34 @@ function groupContentEdits(
   return grouped;
 }
 
+type WorkspaceMilestone = ProjectEngagementWithMilestones['milestones'][number];
+
+/**
+ * The milestone's value label. Gates on the RAW snapshotted value; the client sees it grossed
+ * up by the Balo fee, expert & admin see the raw payout figure.
+ */
+function milestoneValueLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens
+): string | null {
+  const rawValue = m.valueCents;
+  if (rawValue === null || rawValue <= 0) return null;
+  const displayValue = lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
+  return formatWholeCurrency(displayValue, engagement.currency);
+}
+
+/** "Completed 30 Jun 2026 by {person}", naming whoever completed it; null while not completed. */
+function milestoneCompletedLabel(
+  m: WorkspaceMilestone,
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string | null {
+  if (m.completedAt === null) return null;
+  const by = milestoneCompleterLabel(engagement, parties, m.completedBy);
+  return `Completed ${formatShortDate(m.completedAt)} by ${by}`;
+}
+
 function deriveMilestones(
   engagement: ProjectEngagementWithMilestones,
   parties: EngagementParties,
@@ -533,15 +585,7 @@ function deriveMilestones(
   };
   return engagement.milestones.map((m) => {
     const isCompleted = m.status === 'completed';
-    // Gate on the RAW snapshotted value; client sees it grossed up by the Balo fee,
-    // expert & admin see the raw payout figure.
-    const rawValue = m.valueCents;
-    let valueLabel: string | null = null;
-    if (rawValue !== null && rawValue > 0) {
-      const displayValue =
-        lens === 'client' ? applyBaloFee(rawValue, engagement.baloFeeBps) : rawValue;
-      valueLabel = formatWholeCurrency(displayValue, engagement.currency);
-    }
+    const valueLabel = milestoneValueLabel(m, engagement, lens);
     // Plain-text of the raw description for the expert edit-form prefill — kept out
     // of the client's hands as HTML (the modal only sees text). Blank/tag-only → null.
     const descriptionText =
@@ -570,10 +614,7 @@ function deriveMilestones(
       connectorFilled: isCompleted,
       valueLabel,
       startedLabel: m.startedAt === null ? null : `Started ${formatShortDate(m.startedAt)}`,
-      completedLabel:
-        m.completedAt === null
-          ? null
-          : `Completed ${formatShortDate(m.completedAt)} by ${parties.expertPersonShort}`,
+      completedLabel: milestoneCompletedLabel(m, engagement, parties),
       completionNote:
         isCompleted && m.completionNote !== null && m.completionNote.trim() !== ''
           ? m.completionNote
@@ -631,7 +672,7 @@ function deriveChangedSinceProposal(
   const noun = changed.length === 1 ? 'milestone' : 'milestones';
   return {
     heading: 'Changed since proposal',
-    intro: `${parties.expertRetroFirstMention} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
+    intro: `${expertSideRetroParty(parties)} revised the wording of ${changed.length} ${noun} after the proposal was accepted. Each is marked below.`,
     items: changed.map((m) => ({
       milestoneId: m.id,
       milestoneTitle: m.title,
@@ -640,37 +681,45 @@ function deriveChangedSinceProposal(
   };
 }
 
+/** The formatted date the project is accepted automatically; null without a completion request. */
+function autoAcceptDate(engagement: ProjectEngagementWithMilestones): string | null {
+  const requestedAt = engagement.completionRequestedAt;
+  if (requestedAt === null) return null;
+  return formatLongDate(new Date(requestedAt.getTime() + AUTO_ACCEPT_DAYS * DAY_MS));
+}
+
+/** "on 11 Jul 2026", or the window's end when the request date is missing. */
+function acceptedWhenPhrase(autoAcceptOn: string | null): string {
+  return autoAcceptOn === null ? 'at the end of the review window' : `on ${autoAcceptOn}`;
+}
+
+/** Who marked the project ready, named as the acting person; no recorded person → the expert side. */
+function completionRequesterLabel(
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): string {
+  return expertSideActorLabel(engagement, parties, engagement.completionRequestedBy);
+}
+
 function deriveReviewBanner(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
-  now: Date,
   milestones: readonly MilestoneNodeView[]
 ): ReviewBannerView | null {
   if (engagement.status !== 'pending_acceptance') return null;
 
   const requestedAt = engagement.completionRequestedAt;
-  let countdown: CountdownView | null = null;
-  let autoOnLabel = 'the review deadline';
-  let requestedAtLabel = 'recently';
-  if (requestedAt !== null) {
-    const autoOn = new Date(requestedAt.getTime() + AUTO_ACCEPT_DAYS * DAY_MS);
-    const daysRemaining = Math.max(0, Math.ceil((autoOn.getTime() - now.getTime()) / DAY_MS));
-    autoOnLabel = formatLongDate(autoOn);
-    requestedAtLabel = formatShortDate(requestedAt);
-    countdown = {
-      autoOnDate: autoOnLabel,
-      daysRemaining,
-      autoInLabel: autoAcceptPillLabel(daysRemaining),
-    };
-  }
+  const autoAcceptOn = autoAcceptDate(engagement);
+  const acceptedWhen = acceptedWhenPhrase(autoAcceptOn);
+  const requestedAtLabel = requestedAt === null ? 'recently' : formatShortDate(requestedAt);
 
   if (lens === 'client') {
     const expertShort = parties.expertPersonShort;
     return {
-      title: `${parties.expertRetroFirstMention} says the project is ready`,
-      body: `Have a look through the milestones below, then accept the project or request changes. If there's nothing to change, the project will be marked accepted on ${autoOnLabel}.`,
-      countdown,
+      title: `${completionRequesterLabel(engagement, parties)} says the project is ready`,
+      body: `Have a look through the milestones below, then accept the project or request changes. If you don't respond, it's accepted ${acceptedWhen}.`,
+      autoAcceptOn,
       lastRequest: deriveLastRequest(engagement),
       changedSinceProposal: deriveChangedSinceProposal(milestones, parties),
       clientDecision: {
@@ -685,8 +734,8 @@ function deriveReviewBanner(
   if (lens === 'expert') {
     return {
       title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
-      body: `Requested ${requestedAtLabel}. ${parties.clientCompanyName} has ${AUTO_ACCEPT_DAYS} days to accept or request changes — after that the project is accepted automatically. The delivery plan is locked while the project is in review.`,
-      countdown,
+      body: `Requested ${requestedAtLabel}. The delivery plan is locked while the project is in review. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
+      autoAcceptOn,
       clientDecision: null,
       lastRequest: null,
       changedSinceProposal: null,
@@ -694,8 +743,8 @@ function deriveReviewBanner(
   }
   return {
     title: `Completion requested — awaiting ${parties.clientCompanyName}'s review`,
-    body: `Requested ${requestedAtLabel} by ${parties.expertRetroFirstMention}. Auto-accepts ${autoOnLabel} unless ${parties.clientCompanyName} responds. Final invoice raises once accepted.`,
-    countdown,
+    body: `Requested ${requestedAtLabel} by ${completionRequesterLabel(engagement, parties)}. If ${parties.clientCompanyName} doesn't respond, it's accepted ${acceptedWhen} and the final invoice is raised then.`,
+    autoAcceptOn,
     clientDecision: null,
     lastRequest: null,
     changedSinceProposal: null,
@@ -784,7 +833,7 @@ function deriveCancelledBanner(
       ? engagement.cancellationReason
       : null;
   return {
-    title: 'Engagement cancelled',
+    title: 'Project cancelled',
     body: `Cancelled by Balo on ${cancelledAtLabel}.`,
     reason,
   };
@@ -792,28 +841,34 @@ function deriveCancelledBanner(
 
 function deriveEmptyState(
   engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens,
+  ctx: EngagementViewerContext,
   parties: EngagementParties
 ): EmptyStateView | null {
   if (engagement.milestones.length > 0) return null;
   // Terminal engagements show only their completed/cancelled banner — a
   // forward-looking "shaping the delivery plan" invitation would be stale.
   if (engagement.status === 'completed' || engagement.status === 'cancelled') return null;
-  if (lens === 'expert') {
+  if (ctx.lens === 'expert') {
     const client = parties.clientCompanyName;
+    // The delivering expert is addressed directly; an agency owner/admin viewing the same
+    // plan is told what the agency does (prospective copy names the party).
+    const firstMilestone = ctx.isDeliveringExpert ? 'your first milestone' : 'the first milestone';
     // On T&M a milestone is added through a change the client approves, so the invitation
     // matches the "Propose the first milestone" CTA.
     const opener =
       engagement.pricingMethod === 'tm'
         ? `Propose the first milestone — ${client} approves it before work is tracked against it.`
-        : `Add your first milestone so ${client} can follow progress.`;
+        : `Add ${firstMilestone} so ${client} can follow progress.`;
+    const closer = ctx.isDeliveringExpert
+      ? `you mark the project ready and ${client} reviews it as a whole.`
+      : `${parties.expertPartyShort} marks the project ready and ${client} reviews it as a whole.`;
     return {
       icon: 'Flag',
       title: 'Shape the delivery plan',
-      body: `${opener} When everything is delivered, you mark the project ready and ${client} reviews it as a whole.`,
+      body: `${opener} When everything is delivered, ${closer}`,
     };
   }
-  if (lens === 'client') {
+  if (ctx.lens === 'client') {
     return {
       icon: 'Flag',
       title: `${parties.expertPartyShort} is shaping the delivery plan`,
@@ -827,13 +882,20 @@ function deriveEmptyState(
   };
 }
 
-/** Latest delivery-signal timestamp: milestone starts / completions, activation, request. */
-function deriveLastActivityAt(engagement: ProjectEngagementWithMilestones): Date {
+/**
+ * Latest delivery-signal timestamp: milestone starts / completions, activation, the completion
+ * request, and the most recent time logged.
+ */
+function deriveLastActivityAt(
+  engagement: ProjectEngagementWithMilestones,
+  lastTimeLoggedAt: Date | null
+): Date {
   // `createdAt` always exists, so it seeds the fold — the reduce can never run on
   // an empty array (S6959) while still yielding the max of every delivery signal.
   const candidates: Date[] = [];
   if (engagement.activatedAt !== null) candidates.push(engagement.activatedAt);
   if (engagement.completionRequestedAt !== null) candidates.push(engagement.completionRequestedAt);
+  if (lastTimeLoggedAt !== null) candidates.push(lastTimeLoggedAt);
   for (const m of engagement.milestones) {
     if (m.startedAt !== null) candidates.push(m.startedAt);
     if (m.completedAt !== null) candidates.push(m.completedAt);
@@ -844,22 +906,55 @@ function deriveLastActivityAt(engagement: ProjectEngagementWithMilestones): Date
   );
 }
 
-function deriveAdminOversight(
+/**
+ * The admin header chip for an in-flight project: how long since anything moved. Once
+ * delivery has been quiet for `DELIVERY_QUIET_THRESHOLD_DAYS`, the chip turns to a warning
+ * that suggests a check-in.
+ */
+function deriveLastActivityChip(
   engagement: ProjectEngagementWithMilestones,
   lens: EngagementLens,
   parties: EngagementParties,
-  now: Date
-): AdminOversightView | null {
+  now: Date,
+  lastTimeLoggedAt: Date | null
+): TermsStripItem | null {
   if (lens !== 'admin') return null;
   if (engagement.status !== 'active' && engagement.status !== 'pending_acceptance') return null;
-  const lastActivityAt = deriveLastActivityAt(engagement);
-  const stalled = wholeDaysSince(lastActivityAt, now) >= DELIVERY_QUIET_THRESHOLD_DAYS;
+  const lastActivityAt = deriveLastActivityAt(engagement, lastTimeLoggedAt);
+  const quietDays = wholeDaysSince(lastActivityAt, now);
+  if (quietDays >= DELIVERY_QUIET_THRESHOLD_DAYS) {
+    return {
+      icon: 'Clock',
+      label: 'Last delivery activity',
+      value: `Quiet for ${quietDays} days · worth a check-in with ${parties.expertPartyShort}`,
+      tone: 'warning',
+    };
+  }
   return {
-    lastActivityLabel: `Last delivery activity: ${formatRelativeDays(lastActivityAt, now)}`,
-    stalled,
-    stalledNote: stalled
-      ? `Nothing has moved for a while — worth a check-in with ${parties.expertPartyShort} before ${parties.clientCompanyName} asks.`
-      : null,
+    icon: 'Clock',
+    label: 'Last delivery activity',
+    value: `Last delivery activity: ${formatRelativeDays(lastActivityAt, now)}`,
+  };
+}
+
+/**
+ * The cancel dialog's copy, for a project that can still be cancelled. Whether the viewer may
+ * open it is the page's capability decision, not part of this view.
+ */
+function deriveCancelDialog(
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties
+): CancelDialogView | null {
+  if (engagement.status !== 'active' && engagement.status !== 'pending_acceptance') return null;
+  const client = parties.clientCompanyName;
+  const reviewNote =
+    engagement.status === 'pending_acceptance'
+      ? `${completionRequesterLabel(engagement, parties)} has marked the project ready and ${client} is reviewing it. If they don't respond, it's accepted ${acceptedWhenPhrase(autoAcceptDate(engagement))}.`
+      : null;
+  return {
+    body: `Delivery stops straight away for ${client} and ${parties.expertParty}, and it can't be undone. Both are told, with your reason.`,
+    reasonHint: `${client} and ${parties.expertParty} both see this.`,
+    reviewNote,
   };
 }
 
@@ -927,13 +1022,19 @@ function deriveCompletionCard(
  * `now` is injectable for deterministic tests (default `new Date()`). `changeOrders` are the
  * engagement's live change orders, oldest first: they move the terms strip to the effective
  * price, lock and badge milestones, and block the completion card while one is open.
+ * `lastTimeLoggedAt` is when the latest live time entry was logged (T&M), a delivery signal for
+ * the admin activity chip. `expertProfileHref` is the expert's public profile path, already gated
+ * on the public-profile rule by the caller (null when it does not resolve); it links the expert's
+ * name in the header line, and is dropped on a lens whose line names no expert.
  */
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
   now: Date = new Date(),
   changeOrders: readonly ChangeOrderWithLines[] = [],
-  contentEdits: readonly MilestoneContentEditRow[] = []
+  contentEdits: readonly MilestoneContentEditRow[] = [],
+  lastTimeLoggedAt: Date | null = null,
+  expertProfileHref: string | null = null
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -960,12 +1061,24 @@ export function mapEngagementToWorkspaceView(
     contentEdits
   );
 
+  const headerLine = engagementHeaderLine(ctx.lens, parties);
   const header: EngagementHeaderView = {
     engagementTitle,
-    headerLine: engagementHeaderLine(ctx.lens, parties),
+    headerLine: {
+      prefix: headerLine.prefix,
+      expertName: headerLine.expertPerson,
+      suffix: headerLine.suffix,
+      expertProfileHref: headerLine.expertPerson === null ? null : expertProfileHref,
+      tracksProfileClicks: ctx.lens === 'client',
+    },
     statusChip: deriveStatusChip(status),
     provenance,
-    terms: deriveTermsStrip(engagement, ctx.lens, changeOrders),
+    terms: [
+      ...deriveTermsStrip(engagement, ctx.lens, changeOrders),
+      ...[deriveLastActivityChip(engagement, ctx.lens, parties, now, lastTimeLoggedAt)].filter(
+        (item) => item !== null
+      ),
+    ],
     backHref: '/projects',
   };
 
@@ -981,12 +1094,12 @@ export function mapEngagementToWorkspaceView(
     progress: deriveProgress(engagement, ctx.lens, parties, crState),
     milestones,
     hasMilestones: engagement.milestones.length > 0,
-    reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, now, milestones),
+    reviewBanner: deriveReviewBanner(engagement, ctx.lens, parties, milestones),
     changeRequestBanner: deriveChangeRequestBanner(engagement, ctx.lens, parties, crState),
     completedBanner: deriveCompletedBanner(engagement, ctx.lens, parties),
     cancelledBanner: deriveCancelledBanner(engagement),
-    emptyState: deriveEmptyState(engagement, ctx.lens, parties),
-    adminOversight: deriveAdminOversight(engagement, ctx.lens, parties, now),
+    emptyState: deriveEmptyState(engagement, ctx, parties),
+    cancelDialog: deriveCancelDialog(engagement, parties),
     completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
     addMilestoneNeedsChangeOrder: engagement.pricingMethod === 'tm',
   };

@@ -659,3 +659,8 @@ export function ProjectStatusEmail({
     </EmailShell>
   );
 }
+
+/** A non-blank payload string, trimmed; undefined when absent so optional copy clauses drop. */
+export function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}

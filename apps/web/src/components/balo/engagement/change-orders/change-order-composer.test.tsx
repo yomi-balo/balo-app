@@ -42,6 +42,7 @@ interface Overrides {
   milestones?: ComposerMilestone[];
   order?: ChangeOrderComposerOrder | null;
   hourlyRateCents?: number | null;
+  loggedValueCents?: number | null;
 }
 
 function renderComposer(overrides: Overrides = {}): ReturnType<typeof render> {
@@ -54,6 +55,7 @@ function renderComposer(overrides: Overrides = {}): ReturnType<typeof render> {
       currency="aud"
       currentPriceCents={1250000}
       hourlyRateCents={overrides.hourlyRateCents ?? null}
+      loggedValueCents={overrides.loggedValueCents ?? null}
       milestones={overrides.milestones ?? MILESTONES}
       order={overrides.order ?? null}
     />
@@ -215,6 +217,27 @@ describe('ChangeOrderComposer', () => {
     await user.click(screen.getByRole('button', { name: 'Raise cap to A$15,000' }));
     expect(screen.getByLabelText('Cap')).toHaveValue(15000);
     expect(screen.queryByRole('button', { name: /Raise cap to/ })).not.toBeInTheDocument();
+  });
+
+  it('T&M: refuses a cap lowered below the value of the time already logged', async () => {
+    const user = userEvent.setup();
+    renderComposer({ pricingMethod: 'tm', loggedValueCents: 1200000 });
+    await user.clear(screen.getByLabelText('Cap'));
+    await user.type(screen.getByLabelText('Cap'), '11000');
+    await user.click(screen.getByRole('button', { name: /Send to Northwind/ }));
+    expect(
+      screen.getByText("The cap can't go below A$12,000 — the value of the time already logged.")
+    ).toBeInTheDocument();
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it('T&M: accepts a lowered cap that stays at or above the logged value', async () => {
+    const user = userEvent.setup();
+    renderComposer({ pricingMethod: 'tm', loggedValueCents: 1200000 });
+    await user.clear(screen.getByLabelText('Cap'));
+    await user.type(screen.getByLabelText('Cap'), '12000');
+    await user.click(screen.getByRole('button', { name: /Send to Northwind/ }));
+    expect(screen.queryByText(/The cap can't go below/)).not.toBeInTheDocument();
   });
 
   it('T&M: shows a rate that is not a whole amount with cents', () => {

@@ -1,6 +1,4 @@
 import { Suspense } from 'react';
-import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
@@ -9,6 +7,7 @@ import { getWorkspacesForCurrentUser } from '@/lib/workspaces/get-workspaces';
 import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { BreadcrumbProvider } from '@/components/layout/breadcrumb-context';
+import { SessionSyncRedirect } from '@/components/layout/session-sync-redirect';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
 import { MobileTabBar } from '@/components/layout/mobile-tab-bar';
@@ -20,24 +19,31 @@ import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
+import { ViewerTimezoneProvider } from '@/components/balo/date/viewer-timezone-context';
+import { TimezoneMismatchGate } from '@/components/balo/timezone-mismatch/timezone-mismatch-gate';
+import { loadViewerTimezoneContext } from '@/lib/timezone/load-viewer-timezone-context';
 
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }): Promise<React.JSX.Element> {
-  // Read-only drift check — if sync needed, redirect to route handler
-  // which can safely mutate cookies
+  // Read-only drift check — if sync needed, hard-navigate to the route handler, which can safely
+  // mutate cookies. A client component does the navigation: an RSC `redirect()` thrown from this
+  // cached layout segment is re-thrown on every client navigation and loops.
   const checkResult = await checkSessionDrift();
 
   if (checkResult.action === 'sync-needed') {
-    const headersList = await headers();
-    const pathname = headersList.get('x-invoke-path') || '/dashboard';
-    redirect(`/api/auth/session-sync?returnTo=${encodeURIComponent(pathname)}`);
+    return <SessionSyncRedirect />;
   }
 
   // After sync, session is guaranteed fresh — read user normally
   const user = await getCurrentUser();
+
+  // Independent of the checklist read below and of `activeMode`: the saved zone is read for every
+  // signed-in user, and the mismatch prompt is decided by the expert profile's own data. Started
+  // here so it runs alongside the nav and checklist reads.
+  const timezoneContextPromise = user ? loadViewerTimezoneContext(user) : null;
 
   // Fetch checklist status only for expert mode users with a profile
   let checklistCompletedCount = 0;
@@ -57,7 +63,10 @@ export default async function DashboardLayout({
     }
   }
 
-  const navContext = await buildNavContext(user);
+  const [navContext, timezoneContext] = await Promise.all([
+    buildNavContext(user),
+    timezoneContextPromise,
+  ]);
 
   // BAL-496 (D13) — the switcher's list. Mirrors the `navContext` precedent BAL-495 added one
   // commit ago: this layout is an async Server Component and the SOLE renderer of
@@ -106,26 +115,34 @@ export default async function DashboardLayout({
       liveStatus={liveStatus}
     >
       <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
-      <BreadcrumbProvider>
-        {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
+      <ViewerTimezoneProvider savedTimezone={timezoneContext?.savedTimezone ?? null}>
+        {timezoneContext?.mismatchPrompt ? (
+          <TimezoneMismatchGate mismatchPrompt={timezoneContext.mismatchPrompt} />
+        ) : null}
+        <BreadcrumbProvider>
+          {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
             than the visible viewport, which would leave phantom scroll under the sticky tab
             bar. `100dvh === 100vh` on desktop, so this is inert there. */}
-        <div className="bg-background min-h-dvh">
-          <div className="flex">
-            <Sidebar />
-            <div className="flex min-h-dvh flex-1 flex-col">
-              <TopNav creditsChip={creditsChip} />
-              <main className="flex-1 p-6 lg:p-8">
-                <div className="mx-auto max-w-7xl">{children}</div>
-              </main>
-              {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
+          <div className="bg-background min-h-dvh">
+            <div className="flex">
+              <Sidebar />
+              {/* `min-w-0` lets the column shrink below its content's min-content width, so a
+                horizontal rail (dashboard Your move) scrolls inside itself instead of widening
+                the page past the viewport. */}
+              <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
+                <TopNav creditsChip={creditsChip} />
+                <main className="flex-1 p-6 lg:p-8">
+                  <div className="mx-auto max-w-7xl">{children}</div>
+                </main>
+                {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
                   extra bottom padding and `AppFooter` (rendered by the root layout, outside
                   this tree) needs no changes. */}
-              <MobileTabBar />
+                <MobileTabBar />
+              </div>
             </div>
           </div>
-        </div>
-      </BreadcrumbProvider>
+        </BreadcrumbProvider>
+      </ViewerTimezoneProvider>
     </SidebarProvider>
   );
 }

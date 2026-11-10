@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen, within } from '@/test/utils';
+import { axe } from '@/test/axe';
+import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { ProposalDoc } from './proposal-doc';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -52,6 +55,7 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
       initials: 'PS',
       company: 'Cloudwerx',
       headline: 'CPQ Specialist',
+      profileHref: null,
       rating: 4.9,
       ratingCount: 12,
     },
@@ -222,6 +226,60 @@ describe('ProposalDoc — header + revision', () => {
     );
     expect(container.textContent ?? '').not.toContain('0.0');
     expect(screen.queryByText('(0)')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProposalDoc — expert profile link', () => {
+  it('links the avatar and the name to the public profile when the doc carries a profileHref', () => {
+    const base = baseDoc();
+    const { container } = render(
+      <ProposalDoc
+        doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
+      />
+    );
+    const links = screen.getAllByRole('link', { name: 'Priya Sharma' });
+    expect(links).toHaveLength(1);
+    const [link] = links;
+    expect(link).toHaveAttribute('href', '/experts/priya-sharma');
+    expect(link).not.toHaveTextContent('Cloudwerx');
+    const avatarLink = container.querySelector('a[data-expert-profile-avatar]');
+    expect(avatarLink).toHaveAttribute('href', '/experts/priya-sharma');
+    expect(avatarLink).toHaveAttribute('tabindex', '-1');
+    // Hovering the avatar underlines the name: the row is the named group.
+    expect(avatarLink?.parentElement).toHaveClass('group/expert-profile');
+    expect(avatarLink).toHaveTextContent('PS');
+  });
+
+  it('reports a profile click as the proposal header', async () => {
+    const user = userEvent.setup();
+    vi.mocked(track).mockClear();
+    const base = baseDoc();
+    render(
+      <ProposalDoc
+        doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
+      />
+    );
+    await user.click(screen.getByRole('link', { name: 'Priya Sharma' }));
+    expect(track).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_LINK_CLICKED, {
+      surface: 'proposal_header',
+    });
+  });
+
+  it('has no axe violations with the avatar + name linked', async () => {
+    const base = baseDoc();
+    const { container } = render(
+      <ProposalDoc
+        doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
+      />
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('renders the avatar and name plain when profileHref is null (expert, admin, preview, share page)', () => {
+    const { container } = render(<ProposalDoc doc={baseDoc()} />);
+    expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Priya Sharma/ })).not.toBeInTheDocument();
+    expect(container.querySelector('a[href^="/experts/"]')).toBeNull();
   });
 });
 

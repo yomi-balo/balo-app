@@ -10,6 +10,7 @@ vi.mock('server-only', () => ({}));
 const {
   mockFindWithMilestones,
   mockListChangeOrders,
+  mockSums,
   mockGetCurrentUser,
   mockHasDeliveryCapability,
   mockNotFound,
@@ -18,6 +19,7 @@ const {
 } = vi.hoisted(() => ({
   mockFindWithMilestones: vi.fn(),
   mockListChangeOrders: vi.fn(),
+  mockSums: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   mockHasDeliveryCapability: vi.fn(),
   mockNotFound: vi.fn(() => {
@@ -32,6 +34,7 @@ const {
 vi.mock('@balo/db', () => ({
   projectEngagementsRepository: { findWithMilestones: mockFindWithMilestones },
   engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
+  engagementTimeEntriesRepository: { sumsForEngagement: mockSums },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/authz/engagement', () => ({
@@ -90,11 +93,9 @@ function engagement(
     ],
     expertProfile: {
       id: EXPERT_PROFILE_ID,
-      agencyId: null,
       type: 'independent',
       headline: null,
       user: { id: 'user-expert', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-      agency: null,
     },
     company: { id: COMPANY_ID, name: 'Northwind Industrial' },
     projectRequest: { id: 'req-1', title: 'CPQ implementation' },
@@ -152,6 +153,7 @@ function composerProps(): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSums.mockResolvedValue({ totalMinutes: 0, periodMinutes: null, byMilestone: {} });
   mockGetCurrentUser.mockResolvedValue(expertUser());
   mockFindWithMilestones.mockResolvedValue(engagement());
   mockListChangeOrders.mockResolvedValue([]);
@@ -169,12 +171,34 @@ describe('change-order composer page · access', () => {
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
   });
 
-  it('404s a stranger without consulting the capability', async () => {
+  it('404s a stranger who holds no delivery capability', async () => {
     mockGetCurrentUser.mockResolvedValue(
       expertUser({ companyId: 'company-other', expertProfileId: undefined })
     );
+    mockHasDeliveryCapability.mockResolvedValue(false);
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
-    expect(mockHasDeliveryCapability).not.toHaveBeenCalled();
+    expect(mockListChangeOrders).not.toHaveBeenCalled();
+  });
+
+  it('opens the composer for an agency owner/admin (no lens, manage_engagement held)', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      expertUser({
+        id: 'user-agency-admin',
+        companyId: 'company-other',
+        expertProfileId: undefined,
+      })
+    );
+    await renderPage();
+    expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-agency-admin' }),
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
+      { contextType: 'project', contextId: ENGAGEMENT_ID }
+    );
+    expect(screen.getByTestId('composer')).toBeInTheDocument();
   });
 
   it('404s the client company: the composer is expert-only', async () => {
@@ -192,7 +216,10 @@ describe('change-order composer page · access', () => {
     expect(mockHasDeliveryCapability).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-expert' }),
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      EXPERT_PROFILE_ID,
+      expect.objectContaining({
+        expertProfileId: EXPERT_PROFILE_ID,
+        agency: expect.objectContaining({ from: 'engagement' }),
+      }),
       { contextType: 'project', contextId: ENGAGEMENT_ID }
     );
     expect(mockLogWarn).toHaveBeenCalled();
@@ -279,6 +306,8 @@ describe('change-order composer page · props', () => {
         },
       ],
       order: null,
+      loggedMinutesByMilestone: {},
+      loggedValueCents: null,
       prefillLine: null,
     });
   });
@@ -298,6 +327,33 @@ describe('change-order composer page · props', () => {
     );
     await renderPage();
     expect(composerProps().hourlyRateCents).toBe(22_000);
+  });
+
+  it('hands the composer the value of the time already logged on a T&M project', async () => {
+    mockFindWithMilestones.mockResolvedValue(
+      engagement({ pricingMethod: 'tm', rateCents: 15_000 })
+    );
+    mockSums.mockResolvedValue({ totalMinutes: 90, periodMinutes: null, byMilestone: {} });
+    await renderPage();
+    expect(mockSums).toHaveBeenCalledWith('eng-1', null);
+    expect(composerProps().loggedValueCents).toBe(22_500);
+  });
+
+  it('hands the composer the time logged on each milestone', async () => {
+    mockFindWithMilestones.mockResolvedValue(engagement({ pricingMethod: 'tm' }));
+    mockSums.mockResolvedValue({
+      totalMinutes: 90,
+      periodMinutes: null,
+      byMilestone: { 'ms-a': 90, 'ms-b': 0 },
+    });
+    await renderPage();
+    expect(composerProps().loggedMinutesByMilestone).toEqual({ 'ms-a': 90, 'ms-b': 0 });
+  });
+
+  it('reads no logged time for a fixed-price project', async () => {
+    await renderPage();
+    expect(mockSums).not.toHaveBeenCalled();
+    expect(composerProps().loggedValueCents).toBeNull();
   });
 
   it('carries a client request into the composer with its heading and note', async () => {

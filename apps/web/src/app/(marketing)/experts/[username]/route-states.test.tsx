@@ -37,21 +37,31 @@ describe('experts/[username]/not-found', () => {
 });
 
 // ── page.tsx (RSC) — mock the seams the page composes, like BAL-247's page.test ──
-const { mockFindProfile, mockMapView, mockGetAvatarUrl, mockGetCurrentUser, mockNotFound } =
-  vi.hoisted(() => ({
-    mockFindProfile: vi.fn(),
-    mockMapView: vi.fn(),
-    mockGetAvatarUrl: vi.fn(),
-    mockGetCurrentUser: vi.fn(),
-    mockNotFound: vi.fn(() => {
-      throw new Error('NEXT_NOT_FOUND');
-    }),
-  }));
+const {
+  mockFindProfile,
+  mockMapView,
+  mockGetAvatarUrl,
+  mockGetCurrentUser,
+  mockNotFound,
+  mockLoadReviewEntries,
+} = vi.hoisted(() => ({
+  mockFindProfile: vi.fn(),
+  mockLoadReviewEntries: vi.fn(),
+  mockMapView: vi.fn(),
+  mockGetAvatarUrl: vi.fn(),
+  mockGetCurrentUser: vi.fn(),
+  mockNotFound: vi.fn(() => {
+    throw new Error('NEXT_NOT_FOUND');
+  }),
+}));
 
 vi.mock('@balo/db', () => ({
   expertsRepository: { findPublicProfileByUsername: mockFindProfile },
 }));
 vi.mock('@/lib/expert-profile/profile-view', () => ({ mapProfileToView: mockMapView }));
+vi.mock('@/lib/expert-profile/load-public-review-entries', () => ({
+  loadPublicReviewEntries: mockLoadReviewEntries,
+}));
 vi.mock('@/lib/storage/avatar-url', () => ({ getAvatarUrl: mockGetAvatarUrl }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('next/navigation', () => ({ notFound: mockNotFound }));
@@ -98,7 +108,9 @@ describe('ExpertProfilePage (RSC)', () => {
     vi.clearAllMocks();
   });
 
-  it('maps the profile and renders the client tree on a successful fetch', async () => {
+  it('maps the profile with its public review entries and renders the client tree', async () => {
+    const entries = [{ key: 'r1' }];
+    mockLoadReviewEntries.mockResolvedValue(entries);
     mockFindProfile.mockResolvedValue({ id: 'p1' });
     mockMapView.mockReturnValue(VIEW);
     mockGetAvatarUrl.mockReturnValue('https://cdn.test/anil.png');
@@ -107,7 +119,8 @@ describe('ExpertProfilePage (RSC)', () => {
     await renderPage('anil');
 
     expect(mockFindProfile).toHaveBeenCalledWith('anil');
-    expect(mockMapView).toHaveBeenCalledWith({ id: 'p1' });
+    expect(mockLoadReviewEntries).toHaveBeenCalledWith('p1');
+    expect(mockMapView).toHaveBeenCalledWith({ id: 'p1' }, entries);
     const client = screen.getByTestId('profile-client');
     expect(client).toHaveTextContent('Anil Pilania');
     expect(client).toHaveAttribute('data-logged-in', 'true');
@@ -142,6 +155,7 @@ describe('ExpertProfilePage (RSC)', () => {
     await expect(renderPage('ghost')).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockNotFound).toHaveBeenCalledTimes(1);
     expect(mockMapView).not.toHaveBeenCalled();
+    expect(mockLoadReviewEntries).not.toHaveBeenCalled();
   });
 
   it('re-throws so error.tsx can render when the fetch rejects', async () => {

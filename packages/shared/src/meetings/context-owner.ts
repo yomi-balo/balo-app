@@ -49,6 +49,7 @@
  * which is what lets a gate answer both with one denial literal. A caller that injected an
  * unfiltered read would silently resolve tenancy from a deleted row; do not.
  */
+import type { DeliveringAgencySource } from '../parties/delivering-agency';
 import type { MeetingContextTypeWithHolder, PrimaryMeetingContext } from './guest-participation';
 
 /**
@@ -59,6 +60,12 @@ export interface MeetingContextOwner {
   readonly companyId: string;
   /** `null` only for a `match`-routed `project_discovery`, which names nobody. */
   readonly expertProfileId: string | null;
+  /**
+   * Where the delivering agency comes from. Engagement-grain labels carry the engagement's
+   * pin; request-grain labels carry `expert_profile`, so the caller reads the expert
+   * profile's current agency (there is no engagement row to pin yet).
+   */
+  readonly deliveringAgency: DeliveringAgencySource;
 }
 
 /**
@@ -73,6 +80,14 @@ export interface MeetingContextOwner {
 export interface MeetingContextPartyRowLike {
   readonly companyId: string;
   readonly expertProfileId: string | null;
+}
+
+/**
+ * An `engagements` row as this rule sees it: both parties plus the delivering-agency pin
+ * (`engagements.delivering_agency_id`, `null` ⇒ no agency link when the engagement was created).
+ */
+export interface MeetingContextEngagementRowLike extends MeetingContextPartyRowLike {
+  readonly deliveringAgencyId: string | null;
 }
 
 /**
@@ -94,7 +109,7 @@ export interface MeetingContextOwnerReads {
   /** Live engagement by id — the five engagement-grain labels. */
   readonly findEngagement: (
     engagementId: string
-  ) => Promise<MeetingContextPartyRowLike | undefined>;
+  ) => Promise<MeetingContextEngagementRowLike | undefined>;
   /** Live project request by id — `project_discovery`, and the second hop of the third arm. */
   readonly findProjectRequest: (
     projectRequestId: string
@@ -209,6 +224,10 @@ export async function resolveContextOwner(
         owner: {
           companyId: engagement.companyId,
           expertProfileId: engagement.expertProfileId,
+          deliveringAgency: {
+            from: 'engagement',
+            deliveringAgencyId: engagement.deliveringAgencyId,
+          },
         },
       };
     }
@@ -221,7 +240,11 @@ export async function resolveContextOwner(
       }
       return {
         outcome: 'resolved',
-        owner: { companyId: request.companyId, expertProfileId: request.expertProfileId },
+        owner: {
+          companyId: request.companyId,
+          expertProfileId: request.expertProfileId,
+          deliveringAgency: { from: 'expert_profile' },
+        },
       };
     }
 
@@ -239,7 +262,11 @@ export async function resolveContextOwner(
       }
       return {
         outcome: 'resolved',
-        owner: { companyId: request.companyId, expertProfileId: relationship.expertProfileId },
+        owner: {
+          companyId: request.companyId,
+          expertProfileId: relationship.expertProfileId,
+          deliveringAgency: { from: 'expert_profile' },
+        },
       };
     }
 

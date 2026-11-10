@@ -109,11 +109,11 @@ function hydrated(
     expertProfile: {
       id: 'ep-1',
       type: 'agency',
-      agencyId: 'ag-1',
       headline: null,
+      timezone: 'UTC',
       user: { id: 'u-ex', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-      agency: { id: 'ag-1', name: 'CloudPeak Consulting', logoUrl: null },
     },
+    deliveringAgency: { id: 'ag-1', name: 'CloudPeak Consulting', logoUrl: null },
     projectRequest: { id: 'pr-1', title: 'CPQ implementation' },
     milestones: milestoneStubs(4),
     ...over,
@@ -413,11 +413,11 @@ describe('runDeliveryReviewSweep — reminder pass', () => {
         expertProfile: {
           id: 'ep-4',
           type: 'freelancer',
-          agencyId: null,
           headline: null,
+          timezone: 'UTC',
           user: { id: 'u-ex', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-          agency: null,
         },
+        deliveringAgency: null,
       })
     );
     mockFindOwner.mockResolvedValue({ id: 'owner-4' });

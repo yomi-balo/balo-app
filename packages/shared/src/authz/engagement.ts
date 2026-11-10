@@ -7,10 +7,12 @@
  *   - ENGAGEMENT (this file)     — gates by DELIVERY IDENTITY on ONE already-resolved
  *                                  meeting context (ADR-1046 §1).
  *
- * Two tokens, ONE shared holder set, ONE shared resolver per app:
+ * Three tokens, ONE shared resolver per app:
  *   `host_meetings`     — live / in-meeting (Daily owner token, admit/deny, end call)
  *   `manage_engagement` — administrative (reschedule propose/withdraw, expert-side
  *                         cancel, request case resolution)
+ *   `log_time`          — log time on a time-and-materials project. The DELIVERING
+ *                         EXPERT only; the other two share one holder set.
  *
  * ⚠ NO `EngagementCapability` token is a member of the membership `Capability` union.
  * That disjointness is enforced by the COMPILER, not by a lint rule — see the
@@ -37,10 +39,11 @@
  * outside `./index.ts` — would break HARD CONSTRAINT B (a membership role string is
  * interpreted in exactly ONE place), which is a worse defect than a benign cycle.
  */
+import { deliveringAgencyIdFor, type DeliveringAgencySource } from '../parties/delivering-agency';
 import { CAPABILITIES, roleHasCapability } from './index';
 
 /**
- * The two tokens. NOT members of the membership `Capability` union (ADR-1046 §1).
+ * The three tokens. NOT members of the membership `Capability` union (ADR-1046 §1).
  */
 export const ENGAGEMENT_CAPABILITIES = {
   /** Live, in-meeting: Daily owner token, admit/deny, end call. */
@@ -51,6 +54,12 @@ export const ENGAGEMENT_CAPABILITIES = {
    * client-only on the MEMBERSHIP axis (`PARTICIPATE`); the expert may only request.
    */
   MANAGE_ENGAGEMENT: 'manage_engagement',
+  /**
+   * Log time against a milestone of a time-and-materials project (BAL-626). Held by the
+   * delivering expert ONLY: an agency owner/admin manages the engagement and may edit or
+   * remove entries, but the hours are the deliverer's to record.
+   */
+  LOG_TIME: 'log_time',
 } as const;
 
 export type EngagementCapability =
@@ -180,7 +189,7 @@ export function relationshipDeniesHosting(relationship: RelationshipHostingStatu
 }
 
 /**
- * Both tokens over the same holder set — the ADR-1046 2026-07-31 amendment, pinned
+ * The two tokens over the same holder set — the ADR-1046 2026-07-31 amendment, pinned
  * as data rather than prose.
  */
 const HOST_BUNDLE: readonly EngagementCapability[] = [
@@ -189,15 +198,17 @@ const HOST_BUNDLE: readonly EngagementCapability[] = [
 ];
 
 /**
- * Which host roles hold which token. BOTH tokens map to the SAME holder set today
- * (ADR-1046 amendment 2026-07-31).
+ * Which host roles hold which token. `host_meetings` and `manage_engagement` map to the
+ * SAME holder set (ADR-1046 amendment 2026-07-31); `log_time` is the delivering expert's
+ * alone (BAL-626).
  *
- * ⚠ IF THE HOLDER SETS EVER DIVERGE, THEY DIVERGE **HERE**, IN THIS MAP — never by
- * introducing a second resolver. One resolver per app is an ADR-1046 invariant, and
- * `engagement.test.ts` pins the current identity so a divergence must be conscious.
+ * ⚠ THE HOLDER SETS DIVERGE **HERE**, IN THIS MAP — never by introducing a second
+ * resolver or an identity comparison at a call site. One resolver per app is an ADR-1046
+ * invariant, and `engagement.test.ts` pins each role's bundle so a divergence must be
+ * conscious.
  */
 export const ENGAGEMENT_ROLE_CAPABILITIES: Record<HostRole, readonly EngagementCapability[]> = {
-  [HOST_ROLES.DELIVERING_EXPERT]: HOST_BUNDLE,
+  [HOST_ROLES.DELIVERING_EXPERT]: [...HOST_BUNDLE, ENGAGEMENT_CAPABILITIES.LOG_TIME],
   [HOST_ROLES.AGENCY_ADMIN]: HOST_BUNDLE,
 };
 
@@ -266,7 +277,7 @@ export function resolveHostRole(
 
 /**
  * PURE. The composition every per-app resolver ends in: derive the host role, then
- * ask the token map. A non-holder is `false` for BOTH tokens.
+ * ask the token map. A non-holder is `false` for EVERY token.
  */
 export function hostContextGrants(
   hostContext: ResolvedHostContext,
@@ -278,6 +289,32 @@ export function hostContextGrants(
   return hostRoleHasCapability(hostRole, capability);
 }
 
+/**
+ * PURE. True when `actor` holds the agency-administration capability (`MANAGE_MEMBERS`) in
+ * the DELIVERING expert profile's agency — a delivering expert who owns the agency
+ * included, which is why this does NOT short-circuit on `expertUserId === actor.id`.
+ *
+ * The same guards as `resolveHostRole`, in the same order: a context resolved for another
+ * actor answers nothing about this one; an independent expert has no agency to administer;
+ * a null `actorRole` excludes every client-side actor. The role→capability interpretation
+ * is delegated to `roleHasCapability`; no role string is compared here.
+ */
+export function actorAdministersDeliveringAgency(
+  hostContext: ResolvedHostContext,
+  actor: { id: string }
+): boolean {
+  if (hostContext === null) return false;
+  if (hostContext.resolvedForActorId !== actor.id) return false;
+
+  const { agency } = hostContext;
+  if (agency === null) return false;
+
+  const { actorRole } = agency;
+  if (actorRole === null) return false;
+
+  return roleHasCapability(actorRole, CAPABILITIES.MANAGE_MEMBERS);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // THE HOST-CONTEXT ASSEMBLY — shared by BOTH per-app resolvers (BAL-421, ADR-1046
 // amendment). Everything above this line is synchronous; everything below needs I/O, so
@@ -285,7 +322,8 @@ export function hostContextGrants(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The two `expert_profiles` columns the holder rule reads. STRUCTURAL — `@balo/db`'s row
+ * The two `expert_profiles` columns the holder rule reads (`agencyId` only for a
+ * request-grain subject; an engagement-grain one reads the engagement's pin instead). STRUCTURAL — `@balo/db`'s row
  * satisfies it, and nothing here imports `@balo/db`. Deliberately the SAME shape
  * `ExpertSideVisibilityProfile` (`./expert-side-visibility`) declares, because both rules
  * turn on exactly these two facts; they are separate declarations because the two axes
@@ -294,7 +332,10 @@ export function hostContextGrants(
 export interface HostExpertProfile {
   /** `expert_profiles.userId` — the DELIVERING expert. NOT NULL in the database. */
   readonly userId: string;
-  /** `expert_profiles.agencyId`. `null` ⇒ INDEPENDENT expert — no agency lookup is made. */
+  /**
+   * `expert_profiles.agencyId` — the profile's CURRENT agency. Consulted only through an
+   * `expert_profile` agency source; `null` ⇒ no agency lookup is made.
+   */
   readonly agencyId: string | null;
 }
 
@@ -333,7 +374,7 @@ export type HostContextResolution =
  * Three facts this turns on, carried verbatim from the `apps/api` original:
  *   · `expert_profiles` has NO `deleted_at`, so there is no soft-delete predicate to add.
  *   · `expert_profiles.userId` is NOT NULL; `agencyId` is NULLABLE. A null `agencyId` is
- *     the INDEPENDENT expert, and it SHORT-CIRCUITS: `findAgencyRole` is NEVER CALLED,
+ *     the INDEPENDENT expert (for an engagement: a NULL pin), and it SHORT-CIRCUITS: `findAgencyRole` is NEVER CALLED,
  *     because there is no agency for anyone to be an admin of (ADR-1046 §2). Modelling it
  *     as `agency: null` is what makes that guarantee observable by call-count in a test.
  *   · a live-membership read that comes back `undefined` (a removed agency admin) becomes
@@ -348,18 +389,25 @@ export type HostContextResolution =
  * ⚠ `resolvedForActorId` IS STAMPED ON BOTH RETURN PATHS — see `HostContext`'s docblock.
  * It binds the context to the actor it was resolved for, so a caller cannot resolve once
  * as a privileged actor and then check many.
+ *
+ * ⚠ THE AGENCY COMES FROM `agencySource`, NOT FROM `profile.agencyId` ALONE. An
+ * engagement-grain subject passes `{ from: 'engagement', deliveringAgencyId }` so the agency is
+ * the engagement's pin; a request-grain subject passes `{ from: 'expert_profile' }` and gets the
+ * profile's current agency. The profile is still read for `userId` and for the missing-profile
+ * result. A NULL pin yields `agency: null` with no lookup, even if the profile now has an agency.
  */
 export async function buildHostContextForExpertProfile(
   expertProfileId: string,
   actorId: string,
-  reads: HostContextReads
+  reads: HostContextReads,
+  agencySource: DeliveringAgencySource
 ): Promise<HostContextResolution> {
   const profile = await reads.findExpertProfile(expertProfileId);
   if (profile === undefined) {
     return { ok: false, reason: 'expert_profile_missing' };
   }
 
-  const { agencyId } = profile;
+  const agencyId = deliveringAgencyIdFor(agencySource, profile.agencyId);
   if (agencyId === null) {
     return {
       ok: true,

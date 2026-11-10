@@ -11,6 +11,7 @@ const {
   mockJoinExisting,
   mockProvision,
   mockProvisionSolo,
+  ExpertAgencyAlreadyLinkedError,
 } = vi.hoisted(() => ({
   mockFindProfileById: vi.fn(),
   mockFindActiveByDomain: vi.fn(),
@@ -18,9 +19,18 @@ const {
   mockJoinExisting: vi.fn(),
   mockProvision: vi.fn(),
   mockProvisionSolo: vi.fn(),
+  ExpertAgencyAlreadyLinkedError: class ExpertAgencyAlreadyLinkedError extends Error {
+    constructor(
+      readonly expertProfileId: string,
+      readonly existingAgencyId: string
+    ) {
+      super('already linked');
+    }
+  },
 }));
 
 vi.mock('@balo/db', () => ({
+  ExpertAgencyAlreadyLinkedError,
   expertsRepository: { findProfileById: mockFindProfileById },
   partyDomainsRepository: { findActiveByDomain: mockFindActiveByDomain },
   agenciesRepository: {
@@ -200,6 +210,18 @@ describe('runLinkExpertAgency', () => {
     mockProvision.mockRejectedValue(new Error('capture conflict'));
 
     await expect(runLinkExpertAgency(baseInput())).rejects.toThrow('capture conflict');
+  });
+
+  it('reports a lost link race as already_linked with the winning agency, not an error', async () => {
+    mockFindProfileById.mockResolvedValue({ id: PROFILE_ID, userId: USER_ID, agencyId: null });
+    mockFindActiveByDomain.mockResolvedValue(undefined);
+    mockProvision.mockRejectedValue(
+      new ExpertAgencyAlreadyLinkedError(PROFILE_ID, 'agency-winner')
+    );
+
+    const result = await runLinkExpertAgency(baseInput());
+
+    expect(result).toEqual({ outcome: 'already_linked', agencyId: 'agency-winner', fresh: false });
   });
 });
 

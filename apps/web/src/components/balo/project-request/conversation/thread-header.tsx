@@ -9,6 +9,11 @@ import type {
 import type { ThreadActions } from './thread-actions';
 import { CallGroup, NextCallLine } from './thread-call-group';
 import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
+import {
+  EXPERT_PROFILE_ROW,
+  ExpertProfileAvatarLink,
+  ExpertProfileLink,
+} from '@/components/balo/expert-profile-link';
 import { declineVerbFor } from '@/lib/project-request/close-copy';
 
 interface ThreadHeaderProps {
@@ -16,6 +21,11 @@ interface ThreadHeaderProps {
   showYouSuffix: boolean;
   actions: ThreadActions;
   callPending: boolean;
+  /**
+   * `/experts/{u}` — the expert's public profile, non-null only on the client lens when that
+   * profile resolves. Links the avatar + name; `null` renders them plain.
+   */
+  profileHref: string | null;
   /** `/experts/{u}?book=1&src=request_thread`; non-null only when the client books via the profile. */
   profileBookingHref: string | null;
   /** Non-null once kickoff materialized the engagement — the target of a project call's link. */
@@ -73,9 +83,10 @@ function ProposalCtaButton({
 }
 
 /**
- * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar,
- * expert name with the next-call line, the lens-aware call group (book / join /
- * propose times) and the proposal slot per the gating matrix.
+ * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar and
+ * expert name (one link to the public profile when `profileHref` is set) with the
+ * next-call line, the lens-aware call group (book / join / propose times) and the
+ * proposal slot per the gating matrix.
  *
  * ⚠ NO FILES PILL — RETIRED BY BAL-431 (OSD-2), NOT MISSING. The request surface has exactly
  * ONE file home now, `RequestFilesPanel` (request-level, audience-aware), so the in-thread
@@ -96,6 +107,7 @@ export function ThreadHeader({
   showYouSuffix,
   actions,
   callPending,
+  profileHref,
   profileBookingHref,
   deliveryEngagementId,
   joinPartyLabel,
@@ -109,11 +121,20 @@ export function ThreadHeader({
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
   const { headerProposal, declineSlot } = actions;
   return (
-    <div className="border-border flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-4 py-3">
-      <InitialsAvatar initials={thread.expertInitials} size="md" />
+    <div
+      className={cn(
+        'border-border flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b px-4 py-3',
+        EXPERT_PROFILE_ROW
+      )}
+    >
+      <ExpertProfileAvatarLink href={profileHref} surface="request_thread_header">
+        <InitialsAvatar initials={thread.expertInitials} size="md" />
+      </ExpertProfileAvatarLink>
       <div className="min-w-[10rem] flex-1">
         <p className="text-foreground truncate text-sm font-semibold">
-          {thread.expertName}
+          <ExpertProfileLink href={profileHref} surface="request_thread_header">
+            {thread.expertName}
+          </ExpertProfileLink>
           {showYouSuffix && <span className="text-muted-foreground ml-1.5 text-[11px]">(you)</span>}
         </p>
         <NextCallLine

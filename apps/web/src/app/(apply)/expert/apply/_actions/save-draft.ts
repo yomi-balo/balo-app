@@ -11,6 +11,7 @@ import { log } from '@/lib/logging';
 import { sanitizeResponsibilitiesHtml } from '@/lib/sanitize/work-history-html';
 import { trackServerAndFlush, EXPERT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { z } from 'zod';
+import { syncSessionExpertProfileId } from './sync-session-expert-profile';
 import {
   DECLINED_APPLICATION_ERROR,
   SUBMITTED_APPLICATION_ERROR,
@@ -151,6 +152,7 @@ export const saveDraftAction = withAuth(
         }
 
         profileId = result.expertProfileId;
+        await syncSessionExpertProfileId(session, profileId);
       } else if (isNonProfileDraftStep(input.step)) {
         throw new Error(`Cannot save ${input.step} step before the profile step`);
       }
@@ -224,7 +226,6 @@ async function buildStepWrite(step: StepName, parsed: unknown): Promise<Applican
           linkedinUrl: data.linkedinSlug ? `https://linkedin.com/in/${data.linkedinSlug}` : null,
           isSalesforceMvp: data.isSalesforceMvp,
           isSalesforceCta: data.isSalesforceCta,
-          isCertifiedTrainer: data.isCertifiedTrainer,
           languages: data.languages,
           industryIds: data.industryIds,
         },

@@ -491,16 +491,17 @@ async function lockTaggedMilestonesTx(
 // parent rows by a nested relation's columns.
 //
 // CONSEQUENCE: the four relocated relations (`projectRequest`, `acceptedBy`,
-// `cancelledBy`, `changeRequestedBy`) are GRANDCHILDREN here — declared under
+// `cancelledBy`, `changeRequestedBy`, `completionRequestedBy`) are GRANDCHILDREN here — declared under
 // `with: { projectEngagement: { with: { … } } }` — and each fold HOISTS them back to
 // the top level, because every consumer reads them flat.
 
 /**
- * The hydrated project + live milestones + expert (with user + nullable agency)
- * graph behind `findWithMilestones`. A standalone module function so its INFERRED
+ * The hydrated project + live milestones + expert (with user) + nullable delivering
+ * agency graph behind `findWithMilestones`. A standalone module function so its INFERRED
  * return type is the single source of truth for `ProjectEngagementWithMilestones`.
- * `agency` is a LEFT-JOIN `one` relation → `Agency | null` (a freelancer expert has
- * `agency: null`; the caller falls back to the expert's own name).
+ * `deliveringAgency` is a LEFT-JOIN `one` relation over the engagement's pin →
+ * `Agency | null` (NULL pin ⇒ `null`; the caller falls back to the expert's own name).
+ * The expert profile carries no agency: its current link may differ from the pin.
  *
  * A CASE id returns `undefined` — the `engagement_type = 'project'` filter is what
  * makes `/engagements/[id]` (the PROJECT delivery workspace) 404 for a case rather
@@ -522,6 +523,7 @@ function queryProjectEngagementWithMilestones(id: string) {
       id: true,
       companyId: true,
       expertProfileId: true,
+      deliveringAgencyId: true,
       currency: true,
       baloFeeBps: true,
       activatedAt: true,
@@ -532,6 +534,11 @@ function queryProjectEngagementWithMilestones(id: string) {
       milestones: {
         where: (m, { isNull: childIsNull }) => childIsNull(m.deletedAt),
         orderBy: (m, { asc: childAsc }) => [childAsc(m.sortOrder), childAsc(m.id)],
+        // The person who completed each milestone (the delivering expert or an agency
+        // owner/admin), projected to a name only. NULL until completed, and on legacy rows.
+        with: {
+          completedBy: { columns: { id: true, firstName: true, lastName: true } },
+        },
       },
       // SECURITY (BAL-330 review): explicit `columns:` projections so this
       // consumer-facing shape carries ONLY what a party-aware delivery view needs
@@ -541,20 +548,25 @@ function queryProjectEngagementWithMilestones(id: string) {
       // and the expert's email/phone. A later Server Action can safely return this to
       // a client component. Notification/billing slices query their own data.
       expertProfile: {
-        columns: { id: true, agencyId: true, type: true, headline: true },
+        // `timezone` dates the T&M billing period in the expert's own calendar (BAL-624).
+        columns: { id: true, type: true, headline: true, timezone: true },
         with: {
           user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
-          agency: { columns: { id: true, name: true, logoUrl: true } },
         },
       },
+      // The agency pinned on the engagement when it was created — never the profile's current
+      // link, which moves when the expert changes agency. NULL ⇒ no agency.
+      deliveringAgency: { columns: { id: true, name: true, logoUrl: true } },
       // BAL-331 delivery workspace: all additive, all `columns:`-projected, PII-safe
       // (same discipline as `expertProfile` above — never bundle a full row).
       //   - company: the client party's display name for per-lens headers.
       //   - projectRequest: the header title (LEFT-JOIN `one` → null for a retainer
       //     engagement with no `project_request_id`; the caller falls back).
       //   - acceptedBy / changeRequestedBy: retrospective client-person attribution
-      //     (each nullable — `acceptedBy` is NULL on the D7 auto path, and both are
+      //     (each nullable — `acceptedBy` is NULL on the D7 auto path, and all are
       //     NULL until the corresponding transition happens).
+      //   - completionRequestedBy: the person who marked the project ready for review
+      //     (NULL until requested, and after a withdrawal).
       company: { columns: { id: true, name: true } },
       projectEngagement: {
         columns: {
@@ -584,6 +596,7 @@ function queryProjectEngagementWithMilestones(id: string) {
           projectRequest: { columns: { id: true, title: true } },
           acceptedBy: { columns: { id: true, firstName: true, lastName: true } },
           changeRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
+          completionRequestedBy: { columns: { id: true, firstName: true, lastName: true } },
         },
       },
       // BAL-621: every LIVE change-request round, oldest → newest (ties by id), with the
@@ -643,7 +656,14 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
       `Project engagement ${row.id} has a NULL balo_fee_bps — engagement_balo_fee_bps_case_null violated`
     );
   }
-  const { deliveryStatus, projectRequest, acceptedBy, changeRequestedBy, ...childScalars } = child;
+  const {
+    deliveryStatus,
+    projectRequest,
+    acceptedBy,
+    changeRequestedBy,
+    completionRequestedBy,
+    ...childScalars
+  } = child;
   // The change-request rounds are the durable history (the legacy `changeRequestNote` is
   // nulled by `requestCompletion`), so every "latest round" surface reads these.
   const changeRequestRounds = changeRequests.map((round) => ({
@@ -660,6 +680,7 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
     projectRequest, // HOISTED grandchild
     acceptedBy, // HOISTED grandchild
     changeRequestedBy, // HOISTED grandchild
+    completionRequestedBy, // HOISTED grandchild
     changeRequestRounds, // oldest → newest
     latestChangeRequest: changeRequestRounds.at(-1) ?? null,
     changeRequestRoundCount: changeRequestRounds.length,
@@ -667,7 +688,7 @@ function foldWorkspaceRow(row: WorkspaceGraphRow) {
   };
 }
 
-/** Live project + its live milestones + expert (user + nullable agency), FLATTENED. */
+/** Live project + its live milestones + expert (user) + nullable delivering agency, FLATTENED. */
 export type ProjectEngagementWithMilestones = ReturnType<typeof foldWorkspaceRow>;
 
 /** One live change-request round on the workspace graph (requester projected to a name). */
@@ -754,13 +775,21 @@ async function aggregateMilestoneProgress(
  * in the oversight tiles.
  */
 function queryPortfolioProjectEngagements(
-  scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+  scope:
+    | { companyId: string }
+    | { expertProfileId: string }
+    | { agencyId: string }
+    | { platform: true }
 ) {
   let scopeCondition: SQL | undefined;
   if ('companyId' in scope) {
     scopeCondition = eq(engagements.companyId, scope.companyId);
   } else if ('expertProfileId' in scope) {
     scopeCondition = eq(engagements.expertProfileId, scope.expertProfileId);
+  } else if ('agencyId' in scope) {
+    // The agency lens reads the engagement's pin, so a project stays with the agency it was
+    // delivered under after the expert moves to another agency.
+    scopeCondition = eq(engagements.deliveringAgencyId, scope.agencyId);
   }
 
   return db.query.engagements.findMany({
@@ -773,6 +802,7 @@ function queryPortfolioProjectEngagements(
       id: true,
       companyId: true,
       expertProfileId: true,
+      deliveringAgencyId: true,
       activatedAt: true,
       createdAt: true,
       updatedAt: true,
@@ -786,12 +816,13 @@ function queryPortfolioProjectEngagements(
       // can safely return this to a client component.
       company: { columns: { id: true, name: true } },
       expertProfile: {
-        columns: { id: true, agencyId: true, type: true },
+        columns: { id: true, type: true },
         with: {
           user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
-          agency: { columns: { id: true, name: true, logoUrl: true } },
         },
       },
+      // The engagement's pinned delivering agency (see queryProjectEngagementWithMilestones).
+      deliveringAgency: { columns: { id: true, name: true, logoUrl: true } },
       projectEngagement: {
         columns: {
           deliveryStatus: true,
@@ -864,6 +895,7 @@ function queryProjectEngagementsWithParties() {
       id: true,
       companyId: true,
       expertProfileId: true,
+      deliveringAgencyId: true,
       currency: true,
       activatedAt: true,
       createdAt: true,
@@ -873,12 +905,13 @@ function queryProjectEngagementsWithParties() {
       company: { columns: { id: true, name: true } },
       // SECURITY: explicit columns — NEVER stripeConnectId / workosId / email / phone.
       expertProfile: {
-        columns: { id: true, agencyId: true, type: true, headline: true },
+        columns: { id: true, type: true, headline: true },
         with: {
           user: { columns: { id: true, firstName: true, lastName: true, avatarUrl: true } },
-          agency: { columns: { id: true, name: true, logoUrl: true } },
         },
       },
+      // The engagement's pinned delivering agency (see queryProjectEngagementWithMilestones).
+      deliveringAgency: { columns: { id: true, name: true, logoUrl: true } },
       projectEngagement: {
         columns: {
           deliveryStatus: true,
@@ -957,8 +990,8 @@ function foldAdminRow(row: AdminGraphRow) {
 }
 
 /**
- * A project hydrated with its parties (client company, expert person + nullable
- * agency, originating request) PLUS derived milestone progress counts and the
+ * A project hydrated with its parties (client company, expert person, nullable
+ * delivering agency, originating request) PLUS derived milestone progress counts and the
  * `lastActivityAt` proxy — one admin oversight list row (BAL-335). The web "stalled"
  * flag is a later derivation from `lastActivityAt` vs a threshold.
  */
@@ -1374,8 +1407,8 @@ export const projectEngagementsRepository = {
 
   /**
    * A live PROJECT hydrated with its LIVE milestones (ordered `sort_order` asc,
-   * ties by id) and its expert (user + nullable agency — a freelancer gets
-   * `agency: null`), FLATTENED. Returns `undefined` when the engagement is
+   * ties by id), its expert (user) and its nullable delivering agency (the pin — NULL pin
+   * gives `deliveringAgency: null`), FLATTENED. Returns `undefined` when the engagement is
    * missing/soft-deleted OR is not a project (a Case id 404s the project workspace).
    */
   async findWithMilestones(id: string): Promise<ProjectEngagementWithMilestones | undefined> {
@@ -1391,7 +1424,7 @@ export const projectEngagementsRepository = {
   /**
    * All non-deleted PROJECT engagements for a party lens (company / expert /
    * platform), counterpart-hydrated (company name, project-request title, expert
-   * person + nullable agency) with derived milestone progress + a `lastActivityAt`
+   * person, nullable delivering agency) with derived milestone progress + a `lastActivityAt`
    * recency proxy, newest activity first. Returns EVERY non-deleted delivery status
    * (`active`, `pending_acceptance`, `completed`, `cancelled`) — the web A7 loader
    * owns render policy (excluding `completed` re-creates the "vanishes from inbox"
@@ -1401,7 +1434,11 @@ export const projectEngagementsRepository = {
    * NEVER stripeConnectId / workosId / email / phone. Empty → `[]`.
    */
   async listPortfolio(
-    scope: { companyId: string } | { expertProfileId: string } | { platform: true }
+    scope:
+      | { companyId: string }
+      | { expertProfileId: string }
+      | { agencyId: string }
+      | { platform: true }
   ): Promise<PortfolioProjectEngagementView[]> {
     const rows = await queryPortfolioProjectEngagements(scope);
     if (rows.length === 0) {
@@ -1430,9 +1467,41 @@ export const projectEngagementsRepository = {
   },
 
   /**
+   * Live project engagements per agency: not soft-deleted, `delivery_status` in
+   * (`active`, `pending_acceptance`), pinned to the agency (the engagement's delivering
+   * agency, fixed at creation — not the expert profile's current link). Agencies with none
+   * are absent from the Map. An empty input returns an empty Map without querying.
+   */
+  async countLiveByAgency(agencyIds: string[]): Promise<Map<string, number>> {
+    if (agencyIds.length === 0) {
+      return new Map();
+    }
+    const rows = await db
+      .select({ agencyId: engagements.deliveringAgencyId, total: count() })
+      .from(projectEngagements)
+      .innerJoin(engagements, eq(engagements.id, projectEngagements.engagementId))
+      .where(
+        and(
+          inArray(engagements.deliveringAgencyId, agencyIds),
+          isNull(engagements.deletedAt),
+          isNull(projectEngagements.deletedAt),
+          inArray(projectEngagements.deliveryStatus, ['active', 'pending_acceptance'])
+        )
+      )
+      .groupBy(engagements.deliveringAgencyId);
+    const byAgency = new Map<string, number>();
+    for (const row of rows) {
+      if (row.agencyId !== null) {
+        byAgency.set(row.agencyId, row.total);
+      }
+    }
+    return byAgency;
+  },
+
+  /**
    * The admin oversight list (BAL-335): EVERY non-deleted PROJECT engagement (all
-   * delivery statuses) hydrated with its parties (client company, expert person +
-   * nullable agency, originating request) and derived milestone progress. Per row:
+   * delivery statuses) hydrated with its parties (client company, expert person,
+   * nullable delivering agency, originating request) and derived milestone progress. Per row:
    * `totalMilestones`, `completedMilestones`, `inProgressMilestones` (over LIVE
    * milestones), and `lastActivityAt = MAX(GREATEST(started_at, completed_at))` over
    * live milestones, falling back to `activated_at` / `created_at` when there is no
@@ -1557,6 +1626,7 @@ export const projectEngagementsRepository = {
         engagementId: engagements.id,
         companyId: engagements.companyId,
         expertProfileId: engagements.expertProfileId,
+        deliveringAgencyId: engagements.deliveringAgencyId,
         anchorAt: projectEngagements.acceptedAt,
         title: projectRequests.title,
       })
@@ -1598,6 +1668,7 @@ export const projectEngagementsRepository = {
           engagementKind: 'project' as const,
           companyId: row.companyId,
           expertProfileId: row.expertProfileId,
+          deliveringAgencyId: row.deliveringAgencyId,
           anchorAt: row.anchorAt,
           title: row.title ?? UNTITLED_ENGAGEMENT_LABEL,
         },

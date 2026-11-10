@@ -7,6 +7,7 @@ import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { mapProfileToView } from '@/lib/expert-profile/profile-view';
+import { loadPublicReviewEntries } from '@/lib/expert-profile/load-public-review-entries';
 import { loadProjectRequestTaxonomies } from '@/lib/project-request/load-project-taxonomy';
 import { loadSearchTaxonomy } from '@/lib/search/load-taxonomy';
 import { loadBookingContext } from '@/lib/booking/load-booking-context';
@@ -95,18 +96,19 @@ export default async function ExpertProfilePage({
     notFound();
   }
 
-  const view = mapProfileToView(profile);
-  const portraitUrl = getAvatarUrl(view.avatarKey, 'profile');
-  const bookingAvatarUrl = getAvatarUrl(view.avatarKey, 'thumbnail');
-
   // Independent reads — run in parallel. `loadProjectRequestTaxonomies` / `loadSearchTaxonomy`
   // never throw (degrade to EMPTY), so a picker shows its error state with Retry rather than
-  // the page failing.
-  const [user, projectTaxonomies, productsTaxonomy] = await Promise.all([
+  // the page failing. `loadPublicReviewEntries` returns `null` on failure, so the reviews
+  // section falls back to the stored aggregate.
+  const [user, projectTaxonomies, productsTaxonomy, reviewEntries] = await Promise.all([
     getCurrentUser(),
     loadProjectRequestTaxonomies(),
     loadSearchTaxonomy(),
+    loadPublicReviewEntries(profile.id),
   ]);
+  const view = mapProfileToView(profile, reviewEntries);
+  const portraitUrl = getAvatarUrl(view.avatarKey, 'profile');
+  const bookingAvatarUrl = getAvatarUrl(view.avatarKey, 'thumbnail');
   const isLoggedIn = user !== null;
 
   // BAL-400 (D1a) — the booking Step 0 read. Only resolved when signed in (`loadBookingContext`

@@ -103,7 +103,7 @@ function RedeemAnotherButton({ onClick }: Readonly<{ onClick: () => void }>): Re
     <button
       type="button"
       onClick={onClick}
-      className="text-primary focus-visible:ring-ring mx-auto inline-flex min-h-[44px] items-center gap-1.5 rounded py-2 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+      className="text-primary focus-visible:ring-ring mx-auto inline-flex min-h-[44px] items-center gap-1.5 rounded py-2 text-sm font-medium underline-offset-[3px] transition-colors hover:underline focus-visible:ring-2 focus-visible:outline-none"
     >
       <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
       Redeem another code
@@ -180,9 +180,9 @@ export function RedeemPromoPanel({
           <div className="bg-success/10 mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full">
             <PartyPopper className="text-success h-6 w-6" aria-hidden="true" />
           </div>
-          <h1 className="text-foreground text-xl font-semibold">
+          <h2 className="text-foreground text-xl font-semibold">
             {alreadyRedeemed ? 'Already redeemed' : "You're all set"}
-          </h1>
+          </h2>
           <p className="text-muted-foreground mx-auto mt-1.5 max-w-sm text-sm leading-relaxed">
             {alreadyRedeemed
               ? `This code was already redeemed for ${companyName}. Nothing was added twice.`
@@ -229,7 +229,7 @@ export function RedeemPromoPanel({
             <Gift className="text-primary h-5 w-5" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-foreground text-lg font-semibold">Redeem a promo code</h1>
+            <h2 className="text-foreground text-lg font-semibold">Redeem a promo code</h2>
             <p className="text-muted-foreground mt-0.5 text-sm">
               Have a promo code? Add the credit to {companyName} — no card needed.
             </p>

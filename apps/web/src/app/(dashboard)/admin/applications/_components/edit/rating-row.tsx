@@ -1,20 +1,19 @@
 'use client';
 
 import { Wrench, Building2, Compass, GraduationCap, Undo2 } from 'lucide-react';
-import { Slider as SliderPrimitive } from 'radix-ui';
 import { Button } from '@/components/ui/button';
-import { proficiencyToLevel } from '@/lib/expert-profile/proficiency';
+import { proficiencyScaleLevel } from '@balo/shared/experts';
+import { SegmentedSlider } from '@/components/balo/segmented-slider';
 import { cn } from '@/lib/utils';
 import { ChangedDot } from './changed-dot';
 
 /**
  * BAL-593 §[F] — one support-type rating row inside `ProductRatingCard`'s edit mode: Balo's
  * slider, the expert's self-rating marker, and the difference between them. Design ref 1154-1221
- * (the row) / 1027-1118 (the track) — reimplemented on the shadcn `Slider` rather than the
- * design's hand-rolled `<input type="range">`.
+ * (the row) / 1027-1118 (the track) — reimplemented on the shared `SegmentedSlider`.
  *
  * Mirrors the `(apply)/expert/apply/_components/assessment-card.tsx` icon mapping (by support
- * type SLUG — the schema carries no icon column) and its desktop/mobile dual-layout convention.
+ * type SLUG — the schema carries no icon column) and its title-plus-description convention. The row has a desktop and a mobile layout.
  */
 
 const DIMENSION_ICONS: Record<string, typeof Wrench> = {
@@ -56,47 +55,36 @@ function RatingTrack({
   const lo = hasGap && self !== null ? Math.min(self, balo) : balo;
   const hi = hasGap && self !== null ? Math.max(self, balo) : balo;
   const valueText =
-    `${balo}, ${proficiencyToLevel(balo).label}` + (self === null ? '' : `. Self-rating ${self}`);
+    `${balo}, ${proficiencyScaleLevel(balo).title}` +
+    (self === null ? '' : `. Self-rating ${self}`);
 
   return (
-    <div className="relative flex h-7 items-center">
-      {hasGap && (
-        <div
-          aria-hidden="true"
-          className="bg-warning/15 border-warning/40 absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm border"
-          style={{ left: pct(lo), width: pct(hi - lo) }}
-        />
-      )}
-      <SliderPrimitive.Root
-        min={0}
-        max={10}
-        step={1}
-        value={[balo]}
-        onValueChange={([v]) => onChange(v ?? 0)}
-        disabled={disabled}
-        className="relative z-10 flex w-full touch-none items-center select-none data-[disabled]:opacity-50"
-      >
-        <SliderPrimitive.Track className="bg-muted relative h-1.5 w-full grow overflow-hidden rounded-full">
-          <SliderPrimitive.Range className="bg-primary absolute h-full" />
-        </SliderPrimitive.Track>
-        {/* ⚠ `aria-label` goes on the THUMB, not `Root` — `Root` renders a plain wrapper span, and
-            an ancestor's `aria-label` is not an accessible name for the descendant `role="slider"`
-            element (@radix-ui/react-slider only reads `props['aria-label']` off `Thumb` itself). */}
-        <SliderPrimitive.Thumb
-          aria-label={label}
-          aria-valuetext={valueText}
-          className="border-primary ring-ring/50 block size-4 shrink-0 rounded-full border bg-white shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
-        />
-      </SliderPrimitive.Root>
-      {self !== null && (
-        <span
-          aria-hidden="true"
-          title={`Self-rating ${self}`}
-          className="bg-foreground/55 pointer-events-none absolute top-1/2 h-[18px] w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
-          style={{ left: pct(self) }}
-        />
-      )}
-    </div>
+    <SegmentedSlider
+      value={balo}
+      onValueChange={onChange}
+      aria-label={label}
+      aria-valuetext={valueText}
+      disabled={disabled}
+      trackOverlay={
+        <>
+          {hasGap && (
+            <div
+              aria-hidden="true"
+              className="bg-warning/15 border-warning/40 pointer-events-none absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm border"
+              style={{ left: pct(lo), width: pct(hi - lo) }}
+            />
+          )}
+          {self !== null && (
+            <span
+              aria-hidden="true"
+              title={`Self-rating ${self}`}
+              className="bg-foreground/55 pointer-events-none absolute top-1/2 h-[18px] w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+              style={{ left: pct(self) }}
+            />
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -113,7 +101,7 @@ export function RatingRowEdit({
   const changed = !missing && original !== null && original !== balo;
   const rowDisabled = disabled || missing === true;
   const Icon = DIMENSION_ICONS[supportType.slug] ?? Wrench;
-  const { label: levelLabel } = proficiencyToLevel(balo);
+  const { title: levelLabel, description } = proficiencyScaleLevel(balo);
   const trackLabel = `Balo’s ${supportType.name} rating for ${productName}`;
 
   return (
@@ -141,7 +129,9 @@ export function RatingRowEdit({
             balo
           )}
         </span>
-        <span className="text-muted-foreground w-[90px] text-xs">{missing ? '' : levelLabel}</span>
+        <span className="text-muted-foreground w-[128px] shrink-0 text-xs">
+          {missing ? '' : levelLabel}
+        </span>
         <span
           title={
             self === null
@@ -170,6 +160,9 @@ export function RatingRowEdit({
           )}
         </span>
       </div>
+      {!missing && (
+        <p className="text-muted-foreground mt-1 hidden text-xs sm:block">{description}</p>
+      )}
 
       {/* Mobile layout */}
       <div className="space-y-2 sm:hidden">
@@ -214,6 +207,7 @@ export function RatingRowEdit({
             {missing ? 'Not rated' : `${balo} · ${levelLabel}`}
           </span>
         </div>
+        {!missing && <p className="text-muted-foreground text-xs">{description}</p>}
       </div>
     </div>
   );

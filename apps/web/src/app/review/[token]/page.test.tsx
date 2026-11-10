@@ -72,6 +72,11 @@ const LANDING_CONTEXT = {
   expertPartyLabel: 'CloudPeak Consulting',
   expertGivenName: 'Amara',
   reviewerFirstName: 'Dana',
+  reviewerLastInitial: 'M',
+  reviewerJobTitle: null,
+  reviewerLastShowCompany: null,
+  clientCompanyNameAllowed: true,
+  clientIndustryName: null,
   title: 'Flow interview stuck on a record-triggered loop',
   concludedOnIso: '2026-08-03T00:00:00.000Z',
 };
@@ -186,6 +191,9 @@ describe('ReviewLandingPage', () => {
       body: 'Half of it landed',
       createdAt: new Date('2026-07-12T00:00:00Z'),
       lastEditedAt: null,
+      bodyVisibility: 'private',
+      showCompany: false,
+      reviewerRole: 'Sales Director',
     });
 
     await renderPage();
@@ -196,6 +204,9 @@ describe('ReviewLandingPage', () => {
           rating: 3,
           body: 'Half of it landed',
           ratedOnIso: '2026-07-12T00:00:00.000Z',
+          bodyVisibility: 'private',
+          showCompany: false,
+          reviewerRole: 'Sales Director',
         },
       })
     );

@@ -76,6 +76,7 @@ export {
   type ExpertProfileEventMap,
   type ExpertProfileSection,
   type ExpertProfileCta,
+  type ExpertProfileLinkSurface,
   type ProfileViewport,
 } from './expert-profile';
 export {
@@ -118,6 +119,7 @@ export {
   type BillingServerEventMap,
 } from './billing';
 export { PARTY_DOMAIN_SERVER_EVENTS, type PartyDomainServerEventMap } from './party-domains';
+export { ADMIN_COMPANY_SERVER_EVENTS, type AdminCompanyServerEventMap } from './admin-company';
 export {
   SIGNUP_DOMAIN_SERVER_EVENTS,
   type SignupDomainServerEventMap,

@@ -30,7 +30,7 @@ import { creditSessionsRepository } from './credit-sessions';
 
 const MINUTE_MS = 60_000;
 /** Client 700 / minute at the default fee. */
-const EXPERT_HOURLY_700 = 33_600;
+const EXPERT_RATE_700 = 560;
 
 interface Company {
   companyId: string;
@@ -85,14 +85,14 @@ function snapshotFor(owner: Company | { companyId: string }, expertProfileId: st
 describe('bookingFundingRepository.readSnapshot — each kind', () => {
   it('no_wallet — a company that has never had a wallet', async () => {
     const booker = await company({});
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     // A company id with no wallet row (the factory's company carries one; use a fresh company).
     const { companyId } = await caseEngagementFactory({ expertProfileId });
     const snapshot = await snapshotFor({ companyId }, expertProfileId);
     expect(snapshot).toEqual({
       kind: 'no_wallet',
       topUpPricing: {
-        expertRateCents: EXPERT_HOURLY_700,
+        expertRateCents: EXPERT_RATE_700,
         availableMinor: 0,
         reservable: [],
         mandateActive: false,
@@ -103,7 +103,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
   });
 
   it('no_wallet — prices the booked expert and the company’s upcoming bookings, even without a wallet', async () => {
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const { engagement, companyId } = await caseEngagementFactory({ expertProfileId });
     const { start, end } = window(120, 30);
     const { meeting } = await meetingFactory({
@@ -115,7 +115,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     expect(snapshot).toEqual({
       kind: 'no_wallet',
       topUpPricing: {
-        expertRateCents: EXPERT_HOURLY_700,
+        expertRateCents: EXPERT_RATE_700,
         availableMinor: 0,
         reservable: [
           {
@@ -123,7 +123,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
             scheduledStart: start,
             scheduledEnd: end,
             expertProfileId,
-            expertRateCents: EXPERT_HOURLY_700,
+            expertRateCents: EXPERT_RATE_700,
           },
         ],
         mandateActive: false,
@@ -181,7 +181,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
       stripeCustomerId: 'cus_snapshot',
       stripePaymentMethodId: 'pm_snapshot',
     });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     await openHold(booker, expertProfileId);
     const upcoming = await bookCase(booker, expertProfileId, 120, 30);
 
@@ -198,26 +198,26 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     });
     if (snapshot.kind !== 'on_hold') throw new Error('expected on_hold');
     expect(snapshot.topUpPricing).toMatchObject({
-      expertRateCents: EXPERT_HOURLY_700,
+      expertRateCents: EXPERT_RATE_700,
       availableMinor: -5_000,
       mandateActive: true,
     });
     expect(snapshot.topUpPricing.reservable).toHaveLength(1);
     expect(snapshot.topUpPricing.reservable[0]).toMatchObject({
       meetingId: upcoming.meetingId,
-      expertRateCents: EXPERT_HOURLY_700,
+      expertRateCents: EXPERT_RATE_700,
     });
   });
 
   it('on_hold — without a mandate the pricing says so', async () => {
     const booker = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     await openHold(booker, expertProfileId, 30_000);
 
     expect(await snapshotFor(booker, expertProfileId)).toMatchObject({
       kind: 'on_hold',
       topUpPricing: {
-        expertRateCents: EXPERT_HOURLY_700,
+        expertRateCents: EXPERT_RATE_700,
         availableMinor: -5_000,
         reservable: [],
         mandateActive: false,
@@ -232,7 +232,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
       stripeCustomerId: 'cus_snapshot',
       stripePaymentMethodId: 'pm_snapshot',
     });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     expect(await snapshotFor(booker, expertProfileId)).toEqual({
       kind: 'mandate',
       walletId: booker.walletId,
@@ -249,7 +249,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
 
   it('no_mandate — the booked expert’s rate (null when unset), available, and the reservable set', async () => {
     const booker = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const rateless = await expertAt(null);
     const a = await bookCase(booker, expertProfileId, 120, 30);
 
@@ -257,7 +257,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     expect(snapshot).toMatchObject({
       kind: 'no_mandate',
       walletId: booker.walletId,
-      expertRateCents: EXPERT_HOURLY_700,
+      expertRateCents: EXPERT_RATE_700,
       availableMinor: 30_000,
     });
     if (snapshot.kind !== 'no_mandate') throw new Error('expected no_mandate');
@@ -265,7 +265,7 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     expect(snapshot.reservable[0]).toMatchObject({
       meetingId: a.meetingId,
       expertProfileId,
-      expertRateCents: EXPERT_HOURLY_700,
+      expertRateCents: EXPERT_RATE_700,
     });
 
     expect(await snapshotFor(booker, rateless)).toMatchObject({
@@ -279,7 +279,7 @@ describe('bookingFundingRepository.readSnapshot — the reservable set and avail
   it('another company’s booking is never reserved against this one', async () => {
     const booker = await company({ balanceMinor: 30_000 });
     const other = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     await bookCase(other, expertProfileId, 120, 30);
     const snapshot = await snapshotFor(booker, expertProfileId);
     expect(snapshot).toMatchObject({ kind: 'no_mandate', reservable: [] });
@@ -287,7 +287,7 @@ describe('bookingFundingRepository.readSnapshot — the reservable set and avail
 
   it('a meeting whose only session was cancelled is reserved again — it reads as sessionless', async () => {
     const booker = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const a = await bookCase(booker, expertProfileId, 120, 30);
     const opened = await creditSessionsRepository.open({
       walletId: booker.walletId,
@@ -315,15 +315,15 @@ describe('bookingFundingRepository.readSnapshot — the reservable set and avail
 
   it('reserves at the expert’s CURRENT rate — a rate change since booking is reflected', async () => {
     const booker = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     await bookCase(booker, expertProfileId, 120, 30);
     await db
       .update(expertProfiles)
-      .set({ rateCents: EXPERT_HOURLY_700 * 2 })
+      .set({ rateCents: EXPERT_RATE_700 * 2 })
       .where(eq(expertProfiles.id, expertProfileId));
     const snapshot = await snapshotFor(booker, expertProfileId);
     if (snapshot.kind !== 'no_mandate') throw new Error('expected no_mandate');
-    expect(snapshot.reservable[0]?.expertRateCents).toBe(EXPERT_HOURLY_700 * 2);
+    expect(snapshot.reservable[0]?.expertRateCents).toBe(EXPERT_RATE_700 * 2);
   });
 
   it('⚠ D8.5 — available nets a live session’s hold by its posted consumption (29,000, not 15,000)', async () => {
@@ -331,7 +331,7 @@ describe('bookingFundingRepository.readSnapshot — the reservable set and avail
     // 21,000; at minute 20 the balance is 36,000. Gross available would be 15,000 — subtracting
     // the 14,000 already drawn TWICE. Netted: 36,000 − (21,000 − 14,000) = 29,000.
     const booker = await company({ balanceMinor: 50_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const live = await bookCase(booker, expertProfileId, -30, 30);
     const opened = await creditSessionsRepository.open({
       walletId: booker.walletId,
@@ -374,7 +374,7 @@ describe('bookingFundingRepository.readCardRemovalSnapshot (owner ruling D10.6)'
   }
 
   it('no_wallet — a company that has never had a wallet', async () => {
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const { companyId } = await caseEngagementFactory({ expertProfileId });
     expect(await removalSnapshotFor({ companyId })).toEqual({ kind: 'no_wallet' });
   });
@@ -389,7 +389,7 @@ describe('bookingFundingRepository.readCardRemovalSnapshot (owner ruling D10.6)'
 
   it('mandate — carries the NETTED available balance and the upcoming reservable bookings, which the booking snapshot never reads', async () => {
     const booker = await company({ balanceMinor: 30_000, ...MANDATE });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     const a = await bookCase(booker, expertProfileId, 120, 30);
 
     const snapshot = await removalSnapshotFor(booker);
@@ -400,7 +400,7 @@ describe('bookingFundingRepository.readCardRemovalSnapshot (owner ruling D10.6)'
     });
     if (snapshot.kind !== 'mandate') throw new Error('expected mandate');
     expect(snapshot.reservable.map((row) => row.meetingId)).toEqual([a.meetingId]);
-    expect(snapshot.reservable[0]).toMatchObject({ expertRateCents: EXPERT_HOURLY_700 });
+    expect(snapshot.reservable[0]).toMatchObject({ expertRateCents: EXPERT_RATE_700 });
 
     // The booking snapshot for the same company still short-circuits at the mandate.
     expect(await snapshotFor(booker, expertProfileId)).toEqual({
@@ -412,7 +412,7 @@ describe('bookingFundingRepository.readCardRemovalSnapshot (owner ruling D10.6)'
   it('another company’s booking is never counted against this wallet', async () => {
     const booker = await company({ balanceMinor: 30_000, ...MANDATE });
     const other = await company({ balanceMinor: 30_000 });
-    const expertProfileId = await expertAt(EXPERT_HOURLY_700);
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
     await bookCase(other, expertProfileId, 120, 30);
     expect(await removalSnapshotFor(booker)).toMatchObject({ kind: 'mandate', reservable: [] });
   });

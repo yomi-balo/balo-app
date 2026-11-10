@@ -219,6 +219,34 @@ describe('YourMove — chips and filtering', () => {
     );
   });
 
+  it('gives pressed and unpressed chips a hover, a transition and a focus-visible ring', () => {
+    render(
+      <YourMove
+        workspaceType="expert"
+        data={ready([
+          card({ id: 'a', kind: 'proposal_requested' }),
+          card({ id: 'c', kind: 'invitation' }),
+        ])}
+      />
+    );
+    const group = screen.getByRole('group', { name: 'Filter by type' });
+    const chips = within(group).getAllByRole('button');
+    const pressed = chips.filter((chip) => chip.getAttribute('aria-pressed') === 'true');
+    const unpressed = chips.filter((chip) => chip.getAttribute('aria-pressed') === 'false');
+    expect(pressed.length).toBeGreaterThan(0);
+    expect(unpressed.length).toBeGreaterThan(0);
+    for (const chip of pressed) {
+      expect(chip).toHaveClass(
+        'hover:bg-foreground/80',
+        'transition-colors',
+        'focus-visible:ring-2'
+      );
+    }
+    for (const chip of unpressed) {
+      expect(chip).toHaveClass('hover:bg-accent', 'transition-colors', 'focus-visible:ring-2');
+    }
+  });
+
   it('filters the rail, fires filtered with the remaining count, and drops the featured card', async () => {
     render(
       <YourMove
@@ -374,6 +402,18 @@ describe('YourMove — scroll arrows (overflow only)', () => {
     render(<YourMove workspaceType="expert" data={ready([card(), card({ id: 'c-2' })])} />);
     expect(screen.getByRole('button', { name: 'Scroll back' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Scroll forward' })).toBeInTheDocument();
+  });
+
+  it('gives both arrows a hover, a transition and a focus-visible ring', () => {
+    stubOverflow(true);
+    render(<YourMove workspaceType="expert" data={ready([card(), card({ id: 'c-2' })])} />);
+    for (const name of ['Scroll back', 'Scroll forward']) {
+      expect(screen.getByRole('button', { name })).toHaveClass(
+        'hover:bg-accent',
+        'transition-colors',
+        'focus-visible:ring-2'
+      );
+    }
   });
 
   it('renders no arrows when the rail fits', () => {

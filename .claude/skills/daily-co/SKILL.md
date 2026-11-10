@@ -163,12 +163,14 @@ creates or rotates a webhook.
 1. Generate our own secret: `openssl rand -base64 32`.
 2. Set `DAILY_WEBHOOK_SECRET` on the target environment, deploy, and confirm the boot alert is
    gone (an error + Sentry in production, a warning elsewhere).
-3. `POST /v1/webhooks` with `{ url, eventTypes: [...HANDLED_DAILY_EVENT_TYPES], hmac: <same secret>, retryType: "exponential" }`.
+3. `POST /v1/webhooks` with `{ url, eventTypes: [...HANDLED_DAILY_EVENT_TYPES], hmac: <same secret>, retryType: "exponential" }`
+   — `scripts/daily-webhook.ts sync --url <env>/webhooks/daily` builds this body (dry-run by
+   default; `--apply` sends it).
    We supply our own `hmac` — the secret must already be set from step 2, because an endpoint
    can't verify a ping signed with a secret it hasn't been given yet. `retryType` is **required**;
    never rely on the default (`circuit-breaker`).
 4. `GET /v1/webhooks` and check `state: ACTIVE`, `retryType: exponential`, and the full
-   `eventTypes` list.
+   `eventTypes` list — `scripts/daily-webhook.ts verify` does this and exits 1 on drift.
 
 An **update** (e.g. the `eventTypes` change below) or a **re-activate** re-sends the same
 `{"test":"test"}` ping, signed with the webhook's current `hmac` (the one passed in that request,
@@ -190,7 +192,8 @@ times with backoff up to 15 min, then deleted; it never circuit-breaks.
 
 - Headers are `X-Webhook-Signature` and `X-Webhook-Timestamp` — read them **lower-cased**
   (`x-webhook-signature` / `x-webhook-timestamp`); Fastify normalises header names.
-  `X-Webhook-Timestamp` is unix **seconds**.
+  `X-Webhook-Timestamp` is unix **milliseconds** (the docs omit the unit; confirmed from a captured
+  verification ping, 2026-11-10).
 - Signing string is `X-Webhook-Timestamp + '.' + <raw body bytes>`. **Raw bytes, never a
   re-serialized body** — `JSON.parse` + `JSON.stringify` reorders keys and normalises whitespace,
   so a round-tripped body verifies against nothing. Register `fastify-raw-body` **scoped**
@@ -234,6 +237,47 @@ deduplicating on `type` plus the payload's `session_id` instead. Balo's marker a
 on `id`, so that case is NOT deduplicated today: a replayed `participant.joined` whose duplicate
 carries a fresh `id`, arriving after the original interval has legitimately closed, would open a
 second interval. Known gap, not fixed here.
+
+## Domains and environments (BAL-518)
+
+`getbalo` belongs to the **Bubble app** (`balo.expert`). Its one webhook subscription
+(`da03541c-…` → `https://balo.expert/api/1.1/wf/daily_listener`) holds the domain's only slot
+(`max_webhook_count: 1`). **Never modify, repoint or delete it**, and never set domain-level
+config on `getbalo`: domain config applies to every Bubble room too. `scripts/daily-webhook.ts`
+refuses a `getbalo` key for this reason.
+
+The new platform runs on its own Daily account, with one domain per database:
+
+| Environment                  | Daily domain    | Database | Status                   |
+| ---------------------------- | --------------- | -------- | ------------------------ |
+| Railway `production` (api)   | non-prod domain | balo-dev | verified 2026-09-27 (DB) |
+| Vercel Production (web)      | same as the api | balo-dev | confirm before cutover   |
+| Launch database (not built)  | prod domain     | —        | stays empty until then   |
+| Vercel Preview / Development | follows its DB  | confirm  | confirm before cutover   |
+| Local dev                    | non-prod domain | local    | —                        |
+
+**balo-dev is a non-production database** (decided 2026-11-06): it pairs with the non-prod
+domain, even though Railway calls its environment `production`. The prod domain gets no rooms and
+no webhook until the real launch database exists, so test calls never record on the prod plan and
+launch needs no second cutover. The webhook rule follows the database, not the environment name.
+
+- **One domain per database.** `meetings.join_url` persists the room's host, and the web pins
+  grants to one host, so a database whose meetings point at two domains is stranded half-way.
+- **Three variables change together:** `DAILY_API_KEY` + `DAILY_WEBHOOK_SECRET` (api) and
+  `NEXT_PUBLIC_DAILY_DOMAIN` (web, `<domain>.daily.co`). `isDailyHost`
+  (`apps/web/src/lib/meetings/validate-grant.ts`) rejects every grant whose `roomUrl` is not on
+  the pinned host. It is inlined at build time, so a change needs a redeploy; unset, it falls back
+  to any `*.daily.co`.
+- **Recording is per-room, not domain-level.** `enable_recording` is not a settable domain
+  property (`POST /` accepts UI, branding, `hipaa`, `lang`, geo, `meeting_join_hook`,
+  `enable_transcription_storage` and similar). `createOrFindRoom` sets it on every room it
+  creates.
+- **Moving domains = forced re-provision.** A room name is a pure function of `meetings.id`, so
+  nulling a future meeting's venue lets the venue repair job re-create the same name on the new
+  domain. Use `scripts/daily-venue-reprovision.ts` for this. Invites and emails carry Balo's
+  `/meetings/{id}/call`, never the Daily URL, so nothing is re-sent. Rooms left on the old domain
+  are orphans and are not cleaned up.
+- Full cutover steps: `docs/ops/daily-domain-cutover.md`.
 
 ## Recording (BAL-473)
 
@@ -432,7 +476,8 @@ DOOR 3); the batch re-drive is immediate.
 
 ## Testing
 
-- Mint against a **non-prod Daily domain** (test key below prod).
+- Mint against the **non-prod Daily domain** (see **Domains and environments**), never prod and
+  never `getbalo`.
 - Smoke test = mint a token, decode the JWT, assert `room_name` / `user_id` / `exp` / `is_owner`, then `GET /meeting-tokens/:token` to confirm — as an integration test **and** a runnable live script outside CI (mock-only doesn't prove the vendor boundary).
 - Unit tests assert the request body Balo sends (property names, config-table values).
 

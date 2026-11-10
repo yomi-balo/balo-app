@@ -76,6 +76,7 @@ function item(overrides: Partial<ChangeOrderItemView> = {}): ChangeOrderItemView
         title: 'Marketing dashboard',
         descriptionText: 'KPI board.',
         estimateLabel: null,
+        loggedLabel: null,
         before: null,
       },
     ],

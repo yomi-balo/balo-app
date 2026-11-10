@@ -6,10 +6,14 @@ import { z } from 'zod';
 import {
   IN_APP_REVIEW_SURFACES,
   REVIEW_BODY_MAX,
+  REVIEW_BODY_VISIBILITIES,
+  REVIEWER_ROLE_FORBIDDEN,
+  REVIEWER_ROLE_MAX,
   RATING_MAX,
   RATING_MIN,
   isRating,
   type InAppReviewSurface,
+  type ReviewBodyVisibility,
 } from '@balo/shared/reviews';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
@@ -94,6 +98,14 @@ const submitEngagementReviewSchema = z
     rating: z.number().int().min(RATING_MIN).max(RATING_MAX),
     body: z.string().trim().max(REVIEW_BODY_MAX).optional(),
     surface: z.enum(IN_APP_REVIEW_SURFACES),
+    reviewerRole: z
+      .string()
+      .trim()
+      .max(REVIEWER_ROLE_MAX)
+      .refine((v) => !REVIEWER_ROLE_FORBIDDEN.test(v))
+      .optional(),
+    showCompany: z.boolean(),
+    bodyVisibility: z.enum(REVIEW_BODY_VISIBILITIES),
   })
   .strict();
 
@@ -102,6 +114,9 @@ export interface SubmitEngagementReviewInput {
   rating: number;
   body?: string;
   surface: InAppReviewSurface;
+  reviewerRole?: string;
+  showCompany: boolean;
+  bodyVisibility: ReviewBodyVisibility;
 }
 
 export type SubmitEngagementReviewResult =
@@ -122,7 +137,8 @@ export async function submitEngagementReviewAction(
   if (!parsed.success) {
     return { success: false, error: REVIEW_INVALID_REQUEST };
   }
-  const { engagementId, rating, body, surface } = parsed.data;
+  const { engagementId, rating, body, surface, reviewerRole, showCompany, bodyVisibility } =
+    parsed.data;
   // Narrows the Zod-proven range to the `Rating` literal union WITHOUT an assertion.
   if (!isRating(rating)) {
     return { success: false, error: REVIEW_INVALID_REQUEST };
@@ -146,6 +162,9 @@ export async function submitEngagementReviewAction(
     body: body === undefined || body.length === 0 ? null : body,
     surface,
     authMethod: 'session',
+    bodyVisibility,
+    showCompany,
+    reviewerRole: reviewerRole === undefined || reviewerRole.length === 0 ? null : reviewerRole,
   });
 
   if (!result.ok) {

@@ -46,9 +46,9 @@ import { log } from '@/lib/logging';
  * ──────────────────────────────────────────────────────────────────────────────
  * The obvious-looking move is `hasEngagementCapability(actor, MANAGE_ENGAGEMENT, subject)`.
  * IT IS THE WRONG AXIS, and not for packaging reasons (that seam being `apps/api`-only today
- * is a consequence, not the argument). That axis has exactly two tokens — `host_meetings`
- * (live/in-meeting) and `manage_engagement` (administrative acts: reschedule
- * propose/withdraw, expert-side cancel, request case resolution) — and CLAUDE.md states
+ * is a consequence, not the argument). That axis has only act tokens — `host_meetings`
+ * (live/in-meeting), `manage_engagement` (administrative acts: reschedule
+ * propose/withdraw, expert-side cancel, request case resolution) and `log_time` — and CLAUDE.md states
  * plainly that a `true` from that seam "authorizes the ACT, never the READ". READING A THREAD
  * IS NOT AN ACT. Gating a read on an act token would be a category error wherever the module
  * lived, and it would ALSO deny the wrong people: that holder set excludes agency role
@@ -143,7 +143,12 @@ export async function authorizeEngagementConversation(input: {
     return deny('no_engagement', { engagementId, userId });
   }
 
-  const side = await resolveSide(engagement.companyId, engagement.expertProfileId, userId);
+  const side = await resolveSide(
+    engagement.companyId,
+    engagement.expertProfileId,
+    engagement.deliveringAgencyId,
+    userId
+  );
   if (side.ok === false) {
     return side.denial;
   }
@@ -182,6 +187,7 @@ type SideResolution =
 async function resolveSide(
   companyId: string,
   expertProfileId: string,
+  deliveringAgencyId: string | null,
   userId: string
 ): Promise<SideResolution> {
   const participation = await resolveCompanyParticipation(companyId, userId, (partyId, actorId) =>
@@ -208,8 +214,13 @@ async function resolveSide(
   // ⚠ The lookup takes `actorId` as a PARAMETER rather than capturing `userId`, so a callback
   // can never answer for an actor other than the one being authorized (the confused-deputy
   // shape `HostContext.resolvedForActorId` closes on the act axis). Do not "simplify" it.
-  const onExpertSide = await actorHasExpertSideVisibility(profile, userId, (agencyId, actorId) =>
-    partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
+  //
+  // ⚠ The agency is the ENGAGEMENT'S PIN, not the profile's current link: who sees a thread is
+  // fixed by who delivered it, and survives the expert moving agencies.
+  const onExpertSide = await actorHasExpertSideVisibility(
+    { userId: profile.userId, agencyId: deliveringAgencyId },
+    userId,
+    (agencyId, actorId) => partyMembershipsRepository.getMemberRole('agency', agencyId, actorId)
   );
   if (onExpertSide) {
     return { ok: true, side: 'expert' };

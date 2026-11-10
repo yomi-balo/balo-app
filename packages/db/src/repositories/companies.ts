@@ -1,7 +1,7 @@
 import { eq, and, asc, inArray, isNull } from 'drizzle-orm';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { db } from '../client';
-import { companies, companyMembers, type Company, type User } from '../schema';
+import { companies, companyMembers, industries, type Company, type User } from '../schema';
 import { auditEventsRepository } from './audit-events';
 import { partyDomainsRepository } from './party-domains';
 import { partyMembershipsRepository } from './party-memberships';
@@ -61,6 +61,77 @@ export interface CompanyBillingIdentity {
   /** → the provenance line's date, and `days_since_set` on `billing_email_updated`. */
   billingEmailSetAt: Date | null;
 }
+
+/**
+ * BAL-628 — what a review needs to know about the client company: whether its name may be
+ * shown (`isCompanyNameAllowedOnReviews` reads `isPersonal` + `reviewNameHiddenAt`) and the
+ * fallback industry. See {@link companiesRepository.findReviewAttributionById}.
+ */
+export interface CompanyReviewAttribution {
+  name: string;
+  isPersonal: boolean;
+  reviewNameHiddenAt: Date | null;
+  /** The company's industry name, or `null` when unset or the industry is inactive. */
+  industryName: string | null;
+}
+
+/**
+ * BAL-630 — the STAFF projection of one company for `/admin/companies/[companyId]`. See
+ * {@link companiesRepository.findAdminDetailsById}. Unlike {@link CompanyReviewAttribution},
+ * a retired industry is still returned (with `industryIsActive: false`) so staff can see it.
+ */
+export interface CompanyAdminDetails {
+  id: string;
+  name: string;
+  isPersonal: boolean;
+  industryId: string | null;
+  /** The current industry's name, active or retired; `null` when none is set. */
+  industryName: string | null;
+  /** `null` when no industry is set. */
+  industryIsActive: boolean | null;
+  reviewNameHiddenAt: Date | null;
+}
+
+/** BAL-630 — input for a staff industry change. `industryId: null` clears it. */
+export interface SetCompanyIndustryInput {
+  companyId: string;
+  industryId: string | null;
+  actorUserId: string;
+}
+
+/**
+ * BAL-630 — the outcome of a staff industry change. `unchanged` is the `setDomainJoinMode`
+ * no-op posture (no write, no audit); `industry_unavailable` means the target industry is
+ * unknown or retired, and nothing was written.
+ */
+export type SetCompanyIndustryResult =
+  | {
+      outcome: 'changed';
+      companyName: string;
+      from: string | null;
+      to: string | null;
+      toName: string | null;
+    }
+  | { outcome: 'unchanged'; companyName: string }
+  | { outcome: 'company_not_found' }
+  | { outcome: 'industry_unavailable' };
+
+/** BAL-630 — input for the staff "hide this company's name on reviews" switch. */
+export interface SetCompanyReviewNameHiddenInput {
+  companyId: string;
+  hidden: boolean;
+  actorUserId: string;
+}
+
+/**
+ * BAL-630 — the outcome of the review-name switch. `personal_workspace` is refused with no
+ * write: a personal company's name never appears on a review anyway
+ * (`isCompanyNameAllowedOnReviews`).
+ */
+export type SetCompanyReviewNameHiddenResult =
+  | { outcome: 'changed' | 'unchanged'; companyName: string; hidden: boolean }
+  | { outcome: 'personal_workspace'; companyName: string }
+  | { outcome: 'company_not_found' };
 
 /** BAL-522 — input for the first-purchase seed of `companies.billing_email`. */
 export interface SeedBillingEmailInput {
@@ -211,6 +282,66 @@ export const companiesRepository = {
         billingEmailSetAt: companies.billingEmailSetAt,
       })
       .from(companies)
+      .where(eq(companies.id, id))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-628 — the REVIEW-ATTRIBUTION projection of ONE company: its name, the two facts that
+   * decide whether that name may appear on a review, and its industry. Read by the review
+   * write path (to force `show_company` off server-side) and by both capture surfaces.
+   *
+   * A fourth projection on this table rather than a widening of an existing one, for the
+   * reason {@link companiesRepository.findBillingIdentityById} gives.
+   *
+   * ⚠ THE INDUSTRY JOIN CARRIES `is_active` IN THE `ON`, not the `WHERE`: a retired industry
+   * must drop out of the attribution (fail closed, never infer), not drop the company row.
+   *
+   * NOTE: no `deleted_at` guard on `companies` — the table has NO such column (same note as
+   * `findBillingIdentityById`). `industries` has none either.
+   */
+  findReviewAttributionById: async (id: string): Promise<CompanyReviewAttribution | undefined> => {
+    const [row] = await db
+      .select({
+        name: companies.name,
+        isPersonal: companies.isPersonal,
+        reviewNameHiddenAt: companies.reviewNameHiddenAt,
+        industryName: industries.name,
+      })
+      .from(companies)
+      .leftJoin(
+        industries,
+        and(eq(industries.id, companies.industryId), eq(industries.isActive, true))
+      )
+      .where(eq(companies.id, id))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-630 — the STAFF projection of ONE company: its name, whether it is personal, its
+   * current industry and the review-name hide stamp. Read by `/admin/companies/[companyId]`.
+   *
+   * ⚠ THE INDUSTRY JOIN HAS NO `is_active` FILTER, unlike `findReviewAttributionById`: staff
+   * must see that the current industry is retired (`industryIsActive: false`), where a review
+   * must not show it.
+   *
+   * NOTE: no `deleted_at` guard — `companies` has no such column, nor does `industries`.
+   */
+  findAdminDetailsById: async (id: string): Promise<CompanyAdminDetails | undefined> => {
+    const [row] = await db
+      .select({
+        id: companies.id,
+        name: companies.name,
+        isPersonal: companies.isPersonal,
+        industryId: companies.industryId,
+        industryName: industries.name,
+        industryIsActive: industries.isActive,
+        reviewNameHiddenAt: companies.reviewNameHiddenAt,
+      })
+      .from(companies)
+      .leftJoin(industries, eq(industries.id, companies.industryId))
       .where(eq(companies.id, id))
       .limit(1);
     return row;
@@ -371,6 +502,153 @@ export const companiesRepository = {
       );
 
       return { previous: current.mode, next, changed: true };
+    });
+  },
+
+  /**
+   * BAL-630 — staff set or clear a company's industry. One tx, modelled on
+   * `setDomainJoinMode`: lock the company `FOR UPDATE`, no-op when unchanged, otherwise
+   * UPDATE + the `company.industry_set` audit row (metadata `{ from, to, fromName, toName }`)
+   * in the SAME tx.
+   *
+   * A non-null target must be a LIVE industry, read on this tx under `FOR SHARE` so a
+   * concurrent retirement cannot slip between the check and the write. A retired current
+   * industry may still be cleared; it can never be re-selected.
+   *
+   * Never throws for a business outcome; a genuine DB fault still throws and rolls back.
+   * NOTE: no `deleted_at` guard — `companies` has no such column.
+   */
+  setIndustry: async (input: SetCompanyIndustryInput): Promise<SetCompanyIndustryResult> => {
+    return db.transaction(async (tx) => {
+      // `OF companies`: Postgres refuses FOR UPDATE on the nullable side of an outer join.
+      const [current] = await tx
+        .select({
+          name: companies.name,
+          industryId: companies.industryId,
+          industryName: industries.name,
+        })
+        .from(companies)
+        .leftJoin(industries, eq(industries.id, companies.industryId))
+        .where(eq(companies.id, input.companyId))
+        .for('update', { of: companies });
+
+      if (current === undefined) {
+        return { outcome: 'company_not_found' };
+      }
+
+      if (current.industryId === input.industryId) {
+        return { outcome: 'unchanged', companyName: current.name };
+      }
+
+      let toName: string | null = null;
+      if (input.industryId !== null) {
+        const [target] = await tx
+          .select({ name: industries.name })
+          .from(industries)
+          .where(and(eq(industries.id, input.industryId), eq(industries.isActive, true)))
+          .for('share');
+        if (target === undefined) {
+          return { outcome: 'industry_unavailable' };
+        }
+        toName = target.name;
+      }
+
+      await tx
+        .update(companies)
+        .set({ industryId: input.industryId, updatedAt: new Date() })
+        .where(eq(companies.id, input.companyId));
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'company.industry_set',
+          entityType: 'company',
+          entityId: input.companyId,
+          metadata: {
+            from: current.industryId,
+            to: input.industryId,
+            fromName: current.industryName,
+            toName,
+          },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'changed',
+        companyName: current.name,
+        from: current.industryId,
+        to: input.industryId,
+        toName,
+      };
+    });
+  },
+
+  /**
+   * BAL-630 — staff hide or show a company's name on reviews. One tx, modelled on
+   * `setDomainJoinMode`: lock `FOR UPDATE`, refuse a personal workspace, no-op when the
+   * state already matches, otherwise write the ADR-1030 pair (`review_name_hidden_at` +
+   * `_by_user_id`, both nulled when showing) and the `company.review_name_hidden` /
+   * `company.review_name_shown` audit row in the SAME tx.
+   *
+   * The hide is read-time only: no `reviews.show_company` value is rewritten, so showing the
+   * name again restores each reviewer's own choice.
+   *
+   * Never throws for a business outcome; a genuine DB fault still throws and rolls back.
+   * NOTE: no `deleted_at` guard — `companies` has no such column.
+   */
+  setReviewNameHidden: async (
+    input: SetCompanyReviewNameHiddenInput
+  ): Promise<SetCompanyReviewNameHiddenResult> => {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          name: companies.name,
+          isPersonal: companies.isPersonal,
+          reviewNameHiddenAt: companies.reviewNameHiddenAt,
+        })
+        .from(companies)
+        .where(eq(companies.id, input.companyId))
+        .for('update');
+
+      if (current === undefined) {
+        return { outcome: 'company_not_found' };
+      }
+
+      if (current.isPersonal) {
+        return { outcome: 'personal_workspace', companyName: current.name };
+      }
+
+      if (input.hidden === (current.reviewNameHiddenAt !== null)) {
+        return { outcome: 'unchanged', companyName: current.name, hidden: input.hidden };
+      }
+
+      const now = new Date();
+      await tx
+        .update(companies)
+        .set(
+          input.hidden
+            ? {
+                reviewNameHiddenAt: now,
+                reviewNameHiddenByUserId: input.actorUserId,
+                updatedAt: now,
+              }
+            : { reviewNameHiddenAt: null, reviewNameHiddenByUserId: null, updatedAt: now }
+        )
+        .where(eq(companies.id, input.companyId));
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: input.hidden ? 'company.review_name_hidden' : 'company.review_name_shown',
+          entityType: 'company',
+          entityId: input.companyId,
+          metadata: {},
+        },
+        tx
+      );
+
+      return { outcome: 'changed', companyName: current.name, hidden: input.hidden };
     });
   },
 

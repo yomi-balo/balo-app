@@ -56,7 +56,7 @@ export async function setActionItemStatusAction(
     engagementId,
     { actionItemId },
     'Failed to update action item status',
-    async ({ user, engagement, lens, actionItem }) => {
+    async ({ user, actingAs, engagement, lens, actionItem }) => {
       if (actionItem === undefined) {
         return { success: false, error: ACTION_ITEM_GONE };
       }
@@ -72,6 +72,7 @@ export async function setActionItemStatusAction(
           action_item_id: updated.id,
           completed_by_role: lens,
           was_ai_extracted: actionItem.source === 'ai_extracted',
+          ...(actingAs === null ? {} : { acting_as: actingAs }),
           distinct_id: user.id,
         });
         log.info('Action item completed', {
@@ -91,6 +92,7 @@ export async function setActionItemStatusAction(
         engagement_type: 'project',
         action_item_id: updated.id,
         reopened_by_role: lens,
+        ...(actingAs === null ? {} : { acting_as: actingAs }),
         distinct_id: user.id,
       });
       log.info('Action item reopened', {
