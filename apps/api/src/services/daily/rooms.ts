@@ -52,20 +52,19 @@
  * `services/daily/recordings.ts` for the rest of the recording pipeline and
  * `.claude/skills/mux/SKILL.md` for where the captured source goes.
  *
- * ⚠⚠ FIX ROUND 2 (R1) — `reconcileRoomRecording` DOES NOT CLOSE THE PRE-DEPLOY GAP, AND AN
- * EARLIER VERSION OF THIS COMMENT CLAIMED IT DID. `provisionMeeting`
+ * ⚠ `reconcileRoomRecording` DOES NOT REACH EVERY EXISTING ROOM. `provisionMeeting`
  * (`services/meetings/provision-meeting.ts`) short-circuits with ZERO VENDOR CALLS the moment
  * a meeting's venue is READY per `isMeetingVenueReady` (both columns AND
- * `daily_room_name === dailyRoomNameForMeeting(id)`) — true of every meeting booked before this
- * shipped. So `createOrFindRoom`, and therefore `reconcileRoomRecording`, is NEVER REACHED for
- * that population; the already-exists fallback below only runs when `provisionMeeting` is
- * called for a meeting whose venue is NOT yet ready and the room name is already taken at
- * Daily — a concurrent duplicate provision, or the venue repair job (BAL-581)
- * re-provisioning a meeting whose earlier venue write failed. What actually covers the
- * pre-deploy population is `enable_recording` set at the DAILY DOMAIN LEVEL (Daily supports an
- * always-on default at that scope) — the right home for an always-on platform guarantee (D5),
- * since a per-room property is inherently a per-room preference, never a platform one.
- * `reconcileRoomRecording` still earns its keep on the paths it DOES reach; it stays.
+ * `daily_room_name === dailyRoomNameForMeeting(id)`), so `createOrFindRoom`, and therefore
+ * `reconcileRoomRecording`, is not reached for such a meeting. The already-exists fallback
+ * below only runs when `provisionMeeting` is called for a meeting whose venue is NOT yet ready
+ * and the room name is already taken at Daily — a concurrent duplicate provision, or the venue
+ * repair job (BAL-581) re-provisioning a meeting whose earlier venue write failed.
+ * `enable_recording` is not a settable Daily domain property, so per-room create (below) is the
+ * only place it is applied. Coverage comes from the domain cutover (BAL-518): the new domain
+ * starts empty and the forced re-provision nulls every future meeting's venue, so every live
+ * room is created fresh here with `enable_recording` set. No pre-deploy room population exists
+ * on the new domain.
  */
 import { z } from 'zod';
 import { createLogger } from '@balo/shared/logging';
@@ -147,18 +146,16 @@ interface VendorRoom {
  * already-exists fallback below). `createOrFindRoom`'s `GET` fallback only ADOPTS a
  * pre-existing room; it reconciles nothing.
  *
- * ⚠⚠ FIX ROUND 2 (R1) — THIS DOES NOT REACH EVERY ROOM PROVISIONED BEFORE BAL-473 SHIPPED, AND
- * SAYING SO HERE WOULD BE A LIE. `provisionMeeting`'s replay guard
+ * ⚠ THIS DOES NOT REACH EVERY EXISTING ROOM. `provisionMeeting`'s replay guard
  * (`services/meetings/provision-meeting.ts`) short-circuits with zero vendor calls whenever a
  * meeting's venue is READY per `isMeetingVenueReady` (both columns AND
- * `daily_room_name === dailyRoomNameForMeeting(id)`) — true of every meeting booked before this
- * shipped — so `createOrFindRoom` is never called for that meeting and this function never
- * runs for it. It only runs when `provisionMeeting` is called for a meeting whose venue is NOT
- * yet ready and the room name is already taken at Daily: a concurrent duplicate provision, or
- * the venue repair job (BAL-581) re-provisioning a meeting whose earlier venue write failed.
- * Domain-level `enable_recording` (set once, at the Daily domain, outside this codebase) is
- * what actually covers the pre-deploy population — a platform-wide always-on default is what
- * D5 asks for, and a per-room property can only ever be a per-room preference.
+ * `daily_room_name === dailyRoomNameForMeeting(id)`), so `createOrFindRoom` is not called for
+ * that meeting and this function does not run for it. It only runs when `provisionMeeting` is
+ * called for a meeting whose venue is NOT yet ready and the room name is already taken at
+ * Daily: a concurrent duplicate provision, or the venue repair job (BAL-581) re-provisioning a
+ * meeting whose earlier venue write failed. `enable_recording` is not a settable Daily domain
+ * property; after the BAL-518 domain cutover every live room is created fresh with it set, so
+ * no pre-deploy room population exists.
  *
  * `POST /rooms/:name` OVERRIDES an existing room's config without recreating it — the
  * daily-co skill's "Update room config" scenario.
