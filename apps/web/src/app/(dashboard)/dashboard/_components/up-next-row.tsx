@@ -127,7 +127,11 @@ export function UpNextRow({
         'flex items-center gap-3',
         featured
           ? 'bg-success/10 ring-success/30 -mx-1 mb-1.5 rounded-xl px-3 py-3 ring-1 ring-inset'
-          : 'border-border hover:bg-muted/50 border-b px-1 py-3 transition-colors last:border-b-0'
+          : 'border-border border-b px-1 py-3 last:border-b-0',
+        row.href !== null &&
+          (featured
+            ? 'hover:bg-success/15 transition-colors'
+            : 'hover:bg-muted/50 transition-colors')
       )}
     >
       <span

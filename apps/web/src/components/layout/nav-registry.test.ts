@@ -9,6 +9,7 @@ import {
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
   resolveEntityListNavEntry,
+  SUPPLEMENTAL_ROUTE_PARENTS,
   splitMobileNav,
   resolveMobileTabs,
   resolveMoreItems,
@@ -662,6 +663,22 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     const [parent] = resolveBreadcrumbTrail('/redeem');
     expect(parent).toEqual({ label: dashboard?.label, href: dashboard?.href });
   });
+
+  it('drift guard: SUPPLEMENTAL_ROUTE_PARENTS is non-empty', () => {
+    expect(Object.keys(SUPPLEMENTAL_ROUTE_PARENTS).length).toBeGreaterThan(0);
+  });
+
+  it.each(Object.entries(SUPPLEMENTAL_ROUTE_PARENTS))(
+    'drift guard: %s resolves to a labelled parent crumb (%s) then a null-href own crumb',
+    (route, parentHref) => {
+      const trail = resolveBreadcrumbTrail(route);
+      expect(trail).toHaveLength(2);
+      const [parent, current] = trail;
+      expect(parent?.href).toBe(parentHref);
+      expect(parent?.label.length).toBeGreaterThan(0);
+      expect(current?.href).toBeNull();
+    }
+  );
 
   it('drift guard: no supplemental route collides with an enabled registry href', () => {
     const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));

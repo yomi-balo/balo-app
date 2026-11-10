@@ -590,9 +590,10 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
  * a way back. `Breadcrumbs` turns the parent crumb into the mobile back arrow and the earlier
  * desktop crumb, so a route listed here needs no bespoke back button. The parent's LABEL is never
  * typed here: {@link supplementalParentFor} resolves it from the registry so labels keep one home.
- * `/billing/top-up` has no parent row yet, so it shows no back arrow.
+ * `/billing/top-up` has no parent row yet, so it shows no back arrow. Exported for the
+ * drift-guard test only.
  */
-const SUPPLEMENTAL_ROUTE_PARENTS: Readonly<Record<string, string>> = {
+export const SUPPLEMENTAL_ROUTE_PARENTS: Readonly<Record<string, string>> = {
   '/redeem': '/dashboard',
 };
 
