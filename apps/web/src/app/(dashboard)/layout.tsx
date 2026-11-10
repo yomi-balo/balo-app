@@ -20,6 +20,9 @@ import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
+import { ViewerTimezoneProvider } from '@/components/balo/date/viewer-timezone-context';
+import { TimezoneMismatchGate } from '@/components/balo/timezone-mismatch/timezone-mismatch-gate';
+import { loadViewerTimezoneContext } from '@/lib/timezone/load-viewer-timezone-context';
 
 export default async function DashboardLayout({
   children,
@@ -39,6 +42,11 @@ export default async function DashboardLayout({
   // After sync, session is guaranteed fresh — read user normally
   const user = await getCurrentUser();
 
+  // Independent of the checklist read below and of `activeMode`: the saved zone is read for every
+  // signed-in user, and the mismatch prompt is decided by the expert profile's own data. Started
+  // here so it runs alongside the nav and checklist reads.
+  const timezoneContextPromise = user ? loadViewerTimezoneContext(user) : null;
+
   // Fetch checklist status only for expert mode users with a profile
   let checklistCompletedCount = 0;
   let checklistAllComplete = false;
@@ -57,7 +65,10 @@ export default async function DashboardLayout({
     }
   }
 
-  const navContext = await buildNavContext(user);
+  const [navContext, timezoneContext] = await Promise.all([
+    buildNavContext(user),
+    timezoneContextPromise,
+  ]);
 
   // BAL-496 (D13) — the switcher's list. Mirrors the `navContext` precedent BAL-495 added one
   // commit ago: this layout is an async Server Component and the SOLE renderer of
@@ -106,29 +117,34 @@ export default async function DashboardLayout({
       liveStatus={liveStatus}
     >
       <AnalyticsIdentify {...analyticsIdentifyPropsFor(user)} />
-      <BreadcrumbProvider>
-        {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
+      <ViewerTimezoneProvider savedTimezone={timezoneContext?.savedTimezone ?? null}>
+        {timezoneContext?.mismatchPrompt ? (
+          <TimezoneMismatchGate mismatchPrompt={timezoneContext.mismatchPrompt} />
+        ) : null}
+        <BreadcrumbProvider>
+          {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
             than the visible viewport, which would leave phantom scroll under the sticky tab
             bar. `100dvh === 100vh` on desktop, so this is inert there. */}
-        <div className="bg-background min-h-dvh">
-          <div className="flex">
-            <Sidebar />
-            {/* `min-w-0` lets the column shrink below its content's min-content width, so a
+          <div className="bg-background min-h-dvh">
+            <div className="flex">
+              <Sidebar />
+              {/* `min-w-0` lets the column shrink below its content's min-content width, so a
                 horizontal rail (dashboard Your move) scrolls inside itself instead of widening
                 the page past the viewport. */}
-            <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
-              <TopNav creditsChip={creditsChip} />
-              <main className="flex-1 p-6 lg:p-8">
-                <div className="mx-auto max-w-7xl">{children}</div>
-              </main>
-              {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
+              <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
+                <TopNav creditsChip={creditsChip} />
+                <main className="flex-1 p-6 lg:p-8">
+                  <div className="mx-auto max-w-7xl">{children}</div>
+                </main>
+                {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
                   extra bottom padding and `AppFooter` (rendered by the root layout, outside
                   this tree) needs no changes. */}
-              <MobileTabBar />
+                <MobileTabBar />
+              </div>
             </div>
           </div>
-        </div>
-      </BreadcrumbProvider>
+        </BreadcrumbProvider>
+      </ViewerTimezoneProvider>
     </SidebarProvider>
   );
 }

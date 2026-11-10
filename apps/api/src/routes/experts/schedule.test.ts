@@ -144,6 +144,17 @@ const expectRebuildEnqueued = (): void => {
   );
 };
 
+/** The Redis slot cache is dropped once the write has committed, before the rebuild is queued. */
+const expectSlotsInvalidatedBeforeRebuild = (): void => {
+  expect(mockInvalidateExpertSlots).toHaveBeenCalledTimes(1);
+  expect(mockInvalidateExpertSlots).toHaveBeenCalledWith(EXPERT_UUID);
+  const [invalidated] = mockInvalidateExpertSlots.mock.invocationCallOrder;
+  const [enqueued] = mockQueueAdd.mock.invocationCallOrder;
+  expect(invalidated).toBeDefined();
+  expect(enqueued).toBeDefined();
+  expect(invalidated as number).toBeLessThan(enqueued as number);
+};
+
 const VALID_BODY = {
   timezone: 'Australia/Melbourne',
   actorUserId: ACTOR_UUID,
@@ -430,6 +441,7 @@ describe('experts schedule API routes', () => {
 
       // Enqueue AFTER the tx, with the coalescing jobId.
       expectRebuildEnqueued();
+      expectSlotsInvalidatedBeforeRebuild();
     });
 
     it('returns 500 when the transaction fails', async () => {
@@ -445,6 +457,7 @@ describe('experts schedule API routes', () => {
 
       expect(res.statusCode).toBe(500);
       expect(mockQueueAdd).not.toHaveBeenCalled();
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
     });
   });
 
@@ -493,6 +506,21 @@ describe('experts schedule API routes', () => {
         })
       );
       expectRebuildEnqueued();
+      expectSlotsInvalidatedBeforeRebuild();
+    });
+
+    it('does not invalidate the slot cache when the transaction fails', async () => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+      mockTransaction.mockRejectedValueOnce(new Error('db down'));
+
+      const res = await app.inject({
+        method: 'DELETE',
+        url: `/api/experts/${EXPERT_UUID}/schedule`,
+        headers: AUTH_ONLY,
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
     });
   });
 
@@ -564,6 +592,23 @@ describe('experts schedule API routes', () => {
         })
       );
       expectRebuildEnqueued();
+      expectSlotsInvalidatedBeforeRebuild();
+    });
+
+    it('does not invalidate the slot cache when the transaction fails', async () => {
+      mockFindProfileById.mockResolvedValue(PROFILE);
+      mockTransaction.mockRejectedValueOnce(new Error('db down'));
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/experts/${EXPERT_UUID}/timezone`,
+        headers: AUTH_HEADERS,
+        payload: { timezone: 'America/New_York' },
+      });
+
+      expect(res.statusCode).toBe(500);
+      expect(mockInvalidateExpertSlots).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalled();
     });
 
     it('stores a legacy zone name as the zone it resolves to', async () => {

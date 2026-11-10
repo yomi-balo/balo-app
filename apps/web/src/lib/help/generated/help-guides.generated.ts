@@ -1901,6 +1901,80 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "travelling-or-moving",
+    "title": "Travelling or moving? Keep or switch your hours' timezone",
+    "summary": "What to do when your device is in a different timezone from your schedule.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "getting-booked"
+    },
+    "order": 5,
+    "updated": "2026-11-06",
+    "related": [
+      "weekly-schedule",
+      "pausing-new-work"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Your weekly hours are saved as clock times in one timezone. If your device ends up in a different\none, Balo asks whether your hours should follow you or stay where they are.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What the message means",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When you open Balo and your device is in a different timezone from your schedule, you'll see a\nmessage like \"You're in London, but your hours are set in Sydney time\". It shows your usual hours in\nboth timezones, so you can see exactly what each choice would do.</p>\n<p>It only appears if you're approved, available for new work, and have weekly hours set. Moving\nbetween places that share the same clock, like Sydney and Melbourne, never triggers it.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Keep or switch",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li><strong>Keep your hours where they are.</strong> Choose <strong>Keep {city} hours</strong>. Pressing Escape does the same. Nothing changes, and we won't ask again for that pair of timezones on this\nbrowser. The message may come back after about a month. This is the right choice if you're travelling and still working your usual hours.</li>\n<li><strong>Switch to the new timezone.</strong> Choose <strong>Switch to {city} time</strong>. Your hours keep the same clock\ntimes, read in the new timezone, so 9:00 am stays 9:00 am but at the new place. This is the right\nchoice if you've moved.</li>\n</ul>\n<p>Either way, consultations that are already booked stay booked. If a switch would put some of them\noutside your new hours, Balo tells you which ones before you decide. Nothing is moved\nor cancelled for you. Your time off is read in the new timezone from then on, and busy times on your\nconnected calendar don't change.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Changing your timezone later",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You can switch at any time without waiting for the message. Go to <strong>Expert Settings → Schedule</strong>\nand choose <strong>Change timezone</strong>.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Times marked with a city",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>While your device is in a different timezone from your schedule, times on your cases and bookings\nshow the city after them, for example \"2:00 pm (London)\". That tells you the time is in your\ndevice's timezone. Once you switch, or once your device is back in your schedule's timezone, the\ncity goes away.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "turning-a-case-into-a-project",
     "title": "Turning a case into a project",
     "summary": "Start a project from a case without losing its history.",
@@ -2162,7 +2236,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Change your timezone?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. Busy times on your connected calendar aren't affected.</p>\n<p>Booking confirmation, change and cancellation emails show times in this timezone too, for example\n\"10:00–11:00 (Melbourne time)\". If one names a zone you're not in, change it here.</p>",
+            "html": "<p>Your hours are set in one timezone. The line under the page title reads \"Hours are set in {timezone}\n— currently {time}\". To switch, choose <strong>Change timezone</strong>. Balo asks \"Switch your hours to {city} time?\" first,\nbecause your hours are saved as clock times: 9:00 AM stays 9:00 AM, but in the new zone, so every\nbookable slot shifts. The message checks your upcoming consultations and tells you which, if any,\nwould fall outside your hours in the new zone. Choose <strong>Keep {city} hours</strong> to leave things as they\nare, or <strong>Switch to {city} time</strong> to go ahead. Busy times on your connected calendar aren't\naffected.</p>\n<p>Booking confirmation, change and cancellation emails show times in this timezone too, for example\n\"10:00–11:00 (Melbourne time)\". If one names a zone you're not in, change it here.</p>",
             "id": "s2-b0"
           }
         ],

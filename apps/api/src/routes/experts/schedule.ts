@@ -53,13 +53,13 @@ const bookingSettingsSchema = z.object({
   minimumNoticeMinutes: z.number().int().min(0).max(20160), // ≤ 14 days
 });
 
-const paramsSchema = z.object({ expertProfileId: z.string().uuid() });
+const paramsSchema = z.object({ expertProfileId: z.uuid() });
 
 // The acting user's id, threaded from the web server action for ADR-1030 audit
 // attribution ONLY (never authorization — the IDOR gate is the session-derived
 // expertProfileId in the web action). Optional so a caller that omits it records a
 // null-actor audit row rather than 400ing.
-const actorUserIdSchema = z.string().uuid().optional();
+const actorUserIdSchema = z.uuid().optional();
 
 const postBodySchema = z.object({
   timezone: timezoneSchema,
@@ -153,7 +153,7 @@ function toHHMM(time: string): string {
 
 // ── Routes ──────────────────────────────────────────────────────
 
-export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
+export function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
   /**
    * GET /api/experts/:expertProfileId/schedule
    * Returns the expert's timezone, booking settings, and weekly rules.
@@ -261,6 +261,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
           });
         });
 
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true, timezone, bookingSettings, rules });
@@ -303,6 +304,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             expertProfileId,
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -354,6 +356,7 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
             metadata: { oldTimezone, newTimezone: timezone },
           });
         });
+        await invalidateExpertSlots(expertProfileId);
         await enqueueAvailabilityCacheRebuild(expertProfileId, request.log);
 
         return reply.send({ success: true });
@@ -419,4 +422,5 @@ export async function scheduleRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
   );
+  return Promise.resolve();
 }

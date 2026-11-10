@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Clock, Info } from 'lucide-react';
+import { zonesDiffer } from '@balo/shared/timezone';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { formatTimezoneLabel } from '@/lib/calendar/zoned-grid';
+import { useDeviceTimezone } from '@/hooks/use-device-timezone';
 
 interface TimezoneChipProps {
   readonly scheduleTimezone: string;
@@ -15,16 +16,12 @@ const DIFFERS_EXPLANATION =
 /**
  * BAL-498 — the persistent timezone chip. The `Info` affordance (Tooltip on hover/focus, tap-
  * `Popover` on touch — never hover-only) appears ONLY when the browser zone differs from the
- * schedule zone. The comparison runs in an effect (browser-zone read), so it never perturbs SSR
+ * schedule zone. The comparison uses the post-mount device zone, so it never perturbs SSR
  * hydration of the chip label itself, which is built entirely from `scheduleTimezone`.
  */
 export function TimezoneChip({ scheduleTimezone }: Readonly<TimezoneChipProps>): React.JSX.Element {
-  const [browserDiffers, setBrowserDiffers] = useState(false);
-
-  useEffect(() => {
-    const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    setBrowserDiffers(browserZone !== scheduleTimezone);
-  }, [scheduleTimezone]);
+  const device = useDeviceTimezone();
+  const browserDiffers = device !== null && zonesDiffer(scheduleTimezone, device, new Date());
 
   const label = formatTimezoneLabel(scheduleTimezone);
 
