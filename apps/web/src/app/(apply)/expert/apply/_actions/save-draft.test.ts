@@ -177,6 +177,43 @@ describe('saveDraftAction', () => {
    * translate the discriminant into the right `SaveDraftResult`.
    */
   describe('outcome mapping', () => {
+    it('writes the new profile id into the session and saves once', async () => {
+      mockGetSalesforceVertical.mockResolvedValue({ id: VERTICAL_ID });
+      await saveDraftAction({ step: 'profile', data: validProfileData() });
+      expect((mockSessionObj.user as { expertProfileId?: string }).expertProfileId).toBe(
+        PROFILE_ID
+      );
+      expect(mockSave).toHaveBeenCalledOnce();
+    });
+
+    it('does not re-save when the session already holds the profile id', async () => {
+      (mockSessionObj.user as { expertProfileId?: string }).expertProfileId = PROFILE_ID;
+      await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(mockSave).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['declined', {}],
+      ['closed', { currentStatus: 'approved' }],
+    ])('does not touch the session on a %s outcome', async (outcome, extra) => {
+      mockSaveApplicantDraftStep.mockResolvedValue({
+        outcome,
+        expertProfileId: PROFILE_ID,
+        ...extra,
+      });
+      await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(mockSave).not.toHaveBeenCalled();
+      expect((mockSessionObj.user as { expertProfileId?: string }).expertProfileId).toBeUndefined();
+    });
+
     it('maps not_owner to Unauthorized with an empty id', async () => {
       mockSaveApplicantDraftStep.mockResolvedValue({ outcome: 'not_owner' });
       const result = await saveDraftAction({
