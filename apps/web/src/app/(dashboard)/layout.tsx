@@ -1,6 +1,4 @@
 import { Suspense } from 'react';
-import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
@@ -9,6 +7,7 @@ import { getWorkspacesForCurrentUser } from '@/lib/workspaces/get-workspaces';
 import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { BreadcrumbProvider } from '@/components/layout/breadcrumb-context';
+import { SessionSyncRedirect } from '@/components/layout/session-sync-redirect';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
 import { MobileTabBar } from '@/components/layout/mobile-tab-bar';
@@ -29,14 +28,13 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }): Promise<React.JSX.Element> {
-  // Read-only drift check — if sync needed, redirect to route handler
-  // which can safely mutate cookies
+  // Read-only drift check — if sync needed, hard-navigate to the route handler, which can safely
+  // mutate cookies. A client component does the navigation: an RSC `redirect()` thrown from this
+  // cached layout segment is re-thrown on every client navigation and loops.
   const checkResult = await checkSessionDrift();
 
   if (checkResult.action === 'sync-needed') {
-    const headersList = await headers();
-    const pathname = headersList.get('x-invoke-path') || '/dashboard';
-    redirect(`/api/auth/session-sync?returnTo=${encodeURIComponent(pathname)}`);
+    return <SessionSyncRedirect />;
   }
 
   // After sync, session is guaranteed fresh — read user normally

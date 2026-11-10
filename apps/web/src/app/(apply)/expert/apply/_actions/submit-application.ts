@@ -6,6 +6,7 @@ import { buildExpertApplicationSubmittedPayload } from '@balo/shared/notificatio
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
+import { syncSessionExpertProfileId } from './sync-session-expert-profile';
 
 interface SubmitResult {
   success: boolean;
@@ -155,6 +156,8 @@ export const submitApplicationAction = withAuth(
           error: statusRefusal ?? 'Application already submitted',
         };
       }
+
+      await syncSessionExpertProfileId(session, submitResult.expertProfileId);
 
       log.info('Expert application submitted', {
         userId: session.user.id,

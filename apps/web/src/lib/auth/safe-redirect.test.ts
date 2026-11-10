@@ -61,6 +61,18 @@ describe('getSafeRedirectPath', () => {
     });
   });
 
+  it('keeps the query string of a valid path', () => {
+    expect(getSafeRedirectPath('/cases/abc?tab=files', BASE_URL)).toBe('/cases/abc?tab=files');
+  });
+
+  it('still blocks auth paths when a query is present', () => {
+    expect(getSafeRedirectPath('/login?x=1', BASE_URL)).toBe('/dashboard');
+  });
+
+  it('still blocks a dot-segment payload that carries a query', () => {
+    expect(getSafeRedirectPath('/.//evil.com?x=1', BASE_URL)).toBe('/dashboard');
+  });
+
   it('never returns a value that re-parses to a foreign origin', () => {
     const payloads = [
       '/.//evil.com',

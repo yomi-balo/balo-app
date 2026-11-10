@@ -23,13 +23,19 @@ const mockGetCurrentUser = vi.fn<() => Promise<SessionUser | null>>();
 const mockBuildNavContext = vi.fn<(user: SessionUser | null) => Promise<NavContext>>();
 const mockLoadTopBarWalletData = vi.fn();
 const mockLoadViewerTimezoneContext = vi.fn();
+const { mockRedirect } = vi.hoisted(() => ({ mockRedirect: vi.fn() }));
 
 vi.mock('@/lib/auth/session', () => ({
   getCurrentUser: () => mockGetCurrentUser(),
 }));
 
+const mockCheckSessionDrift = vi.fn<() => Promise<{ action: 'ok' | 'sync-needed' }>>();
 vi.mock('@/lib/auth/session-sync', () => ({
-  checkSessionDrift: () => Promise.resolve({ action: 'ok' }),
+  checkSessionDrift: () => mockCheckSessionDrift(),
+}));
+
+vi.mock('@/components/layout/session-sync-redirect', () => ({
+  SessionSyncRedirect: () => <div data-testid="session-sync-redirect" />,
 }));
 
 vi.mock('@/lib/actions/expert-checklist', () => ({
@@ -105,7 +111,7 @@ vi.mock('@/components/providers/analytics-identify', () => ({
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
-  redirect: vi.fn(),
+  redirect: mockRedirect,
   // ⚠ REQUIRED — this file renders the REAL `TopNav`, and BAL-500's ⌘K palette inside it calls
   // `useRouter()`. Without this the render throws before the first assertion.
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -148,9 +154,44 @@ const COMPANY_USER: SessionUser = {
   companyRole: 'owner',
 };
 
+const APPLICANT_USER: SessionUser = {
+  ...COMPANY_USER,
+  id: 'user-applicant-1',
+  companyId: 'co-applicant-personal',
+  companyName: 'Applicant Person',
+  expertProfileId: 'ep-pending',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadViewerTimezoneContext.mockResolvedValue({ savedTimezone: null, mismatchPrompt: null });
+  mockCheckSessionDrift.mockResolvedValue({ action: 'ok' });
+});
+
+describe('DashboardLayout — session drift', () => {
+  it('hard-navigates via SessionSyncRedirect instead of redirect(), with no chrome', async () => {
+    mockCheckSessionDrift.mockResolvedValue({ action: 'sync-needed' });
+
+    const element = await DashboardLayout({ children: <div data-testid="child-sentinel" /> });
+    render(element);
+
+    expect(screen.getByTestId('session-sync-redirect')).toBeInTheDocument();
+    expect(screen.queryByTestId('child-sentinel')).not.toBeInTheDocument();
+    expect(mockRedirect).not.toHaveBeenCalled();
+    expect(mockGetCurrentUser).not.toHaveBeenCalled();
+    expect(mockLoadViewerTimezoneContext).not.toHaveBeenCalled();
+  });
+
+  it('renders children for a pending applicant (client mode, expertProfileId set)', async () => {
+    mockGetCurrentUser.mockResolvedValue(APPLICANT_USER);
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
+
+    const element = await DashboardLayout({ children: <div data-testid="child-sentinel" /> });
+    const { container } = render(element);
+
+    expect(container.querySelector('main')).toContainElement(screen.getByTestId('child-sentinel'));
+    expect(screen.queryByTestId('session-sync-redirect')).not.toBeInTheDocument();
+  });
 });
 
 describe('DashboardLayout — the credits-chip gate (BAL-499 F1)', () => {

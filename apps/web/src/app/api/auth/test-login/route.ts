@@ -313,11 +313,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // `checkSessionDrift` treats an ABSENT `activeWorkspace` as the pre-BAL-494 bootstrap case
     // and returns `sync-needed`, so a session sealed without it is DRIFTED THE INSTANT IT IS
     // WRITTEN. `(dashboard)/layout.tsx` then spends the very first navigation after seeding on a
-    // `/api/auth/session-sync` round-trip — and that layout's `returnTo` reads
+    // `/api/auth/session-sync` round-trip. That layout used to read `returnTo` from
     // `headers().get('x-invoke-path')`, a header that DOES NOT EXIST IN NEXT 16, so it always
-    // falls back to `/dashboard`. Net effect: `seedSession()` followed by `page.goto('/admin/…')`
-    // landed on `/dashboard` no matter what role was sealed, which read exactly like a failing
-    // capability gate (BAL-548 — three staff arms of `e2e/admin-shell.spec.ts`, CI-only because
+    // fell back to `/dashboard`; it now hard-navigates with the real path. The old effect was:
+    // `seedSession()` followed by `page.goto('/admin/…')` landed on `/dashboard` no matter what
+    // role was sealed, which read exactly like a failing capability gate (BAL-548 — three staff arms of `e2e/admin-shell.spec.ts`, CI-only because
     // no local harness ran the production `(dashboard)` layout). The cookie was always correct;
     // the session was merely incomplete.
     //
