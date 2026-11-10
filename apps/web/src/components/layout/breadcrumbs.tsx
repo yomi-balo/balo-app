@@ -15,7 +15,7 @@ const LAST_CRUMB_LINK_CLASSNAME = `${LAST_CRUMB_CLASSNAME} focus-visible:ring-ri
 /**
  * The content of one crumb — a `<Link>` when it carries an `href`, a plain `<span>` otherwise.
  * Every non-last crumb `resolveBreadcrumbTrail` returns carries a real `href` (every
- * `ENTITY_PARENTS` entry does), so the `href === null` branch below only ever fires for the last
+ * `ENTITY_PARENTS` entry and every `SUPPLEMENTAL_ROUTE_PARENTS` target does), so the `href === null` branch below only ever fires for the last
  * crumb — kept explicit rather than asserted away, since `NavCrumb.href` is honestly typed
  * `string | null`. `aria-current="page"` for the last crumb sits on the wrapping `<h1>` (see
  * `Breadcrumbs` below), not here, so it applies uniformly whether the current page is a link or

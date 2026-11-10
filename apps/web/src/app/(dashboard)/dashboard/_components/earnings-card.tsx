@@ -34,7 +34,7 @@ export function EarningsCard(): React.JSX.Element {
       <div className="pt-3 pb-2.5">
         <Link
           href={PAYOUTS_HREF}
-          className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 rounded-sm text-[12.5px] font-semibold focus-visible:ring-2 focus-visible:outline-none"
+          className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 rounded-sm text-[12.5px] font-semibold underline-offset-[3px] transition-colors hover:underline focus-visible:ring-2 focus-visible:outline-none"
         >
           View payouts
           <ArrowRight className="size-3" aria-hidden="true" />

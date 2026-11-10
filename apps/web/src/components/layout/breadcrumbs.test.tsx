@@ -272,6 +272,25 @@ describe('Breadcrumbs', () => {
       expect(back.className).toContain('lg:hidden');
     });
 
+    it('/redeem renders a "Back to Dashboard" link, a Dashboard crumb and one current-page h1', async () => {
+      pathname = '/redeem';
+      const { container } = render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      const back = screen.getByRole('link', { name: 'Back to Dashboard' });
+      expect(back).toHaveAttribute('href', '/dashboard');
+      expect(back.className).toContain('lg:hidden');
+      const earlier = screen.getByRole('link', { name: 'Dashboard' });
+      expect(earlier).toHaveAttribute('href', '/dashboard');
+      const headings = screen.getAllByRole('heading', { level: 1 });
+      expect(headings).toHaveLength(1);
+      expect(headings[0]).toHaveTextContent('Redeem a code');
+      expect(headings[0]).toHaveAttribute('aria-current', 'page');
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
     it('a list route (single crumb) renders no back link', () => {
       pathname = '/cases';
       render(

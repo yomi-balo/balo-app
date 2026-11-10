@@ -186,6 +186,7 @@ describe('MoveCardContext', () => {
     const first = screen.getByRole('link', { name: 'Choose Thu 22 Oct, 8:00 pm on the case page' });
     expect(first).toHaveAttribute('href', '/cases/e-1');
     expect(first).toHaveClass('h-11');
+    expect(first).toHaveClass('hover:bg-primary/20', 'transition-colors', 'focus-visible:ring-2');
     expect(
       screen.getByRole('link', { name: 'Choose Fri 23 Oct, 3:30 pm on the case page' })
     ).toBeInTheDocument();

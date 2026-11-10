@@ -49,6 +49,14 @@ describe('RedeemPromoPanel', () => {
     expect(screen.getByRole('button', { name: /^redeem$/i })).toBeDisabled();
   });
 
+  it('renders the idle heading as a level-2 heading (the chrome breadcrumbs own the h1)', () => {
+    render(<RedeemPromoPanel {...COMPANY} />);
+    expect(
+      screen.getByRole('heading', { level: 2, name: /redeem a promo code/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
   it('shows the success card + continue hand-off + toast on a fresh redeem', async () => {
     mockRedeem.mockResolvedValue({
       status: 'redeemed',
@@ -60,7 +68,15 @@ describe('RedeemPromoPanel', () => {
     render(<RedeemPromoPanel {...COMPANY} />);
     await submitCode(user);
 
-    expect(await screen.findByText(/you're all set/i)).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /you're all set/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /redeem another code/i })).toHaveClass(
+      'hover:underline',
+      'underline-offset-[3px]',
+      'transition-colors'
+    );
     expect(screen.getByText(/A\$50\.00 added to Northwind Industrial/i)).toBeInTheDocument();
     expect(screen.getByTestId('continue-to-mandate')).toHaveTextContent('company-1');
     expect(mockToastSuccess).toHaveBeenCalledWith('A$50.00 added to Northwind Industrial.');
@@ -77,7 +93,10 @@ describe('RedeemPromoPanel', () => {
     render(<RedeemPromoPanel {...COMPANY} />);
     await submitCode(user);
 
-    expect(await screen.findByRole('heading', { name: /already redeemed/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /already redeemed/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
     expect(mockToastSuccess).toHaveBeenCalledWith(
       'This code was already redeemed for Northwind Industrial.'
     );
