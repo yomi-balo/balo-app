@@ -13,16 +13,10 @@ const DEFAULT_REDIRECT = '/dashboard';
  * original carried, fixed here for BOTH routes), and `/login` / `/signup` / `/api/auth`
  * (which also prevents a switch → switch redirect loop).
  *
- * ⚠ RETURNS `pathname` ONLY — the query string and fragment are DROPPED. Pre-existing
- * behaviour, inherited verbatim from the extracted original, and harmless today because every
- * current caller passes a query-less `returnTo` (`/projects/{id}`). Called out because this is
- * now the shared guard for a growing caller set: the first deep link carrying `?tab=…` will
- * silently lose it at redirect time, and the symptom — landing on the right page with the
- * wrong tab — is otherwise hard to trace back to here.
- *
- * If a caller ever needs them preserved, append `parsed.search` / `parsed.hash` to the
- * returned path. Do NOT return `returnTo` unmodified instead: that reintroduces the
- * dot-segment bypass the guard below exists to stop.
+ * ⚠ The query string is preserved and the fragment is dropped (it never reaches the server).
+ * `search` is appended only after the origin, `//` and auth-path checks on the pathname, and it
+ * always begins with `?`, so it cannot change the validated path. Do NOT return `returnTo`
+ * unmodified instead: that reintroduces the dot-segment bypass the guard below exists to stop.
  */
 export function getSafeRedirectPath(returnTo: string | null, baseUrl: string): string {
   if (!returnTo) return DEFAULT_REDIRECT;
@@ -52,7 +46,7 @@ export function getSafeRedirectPath(returnTo: string | null, baseUrl: string): s
       return DEFAULT_REDIRECT;
     }
 
-    return path;
+    return path + parsed.search;
   } catch {
     return DEFAULT_REDIRECT;
   }

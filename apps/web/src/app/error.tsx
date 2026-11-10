@@ -16,7 +16,8 @@ export default function RootError({
   reset,
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   useEffect(() => {
-    Sentry.captureException(error);
+    // Server-thrown errors carry a digest and are already reported by `onRequestError`.
+    if (!error.digest) Sentry.captureException(error);
   }, [error]);
 
   return (

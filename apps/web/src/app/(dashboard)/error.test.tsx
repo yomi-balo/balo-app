@@ -18,4 +18,12 @@ describe('DashboardError', () => {
     expect(reset).toHaveBeenCalledOnce();
     expect(Sentry.captureException).toHaveBeenCalledWith(error);
   });
+
+  it('does not re-report an error that already has a server digest', () => {
+    vi.mocked(Sentry.captureException).mockClear();
+    render(
+      <DashboardError error={Object.assign(new Error('boom'), { digest: 'abc' })} reset={vi.fn()} />
+    );
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
 });

@@ -19,6 +19,14 @@ describe('RootError', () => {
     expect(Sentry.captureException).toHaveBeenCalledWith(error);
   });
 
+  it('does not re-report an error that already has a server digest', () => {
+    vi.mocked(Sentry.captureException).mockClear();
+    render(
+      <RootError error={Object.assign(new Error('boom'), { digest: 'abc' })} reset={vi.fn()} />
+    );
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
   it('links to the dashboard with a plain anchor', () => {
     render(<RootError error={new Error('boom')} reset={vi.fn()} />);
     expect(screen.getByRole('link', { name: /go to dashboard/i })).toHaveAttribute(
