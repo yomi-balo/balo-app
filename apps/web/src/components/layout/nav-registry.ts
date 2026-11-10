@@ -586,6 +586,17 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * BAL-641 — route to the href of its parent, for a supplemental (non-nav) route that still needs
+ * a way back. `Breadcrumbs` turns the parent crumb into the mobile back arrow and the earlier
+ * desktop crumb, so a route listed here needs no bespoke back button. The parent's LABEL is never
+ * typed here: {@link supplementalParentFor} resolves it from the registry so labels keep one home.
+ * `/billing/top-up` has no parent row yet, so it shows no back arrow.
+ */
+const SUPPLEMENTAL_ROUTE_PARENTS: Readonly<Record<string, string>> = {
+  '/redeem': '/dashboard',
+};
+
+/**
  * BAL-499 (D5/D11) — first path segment to the list an entity route sits under. The parent crumb
  * ALWAYS carries an href, so the way back is never lost even when the entity itself has
  * published no label yet.
@@ -639,6 +650,19 @@ function exactCrumbLabelFor(pathname: string): string | undefined {
   return SUPPLEMENTAL_ROUTE_LABELS[pathname];
 }
 
+/**
+ * BAL-641 — the parent crumb for a supplemental route, else `undefined`. `Object.hasOwn` for the
+ * reason given on {@link exactCrumbLabelFor}. A parent href with no label yields `undefined`
+ * rather than a hand-typed or empty crumb (D11: no crumb beats a wrong crumb).
+ */
+function supplementalParentFor(pathname: string): NavCrumb | undefined {
+  if (!Object.hasOwn(SUPPLEMENTAL_ROUTE_PARENTS, pathname)) return undefined;
+  const parentHref = SUPPLEMENTAL_ROUTE_PARENTS[pathname];
+  if (parentHref === undefined) return undefined;
+  const label = exactCrumbLabelFor(parentHref);
+  return label === undefined ? undefined : { label, href: parentHref };
+}
+
 /** The path's first segment (between the leading `/` and the next `/`, or the end of string). */
 function firstSegmentOf(pathname: string): string {
   const [, segment] = pathname.split('/');
@@ -649,7 +673,9 @@ function firstSegmentOf(pathname: string): string {
  * BAL-499 (D5) — the route-derived crumb trail for `pathname`, deepest-last. An entity route
  * yields ONLY its parent — the entity's own crumb is published by the page (`EntityCrumb`,
  * `breadcrumb-context.tsx`) and appended by `Breadcrumbs`. An unrecognised route yields `[]`: no
- * crumb beats a wrong crumb (D11) — the old silent `'Dashboard'` fallback is gone.
+ * crumb beats a wrong crumb (D11) — the old silent `'Dashboard'` fallback is gone. An exact
+ * (nav or supplemental) route yields its own crumb with `href: null`, preceded by ONE parent
+ * crumb when `SUPPLEMENTAL_ROUTE_PARENTS` names one (BAL-641).
  *
  * ⚠ `Object.hasOwn` guards `ENTITY_PARENTS` for the same reason as `exactCrumbLabelFor` above:
  * `firstSegmentOf` returns a bare path segment, and `constructor` / `toString` / `valueOf` /
@@ -659,7 +685,11 @@ function firstSegmentOf(pathname: string): string {
  */
 export function resolveBreadcrumbTrail(pathname: string): readonly NavCrumb[] {
   const exact = exactCrumbLabelFor(pathname);
-  if (exact !== undefined) return [{ label: exact, href: null }];
+  if (exact !== undefined) {
+    const parent = supplementalParentFor(pathname);
+    const current: NavCrumb = { label: exact, href: null };
+    return parent === undefined ? [current] : [parent, current];
+  }
   const segment = firstSegmentOf(pathname);
   if (!Object.hasOwn(ENTITY_PARENTS, segment)) return [];
   const parent = ENTITY_PARENTS[segment];

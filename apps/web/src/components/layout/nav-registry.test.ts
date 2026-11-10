@@ -533,7 +533,14 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/admin', [{ label: 'Home', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
     ['/billing/top-up', [{ label: 'Top up', href: null }]],
-    ['/redeem', [{ label: 'Redeem a code', href: null }]],
+    // BAL-641 — `/redeem` carries a `Dashboard` parent; `/billing/top-up` above stays single-crumb.
+    [
+      '/redeem',
+      [
+        { label: 'Dashboard', href: '/dashboard' },
+        { label: 'Redeem a code', href: null },
+      ],
+    ],
     // BAL-503 — the three new Settings sections.
     ['/settings/company', [{ label: 'Company', href: null }]],
     ['/settings/billing', [{ label: 'Credits & billing', href: null }]],
@@ -643,9 +650,17 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/settings/notifications',
     ];
     for (const pathname of listRoutes) {
-      const [crumb] = resolveBreadcrumbTrail(pathname);
+      const crumb = resolveBreadcrumbTrail(pathname).at(-1);
+      expect(crumb).toBeDefined();
       expect(crumb?.href).toBeNull();
     }
+  });
+
+  it("/redeem's parent crumb is the enabled dashboard registry entry, label and href", () => {
+    const dashboard = NAV_ENTRIES.find((e) => e.key === 'dashboard' && e.enabled);
+    expect(dashboard).toBeDefined();
+    const [parent] = resolveBreadcrumbTrail('/redeem');
+    expect(parent).toEqual({ label: dashboard?.label, href: dashboard?.href });
   });
 
   it('drift guard: no supplemental route collides with an enabled registry href', () => {

@@ -164,7 +164,7 @@ export function UpNextCard({
                 key={link.target}
                 href={link.href}
                 onClick={() => handleFooterLinkClick(link.target)}
-                className="text-primary inline-flex items-center gap-1 text-[12.5px] font-semibold"
+                className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 rounded-sm text-[12.5px] font-semibold underline-offset-[3px] transition-colors hover:underline focus-visible:ring-2 focus-visible:outline-none"
               >
                 {link.label}
                 <ArrowRight className="size-3" aria-hidden="true" />

@@ -65,16 +65,19 @@ function FilterChip({
       aria-pressed={pressed}
       onClick={onClick}
       className={cn(
-        'focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] font-semibold focus-visible:ring-2 focus-visible:outline-none sm:min-h-8',
+        'focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-8',
         pressed
-          ? 'bg-foreground text-background border-foreground'
-          : 'bg-card text-foreground border-primary/15'
+          ? 'bg-foreground text-background border-foreground hover:bg-foreground/80'
+          : 'bg-card text-foreground border-primary/15 hover:bg-accent hover:border-primary/30'
       )}
     >
       {label} <span className="opacity-65">{count}</span>
     </button>
   );
 }
+
+const SCROLL_ARROW_CLASS =
+  'bg-card text-foreground border-primary/15 hover:bg-accent hover:border-primary/30 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border transition-colors focus-visible:ring-2 focus-visible:outline-none sm:flex';
 
 const PANEL_CLASS = 'bg-primary/5 border-primary/15 rounded-[18px] border';
 
@@ -214,7 +217,7 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
               type="button"
               aria-label="Scroll back"
               onClick={() => scroll(-1)}
-              className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
+              className={SCROLL_ARROW_CLASS}
             >
               <ChevronLeft className="size-[18px]" aria-hidden="true" />
             </button>
@@ -222,7 +225,7 @@ export function YourMove({ data, workspaceType }: Readonly<YourMoveProps>): Reac
               type="button"
               aria-label="Scroll forward"
               onClick={() => scroll(1)}
-              className="bg-card text-foreground border-primary/15 focus-visible:ring-ring hidden size-9 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:outline-none sm:flex"
+              className={SCROLL_ARROW_CLASS}
             >
               <ChevronRight className="size-[18px]" aria-hidden="true" />
             </button>

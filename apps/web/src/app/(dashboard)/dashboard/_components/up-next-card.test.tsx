@@ -54,6 +54,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('UpNextCard — hover states', () => {
+  it('gives every footer link a hover underline and a focus-visible ring', () => {
+    const data: UpNextData = { kind: 'ready', rows: [row()] };
+    render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    for (const { label } of FOOTER_LINKS) {
+      expect(screen.getByRole('link', { name: label })).toHaveClass(
+        'hover:underline',
+        'transition-colors',
+        'focus-visible:ring-2',
+        'min-h-11'
+      );
+    }
+  });
+
+  it('adds no hover to the static card root', () => {
+    const data: UpNextData = { kind: 'ready', rows: [row()] };
+    const { container } = render(
+      <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
+    );
+    const root = container.querySelector('section');
+    expect(root).not.toBeNull();
+    expect(root?.className).not.toContain('hover:');
+  });
+});
+
 describe('UpNextCard — rendering rows', () => {
   it('renders rows in the order given, with title and counterparty', () => {
     const data: UpNextData = {
