@@ -129,7 +129,9 @@ export function RatingRowEdit({
             balo
           )}
         </span>
-        <span className="text-muted-foreground w-[110px] text-xs">{missing ? '' : levelLabel}</span>
+        <span className="text-muted-foreground w-[128px] shrink-0 text-xs">
+          {missing ? '' : levelLabel}
+        </span>
         <span
           title={
             self === null

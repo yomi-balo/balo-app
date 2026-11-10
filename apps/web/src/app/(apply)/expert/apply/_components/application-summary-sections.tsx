@@ -225,7 +225,7 @@ function UnratedCallout({
   onEdit,
 }: Readonly<{
   unrated: ApplicationSummaryView['products'];
-  onEdit?: (step: SummaryEditTarget) => void;
+  onEdit: (step: SummaryEditTarget) => void;
 }>): React.JSX.Element {
   const [first] = unrated;
   const lead =
@@ -233,22 +233,17 @@ function UnratedCallout({
       ? `${first.name} isn't rated yet.`
       : `${unrated.length} products aren't rated yet.`;
   return (
-    <div
-      role="status"
-      className="border-warning/30 bg-warning/10 mb-3 flex items-start gap-2 rounded-[10px] border px-3.5 py-2.5"
-    >
+    <div className="border-warning/30 bg-warning/10 mb-3 flex items-start gap-2 rounded-[10px] border px-3.5 py-2.5">
       <AlertTriangle className="text-warning-strong mt-px h-4 w-4 shrink-0" aria-hidden="true" />
       <p className="text-foreground text-[13px] leading-normal">
         {lead} Rate at least one dimension for each product before you submit.{' '}
-        {onEdit && (
-          <button
-            type="button"
-            onClick={() => onEdit('assessment')}
-            className="text-foreground focus-visible:ring-ring rounded-sm py-3 font-semibold underline focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Rate now
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => onEdit('assessment')}
+          className="text-foreground focus-visible:ring-ring rounded-sm py-3 font-semibold underline focus-visible:ring-2 focus-visible:outline-none"
+        >
+          Rate now
+        </button>
       </p>
     </div>
   );
@@ -267,7 +262,9 @@ function ProductsSection({
       editTarget={summary.products.length === 0 ? 'products' : 'assessment'}
       onEdit={onEdit}
     >
-      {unrated.length > 0 && <UnratedCallout unrated={unrated} onEdit={onEdit} />}
+      {/* The callout asks for action, so only the editable summary shows it; the read-only page
+          keeps the per-product "Not rated" tag. */}
+      {onEdit && unrated.length > 0 && <UnratedCallout unrated={unrated} onEdit={onEdit} />}
       {summary.products.length === 0 && (
         <p className="text-muted-foreground text-[13px]">
           Choose the Salesforce products you work with.
@@ -362,15 +359,12 @@ function WorkHistorySection({
 }: Readonly<ApplicationSummarySectionsProps>): React.JSX.Element | null {
   const { workHistory } = summary;
   if (workHistory.length === 0 && !onEdit) return null;
+  const positions = workHistory.length === 1 ? 'position' : 'positions';
   return (
     <SummarySection
       icon={Briefcase}
       label="Work history"
-      digest={
-        workHistory.length > 0
-          ? `${workHistory.length} position${workHistory.length === 1 ? '' : 's'}`
-          : undefined
-      }
+      digest={workHistory.length > 0 ? `${workHistory.length} ${positions}` : undefined}
       editTarget="work-history"
       onEdit={onEdit}
     >

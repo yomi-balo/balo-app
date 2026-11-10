@@ -149,9 +149,9 @@ export function AssessmentCard({
                   <Check className="mr-1 h-4 w-4" aria-hidden="true" />
                   Done
                 </Button>
-                <p role="status" className="text-destructive/90 text-xs">
+                <output className="text-destructive/90 block text-xs">
                   {showRatingHint ? 'Rate at least one dimension first' : ''}
-                </p>
+                </output>
               </div>
             </div>
           </motion.div>

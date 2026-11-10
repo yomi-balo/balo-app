@@ -428,10 +428,9 @@ describe('StepAssessment', () => {
     // is never focused — focus does not advance to another card.
     expect(screen.getByRole('button', { name: /Lead Mgmt/ })).not.toHaveFocus();
 
-    // The hint appears inside a role="status" live region.
+    // The hint appears inside an <output> live region (implicit role="status").
     const hint = screen.getByText(/rate at least one dimension first/i);
-    expect(hint).toBeInTheDocument();
-    expect(hint).toHaveAttribute('role', 'status');
+    expect(hint.tagName).toBe('OUTPUT');
 
     // The gate fires the analytics event with the offending product id.
     expect(track).toHaveBeenCalledWith(EXPERT_EVENTS.ASSESSMENT_DONE_BLOCKED, {

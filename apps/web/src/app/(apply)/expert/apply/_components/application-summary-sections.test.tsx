@@ -48,12 +48,13 @@ function buildSummary(overrides: Partial<ApplicationSummaryView> = {}): Applicat
 }
 
 describe('ApplicationSummarySections', () => {
-  it('shows no Edit buttons and no Rate now link without onEdit', () => {
+  it('shows no Edit buttons and no unrated callout without onEdit', () => {
     render(<ApplicationSummarySections summary={buildSummary()} />);
 
     expect(screen.queryByRole('button', { name: /^edit/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /rate now/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent("Lead Mgmt isn't rated yet.");
+    expect(screen.queryByText(/isn't rated yet/)).not.toBeInTheDocument();
+    expect(screen.getByText('Not rated')).toBeInTheDocument();
   });
 
   it('fires onEdit with the section target for each Edit button', async () => {
@@ -83,8 +84,7 @@ describe('ApplicationSummarySections', () => {
     const onEdit = vi.fn();
     render(<ApplicationSummarySections summary={buildSummary()} onEdit={onEdit} />);
 
-    const callout = screen.getByRole('status');
-    expect(callout).toHaveTextContent("Lead Mgmt isn't rated yet.");
+    const callout = screen.getByText(/Lead Mgmt isn't rated yet\./);
     await user.click(within(callout).getByRole('button', { name: 'Rate now' }));
 
     expect(onEdit).toHaveBeenCalledWith('assessment');
@@ -98,18 +98,18 @@ describe('ApplicationSummarySections', () => {
         { id: 'p2', name: 'Lead Mgmt', rated: false, ratings: ratings(0) },
       ],
     });
-    render(<ApplicationSummarySections summary={summary} />);
+    render(<ApplicationSummarySections summary={summary} onEdit={vi.fn()} />);
 
-    expect(screen.getByRole('status')).toHaveTextContent("2 products aren't rated yet.");
+    expect(screen.getByText(/2 products aren't rated yet\./)).toBeInTheDocument();
   });
 
   it('shows no callout when every product is rated', () => {
     const summary = buildSummary({
       products: [{ id: 'p1', name: 'CPQ', rated: true, ratings: ratings(8) }],
     });
-    render(<ApplicationSummarySections summary={summary} />);
+    render(<ApplicationSummarySections summary={summary} onEdit={vi.fn()} />);
 
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/rated yet/)).not.toBeInTheDocument();
     expect(screen.getByText('1 product')).toBeInTheDocument();
   });
 

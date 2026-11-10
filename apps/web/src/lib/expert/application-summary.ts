@@ -88,17 +88,15 @@ export function productHasRating(
   return ratings.some((r) => r.productId === productId && r.proficiency > 0);
 }
 
-function formatDate(date: Date | string | null | undefined): string {
+type DateInput = Date | string | null | undefined;
+
+function formatDate(date: DateInput): string {
   if (!date) return '—';
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
-function periodLabel(
-  startedAt: Date | string | null | undefined,
-  endedAt: Date | string | null | undefined,
-  isCurrent: boolean
-): string {
+function periodLabel(startedAt: DateInput, endedAt: DateInput, isCurrent: boolean): string {
   return `${formatDate(startedAt)} — ${isCurrent ? 'Present' : formatDate(endedAt)}`;
 }
 

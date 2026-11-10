@@ -5,6 +5,7 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Plus, X, Briefcase, Globe, Award, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import * as Sentry from '@sentry/nextjs';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -115,6 +116,15 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
     return () => subscription.unsubscribe();
   }, [form, updateStepData]);
 
+  // Re-validates one field after a picker change. Pickers have no blur, so `mode: 'onBlur'`
+  // never fires for them.
+  const revalidate = useCallback(
+    (name: keyof ProfileStepData): void => {
+      form.trigger(name).catch((error: unknown) => Sentry.captureException(error));
+    },
+    [form]
+  );
+
   // Register validation
   const validate = useCallback(async (): Promise<boolean> => {
     return form.trigger();
@@ -166,7 +176,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   <Select
                     onValueChange={(v) => {
                       field.onChange(Number(v));
-                      form.trigger('yearStartedSalesforce');
+                      revalidate('yearStartedSalesforce');
                     }}
                     value={field.value?.toString()}
                   >
@@ -200,7 +210,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   <Select
                     onValueChange={(v) => {
                       field.onChange(Number(v));
-                      form.trigger('projectCountMin');
+                      revalidate('projectCountMin');
                     }}
                     value={field.value?.toString()}
                   >
@@ -233,7 +243,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                   <Select
                     onValueChange={(v) => {
                       field.onChange(Number(v));
-                      form.trigger('projectLeadCountMin');
+                      revalidate('projectLeadCountMin');
                     }}
                     value={field.value?.toString()}
                   >
@@ -482,7 +492,7 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
                     selected={field.value ?? []}
                     onChange={(v) => {
                       field.onChange(v);
-                      form.trigger('industryIds');
+                      revalidate('industryIds');
                     }}
                     className="mt-3"
                   />

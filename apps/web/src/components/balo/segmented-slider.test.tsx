@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { axe } from '@/test/axe';
 import {
+  nearestValueFromPointer,
   PROFICIENCY_RAMP_CLASSES,
   SegmentedSlider,
   valueFromKey,
@@ -27,6 +28,16 @@ describe('valueFromPointer', () => {
 
   it('returns 0 for a zero-width track', () => {
     expect(valueFromPointer(10, 0)).toBe(0);
+  });
+});
+
+describe('nearestValueFromPointer', () => {
+  it('snaps to the nearest knob position and clamps', () => {
+    expect(nearestValueFromPointer(34, 100)).toBe(3);
+    expect(nearestValueFromPointer(36, 100)).toBe(4);
+    expect(nearestValueFromPointer(-20, 100)).toBe(0);
+    expect(nearestValueFromPointer(140, 100)).toBe(10);
+    expect(nearestValueFromPointer(50, 0)).toBe(0);
   });
 });
 
@@ -119,6 +130,60 @@ describe('SegmentedSlider', () => {
     fireEvent.pointerUp(slider, { pointerId: 1 });
     onValueChange.mockClear();
     fireEvent.pointerMove(slider, { clientX: 90, pointerId: 1 });
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it('grabs the knob without changing the value', () => {
+    const slider = setup(3);
+    fireEvent.pointerDown(slider, { clientX: 35, pointerId: 1 });
+    fireEvent.pointerUp(slider, { pointerId: 1 });
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it('drags a grabbed knob to the nearest position', () => {
+    const slider = setup(3);
+    fireEvent.pointerDown(slider, { clientX: 31, pointerId: 1 });
+    fireEvent.pointerMove(slider, { clientX: 33, pointerId: 1 });
+    expect(onValueChange).not.toHaveBeenCalled();
+    fireEvent.pointerMove(slider, { clientX: 52, pointerId: 1 });
+    expect(onValueChange).toHaveBeenLastCalledWith(5);
+  });
+
+  it('lets vertical swipes scroll the page', () => {
+    const slider = setup();
+    expect(slider).toHaveClass('touch-pan-y');
+    expect(slider).not.toHaveClass('touch-none');
+  });
+
+  it('sets the value on a touch tap, not on touch down', () => {
+    const slider = setup();
+    fireEvent.pointerDown(slider, { clientX: 55, pointerId: 1, pointerType: 'touch' });
+    expect(onValueChange).not.toHaveBeenCalled();
+    fireEvent.pointerUp(slider, { clientX: 55, pointerId: 1, pointerType: 'touch' });
+    expect(onValueChange).toHaveBeenLastCalledWith(6);
+  });
+
+  it('leaves the value alone when the browser takes a touch for scrolling', () => {
+    const slider = setup();
+    fireEvent.pointerDown(slider, { clientX: 55, pointerId: 1, pointerType: 'touch' });
+    fireEvent.pointerCancel(slider, { pointerId: 1, pointerType: 'touch' });
+    fireEvent.pointerUp(slider, { clientX: 55, pointerId: 1, pointerType: 'touch' });
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it('follows a horizontal touch drag once it passes the slop', () => {
+    const slider = setup();
+    fireEvent.pointerDown(slider, { clientX: 55, pointerId: 1, pointerType: 'touch' });
+    fireEvent.pointerMove(slider, { clientX: 58, pointerId: 1, pointerType: 'touch' });
+    expect(onValueChange).not.toHaveBeenCalled();
+    fireEvent.pointerMove(slider, { clientX: 72, pointerId: 1, pointerType: 'touch' });
+    expect(onValueChange).toHaveBeenLastCalledWith(8);
+  });
+
+  it('ignores a touch tap on the knob', () => {
+    const slider = setup(3);
+    fireEvent.pointerDown(slider, { clientX: 36, pointerId: 1, pointerType: 'touch' });
+    fireEvent.pointerUp(slider, { clientX: 36, pointerId: 1, pointerType: 'touch' });
     expect(onValueChange).not.toHaveBeenCalled();
   });
 

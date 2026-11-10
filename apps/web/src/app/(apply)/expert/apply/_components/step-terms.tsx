@@ -83,7 +83,7 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     registerValidation(validate);
   }, [registerValidation, validate]);
 
-  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const scrollViewportRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const viewport = scrollViewportRef.current;
@@ -277,15 +277,16 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
           {/* T&C container */}
           <div className="border-border relative overflow-hidden rounded-xl border">
             <ScrollArea className="max-h-[50vh] sm:max-h-[400px]">
-              <div
+              <section
                 ref={scrollViewportRef}
-                tabIndex={0}
-                role="region"
+                // The agreement unlocks once the terms are scrolled to the end, so keyboard users
+                // must be able to focus this region to scroll it.
+                tabIndex={0} // NOSONAR — a scrollable region must be keyboard-focusable (WCAG 2.1.1)
                 aria-label="Balo Expert Terms & Conditions"
                 className="prose prose-sm dark:prose-invert focus-visible:ring-ring max-h-[50vh] max-w-none overflow-y-auto p-6 focus-visible:ring-2 focus-visible:outline-none sm:max-h-[400px]"
               >
                 <ExpertTermsDocument />
-              </div>
+              </section>
             </ScrollArea>
 
             {/* Scroll gradient indicator */}
