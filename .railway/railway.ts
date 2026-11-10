@@ -25,8 +25,9 @@ export default defineRailway(() => {
       builder: 'RAILPACK',
       watchPatterns: ['apps/api/**', 'packages/**'],
     },
-    // TZ and NODE_ENV are pinned inline here, never as service variables, so they live in
-    // checked-in, reviewed config.
+    // TZ and NODE_ENV are pinned inline here so the running process gets them from checked-in,
+    // reviewed config. The service also has a dashboard NODE_ENV variable (`production`), which
+    // the build and the pre-deploy step see; for the running API this inline value overrides it.
     //
     // TZ=UTC pins the process timezone: the availability resolver iterates local-midnight Date
     // objects (getDay()/setDate()), which are only correct when the server runs UTC.
@@ -64,14 +65,19 @@ export default defineRailway(() => {
     deploy: {
       // Without a cap, a migration waiting on a lock holds the deploy "in progress" indefinitely.
       preDeployTimeoutSeconds: 600,
-      // Matches Railway's default; declared so a dashboard edit can't silently change it.
+      // Matches Railway's default. Declaring it records the intended value in reviewed config,
+      // but nothing re-checks it between applies: a dashboard edit drifts silently until the next
+      // `.railway/**` change plans against it.
       restartPolicyType: 'ON_FAILURE',
       restartPolicyMaxRetries: 10,
     },
   });
 
   return project('atlas-api', {
-    // The service variables stay owned by the Railway dashboard (see the header).
+    // The service variables stay owned by the Railway dashboard (see the header). The SDK 3.16.0
+    // types reject `managed` (TS2353), but the CLI generated it and reads it at runtime: without it
+    // the plan refuses to run, because the file declares none of the service's variables.
+    // `.railway/` is outside every typecheck, so leave the line as it is.
     variables: { managed: false },
     resources: [baloApp],
   });

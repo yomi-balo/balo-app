@@ -42,17 +42,29 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      # The action sets up its own Node 24 (the `railway` SDK needs >= 22, CI's other jobs use 20),
-      # enables pnpm through corepack (the version is package.json's `packageManager`) and runs
-      # `pnpm install --frozen-lockfile`, so `.railway/railway.ts` can import `railway/iac`. The
-      # v1 tag (v1.2.0) predates package-manager detection and runs `npm install`, which fails on
-      # the `workspace:*` dependencies, so both steps pin a main commit.
-      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: pnpm detection; no tag yet
+      # The `railway` SDK needs Node >= 22; CI's other jobs use 20.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Installs only the `railway` SDK, from `.railway/`'s own npm lockfile and with install
+      # scripts off, so `.railway/railway.ts` can import `railway/iac`. This job hands a production
+      # project token to the Plan step: a full monorepo install would run every dependency's
+      # install scripts first, and any of them could tamper with the code that step runs.
+      # `.railway/node_modules` is gitignored, so it stays out of the pinned plan's source tree
+      # (`git rev-parse HEAD:.railway`).
+      - name: Install the Railway SDK
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix .railway
+
+      # `package-manager: none` skips the action's own repository install. Both steps pin a main
+      # commit: the v1 tag (v1.2.0) always runs `npm install` at the repository root, which fails
+      # on the pnpm `workspace:*` dependencies, and `package-manager` exists only on main.
+      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: package-manager input; no tag yet
         with:
           command: plan
           railway-token: ${{ secrets.RAILWAY_TOKEN }}
           cli-version: 5.71.0
-          package-manager: pnpm
+          package-manager: none
 
   apply:
     name: Railway apply
@@ -82,7 +94,7 @@ jobs:
 
       # Destructive changes (deleting the service) fail rather than apply on merge. Apply installs
       # no dependencies: it downloads the `railway-plan` artifact planned on the PR head SHA.
-      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: pnpm detection; no tag yet
+      - uses: railwayapp/config@f1f0c715716fe035319b0a716b95c6e83e0f6595 # main 2026-10-13: package-manager input; no tag yet
         with:
           command: apply
           railway-token: ${{ secrets.RAILWAY_TOKEN }}
