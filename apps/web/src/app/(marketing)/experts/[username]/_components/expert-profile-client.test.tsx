@@ -115,9 +115,9 @@ function makeView(overrides: Partial<ExpertProfileView> = {}): ExpertProfileView
     ratingAverage: null,
     ratingCount: 0,
     competencies: [
-      { id: 's1', name: 'Apex', proficiency: 10, level: 'Expert', tone: 'success', pct: 100 },
-      { id: 's2', name: 'Flows', proficiency: 5, level: 'Intermediate', tone: 'warning', pct: 50 },
-      { id: 's3', name: 'LWC', proficiency: 2, level: 'Beginner', tone: 'muted', pct: 20 },
+      { id: 's1', name: 'Apex', proficiency: 10, title: 'Master', pct: 100 },
+      { id: 's2', name: 'Flows', proficiency: 5, title: 'Intermediate', pct: 50 },
+      { id: 's3', name: 'LWC', proficiency: 2, title: 'Basic awareness', pct: 20 },
     ],
     certifications: [
       { id: 'c1', name: 'Platform Developer I', logoUrl: 'https://cdn.test/pd1.png' },

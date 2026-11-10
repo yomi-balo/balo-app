@@ -9,17 +9,16 @@ import { ChangedDot } from './changed-dot';
 import type { StaffEditModel } from '../../_lib/staff-edit-model';
 
 /**
- * BAL-593 §[F] — industries (chips with remove/undo + an add-picker) and the three Salesforce
+ * BAL-593 §[F] — industries (chips with remove/undo + an add-picker) and the two Salesforce
  * distinction toggles, side by side. Design ref 1568-1701.
  */
 
 const DISTINCTIONS: readonly {
-  key: 'isSalesforceMvp' | 'isSalesforceCta' | 'isCertifiedTrainer';
+  key: 'isSalesforceMvp' | 'isSalesforceCta';
   label: string;
 }[] = [
   { key: 'isSalesforceMvp', label: 'Salesforce MVP' },
   { key: 'isSalesforceCta', label: 'Salesforce CTA' },
-  { key: 'isCertifiedTrainer', label: 'Certified Trainer' },
 ];
 
 export interface IndustriesDistinctionsEditSectionProps {

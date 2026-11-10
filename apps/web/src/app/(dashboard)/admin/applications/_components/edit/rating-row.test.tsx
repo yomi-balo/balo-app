@@ -105,4 +105,23 @@ describe('RatingRowEdit', () => {
       screen.queryByRole('button', { name: 'Undo change to Technical Fix for Sales Cloud' })
     ).not.toBeInTheDocument();
   });
+
+  it('shows the scale title and description for the value', () => {
+    render(
+      <RatingRowEdit
+        productName="Sales Cloud"
+        supportType={SUPPORT_TYPE}
+        rating={{ balo: 8, self: 8 }}
+        original={8}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('Highly experienced').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(
+        "You've handled complex work across several clients or orgs, and people outside your team come to you for advice."
+      ).length
+    ).toBeGreaterThan(0);
+  });
 });

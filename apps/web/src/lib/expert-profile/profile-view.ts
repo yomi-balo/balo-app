@@ -12,7 +12,8 @@ import type {
   ProfileReviewEntryView,
   WorkHistoryView,
 } from '@/components/expert/profile/types';
-import { proficiencyToLevel, proficiencyToPct } from './proficiency';
+import { proficiencyScaleLevel } from '@balo/shared/experts';
+import { proficiencyToPct } from './proficiency';
 
 const MONTHS = [
   'Jan',
@@ -78,17 +79,13 @@ function mapCompetencies(competencies: PublicExpertProfile['competencies']): Com
   }
 
   return [...maxByProductId.values()]
-    .map(({ id, name, proficiency }) => {
-      const level = proficiencyToLevel(proficiency);
-      return {
-        id,
-        name,
-        proficiency,
-        level: level.label,
-        tone: level.tone,
-        pct: proficiencyToPct(proficiency),
-      };
-    })
+    .map(({ id, name, proficiency }) => ({
+      id,
+      name,
+      proficiency,
+      title: proficiencyScaleLevel(proficiency).title,
+      pct: proficiencyToPct(proficiency),
+    }))
     .sort((a, b) => b.proficiency - a.proficiency);
 }
 

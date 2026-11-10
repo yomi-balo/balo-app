@@ -75,6 +75,10 @@ const referenceData: ReferenceData = {
       products: [
         { id: 'skill-cpq', name: 'CPQ', slug: 'cpq', sortOrder: 0 },
         { id: 'skill-leads', name: 'Lead Mgmt', slug: 'lead-mgmt', sortOrder: 1 },
+        { id: 'skill-forecast', name: 'Forecasting', slug: 'forecasting', sortOrder: 2 },
+        { id: 'skill-territory', name: 'Territory Mgmt', slug: 'territory-mgmt', sortOrder: 3 },
+        { id: 'skill-engage', name: 'Engagement', slug: 'engagement', sortOrder: 4 },
+        { id: 'skill-pipeline', name: 'Pipeline Inspection', slug: 'pipeline', sortOrder: 5 },
       ],
     },
     {
@@ -132,6 +136,17 @@ describe('StepProducts', () => {
     expect(screen.getByRole('button', { name: 'CPQ' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Lead Mgmt' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Case Mgmt' })).toBeInTheDocument();
+  });
+
+  it('lists every product in a dense category with no "more" button', async () => {
+    const user = userEvent.setup();
+    renderStep();
+
+    await openBrowse(user);
+
+    expect(screen.getByRole('button', { name: 'Pipeline Inspection' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Engagement' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^\d+ more$/ })).not.toBeInTheDocument();
   });
 
   it('filters products by the search query, dropping non-matching groups', async () => {

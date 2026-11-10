@@ -30,7 +30,6 @@ function profile(overrides: Partial<ApplicationProfile> = {}): ApplicationProfil
   return {
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
     submittedAt: null,
     ...overrides,
   } as unknown as ApplicationProfile;
@@ -137,10 +136,14 @@ describe('buildDistinctions', () => {
 
   it('lists every distinction the applicant holds, in a fixed order', () => {
     const distinctions = buildDistinctions(
-      profile({ isSalesforceMvp: true, isSalesforceCta: true, isCertifiedTrainer: true })
+      profile({
+        isSalesforceMvp: true,
+        isSalesforceCta: true,
+        isCertifiedTrainer: true,
+      } as Partial<ApplicationProfile>)
     );
 
-    expect(distinctions).toEqual(['Salesforce MVP', 'Salesforce CTA', 'Certified Trainer']);
+    expect(distinctions).toEqual(['Salesforce MVP', 'Salesforce CTA']);
   });
 });
 

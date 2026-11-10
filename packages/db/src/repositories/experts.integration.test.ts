@@ -1613,7 +1613,6 @@ describe('expertsRepository.saveProfileStep', () => {
         linkedinUrl: 'https://linkedin.com/in/eva-stone',
         isSalesforceMvp: true,
         isSalesforceCta: false,
-        isCertifiedTrainer: false,
         languages: [
           { languageId: lang1.id, proficiency: 'native' },
           { languageId: lang2.id, proficiency: 'intermediate' },
@@ -1669,7 +1668,6 @@ describe('expertsRepository.saveProfileStep', () => {
           linkedinUrl: null,
           isSalesforceMvp: false,
           isSalesforceCta: false,
-          isCertifiedTrainer: false,
           languages: [{ languageId: lang1.id, proficiency: 'native' }],
           industryIds: [randomUUID()],
         }
@@ -1713,7 +1711,6 @@ describe('expertsRepository.saveProfileStep', () => {
         linkedinUrl: null,
         isSalesforceMvp: false,
         isSalesforceCta: false,
-        isCertifiedTrainer: false,
         languages: [{ languageId: lang1.id, proficiency: 'advanced' }],
         industryIds: [randomUUID()], // invalid FK → rollback
       })
@@ -1750,7 +1747,6 @@ describe('expertsRepository.saveProfileStep', () => {
       linkedinUrl: null,
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
       languages: [],
       industryIds: [ind1.id],
     });

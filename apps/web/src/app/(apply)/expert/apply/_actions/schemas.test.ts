@@ -40,6 +40,12 @@ describe('profileStepSchema', () => {
     expect(profileStepSchema.safeParse(validData).success).toBe(true);
   });
 
+  it('strips isCertifiedTrainer from the parsed output', () => {
+    const result = profileStepSchema.safeParse(validData);
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('isCertifiedTrainer');
+  });
+
   it('rejects year before 2000', () => {
     const result = profileStepSchema.safeParse({
       ...validData,
@@ -479,6 +485,12 @@ describe('profileStepDraftSchema', () => {
     languages: [{ languageId: UUID_A, proficiency: 'native' as const }],
     industryIds: [UUID_A],
   };
+
+  it('strips isCertifiedTrainer from the parsed draft output', () => {
+    const result = profileStepDraftSchema.safeParse(fullDraft);
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('isCertifiedTrainer');
+  });
 
   it('accepts empty languages array (strict rejects it)', () => {
     const draft = { ...fullDraft, languages: [] };

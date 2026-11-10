@@ -2,11 +2,11 @@
 
 import { useCallback } from 'react';
 import { Check, Wrench, Building2, Compass, GraduationCap } from 'lucide-react';
+import { proficiencyScaleLevel } from '@balo/shared/experts';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
-import { proficiencyToLevel } from '@/lib/expert-profile/proficiency';
+import { SegmentedSlider } from '@/components/balo/segmented-slider';
 import { cn } from '@/lib/utils';
 
 // ── Types ────────────────────────────────────────────────────────
@@ -104,62 +104,43 @@ export function AssessmentCard({
             <div className="space-y-1 px-4 pb-4">
               {dimensions.map((dim) => {
                 const Icon = DIMENSION_ICONS[dim.slug] ?? Wrench;
-                const { label, className: labelClass } = proficiencyToLevel(dim.proficiency);
+                const { title, description } = proficiencyScaleLevel(dim.proficiency);
+                const sliderLabel = `${dim.name} proficiency for ${productName}`;
                 return (
-                  <div key={dim.supportTypeId}>
-                    {/* Desktop layout */}
-                    <div className="border-border/50 hidden items-center gap-4 border-b py-3 last:border-b-0 sm:flex">
-                      <div className="flex w-[130px] shrink-0 items-center gap-2">
-                        <Icon className="text-muted-foreground h-4 w-4" aria-hidden="true" />
-                        <span className="text-foreground text-sm font-medium">{dim.name}</span>
-                      </div>
-                      <Slider
-                        min={0}
-                        max={10}
-                        step={1}
-                        value={[dim.proficiency]}
-                        onValueChange={([v]) => onChange(productId, dim.supportTypeId, v ?? 0)}
-                        className="flex-1"
-                        aria-label={`${dim.name} proficiency for ${productName}`}
-                      />
-                      <span className="text-foreground w-6 text-right font-mono text-sm tabular-nums">
-                        {dim.proficiency}
-                      </span>
-                      <AnimatePresence mode="wait">
-                        <motion.span
-                          key={label}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.1 }}
-                          className={cn('w-[80px] text-right text-xs', labelClass)}
-                        >
-                          {label}
-                        </motion.span>
-                      </AnimatePresence>
-                    </div>
-
-                    {/* Mobile layout */}
-                    <div className="border-border/50 space-y-2 border-b py-3 last:border-b-0 sm:hidden">
+                  <div
+                    key={dim.supportTypeId}
+                    className="border-border/50 border-b py-3 last:border-b-0"
+                  >
+                    <div className="sm:grid sm:grid-cols-[130px_minmax(0,1fr)_24px_128px] sm:items-center sm:gap-x-4">
                       <div className="flex items-center gap-2">
                         <Icon className="text-muted-foreground h-4 w-4" aria-hidden="true" />
                         <span className="text-foreground text-sm font-medium">{dim.name}</span>
                       </div>
-                      <Slider
-                        min={0}
-                        max={10}
-                        step={1}
-                        value={[dim.proficiency]}
-                        onValueChange={([v]) => onChange(productId, dim.supportTypeId, v ?? 0)}
-                        aria-label={`${dim.name} proficiency for ${productName}`}
-                      />
-                      <div className="flex justify-end gap-2">
-                        <span className="text-foreground font-mono text-sm tabular-nums">
+                      <div className="mt-2 min-w-0 sm:mt-0">
+                        <SegmentedSlider
+                          value={dim.proficiency}
+                          onValueChange={(v) => onChange(productId, dim.supportTypeId, v)}
+                          aria-label={sliderLabel}
+                          aria-valuetext={`${dim.proficiency}, ${title}: ${description}`}
+                        />
+                      </div>
+                      <div className="mt-1.5 flex items-baseline justify-end gap-2 sm:mt-0 sm:contents">
+                        <span className="text-foreground font-mono text-sm font-semibold tabular-nums sm:text-right">
                           {dim.proficiency}
                         </span>
-                        <span className={cn('text-xs', labelClass)}>{label}</span>
+                        <span className="text-muted-foreground text-xs font-medium sm:text-right">
+                          {title}
+                        </span>
                       </div>
                     </div>
+                    <p
+                      className={cn(
+                        'mt-1.5 text-xs leading-snug sm:ml-[146px]',
+                        dim.proficiency === 0 ? 'text-muted-foreground/70' : 'text-muted-foreground'
+                      )}
+                    >
+                      {description}
+                    </p>
                   </div>
                 );
               })}
@@ -168,9 +149,9 @@ export function AssessmentCard({
                   <Check className="mr-1 h-4 w-4" aria-hidden="true" />
                   Done
                 </Button>
-                <p role="status" className="text-destructive/90 text-xs">
+                <output className="text-destructive/90 block text-xs">
                   {showRatingHint ? 'Rate at least one dimension first' : ''}
-                </p>
+                </output>
               </div>
             </div>
           </motion.div>

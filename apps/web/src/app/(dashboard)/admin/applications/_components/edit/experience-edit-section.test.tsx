@@ -16,7 +16,6 @@ function model(overrides: Partial<StaffEditModel['experience']> = {}): StaffEdit
       projectLeadCountMin: 1,
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
       ...overrides,
     },
     languages: [],

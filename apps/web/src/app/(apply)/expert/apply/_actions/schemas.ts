@@ -25,7 +25,6 @@ const linkedinSlugField = z
 
 const isSalesforceMvpField = z.boolean();
 const isSalesforceCtaField = z.boolean();
-const isCertifiedTrainerField = z.boolean();
 
 const languageItem = z.object({
   languageId: z.uuid(),
@@ -61,7 +60,6 @@ const profileStepBase = z.object({
   linkedinSlug: linkedinSlugField,
   isSalesforceMvp: isSalesforceMvpField,
   isSalesforceCta: isSalesforceCtaField,
-  isCertifiedTrainer: isCertifiedTrainerField,
   languages: languagesField.min(1, 'Please add at least one language you can consult in.'),
   industryIds: industryIdsField.min(1, 'Please select at least one industry.'),
 });
@@ -184,7 +182,6 @@ const profileStepDraftBase = profileStepBase
     projectLeadCountMin: true,
     isSalesforceMvp: true,
     isSalesforceCta: true,
-    isCertifiedTrainer: true,
   })
   .extend({
     languages: languagesField,
@@ -263,7 +260,7 @@ export const STEP_CONFIG = [
     shortLabel: 'History',
     required: false,
   },
-  { key: 'terms', label: 'Terms', shortLabel: 'Terms', required: true },
+  { key: 'terms', label: 'Review and submit', shortLabel: 'Review', required: true },
 ] as const satisfies readonly StepConfigItem[];
 
 export type StepKey = (typeof STEP_CONFIG)[number]['key'];

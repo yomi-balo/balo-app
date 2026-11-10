@@ -19,14 +19,13 @@ import {
   type StaffEditableApplicationStatus,
 } from '@balo/shared/experts';
 
-/** The six experience scalars a staff edit may change, in display order. */
+/** The five experience scalars a staff edit may change, in display order. */
 export const STAFF_EDIT_EXPERIENCE_FIELDS = [
   'yearStartedSalesforce',
   'projectCountMin',
   'projectLeadCountMin',
   'isSalesforceMvp',
   'isSalesforceCta',
-  'isCertifiedTrainer',
 ] as const;
 
 export type StaffEditExperienceField = (typeof STAFF_EDIT_EXPERIENCE_FIELDS)[number];

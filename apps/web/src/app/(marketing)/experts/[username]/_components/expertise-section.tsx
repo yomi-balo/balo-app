@@ -5,20 +5,12 @@ import { TrendingUp, Award } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Card } from '@/components/ui/card';
 import { SectionLabel, type CompetencyView, type CertView } from '@/components/expert/profile';
-import type { ProficiencyTone } from '@/lib/expert-profile/proficiency';
 import { cn } from '@/lib/utils';
 
 interface ExpertiseSectionProps {
   competencies: CompetencyView[];
   certifications: CertView[];
 }
-
-const LEVEL_BADGE_CLASS: Record<ProficiencyTone, string> = {
-  success: 'text-success bg-success/10 border-success/30',
-  primary: 'text-primary bg-primary/10 border-primary/25',
-  warning: 'text-warning bg-warning/10 border-warning/30',
-  muted: 'text-muted-foreground bg-muted border-border',
-};
 
 function CompetencyBar({
   competency,
@@ -27,13 +19,8 @@ function CompetencyBar({
     <div>
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-foreground text-sm font-medium">{competency.name}</span>
-        <span
-          className={cn(
-            'rounded-md border px-2 py-0.5 text-[11px] font-semibold',
-            LEVEL_BADGE_CLASS[competency.tone]
-          )}
-        >
-          {competency.level}
+        <span className="text-foreground bg-muted border-border rounded-md border px-2 py-0.5 text-[11px] font-semibold">
+          <span className="tabular-nums">{competency.proficiency}</span> · {competency.title}
         </span>
       </div>
       <div className="bg-muted h-1.5 overflow-hidden rounded-full">

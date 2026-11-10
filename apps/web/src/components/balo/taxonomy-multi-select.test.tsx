@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { TaxonomyMultiSelect } from './taxonomy-multi-select';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
+import { DENSE_CAP } from '@/components/search/composer/constants';
 
 const TAXONOMY: ProductTaxonomy = {
   groups: [
@@ -457,5 +458,55 @@ describe('TaxonomyMultiSelect', () => {
       />
     );
     expect(screen.getByText(/you can still send your request/i)).toBeInTheDocument();
+  });
+
+  describe('dense groups', () => {
+    const DENSE: ProductTaxonomy = {
+      groups: [
+        {
+          id: 'dense',
+          name: 'Dense group',
+          items: Array.from({ length: DENSE_CAP + 2 }, (_, k) => ({
+            id: `item-${k}`,
+            name: `Dense item ${k}`,
+          })),
+        },
+      ],
+    };
+
+    it('caps a dense group behind a "+N more" button by default', async () => {
+      const user = userEvent.setup();
+      render(
+        <TaxonomyMultiSelect
+          {...BASE}
+          taxonomy={DENSE}
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+      );
+      await openBrowse(user);
+      expect(screen.getByRole('button', { name: /2 more/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Dense item 5' })).not.toBeInTheDocument();
+    });
+
+    it('renders every item and no "more" button with expandAll', async () => {
+      const user = userEvent.setup();
+      render(
+        <TaxonomyMultiSelect
+          {...BASE}
+          taxonomy={DENSE}
+          expandAll
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+      );
+      await openBrowse(user);
+      for (let k = 0; k < DENSE_CAP + 2; k++) {
+        expect(screen.getByRole('button', { name: `Dense item ${k}` })).toBeInTheDocument();
+      }
+      expect(screen.queryByRole('button', { name: /more/ })).not.toBeInTheDocument();
+    });
   });
 });

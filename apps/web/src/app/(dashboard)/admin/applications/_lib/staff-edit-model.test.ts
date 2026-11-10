@@ -159,7 +159,6 @@ describe('buildStaffEditModel', () => {
       projectLeadCountMin: 1,
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
     });
     expect(model.languages).toEqual([{ languageId: 'en', proficiency: 'native' }]);
     expect(model.industryIds).toEqual(['technology']);

@@ -10,6 +10,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../../../../..');
 
 const EXPECTED_FILES = [
   'agency-projects.md',
+  'applying-to-become-an-expert.md',
   'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
@@ -44,6 +45,7 @@ const EXPECTED_FILES = [
 /** Publishing is a reviewed decision: flipping a guide means adding it here too. */
 const PUBLISHED_FILES = [
   'agency-projects.md',
+  'applying-to-become-an-expert.md',
   'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',

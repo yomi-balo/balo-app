@@ -233,7 +233,7 @@ describe('ExpertCard', () => {
     expect(screen.queryByText('Salesforce MVP')).not.toBeInTheDocument();
   });
 
-  it('renders the Certified Trainer label when isCertifiedTrainer is true', () => {
+  it('does not render a Certified Trainer label when isCertifiedTrainer is true', () => {
     render(
       <ExpertCard
         expert={makeExpert({
@@ -245,7 +245,7 @@ describe('ExpertCard', () => {
         })}
       />
     );
-    expect(screen.getByText('Certified Trainer')).toBeInTheDocument();
+    expect(screen.queryByText('Certified Trainer')).not.toBeInTheDocument();
     expect(screen.queryByText('CTA')).not.toBeInTheDocument();
   });
 
@@ -253,7 +253,6 @@ describe('ExpertCard', () => {
     render(<ExpertCard expert={makeExpert()} />);
     expect(screen.queryByText('Salesforce MVP')).not.toBeInTheDocument();
     expect(screen.queryByText('CTA')).not.toBeInTheDocument();
-    expect(screen.queryByText('Certified Trainer')).not.toBeInTheDocument();
   });
 
   // ── Availability ──────────────────────────────────────────────

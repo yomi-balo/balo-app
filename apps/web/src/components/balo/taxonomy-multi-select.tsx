@@ -37,6 +37,8 @@ interface TaxonomyMultiSelectProps {
   errorCopy: string;
   /** "No X match" copy for the search-no-results line. */
   noMatchNoun: string;
+  /** Show every item in every group instead of capping dense groups behind "+N more". */
+  expandAll?: boolean;
 }
 
 /**
@@ -63,6 +65,7 @@ export function TaxonomyMultiSelect({
   emptyCopy,
   errorCopy,
   noMatchNoun,
+  expandAll = false,
 }: Readonly<TaxonomyMultiSelectProps>): React.JSX.Element {
   const reduce = useReducedMotion();
   const [query, setQuery] = useState('');
@@ -314,7 +317,7 @@ export function TaxonomyMultiSelect({
             </output>
           )}
           {filteredGroups.map((group) => {
-            const isDense = group.items.length > DENSE_CAP && trimmed === '';
+            const isDense = !expandAll && group.items.length > DENSE_CAP && trimmed === '';
             const showAll = expandedGroups.has(group.name);
             const visible = isDense && !showAll ? group.items.slice(0, DENSE_CAP) : group.items;
             const hiddenCount = group.items.length - visible.length;
