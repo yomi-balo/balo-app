@@ -723,11 +723,14 @@ describe('ExpertAvailabilityCalendar', () => {
       renderPicker();
 
       expect(await screen.findByText(/nothing open in the next 14 days/i)).toBeInTheDocument();
-      const shown = vi
-        .mocked(track)
-        .mock.calls.filter((call) => call[0] === 'availability_empty_state_shown');
-      expect(shown).toHaveLength(1);
-      expect(shown[0]?.[1]).toMatchObject({ reason: 'no_slots' });
+      // The event fires from a passive effect, which can land after the text is on screen.
+      await waitFor(() => {
+        const shown = vi
+          .mocked(track)
+          .mock.calls.filter((call) => call[0] === 'availability_empty_state_shown');
+        expect(shown).toHaveLength(1);
+        expect(shown[0]?.[1]).toMatchObject({ reason: 'no_slots' });
+      });
     });
   });
 

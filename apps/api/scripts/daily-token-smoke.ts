@@ -187,7 +187,8 @@ async function main(): Promise<void> {
     }
     pass('room claim matches dailyRoomNameForMeeting');
 
-    const decodedIdentity = parseDailyParticipantId(String(claims.u ?? claims.user_id ?? ''));
+    // Daily abbreviates `user_id` as `ud`; `u` is `user_name`, the display name.
+    const decodedIdentity = parseDailyParticipantId(String(claims.ud ?? claims.user_id ?? ''));
     if (
       decodedIdentity === null ||
       decodedIdentity.kind !== 'user' ||
