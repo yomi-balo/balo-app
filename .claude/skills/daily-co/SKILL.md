@@ -192,7 +192,8 @@ times with backoff up to 15 min, then deleted; it never circuit-breaks.
 
 - Headers are `X-Webhook-Signature` and `X-Webhook-Timestamp` — read them **lower-cased**
   (`x-webhook-signature` / `x-webhook-timestamp`); Fastify normalises header names.
-  `X-Webhook-Timestamp` is unix **seconds**.
+  `X-Webhook-Timestamp` is unix **milliseconds** (the docs omit the unit; confirmed from a captured
+  verification ping, 2026-11-10).
 - Signing string is `X-Webhook-Timestamp + '.' + <raw body bytes>`. **Raw bytes, never a
   re-serialized body** — `JSON.parse` + `JSON.stringify` reorders keys and normalises whitespace,
   so a round-tripped body verifies against nothing. Register `fastify-raw-body` **scoped**

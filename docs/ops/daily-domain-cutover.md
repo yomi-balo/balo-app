@@ -36,13 +36,15 @@ Two tools do the work:
   still stamped on the old domain. Dry-run by default. Needs only `DATABASE_URL`.
 
 Run both from the repo root through dotenv, so no key, secret or database url ever appears on the
-command line or in shell history:
+command line or in shell history. `pnpm --filter api exec` runs the command inside `apps/api`,
+where `tsx` and `dotenv` are installed, so script paths are relative to `apps/api`:
 
 ```bash
-npx dotenv -e <target-env-file> -- npx tsx apps/api/scripts/daily-webhook.ts verify
+pnpm --filter api exec dotenv -e <target-env-file> -- tsx scripts/daily-webhook.ts verify
 ```
 
-`<target-env-file>` is a git-ignored file you create for this cutover holding the **target
+`<target-env-file>` is an **absolute path** (the command runs inside `apps/api`) to a file you
+create for this cutover, outside the repo, such as `~/.balo/<environment>.env`, holding the **target
 environment's** values (see the table above and steps 2, 5 and 6). It is never `apps/api/.env.local`:
 that file points at a developer's local setup, and running a script against it checks, or worse
 changes, the wrong database and the wrong Daily domain.
@@ -97,8 +99,8 @@ compare the hmac when `DAILY_WEBHOOK_SECRET` is in its env file; without it, it 
 ## Step 2. Re-provision dry-run
 
 ```bash
-npx dotenv -e <target-env-file> -- \
-  npx tsx apps/api/scripts/daily-venue-reprovision.ts --from-domain getbalo
+pnpm --filter api exec dotenv -e <target-env-file> -- \
+  tsx scripts/daily-venue-reprovision.ts --from-domain getbalo
 ```
 
 `DATABASE_URL` in `<target-env-file>` is **the deployed database** for this environment (the one the
@@ -146,15 +148,15 @@ The plan prints the domain the key belongs to; confirm it is the new domain.
 Dry-run first:
 
 ```bash
-npx dotenv -e <target-env-file> -- \
-  npx tsx apps/api/scripts/daily-webhook.ts sync --url https://<api-origin>/webhooks/daily
+pnpm --filter api exec dotenv -e <target-env-file> -- \
+  tsx scripts/daily-webhook.ts sync --url https://<api-origin>/webhooks/daily
 ```
 
 Read the plan. Then:
 
 ```bash
-npx dotenv -e <target-env-file> -- \
-  npx tsx apps/api/scripts/daily-webhook.ts sync --url https://<api-origin>/webhooks/daily --apply
+pnpm --filter api exec dotenv -e <target-env-file> -- \
+  tsx scripts/daily-webhook.ts sync --url https://<api-origin>/webhooks/daily --apply
 ```
 
 It creates or updates the subscription with `retryType: exponential` and every handled event
@@ -169,8 +171,8 @@ delete it; the domain allows one subscription.
 ## Step 6. Re-provision
 
 ```bash
-npx dotenv -e <target-env-file> -- \
-  npx tsx apps/api/scripts/daily-venue-reprovision.ts --from-domain getbalo --apply
+pnpm --filter api exec dotenv -e <target-env-file> -- \
+  tsx scripts/daily-venue-reprovision.ts --from-domain getbalo --apply
 ```
 
 Same `<target-env-file>` and the same `Database host:` check as step 2: `DATABASE_URL` is the
@@ -196,7 +198,7 @@ Set `NEXT_PUBLIC_DAILY_DOMAIN=<domain>.daily.co` for the environment and redeplo
   the repair job has healed the rows. Stranded rows may remain; they are the BAL-586 alert's.
 - New meetings in this database get join urls on the new domain only. If a `getbalo` url appears
   after cutover, a writer from step 0 still has the old key.
-- `npx dotenv -e <target-env-file> -- npx tsx apps/api/scripts/daily-token-smoke.ts` passes.
+- `pnpm --filter api exec dotenv -e <target-env-file> -- tsx scripts/daily-token-smoke.ts` passes.
 
 ---
 

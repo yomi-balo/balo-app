@@ -17,8 +17,8 @@
  *   The values are the TARGET environment's (its Daily key and webhook secret), kept in a
  *   git-ignored env file and loaded with dotenv, never typed on the command line:
  *
- *   npx dotenv -e <target-env-file> -- \
- *     npx tsx apps/api/scripts/daily-webhook.ts sync --url https://<api-host>/webhooks/daily
+ *   pnpm --filter api exec dotenv -e <target-env-file> -- \
+ *     tsx scripts/daily-webhook.ts sync --url https://<api-host>/webhooks/daily
  *
  *   `verify` needs DAILY_API_KEY (and DAILY_WEBHOOK_SECRET to check the hmac). Neither value is
  *   ever printed. A webhook url prints as origin + path only. A failed Daily call prints the
