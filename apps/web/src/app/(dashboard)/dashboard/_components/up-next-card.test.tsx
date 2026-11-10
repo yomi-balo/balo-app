@@ -84,32 +84,36 @@ describe('UpNextCard — hover states', () => {
   const LATER = new Date(NOW.getTime() + 30 * MIN).toISOString();
 
   function rowWrapper(container: HTMLElement): HTMLElement {
-    const wrapper = container.querySelector('section [class*="items-center"][class*="gap-3"]');
+    const wrapper = container.querySelector('[data-up-next-row]');
     expect(wrapper).not.toBeNull();
     return wrapper as HTMLElement;
   }
 
   it.each([
-    ['featured', SOON, 'hover:bg-success/15'],
-    ['non-featured', LATER, 'hover:bg-muted/50'],
-  ])('a %s row with an href hovers on its wrapper', (_name, scheduledStart, hoverClass) => {
+    ['featured', SOON, 'hover:bg-success/20'],
+    ['default', LATER, 'hover:bg-muted/50'],
+  ])('a %s row with an href hovers on its wrapper', (variant, scheduledStart, hoverClass) => {
     const data: UpNextData = { kind: 'ready', rows: [row({ scheduledStart })] };
     const { container } = render(
       <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
     );
-    expect(rowWrapper(container)).toHaveClass(hoverClass, 'transition-colors');
+    const wrapper = rowWrapper(container);
+    expect(wrapper).toHaveAttribute('data-up-next-row', variant);
+    expect(wrapper).toHaveClass(hoverClass, 'transition-colors');
   });
 
   it.each([
     ['featured', SOON],
-    ['non-featured', LATER],
-  ])('a %s row with href null gains no hover', (_name, scheduledStart) => {
+    ['default', LATER],
+  ])('a %s row with href null gains no hover', (variant, scheduledStart) => {
     const data: UpNextData = { kind: 'ready', rows: [row({ href: null, scheduledStart })] };
     const { container } = render(
       <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
     );
     expect(container.querySelector('a[href^="/cases/"]')).toBeNull();
-    expect(rowWrapper(container).className).not.toContain('hover:');
+    const wrapper = rowWrapper(container);
+    expect(wrapper).toHaveAttribute('data-up-next-row', variant);
+    expect(wrapper.className).not.toContain('hover:');
   });
 });
 
