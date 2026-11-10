@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { airwallexRequest } from '../../services/airwallex/client.js';
-import { AirwallexApiError } from '../../services/airwallex/errors.js';
+import { AirwallexApiError, AirwallexAuthError } from '../../services/airwallex/errors.js';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -133,6 +133,16 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
       fastify.log.error(
         {
           countryCode: country,
+          method,
+          currency,
+          airwallexStatus:
+            err instanceof AirwallexApiError || err instanceof AirwallexAuthError
+              ? err.status
+              : undefined,
+          airwallexBody:
+            err instanceof AirwallexApiError || err instanceof AirwallexAuthError
+              ? err.detail
+              : undefined,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
         },
