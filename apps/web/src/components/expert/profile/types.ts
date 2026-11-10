@@ -1,4 +1,3 @@
-import type { ProficiencyTone } from '@/lib/expert-profile/proficiency';
 import type { ReviewEntryRater } from '@/components/balo/reviews/review-entry';
 
 /** Section keys the StickyNav / scroll-spy operates on. */
@@ -11,10 +10,8 @@ export interface CompetencyView {
   name: string;
   /** 0–10 proficiency. */
   proficiency: number;
-  /** Human level label derived from proficiency. */
-  level: string;
-  /** Semantic tone for the level badge. */
-  tone: ProficiencyTone;
+  /** Scale title for the proficiency (`PROFICIENCY_SCALE`). */
+  title: string;
   /** Bar fill percentage (0–100). */
   pct: number;
 }

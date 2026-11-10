@@ -29,7 +29,6 @@ function model(overrides: Partial<StaffEditModel> = {}): StaffEditModel {
       projectLeadCountMin: null,
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
     },
     languages: [],
     industryIds: [],

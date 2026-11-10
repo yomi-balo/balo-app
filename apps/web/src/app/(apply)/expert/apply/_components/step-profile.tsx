@@ -70,11 +70,6 @@ const CREDENTIALS = [
     label: 'Salesforce CTA (Certified Technical Architect)',
     description: 'The highest Salesforce certification',
   },
-  {
-    field: 'isCertifiedTrainer' as const,
-    label: 'Certified Salesforce Trainer',
-    description: 'Authorized to deliver official Salesforce training',
-  },
 ] as const;
 
 // ── Component ────────────────────────────────────────────────────
@@ -98,7 +93,6 @@ export function StepProfile({ headingRef }: Readonly<StepProfileProps>): React.J
       linkedinSlug: profileData.linkedinSlug ?? '',
       isSalesforceMvp: profileData.isSalesforceMvp ?? false,
       isSalesforceCta: profileData.isSalesforceCta ?? false,
-      isCertifiedTrainer: profileData.isCertifiedTrainer ?? false,
       languages: profileData.languages ?? [],
       industryIds: profileData.industryIds ?? [],
     },

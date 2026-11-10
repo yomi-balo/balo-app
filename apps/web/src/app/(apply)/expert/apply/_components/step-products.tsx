@@ -96,6 +96,7 @@ export function StepProducts({ headingRef }: Readonly<StepProductsProps>): React
                     emptyCopy="Products couldn't load right now."
                     errorCopy="Couldn't load products. Please refresh and try again."
                     noMatchNoun="products"
+                    expandAll
                   />
                 </FormControl>
                 <FormMessage />

@@ -63,7 +63,6 @@ export interface StaffApplicationEdit {
     projectLeadCountMin: number;
     isSalesforceMvp: boolean;
     isSalesforceCta: boolean;
-    isCertifiedTrainer: boolean;
   }>;
   /** The FULL set of languages, when changed. */
   languages?: {

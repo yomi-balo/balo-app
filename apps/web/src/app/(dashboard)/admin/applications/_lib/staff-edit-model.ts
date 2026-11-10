@@ -26,7 +26,6 @@ export interface StaffEditModel {
     projectLeadCountMin: number | null;
     isSalesforceMvp: boolean;
     isSalesforceCta: boolean;
-    isCertifiedTrainer: boolean;
   };
   languages: NonNullable<StaffApplicationEdit['languages']>;
   industryIds: string[];
@@ -58,12 +57,11 @@ export interface StaffEditReference {
  * never drift between the two.
  */
 const DISTINCTION_FIELDS: readonly {
-  key: 'isSalesforceMvp' | 'isSalesforceCta' | 'isCertifiedTrainer';
+  key: 'isSalesforceMvp' | 'isSalesforceCta';
   label: string;
 }[] = [
   { key: 'isSalesforceMvp', label: 'Salesforce MVP' },
   { key: 'isSalesforceCta', label: 'Salesforce CTA' },
-  { key: 'isCertifiedTrainer', label: 'Certified Trainer' },
 ];
 
 /** Builds the initial `StaffEditModel` from a locked application read and the vertical's support types. */
@@ -107,7 +105,6 @@ export function buildStaffEditModel(
       projectLeadCountMin: profile.projectLeadCountMin,
       isSalesforceMvp: profile.isSalesforceMvp,
       isSalesforceCta: profile.isSalesforceCta,
-      isCertifiedTrainer: profile.isCertifiedTrainer,
     },
     languages: languages.map((l) => ({ languageId: l.languageId, proficiency: l.proficiency })),
     industryIds: industries.map((i) => i.industryId),
@@ -160,9 +157,6 @@ function buildExperienceEdit(
   }
   if (draft.experience.isSalesforceCta !== initial.experience.isSalesforceCta) {
     experience.isSalesforceCta = draft.experience.isSalesforceCta;
-  }
-  if (draft.experience.isCertifiedTrainer !== initial.experience.isCertifiedTrainer) {
-    experience.isCertifiedTrainer = draft.experience.isCertifiedTrainer;
   }
   return Object.keys(experience).length > 0 ? experience : undefined;
 }

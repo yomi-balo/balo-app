@@ -80,7 +80,8 @@ vi.mock('motion/react', async () => {
 
 import { StepTerms } from './step-terms';
 import { WizardActionBar } from './wizard-action-bar';
-import { ExpertApplicationProvider } from './expert-application-context';
+import { ExpertApplicationProvider, useWizard } from './expert-application-context';
+import { STEP_CONFIG } from '../_actions/schemas';
 import { submitApplicationAction } from '../_actions/submit-application';
 import { writeAnonymousDraft } from '@/lib/expert-apply/anonymous-draft';
 import { toast } from 'sonner';
@@ -93,14 +94,43 @@ const writeAnonymousDraftMock = vi.mocked(writeAnonymousDraft);
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
-const referenceData: ReferenceData = {
-  productsByCategory: [],
-  supportTypes: [],
-  certificationsByCategory: [],
-  languages: [],
-  industries: [],
-  vertical: { id: 'vertical-1' } as ReferenceData['vertical'],
-};
+const PRODUCT_A = '11111111-1111-1111-1111-111111111111';
+const PRODUCT_B = '22222222-2222-2222-2222-222222222222';
+
+const referenceData = {
+  productsByCategory: [
+    {
+      category: { id: 'cat-sales', name: 'Sales', slug: 'sales', sortOrder: 0 },
+      products: [
+        { id: PRODUCT_A, name: 'CPQ', slug: 'cpq', sortOrder: 0 },
+        { id: PRODUCT_B, name: 'Lead Mgmt', slug: 'lead-mgmt', sortOrder: 1 },
+      ],
+    },
+  ],
+  supportTypes: [{ id: 'st-fix', name: 'Technical Fix', slug: 'technical-fix' }],
+  certificationsByCategory: [
+    {
+      category: { id: 'cc-admin', name: 'Administrator', slug: 'administrator', sortOrder: 0 },
+      certifications: [
+        {
+          id: '33333333-3333-3333-3333-333333333333',
+          name: 'Certified Administrator',
+          slug: 'admin',
+        },
+      ],
+    },
+  ],
+  languages: [
+    {
+      id: '44444444-4444-4444-4444-444444444444',
+      name: 'English',
+      code: 'en',
+      flagEmoji: null,
+    },
+  ],
+  industries: [{ id: '55555555-5555-5555-5555-555555555555', name: 'Financial Services' }],
+  vertical: { id: 'vertical-1' },
+} as unknown as ReferenceData;
 
 // A draft with a profile id (so the provider's `expertProfileId` is non-null and
 // `submitApplication` actually calls the action), plus competencies/certs and a
@@ -158,6 +188,21 @@ const draft = {
   ],
 } as unknown as ApplicationWithRelations;
 
+function CurrentStepProbe(): React.JSX.Element {
+  const { currentStep, goToStep } = useWizard();
+  return (
+    <>
+      <output data-testid="current-step">{STEP_CONFIG[currentStep]?.key}</output>
+      <button
+        type="button"
+        onClick={() => goToStep(STEP_CONFIG.findIndex((s) => s.key === 'agency'))}
+      >
+        Go to agency
+      </button>
+    </>
+  );
+}
+
 function renderStep(draftArg: ApplicationWithRelations | null): void {
   const headingRef = createRef<HTMLHeadingElement>();
   render(
@@ -168,6 +213,7 @@ function renderStep(draftArg: ApplicationWithRelations | null): void {
     >
       <StepTerms headingRef={headingRef} />
       <WizardActionBar />
+      <CurrentStepProbe />
     </ExpertApplicationProvider>
   );
 }
@@ -197,9 +243,14 @@ describe('StepTerms', () => {
     globalThis.sessionStorage.clear();
   });
 
-  it('renders the terms heading and the agreement checkbox', () => {
+  it('renders the review heading and the agreement checkbox, with no collapsible summary', () => {
     renderStep(draft);
-    expect(screen.getByRole('heading', { name: /terms & conditions/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: /review and submit/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /review your application/i })
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/i have read and agree/i)).toBeInTheDocument();
     expect(screen.getByRole('checkbox')).toBeInTheDocument();
   });
@@ -212,22 +263,68 @@ describe('StepTerms', () => {
     expect(document.body.textContent).not.toContain('hourly');
   });
 
-  it('builds the application summary with real counts (exercises the summaryItems ternaries)', () => {
-    // Hydrated draft → productsData.productIds has 2 ids, so the ternary at
-    // lines 137-138 renders "2 selected" rather than "None".
+  it('renders the full summary from the draft above the agreement checkbox', () => {
     renderStep(draft);
-    expect(screen.getByText('Products')).toBeInTheDocument();
-    expect(screen.getByText('2 selected')).toBeInTheDocument();
-    expect(screen.getByText('1 added')).toBeInTheDocument(); // certifications
-    expect(screen.getByText('1 languages')).toBeInTheDocument();
-    expect(screen.getByText('1 selected')).toBeInTheDocument(); // industries
+
+    const experience = screen.getByRole('region', { name: 'Experience' });
+    const checkbox = screen.getByRole('checkbox');
+    expect(
+      experience.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.getByText('CPQ')).toBeInTheDocument();
+    expect(screen.getByText('Certified Administrator')).toBeInTheDocument();
+    expect(screen.getByText('English')).toBeInTheDocument();
+    expect(screen.getByText('Financial Services')).toBeInTheDocument();
+    expect(screen.getByText('Consultant')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Expert terms' })).toBeInTheDocument();
   });
 
-  it('renders "None"/"Skipped" placeholders when the draft is empty', () => {
+  it('keeps invitation copy for optional sections when the draft is empty', () => {
     renderStep(null);
-    // No draft → empty product/cert/etc. arrays → placeholder values render.
-    expect(screen.getAllByText('None').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Skipped').length).toBeGreaterThan(0);
+
+    expect(
+      screen.getByText('Add your certifications to strengthen your application.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Add your recent roles so we can see your experience.')
+    ).toBeInTheDocument();
+  });
+
+  it('jumps to the step named by the section Edit button', async () => {
+    const user = userEvent.setup();
+    renderStep(draft);
+
+    expect(screen.getByTestId('current-step')).toHaveTextContent('terms');
+    await user.click(screen.getByRole('button', { name: 'Edit work history' }));
+    expect(screen.getByTestId('current-step')).toHaveTextContent('work-history');
+  });
+
+  it('sends the products Edit to the products step when none are selected', async () => {
+    const user = userEvent.setup();
+    renderStep({ ...draft, competencies: [] } as unknown as ApplicationWithRelations);
+    await user.click(screen.getByRole('button', { name: 'Go to agency' }));
+    expect(screen.getByTestId('current-step')).toHaveTextContent('agency');
+
+    await user.click(screen.getByRole('button', { name: 'Edit products and ratings' }));
+    expect(screen.getByTestId('current-step')).toHaveTextContent('products');
+  });
+
+  it('flags an unrated product and sends Rate now to the assessment step', async () => {
+    const user = userEvent.setup();
+    const unratedDraft = {
+      ...draft,
+      competencies: [
+        { id: 's1', productId: PRODUCT_A, supportTypeId: 'st-fix', proficiency: 7 },
+        { id: 's2', productId: PRODUCT_B, supportTypeId: 'st-fix', proficiency: 0 },
+      ],
+    } as unknown as ApplicationWithRelations;
+    renderStep(unratedDraft);
+    await user.click(screen.getByRole('button', { name: 'Go to agency' }));
+
+    expect(screen.getByText(/Lead Mgmt isn't rated yet\./)).toBeInTheDocument();
+    expect(screen.getByTestId('current-step')).toHaveTextContent('agency');
+    await user.click(screen.getByRole('button', { name: 'Rate now' }));
+    expect(screen.getByTestId('current-step')).toHaveTextContent('assessment');
   });
 
   it('surfaces the terms validation message and does not submit when the box is unchecked', async () => {

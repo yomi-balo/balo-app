@@ -40,7 +40,6 @@ const experienceEditSchema = z
     projectLeadCountMin: z.number().int().refine(isValidProjectCount),
     isSalesforceMvp: z.boolean(),
     isSalesforceCta: z.boolean(),
-    isCertifiedTrainer: z.boolean(),
   })
   .partial()
   .strict()

@@ -1,29 +1,23 @@
 'use client';
 
-import { useEffect, useCallback, useState, useRef } from 'react';
+import { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Shield } from 'lucide-react';
+import { ClipboardCheck, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { ExpertTermsDocument } from '@/components/balo/legal/expert-terms-document';
-import { cn } from '@/lib/utils';
+import { summaryFromDraft, type SummaryEditTarget } from '@/lib/expert/application-summary';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { useAuthModal } from '@/hooks/use-auth-modal';
-import {
-  termsStepSchema,
-  type TermsStepData,
-  type StepKey,
-  STEP_CONFIG,
-} from '../_actions/schemas';
+import { termsStepSchema, type TermsStepData, STEP_CONFIG } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { StepHeading } from './design-system';
+import { ApplicationSummarySections } from './application-summary-sections';
 
 interface StepTermsProps {
   headingRef: React.RefObject<HTMLHeadingElement | null>;
@@ -38,6 +32,8 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     certificationsData,
     workHistoryData,
     profileData,
+    assessmentData,
+    referenceData,
     updateStepData,
     registerValidation,
     submitApplication,
@@ -49,7 +45,6 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     saveAnonymousDraftNow,
   } = useWizard();
 
-  const [summaryOpen, setSummaryOpen] = useState(true);
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
 
   const form = useForm<TermsStepData>({
@@ -233,162 +228,109 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     registerSubmit(handleSubmit);
   }, [registerSubmit, handleSubmit]);
 
-  // Derive each summary row's jump target by KEY so inserting/reordering steps (e.g.
-  // BAL-356's agency step at index 1) never leaves an "Edit" link pointing at the
-  // wrong step.
-  const indexOfStep = (key: StepKey): number => STEP_CONFIG.findIndex((s) => s.key === key);
+  const summary = useMemo(
+    () =>
+      summaryFromDraft(
+        {
+          profile: profileData,
+          products: productsData,
+          assessment: assessmentData,
+          certifications: certificationsData,
+          workHistory: workHistoryData,
+        },
+        referenceData
+      ),
+    [profileData, productsData, assessmentData, certificationsData, workHistoryData, referenceData]
+  );
 
-  // Build summary data
-  const summaryItems = [
-    {
-      label: 'Products',
-      value:
-        (productsData.productIds?.length ?? 0) > 0
-          ? `${productsData.productIds?.length} selected`
-          : 'None',
-      stepIndex: indexOfStep('products'),
+  // Each Edit jumps to its step by KEY, so inserting or reordering steps never leaves a link
+  // pointing at the wrong step.
+  const handleEdit = useCallback(
+    (target: SummaryEditTarget): void => {
+      const stepIndex = STEP_CONFIG.findIndex((s) => s.key === target);
+      if (stepIndex !== -1) goToStep(stepIndex);
     },
-    {
-      label: 'Certifications',
-      value:
-        (certificationsData.certifications?.length ?? 0) > 0
-          ? `${certificationsData.certifications?.length} added`
-          : 'Skipped',
-      stepIndex: indexOfStep('certifications'),
-    },
-    {
-      label: 'Work history',
-      value:
-        (workHistoryData.entries?.length ?? 0) > 0
-          ? `${workHistoryData.entries?.length} positions`
-          : 'Skipped',
-      stepIndex: indexOfStep('work-history'),
-    },
-    {
-      label: 'Languages',
-      value:
-        (profileData.languages?.length ?? 0) > 0
-          ? `${profileData.languages?.length} languages`
-          : 'None',
-      stepIndex: indexOfStep('profile'),
-    },
-    {
-      label: 'Industries',
-      value:
-        (profileData.industryIds?.length ?? 0) > 0
-          ? `${profileData.industryIds?.length} selected`
-          : 'None',
-      stepIndex: indexOfStep('profile'),
-    },
-  ];
+    [goToStep]
+  );
 
   return (
     <Form {...form}>
       <form className="mx-auto max-w-2xl space-y-6">
         <div ref={headingRef} tabIndex={-1} className="outline-none">
           <StepHeading
-            icon={Shield}
-            title="Terms & Conditions"
-            subtitle="Please review and accept the Balo expert terms before submitting your application."
+            icon={ClipboardCheck}
+            title="Review and submit"
+            subtitle="Check your application, then accept the expert terms to submit it."
           />
         </div>
 
-        {/* T&C container */}
-        <div className="border-border relative overflow-hidden rounded-xl border">
-          <ScrollArea className="max-h-[50vh] sm:max-h-[400px]">
-            <div
-              ref={scrollViewportRef}
-              tabIndex={0}
-              role="region"
-              aria-label="Balo Expert Terms & Conditions"
-              className="prose prose-sm dark:prose-invert focus-visible:ring-ring max-h-[50vh] max-w-none overflow-y-auto p-6 focus-visible:ring-2 focus-visible:outline-none sm:max-h-[400px]"
-            >
-              <ExpertTermsDocument />
-            </div>
-          </ScrollArea>
+        <ApplicationSummarySections summary={summary} onEdit={handleEdit} />
 
-          {/* Scroll gradient indicator */}
-          <AnimatePresence>
-            {!hasScrolledToBottom && (
-              <motion.div
-                initial={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="from-card via-card/80 pointer-events-none absolute right-0 bottom-0 left-0 h-12 bg-gradient-to-t to-transparent"
-              />
-            )}
-          </AnimatePresence>
-        </div>
+        <section aria-labelledby="expert-terms-heading" className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Shield className="text-muted-foreground h-4 w-4" aria-hidden="true" />
+            <h3 id="expert-terms-heading" className="text-foreground text-sm font-semibold">
+              Expert terms
+            </h3>
+          </div>
 
-        {/* Checkbox agreement */}
-        <div ref={termsFieldRef}>
-          <FormField
-            control={form.control}
-            name="termsAccepted"
-            render={({ field }) => (
-              <FormItem>
-                <div className="flex items-start gap-3">
-                  <FormControl>
-                    <Checkbox
-                      id="terms-accepted"
-                      checked={field.value === true}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                  <label
-                    htmlFor="terms-accepted"
-                    className="text-foreground cursor-pointer text-sm leading-snug font-medium"
-                  >
-                    I have read and agree to the Balo Expert Terms & Conditions
-                  </label>
-                </div>
-                <p className="text-muted-foreground mt-2 ml-7 text-xs">
-                  By submitting, you agree to these terms in full.
-                </p>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </div>
+          {/* T&C container */}
+          <div className="border-border relative overflow-hidden rounded-xl border">
+            <ScrollArea className="max-h-[50vh] sm:max-h-[400px]">
+              <div
+                ref={scrollViewportRef}
+                tabIndex={0}
+                role="region"
+                aria-label="Balo Expert Terms & Conditions"
+                className="prose prose-sm dark:prose-invert focus-visible:ring-ring max-h-[50vh] max-w-none overflow-y-auto p-6 focus-visible:ring-2 focus-visible:outline-none sm:max-h-[400px]"
+              >
+                <ExpertTermsDocument />
+              </div>
+            </ScrollArea>
 
-        {/* Application summary */}
-        <Collapsible open={summaryOpen} onOpenChange={setSummaryOpen}>
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="border-border flex w-full items-center justify-between border-t py-3"
-            >
-              <span className="text-foreground text-sm font-semibold">Review your application</span>
-              <ChevronDown
-                className={cn(
-                  'text-muted-foreground h-4 w-4 transition-transform duration-200',
-                  summaryOpen && 'rotate-180'
-                )}
-                aria-hidden="true"
-              />
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <div className="space-y-3 rounded-xl bg-gradient-to-br from-blue-50 to-violet-50 p-5 dark:from-blue-950/20 dark:to-violet-950/20">
-              {summaryItems.map((item) => (
-                <div key={item.label} className="flex items-center justify-between">
-                  <div>
-                    <span className="text-muted-foreground text-sm">{item.label}</span>
-                    <span className="text-foreground ml-2 text-sm font-medium">{item.value}</span>
+            {/* Scroll gradient indicator */}
+            <AnimatePresence>
+              {!hasScrolledToBottom && (
+                <motion.div
+                  initial={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="from-card via-card/80 pointer-events-none absolute right-0 bottom-0 left-0 h-12 bg-gradient-to-t to-transparent"
+                />
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Checkbox agreement */}
+          <div ref={termsFieldRef}>
+            <FormField
+              control={form.control}
+              name="termsAccepted"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-start gap-3">
+                    <FormControl>
+                      <Checkbox
+                        id="terms-accepted"
+                        checked={field.value === true}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <label
+                      htmlFor="terms-accepted"
+                      className="text-foreground cursor-pointer text-sm leading-snug font-medium"
+                    >
+                      I have read and agree to the Balo Expert Terms & Conditions
+                    </label>
                   </div>
-                  <Button
-                    type="button"
-                    variant="link"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => goToStep(item.stepIndex)}
-                  >
-                    Edit
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
+                  <p className="text-muted-foreground mt-2 ml-7 text-xs">
+                    By submitting, you agree to these terms in full.
+                  </p>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </section>
 
         <p className="text-muted-foreground mt-3 text-center text-xs">
           You can continue using Balo as a client while we review your application. We&apos;ll email

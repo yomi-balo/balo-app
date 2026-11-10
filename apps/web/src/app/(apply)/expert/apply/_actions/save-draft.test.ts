@@ -315,13 +315,14 @@ describe('saveDraftAction', () => {
               linkedinUrl: 'https://linkedin.com/in/john-doe',
               isSalesforceMvp: false,
               isSalesforceCta: false,
-              isCertifiedTrainer: false,
               languages: [{ languageId: UUID1, proficiency: 'native' }],
               industryIds: [UUID1],
             }),
           },
         })
       );
+      const [call] = mockSaveApplicantDraftStep.mock.calls;
+      expect(call?.[0].write.data).not.toHaveProperty('isCertifiedTrainer');
     });
 
     it('writes null linkedinUrl when slug is empty', async () => {

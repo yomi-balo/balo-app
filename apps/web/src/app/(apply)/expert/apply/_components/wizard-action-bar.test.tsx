@@ -93,7 +93,6 @@ const termsDraft = {
     trailheadUrl: null,
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
   },
   competencies: [
     {

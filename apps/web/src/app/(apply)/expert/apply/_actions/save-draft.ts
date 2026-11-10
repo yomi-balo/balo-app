@@ -224,7 +224,6 @@ async function buildStepWrite(step: StepName, parsed: unknown): Promise<Applican
           linkedinUrl: data.linkedinSlug ? `https://linkedin.com/in/${data.linkedinSlug}` : null,
           isSalesforceMvp: data.isSalesforceMvp,
           isSalesforceCta: data.isSalesforceCta,
-          isCertifiedTrainer: data.isCertifiedTrainer,
           languages: data.languages,
           industryIds: data.industryIds,
         },

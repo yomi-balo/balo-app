@@ -231,7 +231,6 @@ function hydrateProfileData(draft: ApplicationWithRelations | null): Partial<Pro
     return {
       isSalesforceMvp: false,
       isSalesforceCta: false,
-      isCertifiedTrainer: false,
       languages: [],
       industryIds: [],
     };
@@ -247,7 +246,6 @@ function hydrateProfileData(draft: ApplicationWithRelations | null): Partial<Pro
     linkedinSlug,
     isSalesforceMvp: draft.profile.isSalesforceMvp,
     isSalesforceCta: draft.profile.isSalesforceCta,
-    isCertifiedTrainer: draft.profile.isCertifiedTrainer,
     languages: draft.languages.map((l) => ({
       languageId: l.languageId,
       proficiency: l.proficiency,

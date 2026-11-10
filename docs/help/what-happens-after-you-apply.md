@@ -6,8 +6,8 @@ category:
   expert: getting-started
 order: 1
 published: true
-updated: 2026-11-02
-related: [rate-and-payouts, connecting-your-calendar, weekly-schedule]
+updated: 2026-11-10
+related: [applying-to-become-an-expert, rate-and-payouts, connecting-your-calendar, weekly-schedule]
 ---
 
 Once you submit your expert application, our team takes it from there — here's what to

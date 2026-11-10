@@ -215,13 +215,15 @@ describe('mapProfileToView — competencies', () => {
     );
     expect(view.competencies).toHaveLength(2);
     // sorted by proficiency desc → Apex (9) first
-    expect(view.competencies[0]).toMatchObject({ name: 'Apex', proficiency: 9, level: 'Expert' });
+    expect(view.competencies[0]).toMatchObject({ name: 'Apex', proficiency: 9, title: 'Expert' });
     expect(view.competencies[1]).toMatchObject({
       name: 'Flow',
       proficiency: 4,
-      level: 'Intermediate',
+      title: 'Novice',
     });
     expect(view.competencies[0]?.pct).toBe(90);
+    expect(view.competencies[0]).not.toHaveProperty('level');
+    expect(view.competencies[0]).not.toHaveProperty('tone');
   });
 
   it('returns an empty array when there are no competencies', () => {

@@ -33,7 +33,6 @@ const changedProfile = {
   yearStartedSalesforce: 2019,
   isSalesforceMvp: false,
   isSalesforceCta: false,
-  isCertifiedTrainer: false,
   languages: [],
   industryIds: [],
 };
@@ -108,7 +107,6 @@ const termsDraft = {
     trailheadUrl: null,
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
   },
   competencies: [
     {
@@ -154,7 +152,6 @@ const agencyGateDraft = {
     trailheadUrl: null,
     isSalesforceMvp: false,
     isSalesforceCta: false,
-    isCertifiedTrainer: false,
   },
   competencies: [
     {

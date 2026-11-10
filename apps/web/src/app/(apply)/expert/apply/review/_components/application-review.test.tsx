@@ -1,11 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
-import type {
-  ApplicationWithRelations,
-  ProductsByCategory,
-  CertificationsByCategory,
-  SupportType,
-} from '@balo/db';
+import type { ApplicationWithRelations, CertificationsByCategory, SupportType } from '@balo/db';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
@@ -55,22 +50,7 @@ import { ApplicationReview } from './application-review';
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
-// Reference taxonomy — drives the `for (const product of cat.products)` and
-// `for (const cert of cat.certifications)` category-map loops (lines ~290, ~318).
-const productsByCategory: ProductsByCategory[] = [
-  {
-    category: { id: 'cat-sales', name: 'Sales Cloud', slug: 'sales-cloud', sortOrder: 0 },
-    products: [
-      { id: 'skill-cpq', name: 'CPQ', slug: 'cpq', sortOrder: 0 },
-      { id: 'skill-leads', name: 'Lead Mgmt', slug: 'lead-mgmt', sortOrder: 1 },
-    ],
-  },
-  {
-    category: { id: 'cat-service', name: 'Service Cloud', slug: 'service-cloud', sortOrder: 1 },
-    products: [{ id: 'skill-cases', name: 'Case Mgmt', slug: 'case-mgmt', sortOrder: 0 }],
-  },
-];
-
+// Reference taxonomy — supplies each certification's category.
 const certificationsByCategory: CertificationsByCategory[] = [
   {
     category: { id: 'cc-admin', name: 'Administrator', slug: 'administrator', sortOrder: 0 },
@@ -173,7 +153,6 @@ describe('ApplicationReview', () => {
   function renderReview(
     overrides?: Partial<{
       application: ApplicationWithRelations;
-      productsByCategory: ProductsByCategory[];
       certificationsByCategory: CertificationsByCategory[];
     }>
   ): void {
@@ -181,12 +160,16 @@ describe('ApplicationReview', () => {
       <ApplicationReview
         application={overrides?.application ?? buildApplication()}
         email="jane@example.com"
-        productsByCategory={overrides?.productsByCategory ?? productsByCategory}
         supportTypes={supportTypes}
         certificationsByCategory={overrides?.certificationsByCategory ?? certificationsByCategory}
       />
     );
   }
+
+  it('has no Edit links on the read-only page', () => {
+    renderReview();
+    expect(screen.queryByRole('button', { name: /^edit/i })).not.toBeInTheDocument();
+  });
 
   it('renders the application header and reviewer email', () => {
     renderReview();
@@ -194,26 +177,16 @@ describe('ApplicationReview', () => {
     expect(screen.getByText(/jane@example.com/i)).toBeInTheDocument();
   });
 
-  it('groups selected products under their reference-data categories', () => {
-    // Exercises the skill→category loop over cat.products (line ~290) and the
-    // products-by-category render.
+  it('renders a card per product with its dimension ratings', () => {
     renderReview();
-    expect(screen.getByText('Sales Cloud')).toBeInTheDocument();
-    expect(screen.getByText('Service Cloud')).toBeInTheDocument();
-    // CPQ + Case Mgmt each appear in the products list and as assessment card titles.
-    expect(screen.getAllByText('CPQ').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Case Mgmt').length).toBeGreaterThan(0);
-  });
-
-  it('renders the self-assessment cards for each rated skill', () => {
-    renderReview();
-    expect(screen.getByText(/self-assessment/i)).toBeInTheDocument();
-    // Support-type labels render per skill card.
+    expect(screen.getByText('CPQ')).toBeInTheDocument();
+    expect(screen.getByText('Case Mgmt')).toBeInTheDocument();
+    expect(screen.getByText('2 products')).toBeInTheDocument();
     expect(screen.getAllByText('Technical Fix').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Architecture').length).toBeGreaterThan(0);
   });
 
-  it('renders certifications using the cert→category map (line ~318)', () => {
+  it('renders certifications with their reference-data category', () => {
     renderReview();
     expect(screen.getByText('Certified Administrator')).toBeInTheDocument();
     expect(screen.getByText('Administrator')).toBeInTheDocument();
@@ -224,7 +197,7 @@ describe('ApplicationReview', () => {
     expect(screen.getByText('English')).toBeInTheDocument();
     expect(screen.getByText('Financial Services')).toBeInTheDocument();
     expect(screen.getByText('Salesforce MVP')).toBeInTheDocument();
-    expect(screen.getByText('Certified Trainer')).toBeInTheDocument();
+    expect(screen.queryByText('Certified Trainer')).not.toBeInTheDocument();
   });
 
   it('renders work history entries', () => {
@@ -239,17 +212,11 @@ describe('ApplicationReview', () => {
     expect(screen.getByTestId('rt-viewer')).toHaveTextContent('<p>Led Salesforce delivery.</p>');
   });
 
-  it('falls back to "Other" category when a product is not in reference data', () => {
-    // Empty taxonomy → productCategoryMap is empty → every product groups under "Other".
-    renderReview({ productsByCategory: [] });
-    expect(screen.getByText('Other')).toBeInTheDocument();
-  });
-
   it('omits the products section when there are no competencies', () => {
     const app = buildApplication();
     const noCompetencies = { ...app, competencies: [] } as ApplicationWithRelations;
     renderReview({ application: noCompetencies });
-    expect(screen.queryByText(/product expertise/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/products and ratings/i)).not.toBeInTheDocument();
   });
 
   /**
@@ -303,7 +270,6 @@ describe('ApplicationReview', () => {
       <ApplicationReview
         application={declined}
         email="jane@example.com"
-        productsByCategory={productsByCategory}
         supportTypes={supportTypes}
         certificationsByCategory={certificationsByCategory}
       />

@@ -137,6 +137,79 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "applying-to-become-an-expert",
+    "title": "Applying to become an expert",
+    "summary": "What each step asks, how to rate your expertise, and reviewing before you submit.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "getting-started"
+    },
+    "order": 0,
+    "updated": "2026-11-10",
+    "related": [
+      "what-happens-after-you-apply"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>The application takes you through a few short steps. You can leave and come back, and your progress\nis saved as you go. Here is what the steps that need a little thought ask for.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Your profile",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Tell us how long you've worked with Salesforce, how many projects you've done, and which languages\nand industries you work in. If they apply to you, you can also tick your Salesforce distinctions:</p>\n<ul>\n<li><strong>Salesforce MVP</strong>: recognised by Salesforce for outstanding community contributions</li>\n<li><strong>Salesforce CTA (Certified Technical Architect)</strong>: the highest Salesforce certification</li>\n</ul>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Rate your expertise",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>For each product you work with, you rate yourself from 0 to 10 on four dimensions: Technical Fix,\nArchitecture, Strategy and Training. Every number has its own title and description, and both\nupdate as you move the slider. Clients rely on these ratings, so rate yourself as you really work.</p>\n<p>Between two levels? Choose the lower one.</p>\n<ul>\n<li><strong>0, No experience</strong>: You haven't worked with this.</li>\n<li><strong>1, Very limited</strong>: You know what it is, but haven't used it hands-on.</li>\n<li><strong>2, Basic awareness</strong>: You understand the fundamentals from training or a sandbox, but not from real work.</li>\n<li><strong>3, Limited experience</strong>: You've done basic tasks on real work, with someone checking.</li>\n<li><strong>4, Novice</strong>: You've done this on real work a few times, following instructions, and still need guidance.</li>\n<li><strong>5, Intermediate</strong>: You handle standard tasks on your own, and ask for help with anything unusual.</li>\n<li><strong>6, Proficient</strong>: You handle most tasks on your own, including troubleshooting common issues.</li>\n<li><strong>7, Advanced</strong>: You handle complex work on your own, and teammates come to you for help with it.</li>\n<li><strong>8, Highly experienced</strong>: You've handled complex work across several clients or orgs, and people outside your team come to you for advice.</li>\n<li><strong>9, Expert</strong>: You take on the hardest cases, and set the approach others follow.</li>\n<li><strong>10, Master</strong>: You're recognised beyond your own clients and employer, for example through talks, published work or Salesforce recognition.</li>\n</ul>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "Review and submit",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The last step shows your whole application in one place, so you can read it through before it\ngoes to our team. Each section has an <strong>Edit</strong> link that takes you straight back to that step, and\nyour changes are kept when you return.</p>\n<p>If a product you selected hasn't been rated yet, it's flagged here with a <strong>Rate now</strong> link to the\nRate your expertise step. Once everything looks right, accept the expert terms and submit.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "After you submit",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>We'll be in touch within 2–3 business days. See <a href=\"/help/what-happens-after-you-apply\">what happens after you apply</a>\nfor the details.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "approving-a-change-to-your-project",
     "title": "Approving or declining a change to your project",
     "summary": "Ask for a change, then approve or decline what your expert proposes.",
@@ -2241,8 +2314,9 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "getting-started"
     },
     "order": 1,
-    "updated": "2026-11-02",
+    "updated": "2026-11-10",
     "related": [
+      "applying-to-become-an-expert",
       "rate-and-payouts",
       "connecting-your-calendar",
       "weekly-schedule"

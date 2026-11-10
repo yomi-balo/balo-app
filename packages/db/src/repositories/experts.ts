@@ -544,7 +544,6 @@ export interface ProfileStepWrite {
   linkedinUrl?: string | null;
   isSalesforceMvp?: boolean;
   isSalesforceCta?: boolean;
-  isCertifiedTrainer?: boolean;
   languages: SyncLanguageInput[];
   industryIds: string[];
 }
@@ -2043,7 +2042,6 @@ export const expertsRepository = {
           linkedinUrl: data.linkedinUrl,
           isSalesforceMvp: data.isSalesforceMvp,
           isSalesforceCta: data.isSalesforceCta,
-          isCertifiedTrainer: data.isCertifiedTrainer,
         },
         tx
       );
