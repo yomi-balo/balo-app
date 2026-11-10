@@ -27,11 +27,11 @@
  *
  *   From the repo root, with a real key in scope:
  *
- *     DAILY_API_KEY=<your-key> npx tsx apps/api/scripts/daily-token-smoke.ts
+ *     DAILY_API_KEY=<your-key> pnpm --filter api exec tsx scripts/daily-token-smoke.ts
  *
  *   Or, if `apps/api/.env.local` already holds `DAILY_API_KEY`:
  *
- *     npx dotenv -e apps/api/.env.local -- npx tsx apps/api/scripts/daily-token-smoke.ts
+ *     pnpm --filter api exec dotenv -e .env.local -- tsx scripts/daily-token-smoke.ts
  *
  * ── WHAT A PASS LOOKS LIKE ──────────────────────────────────────────────────────────────
  *

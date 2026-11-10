@@ -27,7 +27,7 @@
  *   kept in a git-ignored env file and loaded with dotenv, never typed on the command line and
  *   never `apps/api/.env.local`:
  *
- *   npx dotenv -e <target-env-file> -- npx tsx apps/api/scripts/daily-venue-reprovision.ts \
+ *   pnpm --filter api exec dotenv -e <target-env-file> -- tsx scripts/daily-venue-reprovision.ts \
  *     --from-domain getbalo            # dry run
  *   ... --from-domain getbalo --apply  # clear
  *   ... --limit 200                    # smaller batch (default 500)
@@ -58,11 +58,19 @@ function fail(what: string): never {
   throw new ScriptFailure(what);
 }
 
-/** drizzle's postgres-js driver exposes its client as `$client`; the `Database` type omits it. */
+/**
+ * drizzle's postgres-js driver exposes its client as `$client`; the `Database` type omits it.
+ * postgres-js's client is the tagged-template FUNCTION `sql`, carrying `end` as a property, so
+ * an object-only check never matches and the open pool keeps the process alive.
+ */
 function hasClosableClient(value: unknown): value is { $client: { end: () => Promise<void> } } {
   if (typeof value !== 'object' || value === null || !('$client' in value)) return false;
   const client = value.$client;
-  return typeof client === 'object' && client !== null && 'end' in client;
+  return (
+    (typeof client === 'function' || typeof client === 'object') &&
+    client !== null &&
+    'end' in client
+  );
 }
 
 /** Closes the connection pool so the process can exit. */

@@ -6,11 +6,17 @@
  * (which this PR adds, because the skill had none):
  *
  *     signature = HMAC-SHA256( base64-decoded secret , `${timestamp}.${rawBody}` )   → BASE64
- *     headers   = `x-webhook-timestamp` (unix SECONDS) + `x-webhook-signature`
+ *     headers   = `x-webhook-timestamp` (unix MILLISECONDS) + `x-webhook-signature`
  *     secret    = OUR OWN generated base64 value, supplied as `hmac` on `POST /v1/webhooks`,
  *                 and Daily signs every delivery with it. Omit `hmac` and Daily generates one,
  *                 but returns it only AFTER the create-time ping, which this endpoint therefore
  *                 can't verify — so Balo always supplies its own
+ *
+ * ⚠⚠ THE TIMESTAMP IS MILLISECONDS. Daily's docs do not state the unit; a captured create-time
+ * verification ping (2026-11-10) carried `X-Webhook-Timestamp: 1794309009266` against a server
+ * clock of `1794309009` seconds. Read as seconds, every genuine delivery lands ~56,000 years in
+ * the future, fails freshness as `stale_timestamp`, and returns `400` — so Daily refuses to
+ * create the subscription at all.
  *
  * ⚠⚠ THE DIGEST IS BASE64, NOT HEX, AND THAT DISTINCTION IS LOAD-BEARING. An earlier draft of
  * this module computed a HEX digest — a scheme under which EVERY GENUINE DELIVERY FAILS
@@ -43,7 +49,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-/** The delivery timestamp, in unix SECONDS. Daily sends `X-Webhook-Timestamp`; Fastify lower-cases. */
+/** The delivery timestamp, in unix MILLISECONDS. Daily sends `X-Webhook-Timestamp`; Fastify lower-cases. */
 export const DAILY_WEBHOOK_TIMESTAMP_HEADER = 'x-webhook-timestamp';
 
 /** The BASE64 HMAC-SHA256 signature. Daily sends `X-Webhook-Signature`; Fastify lower-cases. */
@@ -63,7 +69,7 @@ export const DAILY_WEBHOOK_TOLERANCE_MS = 5 * 60_000;
 export type DailyWebhookSignatureFailure =
   /** A required header was absent, empty, or sent more than once (an array). */
   | 'missing_header'
-  /** The timestamp header was not a finite unix-seconds integer. */
+  /** The timestamp header was not a finite unix-milliseconds integer. */
   | 'malformed_timestamp'
   /** Outside {@link DAILY_WEBHOOK_TOLERANCE_MS} in either direction. */
   | 'stale_timestamp'
@@ -184,14 +190,14 @@ export function verifyDailyWebhookSignature(
     return { ok: false, reason: 'missing_header' };
   }
 
-  const seconds = Number(timestamp);
-  if (!Number.isFinite(seconds) || !Number.isInteger(seconds)) {
+  const millis = Number(timestamp);
+  if (!Number.isFinite(millis) || !Number.isInteger(millis)) {
     return { ok: false, reason: 'malformed_timestamp' };
   }
 
   // ⚠ FRESHNESS BEFORE HMAC, on purpose: it is the cheap check, and it means a replay flood
   // costs us a subtraction rather than a digest over an attacker-sized body.
-  if (Math.abs(now.getTime() - seconds * 1000) > DAILY_WEBHOOK_TOLERANCE_MS) {
+  if (Math.abs(now.getTime() - millis) > DAILY_WEBHOOK_TOLERANCE_MS) {
     return { ok: false, reason: 'stale_timestamp' };
   }
 
@@ -222,7 +228,7 @@ export function signDailyWebhookForTest(
   secret: string,
   now: Date
 ): Record<string, string> {
-  const timestamp = String(Math.floor(now.getTime() / 1000));
+  const timestamp = String(now.getTime());
   const signature = createHmac('sha256', secretKey(secret))
     .update(`${timestamp}.`)
     .update(rawBody)
