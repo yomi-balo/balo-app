@@ -65,9 +65,41 @@ const WIDE_FIELD_KEYS = new Set([
   'beneficiary.company_name',
 ]);
 
+function normalizeField(f: FormSchemaField): NormalizedField {
+  const isChoice = f.field.type === 'SELECT' || f.field.type === 'RADIO';
+  return {
+    path: f.path,
+    required: f.required,
+    label: f.field.label,
+    description: f.field.description,
+    placeholder: f.field.placeholder,
+    tip: f.field.tip,
+    type: isChoice ? 'enum' : 'text',
+    options: f.field.options,
+    defaultValue: f.field.default,
+    refresh: f.field.refresh ?? false,
+    validation: f.rule?.pattern ? { pattern: f.rule.pattern } : undefined,
+    wide: WIDE_FIELD_KEYS.has(f.path),
+  };
+}
+
+/**
+ * Disabled fields with a default value that must be included in the create
+ * payload (e.g. account_routing_type1 = "bsb" for AU).
+ */
+function collectHiddenDefaults(fields: FormSchemaField[]): Record<string, string> {
+  const hiddenDefaults: Record<string, string> = {};
+  for (const f of fields) {
+    if (!f.enabled && f.required && f.field.default) {
+      hiddenDefaults[f.path] = f.field.default;
+    }
+  }
+  return hiddenDefaults;
+}
+
 // ── Route ───────────────────────────────────────────────────────
 
-export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
+export function schemaRoute(fastify: FastifyInstance): Promise<void> {
   fastify.get('/api/payouts/schema', { preHandler: [requireAuth] }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
 
@@ -92,34 +124,8 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
         }
       );
 
-      const fields: NormalizedField[] = schema.fields
-        .filter((f: FormSchemaField) => f.enabled)
-        .map((f: FormSchemaField) => ({
-          path: f.path,
-          required: f.required,
-          label: f.field.label,
-          description: f.field.description,
-          placeholder: f.field.placeholder,
-          tip: f.field.tip,
-          type:
-            f.field.type === 'SELECT' || f.field.type === 'RADIO'
-              ? ('enum' as const)
-              : ('text' as const),
-          options: f.field.options,
-          defaultValue: f.field.default,
-          refresh: f.field.refresh ?? false,
-          validation: f.rule?.pattern ? { pattern: f.rule.pattern } : undefined,
-          wide: WIDE_FIELD_KEYS.has(f.path),
-        }));
-
-      // Disabled fields with a default value that must be included in the
-      // create payload (e.g. account_routing_type1 = "bsb" for AU).
-      const hiddenDefaults: Record<string, string> = {};
-      for (const f of schema.fields) {
-        if (!f.enabled && f.required && f.field.default) {
-          hiddenDefaults[f.path] = f.field.default;
-        }
-      }
+      const fields = schema.fields.filter((f) => f.enabled).map(normalizeField);
+      const hiddenDefaults = collectHiddenDefaults(schema.fields);
 
       return reply.send({ fields, hiddenDefaults, condition: schema.condition });
     } catch (err: unknown) {
@@ -162,4 +168,5 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
       });
     }
   });
+  return Promise.resolve();
 }

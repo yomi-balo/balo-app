@@ -266,7 +266,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
       setState('form');
       formStartedRef.current = false;
       track(EXPERT_PAYOUT_EVENTS.PAYOUT_COUNTRY_SELECTED, { country_code: code });
-      fetchSchema(code, curr, transferMethod, entityType);
+      void fetchSchema(code, curr, transferMethod, entityType);
     },
     [fetchSchema, transferMethod, entityType]
   );
@@ -275,7 +275,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     setState('form');
     formStartedRef.current = false;
     if (countryCode) {
-      fetchSchema(countryCode, currency, transferMethod, entityType, formValues);
+      void fetchSchema(countryCode, currency, transferMethod, entityType, formValues);
     }
   }, [fetchSchema, countryCode, currency, transferMethod, entityType, formValues]);
 
@@ -447,14 +447,14 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
           {/* Schema loading shimmer */}
           {isFetchingSchema && (
-            <div className="space-y-4" role="status" aria-label="Loading bank details form">
+            <output className="block space-y-4" aria-label="Loading bank details form">
               <div className="bg-muted h-10 animate-pulse rounded-md" />
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted h-10 animate-pulse rounded-md" />
                 <div className="bg-muted h-10 animate-pulse rounded-md" />
               </div>
               <div className="bg-muted h-10 animate-pulse rounded-md" />
-            </div>
+            </output>
           )}
 
           {/* Schema error */}
@@ -466,7 +466,9 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => fetchSchema(countryCode, currency, transferMethod, entityType)}
+                  onClick={() =>
+                    void fetchSchema(countryCode, currency, transferMethod, entityType)
+                  }
                   className="gap-2"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />

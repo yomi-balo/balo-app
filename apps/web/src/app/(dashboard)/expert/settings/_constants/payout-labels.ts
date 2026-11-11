@@ -46,5 +46,5 @@ export function savedPayoutFieldLabel(path: string, formValues: Record<string, s
     return ROUTING_VALUE_LABELS[formValues[ROUTING_TYPE_PATH] ?? ''] ?? 'Routing code';
   }
   const lastSegment = path.split('.').pop() ?? path;
-  return lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+  return lastSegment.replaceAll('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase());
 }
