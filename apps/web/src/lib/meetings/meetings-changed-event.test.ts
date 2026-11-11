@@ -18,6 +18,8 @@ describe('isMeetingChangeNotification', () => {
     ['conversation.message', false],
     ['conversation.intro_call_booked', true],
     ['conversation.message_posted', false],
+    ['project.kickoff_approved', true],
+    ['project.proposal_sent', false],
     ['booking', true],
     ['', false],
   ])('%s → %s', (event, expected) => {
@@ -29,7 +31,10 @@ describe('isMeetingChangeNotification', () => {
   });
 
   it('pins the exact-event allowlist', () => {
-    expect(MEETING_CHANGE_EVENTS).toEqual(['conversation.intro_call_booked']);
+    expect(MEETING_CHANGE_EVENTS).toEqual([
+      'conversation.intro_call_booked',
+      'project.kickoff_approved',
+    ]);
   });
 });
 

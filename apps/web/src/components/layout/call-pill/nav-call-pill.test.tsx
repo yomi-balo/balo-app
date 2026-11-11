@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 
 // ── Mocks ───────────────────────────────────────────────────────
@@ -441,6 +442,32 @@ describe('NavCallPill — screen reader', () => {
     expect(screen.getByRole('status').textContent).toBe('Your call with Priya is ready to join.');
     expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
     observer.disconnect();
+  });
+
+  it('keeps the announcement under StrictMode effect re-runs', () => {
+    setData([call('m-1', 2)]);
+    render(
+      <StrictMode>
+        <LiveJoinRegistryProvider>
+          <NavCallPill />
+        </LiveJoinRegistryProvider>
+      </StrictMode>
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Your call with Priya is ready to join.');
+  });
+
+  it('clears rather than repeats the text when the primary returns to an announced call', () => {
+    setData([call('m-1', 2)]);
+    const view = renderPill();
+    setData([call('m-1', 2), call('m-2', 3, { counterpartyName: 'Sam' })]);
+    rerenderPill(view);
+    expect(screen.getByRole('status')).toHaveTextContent('Your call with Sam is ready to join.');
+
+    setData([call('m-1', 2)]);
+    rerenderPill(view);
+
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('stays silent while the pill is quiet', () => {

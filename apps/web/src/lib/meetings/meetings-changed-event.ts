@@ -12,11 +12,15 @@ export const MEETINGS_CHANGED_EVENT = 'balo:meetings-changed';
 export const MEETING_CHANGE_NAMESPACES = ['booking', 'reschedule_proposal', 'meeting'] as const;
 
 /**
- * Exact events outside those namespaces that also book a call. `conversation.intro_call_booked`
- * covers every call booked from a request page; the rest of the `conversation` namespace (messages,
- * files) does not touch a join window, so the namespace itself is deliberately not listed.
+ * Exact events outside those namespaces that also change a call. `conversation.intro_call_booked`
+ * covers every call booked from a request page; `project.kickoff_approved` re-anchors the request's
+ * calls onto the new engagement, which changes their type and link. The rest of those namespaces
+ * (messages, files, proposals) does not touch a call, so neither namespace is listed.
  */
-export const MEETING_CHANGE_EVENTS = ['conversation.intro_call_booked'] as const;
+export const MEETING_CHANGE_EVENTS = [
+  'conversation.intro_call_booked',
+  'project.kickoff_approved',
+] as const;
 
 export function isMeetingChangeNotification(event: string): boolean {
   if ((MEETING_CHANGE_EVENTS as readonly string[]).includes(event)) return true;

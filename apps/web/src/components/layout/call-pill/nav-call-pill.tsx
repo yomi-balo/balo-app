@@ -69,7 +69,6 @@ function NavCallPillView({
       onAnnounceClear();
     }
   }, [primaryId, announceable, primaryName, onAnnounce, onAnnounceClear]);
-  useEffect(() => onAnnounceClear, [onAnnounceClear]);
 
   useEffect(() => {
     if (primary === null || shownIds.current.has(primary.call.meetingId)) return;
@@ -118,7 +117,7 @@ function NavCallPillView({
   return (
     <div
       data-testid="nav-call-pill"
-      className="motion-safe:animate-fade-in sm:border-border sm:bg-background flex items-center gap-1.5 sm:h-10 sm:max-w-[340px] sm:gap-3 sm:rounded-lg sm:border sm:pr-1 sm:pl-3"
+      className="motion-safe:animate-fade-in sm:border-border sm:bg-background flex items-center gap-3 sm:h-10 sm:max-w-[340px] sm:rounded-lg sm:border sm:pr-1 sm:pl-3"
     >
       <div className="hidden min-w-0 sm:block">
         {call.href === null ? (
@@ -171,22 +170,32 @@ export function NavCallPill(): React.JSX.Element {
   const announcedIds = useRef<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState('');
 
+  // The meeting whose text the region holds now. A repeat call for it is a no-op, so StrictMode's
+  // effect re-run keeps the text; a return to an earlier meeting clears it instead of re-announcing.
+  const currentAnnouncedId = useRef<string | null>(null);
   const handleAnnounce = useCallback((meetingId: string, text: string) => {
+    if (currentAnnouncedId.current === meetingId) return;
     if (announcedIds.current.has(meetingId)) {
+      currentAnnouncedId.current = null;
       setAnnouncement('');
       return;
     }
     announcedIds.current.add(meetingId);
+    currentAnnouncedId.current = meetingId;
     setAnnouncement(text);
   }, []);
-  const handleAnnounceClear = useCallback(() => setAnnouncement(''), []);
+  const handleAnnounceClear = useCallback(() => {
+    currentAnnouncedId.current = null;
+    setAnnouncement('');
+  }, []);
+  const viewMounted = data !== null && !data.impersonating;
 
   return (
     <>
       <span role="status" className="sr-only">
-        {announcement}
+        {viewMounted ? announcement : ''}
       </span>
-      {data !== null && !data.impersonating && (
+      {viewMounted && (
         <NavCallPillView
           data={data}
           refetch={refetch}
