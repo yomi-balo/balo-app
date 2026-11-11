@@ -167,13 +167,35 @@ describe('ExpertsPage — pagination', () => {
 });
 
 describe('ExpertsPage — layout', () => {
-  it('renders list markup at md and grid markup on mobile when layout=list', async () => {
+  const twoExperts = (): void => {
     mockSearchExperts.mockResolvedValue(
       makeResponse({ experts: [makeExpert(), makeExpert({ id: 'e2' })], total: 2 })
     );
-    const { container } = await renderPage({ layout: 'list' });
+  };
+
+  it('defaults to list: list markup at md and grid markup on mobile when no layout param', async () => {
+    twoExperts();
+    const { container } = await renderPage({});
     // Dual-block: a md:hidden grid block AND a hidden md:block list block.
     expect(container.querySelector('.md\\:hidden')).toBeTruthy();
-    expect(container.querySelector('.hidden.md\\:block')).toBeTruthy();
+    expect(container.querySelector('.hidden.md\\:block > .grid-cols-1')).toBeTruthy();
+  });
+
+  it('renders list markup for layout=list', async () => {
+    twoExperts();
+    const { container } = await renderPage({ layout: 'list' });
+    expect(container.querySelector('.hidden.md\\:block > .grid-cols-1')).toBeTruthy();
+  });
+
+  it('renders the grid only for layout=grid', async () => {
+    twoExperts();
+    const { container } = await renderPage({ layout: 'grid' });
+    expect(container.querySelector('.hidden.md\\:block > .grid-cols-1')).toBeNull();
+  });
+
+  it('falls back to list for an unknown layout value', async () => {
+    twoExperts();
+    const { container } = await renderPage({ layout: 'table' });
+    expect(container.querySelector('.hidden.md\\:block > .grid-cols-1')).toBeTruthy();
   });
 });

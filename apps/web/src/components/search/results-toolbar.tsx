@@ -5,24 +5,24 @@ import { Grid3x3, List, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, SEARCH_EVENTS } from '@/lib/analytics';
 import type { SortValue } from '@/lib/search/filters';
+import { layoutParamFor, type ResultsLayout } from '@/lib/search/layout';
 import { useUpdateSearchParams } from './use-update-search-params';
 import { SortDropdown } from './sort-dropdown';
-
-type Layout = 'grid' | 'list';
 
 interface ResultsToolbarProps {
   /** Count rendered on this page. */
   shown: number;
   /** Total matching experts. */
   total: number;
-  layout: Layout;
+  layout: ResultsLayout;
   sort: SortValue;
 }
 
-const LAYOUT_OPTIONS: ReadonlyArray<{ value: Layout; Icon: typeof Grid3x3; label: string }> = [
-  { value: 'grid', Icon: Grid3x3, label: 'Grid view' },
-  { value: 'list', Icon: List, label: 'List view' },
-];
+const LAYOUT_OPTIONS: ReadonlyArray<{ value: ResultsLayout; Icon: typeof Grid3x3; label: string }> =
+  [
+    { value: 'grid', Icon: Grid3x3, label: 'Grid view' },
+    { value: 'list', Icon: List, label: 'List view' },
+  ];
 
 export function ResultsToolbar({
   shown,
@@ -33,11 +33,11 @@ export function ResultsToolbar({
   const { setChromeParam } = useUpdateSearchParams();
 
   const handleLayout = useCallback(
-    (next: Layout) => {
+    (next: ResultsLayout) => {
       if (next === layout) return;
       track(SEARCH_EVENTS.LAYOUT_TOGGLED, { to: next });
       // `layout` is page chrome, not a filter — preserve the current page.
-      setChromeParam('layout', next === 'grid' ? null : next);
+      setChromeParam('layout', layoutParamFor(next));
     },
     [layout, setChromeParam]
   );

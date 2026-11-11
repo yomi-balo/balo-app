@@ -46,37 +46,37 @@ describe('ResultsToolbar', () => {
     expect(group.parentElement?.className).toContain('md:flex');
   });
 
-  it('writes layout=list and emits search_layout_toggled when switching to list', async () => {
+  it('writes layout=grid and emits search_layout_toggled when switching to grid', async () => {
     const user = userEvent.setup();
-    renderToolbar({ layout: 'grid' });
-    await user.click(screen.getByRole('button', { name: 'List view' }));
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.LAYOUT_TOGGLED, { to: 'list' });
-    expect(mockReplace).toHaveBeenCalledWith('/experts?layout=list', { scroll: false });
+    renderToolbar({ layout: 'list' });
+    await user.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.LAYOUT_TOGGLED, { to: 'grid' });
+    expect(mockReplace).toHaveBeenCalledWith('/experts?layout=grid', { scroll: false });
   });
 
   it('preserves the current page when toggling layout (chrome, not a filter)', async () => {
     const user = userEvent.setup();
     mockUseSearchParams.mockReturnValue(new URLSearchParams('page=3'));
-    renderToolbar({ layout: 'grid' });
-    await user.click(screen.getByRole('button', { name: 'List view' }));
+    renderToolbar({ layout: 'list' });
+    await user.click(screen.getByRole('button', { name: 'Grid view' }));
     const url = mockReplace.mock.calls[0]![0] as string;
-    expect(url).toContain('layout=list');
+    expect(url).toContain('layout=grid');
     expect(url).toContain('page=3');
   });
 
-  it('removes the layout param (back to default) when switching to grid', async () => {
+  it('removes the layout param (back to default) when switching to list', async () => {
     const user = userEvent.setup();
-    mockUseSearchParams.mockReturnValue(new URLSearchParams('layout=list'));
-    renderToolbar({ layout: 'list' });
-    await user.click(screen.getByRole('button', { name: 'Grid view' }));
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.LAYOUT_TOGGLED, { to: 'grid' });
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('layout=grid'));
+    renderToolbar({ layout: 'grid' });
+    await user.click(screen.getByRole('button', { name: 'List view' }));
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.LAYOUT_TOGGLED, { to: 'list' });
     expect(mockReplace).toHaveBeenCalledWith('/experts', { scroll: false });
   });
 
   it('does not write or emit when clicking the already-active layout', async () => {
     const user = userEvent.setup();
-    renderToolbar({ layout: 'grid' });
-    await user.click(screen.getByRole('button', { name: 'Grid view' }));
+    renderToolbar({ layout: 'list' });
+    await user.click(screen.getByRole('button', { name: 'List view' }));
     expect(mockTrack).not.toHaveBeenCalled();
     expect(mockReplace).not.toHaveBeenCalled();
   });

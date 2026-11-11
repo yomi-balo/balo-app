@@ -7,6 +7,7 @@ import { searchExperts, type FacetCountDTO } from '@/lib/search/search-data';
 import { loadSearchTaxonomyCached } from '@/lib/search/load-taxonomy';
 import { buildProductNameMap } from '@/lib/search/taxonomy';
 import { mapSearchResultToCardData } from '@/lib/search/expert-card-mapper';
+import { parseResultsLayout } from '@/lib/search/layout';
 import {
   ActiveFilterChips,
   FacetControls,
@@ -57,7 +58,7 @@ export default async function ExpertsPage({
   const rawParams = await searchParams;
   const filters = parseSearchParams(rawParams);
   // Layout is page-chrome state, not a filter — read it directly from the URL.
-  const layout = rawParams.layout === 'list' ? 'list' : 'grid';
+  const layout = parseResultsLayout(rawParams.layout);
 
   // The browsable taxonomy is independent of the search result — fetch in parallel.
   let response;

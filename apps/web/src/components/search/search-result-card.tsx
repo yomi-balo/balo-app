@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { ExpertCard, type ExpertCardData } from '@/components/expert';
+import { ExpertCard, type ExpertCardData, type ExpertCardProfileTarget } from '@/components/expert';
 import { track, SEARCH_EVENTS } from '@/lib/analytics';
 
 interface SearchResultCardProps {
@@ -20,11 +19,15 @@ interface SearchResultCardProps {
 
 /**
  * Client wrapper around `ExpertCard` that emits `search_result_clicked` (action `'profile'` or
- * `'book'`) and navigates View-profile to `/experts/{username}`.
+ * `'book'`).
+ *
+ * The profile is a real link: the card passes `profileHref` (`/experts/{username}`) and the card's
+ * name link, View profile button and "+N more products" link all navigate natively. This wrapper
+ * only tracks them, with the `target` that was followed.
  *
  * Book a call opens the booking flow in place: `onBook` (owned by `ResultsGrid`, which mounts the
- * one dialog) loads it for this expert's username. Same null-username guard as View-profile — a
- * null `username` means no CTA at all, never a link to `/experts/null`.
+ * one dialog) loads it for this expert's username. Same null-username guard as the profile links —
+ * a null `username` means no links and no CTA at all, never a link to `/experts/null`.
  */
 export function SearchResultCard({
   expert,
@@ -35,20 +38,19 @@ export function SearchResultCard({
   onBook,
   bookPending,
 }: Readonly<SearchResultCardProps>): React.JSX.Element {
-  const router = useRouter();
-
-  const handleViewProfile = useCallback(() => {
-    track(SEARCH_EVENTS.RESULT_CLICKED, {
-      expert_id: expert.id,
-      action: 'profile',
-      position,
-      sort,
-      page,
-    });
-    if (expert.username) {
-      router.push(`/experts/${expert.username}`);
-    }
-  }, [expert.id, expert.username, position, sort, page, router]);
+  const handleProfileLinkClick = useCallback(
+    (target: ExpertCardProfileTarget) => {
+      track(SEARCH_EVENTS.RESULT_CLICKED, {
+        expert_id: expert.id,
+        action: 'profile',
+        target,
+        position,
+        sort,
+        page,
+      });
+    },
+    [expert.id, position, sort, page]
+  );
 
   const handleBook = useCallback(() => {
     if (!expert.username) return;
@@ -63,11 +65,14 @@ export function SearchResultCard({
     );
   }, [expert.id, expert.username, position, sort, page, onBook]);
 
+  const profileHref = expert.username ? `/experts/${expert.username}` : undefined;
+
   return (
     <ExpertCard
       expert={expert}
       variant={variant}
-      onViewProfile={expert.username ? handleViewProfile : undefined}
+      profileHref={profileHref}
+      onProfileLinkClick={profileHref ? handleProfileLinkClick : undefined}
       onBook={expert.username ? handleBook : undefined}
       bookPending={bookPending}
     />

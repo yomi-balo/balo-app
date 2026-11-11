@@ -720,6 +720,50 @@ describe('ExpertProfileClient — CTA handlers', () => {
   });
 });
 
+describe('ExpertProfileClient — #section-* deep link', () => {
+  const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    scrollSpy.mockClear();
+  });
+
+  afterEach(() => {
+    globalThis.history.replaceState(null, '', '/');
+  });
+
+  function renderProfile(): void {
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+  }
+
+  it('scrolls to the hashed section on mount and marks its nav tab active', () => {
+    globalThis.history.replaceState(null, '', '/#section-expertise');
+    renderProfile();
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy.mock.contexts[0]).toHaveProperty('id', 'section-expertise');
+    expect(screen.getByRole('button', { name: 'Expertise' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    );
+  });
+
+  it.each(['', '#unknown', '#section-nonsense'])('does not scroll for hash "%s"', (hash) => {
+    globalThis.history.replaceState(null, '', `/${hash}`);
+    renderProfile();
+
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('ExpertProfileClient — IntersectionObserver effects', () => {
   type Cb = (entries: ReadonlyArray<Partial<IntersectionObserverEntry>>) => void;
   const callbacks: Cb[] = [];

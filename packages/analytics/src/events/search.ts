@@ -45,22 +45,42 @@ export interface SearchComposerSnapshot {
   language_count: number;
 }
 
+/**
+ * Which part of a result card opened the profile: the whole-card/name link, the View profile
+ * button, or the "+N more products" link. The tuple is the source; the union is DERIVED from it
+ * so a test can pin the exact set.
+ */
+export const SEARCH_RESULT_PROFILE_TARGETS = ['card', 'button', 'more_products'] as const;
+
+export type SearchResultProfileTarget = (typeof SEARCH_RESULT_PROFILE_TARGETS)[number];
+
 export interface SearchEventMap {
   [SEARCH_EVENTS.RESULT_CLICKED]: {
     expert_id: string;
-    /**
-     * Which of the card's two CTAs was taken. `book` fires before the booking flow loads, so a
-     * signed-out visitor who stops at the auth modal is still counted.
-     *
-     * ⚠ Added 2026-10-23 (PR #411); Book clicks were untracked before then. Earlier events carry
-     * no `action` and are all profile clicks, so a profile-click insight must keep `action` unset
-     * OR `'profile'`, and the event's raw volume steps up from that date.
-     */
-    action: 'profile' | 'book';
     position: number;
     sort: string;
     page: number;
-  };
+  } & (
+    | {
+        /**
+         * Which of the card's two CTAs was taken. `book` fires before the booking flow loads, so
+         * a signed-out visitor who stops at the auth modal is still counted.
+         *
+         * ⚠ Added 2026-10-23 (PR #411); Book clicks were untracked before then. Earlier events
+         * carry no `action` and are all profile clicks, so a profile-click insight must keep
+         * `action` unset OR `'profile'`, and the event's raw volume steps up from that date.
+         */
+        action: 'profile';
+        /**
+         * Which part of the card opened the profile (see `SEARCH_RESULT_PROFILE_TARGETS`).
+         *
+         * ⚠ `target` was added in BAL-640 (2026-11). Profile events before that date carry no
+         * `target`.
+         */
+        target?: SearchResultProfileTarget;
+      }
+    | { action: 'book'; target?: never }
+  );
   [SEARCH_EVENTS.ZERO_RESULTS_VIEWED]: {
     filters: Record<string, unknown>;
     was_availability_gated: boolean;

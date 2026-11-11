@@ -1,8 +1,13 @@
 import { ResultsGridSkeleton } from '@/components/search';
+import { DEFAULT_RESULTS_LAYOUT } from '@/lib/search/layout';
 
 /**
  * Route-level loading UI shown during the RSC search fetch. Renders the page-frame
- * shell with a skeleton grid that matches the card shape (no spinners).
+ * shell with skeletons that match the card shape (no spinners).
+ *
+ * `loading.tsx` receives no `searchParams`, so the skeleton follows the default layout
+ * (list on desktop, grid on mobile). On a hard load of `?layout=grid`, desktop briefly
+ * shows list skeletons before the grid streams in.
  */
 export default function ExpertsLoading(): React.JSX.Element {
   return (
@@ -30,7 +35,7 @@ export default function ExpertsLoading(): React.JSX.Element {
           {/* Results shell */}
           <div className="min-w-0 flex-1">
             <div className="bg-muted mb-5 h-7 w-48 animate-pulse rounded" />
-            <ResultsGridSkeleton count={6} />
+            <ResultsGridSkeleton count={6} layout={DEFAULT_RESULTS_LAYOUT} />
           </div>
         </div>
       </div>

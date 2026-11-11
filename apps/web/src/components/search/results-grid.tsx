@@ -5,12 +5,13 @@ import { toast } from 'sonner';
 import type { ExpertCardData } from '@/components/expert';
 import { BookingFlowDialog } from '@/components/booking';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
+import type { ResultsLayout } from '@/lib/search/layout';
 import { SearchResultCard } from './search-result-card';
 import { useSearchBooking } from './use-search-booking';
 
 interface ResultsGridProps {
   experts: ExpertCardData[];
-  layout: 'grid' | 'list';
+  layout: ResultsLayout;
   sort: string;
   page: number;
   /** The booking flow's new-case product picker. */
@@ -83,16 +84,17 @@ function ListBlock({
 }
 
 /**
- * Renders the results grid (default) or list. The list layout is desktop-only:
+ * Renders the results grid or list. List is the desktop default and is desktop-only:
  * when `layout==='list'` we render BOTH a `md:hidden` grid block AND a
  * `hidden md:block` list block, so below `md` the grid shows and at/above `md` the
  * list shows — realising `effectiveLayout = isMobile ? 'grid' : userChoice` with
- * zero client breakpoint code (no `window`/resize, no hydration mismatch).
+ * zero client breakpoint code (no `window`/resize, no hydration mismatch). Mobile is
+ * always the grid.
  */
 function ResultsBlocks({
   layout,
   ...blockProps
-}: Readonly<BlockProps & { layout: 'grid' | 'list' }>): React.JSX.Element {
+}: Readonly<BlockProps & { layout: ResultsLayout }>): React.JSX.Element {
   if (layout === 'list') {
     return (
       <>
