@@ -252,3 +252,11 @@ export function getDistinctionList(
 ): ReadonlyArray<{ label: string; cls: string }> {
   return DISTINCTIONS.filter((x) => d[x.key]).map(({ label, cls }) => ({ label, cls }));
 }
+
+// ── Profile deep links ───────────────────────────────────────────
+
+/**
+ * Fragment of the profile's expertise section — the `id="section-expertise"` anchor in
+ * `app/(marketing)/experts/[username]/_components/expert-profile-client.tsx:286`.
+ */
+export const PROFILE_EXPERTISE_HASH = '#section-expertise';

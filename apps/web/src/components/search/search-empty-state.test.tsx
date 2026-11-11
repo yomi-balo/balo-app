@@ -36,12 +36,27 @@ describe('SearchEmptyState', () => {
 
 describe('ResultsGridSkeleton', () => {
   it('renders the requested number of loading cards', () => {
-    render(<ResultsGridSkeleton count={4} />);
+    render(<ResultsGridSkeleton count={4} layout="grid" />);
     expect(screen.getAllByLabelText('Loading expert card')).toHaveLength(4);
   });
 
   it('defaults to 6 skeleton cards', () => {
-    render(<ResultsGridSkeleton />);
+    render(<ResultsGridSkeleton layout="grid" />);
     expect(screen.getAllByLabelText('Loading expert card')).toHaveLength(6);
+  });
+
+  it('renders no list wrapper for the grid layout', () => {
+    const { container } = render(<ResultsGridSkeleton count={3} layout="grid" />);
+    expect(container.querySelector('.md\\:hidden')).toBeNull();
+    expect(container.querySelector('.hidden.md\\:block')).toBeNull();
+  });
+
+  it('renders grid skeletons below md and list skeletons from md for the list layout', () => {
+    const { container } = render(<ResultsGridSkeleton count={3} layout="list" />);
+    const mobile = container.querySelector('.md\\:hidden');
+    const desktop = container.querySelector('.hidden.md\\:block');
+    expect(mobile?.querySelectorAll('[aria-label="Loading expert card"]')).toHaveLength(3);
+    expect(desktop?.querySelectorAll('[aria-label="Loading expert card"]')).toHaveLength(3);
+    expect(desktop?.querySelector('.grid-cols-1')).not.toBeNull();
   });
 });

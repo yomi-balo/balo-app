@@ -1,3 +1,5 @@
+import type { SearchResultProfileTarget } from '@balo/analytics/events';
+
 export type SkillType = 'technical' | 'architecture' | 'admin' | 'strategy';
 
 export interface ExpertiseItem {
@@ -59,6 +61,9 @@ export interface ExpertCardData {
   expertise: ExpertiseItem[]; // web-only; NOT in DTO
 }
 
+/** Which part of a linked card was followed — mirrors `search_result_clicked`'s profile `target`. */
+export type ExpertCardProfileTarget = SearchResultProfileTarget;
+
 export interface ExpertCardProps {
   expert: ExpertCardData;
   orderBy?: string[];
@@ -67,4 +72,8 @@ export interface ExpertCardProps {
   /** `onBook` is loading what the booking flow needs: the button spins and ignores clicks. */
   bookPending?: boolean;
   onViewProfile?: () => void;
+  /** Opt-in: makes the card a link to this profile. Only search results pass it. */
+  profileHref?: string;
+  /** Fires when one of the card's profile links is followed (click or middle-click). */
+  onProfileLinkClick?: (target: ExpertCardProfileTarget) => void;
 }

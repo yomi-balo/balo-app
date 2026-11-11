@@ -1,34 +1,41 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { SEARCH_EVENTS } from '@balo/analytics/events';
+import {
+  SEARCH_EVENTS,
+  SEARCH_RESULT_PROFILE_TARGETS,
+  type SearchResultProfileTarget,
+} from '@balo/analytics/events';
 import { track } from '@/lib/analytics';
 import type { ExpertCardData } from '@/components/expert';
 
-const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
-
-// Stub ExpertCard to expose the View-profile + Book handlers simply.
+// Stub ExpertCard to expose the profile href, profile-link handler and Book handler simply.
 vi.mock('@/components/expert', () => ({
   ExpertCard: ({
     expert,
-    onViewProfile,
+    profileHref,
+    onProfileLinkClick,
     onBook,
     bookPending,
   }: {
     expert: { name: string };
-    onViewProfile?: () => void;
+    profileHref?: string;
+    onProfileLinkClick?: (target: SearchResultProfileTarget) => void;
     onBook?: () => void;
     bookPending?: boolean;
   }) => (
-    <div data-book-pending={String(bookPending)}>
+    <div data-book-pending={String(bookPending)} data-profile-href={profileHref ?? ''}>
       <span>{expert.name}</span>
-      {onViewProfile ? (
-        <button type="button" onClick={onViewProfile}>
-          View profile
-        </button>
+      {onProfileLinkClick ? (
+        <>
+          {SEARCH_RESULT_PROFILE_TARGETS.map((target) => (
+            <button key={target} type="button" onClick={() => onProfileLinkClick(target)}>
+              {`profile ${target}`}
+            </button>
+          ))}
+        </>
       ) : (
-        <span>View profile</span>
+        <span>no profile links</span>
       )}
       {onBook ? (
         <button type="button" onClick={onBook}>
@@ -73,32 +80,51 @@ function expert(overrides: Partial<ExpertCardData> = {}): ExpertCardData {
 beforeEach(() => vi.clearAllMocks());
 
 describe('SearchResultCard', () => {
-  it('emits search_result_clicked with position/sort/page and navigates on View profile', async () => {
-    const user = userEvent.setup();
-    render(
+  it('passes the profile href to the card', () => {
+    const { container } = render(
       <SearchResultCard
         expert={expert()}
         variant="grid"
-        position={3}
-        sort="soonest"
-        page={2}
+        position={1}
+        sort="best_match"
+        page={1}
         onBook={mockOnBook}
         bookPending={false}
       />
     );
-    await user.click(screen.getByRole('button', { name: 'View profile' }));
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
-      expert_id: 'e1',
-      action: 'profile',
-      position: 3,
-      sort: 'soonest',
-      page: 2,
-    });
-    expect(mockPush).toHaveBeenCalledWith('/experts/anil');
+    expect(container.querySelector('[data-profile-href="/experts/anil"]')).not.toBeNull();
   });
 
-  it('renders an inert View-profile (no handler) when the expert has no username', () => {
-    render(
+  it.each(SEARCH_RESULT_PROFILE_TARGETS)(
+    'emits search_result_clicked with target %s when that profile link is followed',
+    async (target) => {
+      const user = userEvent.setup();
+      render(
+        <SearchResultCard
+          expert={expert()}
+          variant="grid"
+          position={3}
+          sort="soonest"
+          page={2}
+          onBook={mockOnBook}
+          bookPending={false}
+        />
+      );
+      await user.click(screen.getByRole('button', { name: `profile ${target}` }));
+      expect(mockTrack).toHaveBeenCalledOnce();
+      expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.RESULT_CLICKED, {
+        expert_id: 'e1',
+        action: 'profile',
+        target,
+        position: 3,
+        sort: 'soonest',
+        page: 2,
+      });
+    }
+  );
+
+  it('passes no href or profile handler when the expert has no username', () => {
+    const { container } = render(
       <SearchResultCard
         expert={expert({ username: null })}
         variant="grid"
@@ -109,12 +135,11 @@ describe('SearchResultCard', () => {
         bookPending={false}
       />
     );
-    // No button is wired — the card renders the default inert label.
-    expect(screen.queryByRole('button', { name: 'View profile' })).not.toBeInTheDocument();
-    expect(screen.getByText('View profile')).toBeInTheDocument();
+    expect(container.querySelector('[data-profile-href=""]')).not.toBeNull();
+    expect(screen.getByText('no profile links')).toBeInTheDocument();
   });
 
-  it('hands Book to onBook with the username, without navigating', async () => {
+  it('hands Book to onBook with the username, without tracking a profile click', async () => {
     const user = userEvent.setup();
     render(
       <SearchResultCard
@@ -129,7 +154,7 @@ describe('SearchResultCard', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Book' }));
     expect(mockOnBook).toHaveBeenCalledWith('anil', expect.any(Function));
-    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
   });
 
   it('emits search_result_clicked with action book only once the booking accepts the click', async () => {
