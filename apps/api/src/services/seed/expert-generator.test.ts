@@ -127,8 +127,8 @@ describe('generateExperts — competencies', () => {
       const keys = new Set(e.competencies.map((c) => `${c.productId}:${c.supportTypeId}`));
       expect(keys.size).toBe(e.competencies.length);
       for (const c of e.competencies) {
-        expect(c.proficiency).toBeGreaterThanOrEqual(1);
-        expect(c.proficiency).toBeLessThanOrEqual(5);
+        expect(c.proficiency).toBeGreaterThanOrEqual(3);
+        expect(c.proficiency).toBeLessThanOrEqual(10);
       }
     }
   });

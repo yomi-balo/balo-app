@@ -1305,6 +1305,22 @@ describe('expertSearchRepository.search — product mention threshold (BAL-639)'
 });
 
 describe('expertSearchRepository.search — name and product ranking (BAL-639)', () => {
+  it('finds an expert by a four-token full name', async () => {
+    const verticalId = await getVerticalId();
+    const user = await userFactory({ firstName: 'Maria', lastName: 'de la Cruz' });
+    const maria = await searchExpertFactory({
+      verticalId,
+      userId: user.id,
+      headline: 'Senior delivery lead',
+      bio: 'Rollouts',
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'Maria de la Cruz', pageSize: 50 })
+    );
+    expect(rows[0]?.id).toBe(maria.id);
+  });
+
   it('puts the expert named Charles ahead of a Charleston headline match', async () => {
     const verticalId = await getVerticalId();
     const charlesUser = await userFactory({ firstName: 'Charles', lastName: 'Whitlock' });

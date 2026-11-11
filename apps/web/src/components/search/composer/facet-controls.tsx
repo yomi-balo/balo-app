@@ -97,7 +97,7 @@ function Section({
       <div
         ref={headingRef}
         tabIndex={-1}
-        className="focus-visible:ring-ring mb-3.5 flex h-4 items-center gap-2 rounded-sm focus-visible:ring-2"
+        className="focus-visible:ring-ring mb-3.5 flex h-4 items-center gap-2 rounded-sm focus-visible:ring-2 focus-visible:outline-none"
       >
         <Icon className="text-muted-foreground h-3.5 w-3.5" aria-hidden />
         <span className="text-muted-foreground text-[11px] font-bold tracking-wide uppercase">
@@ -200,10 +200,10 @@ export function FacetControls({
           clearArray('languages');
           break;
       }
-      track(SEARCH_EVENTS.FACET_CLEARED, { facet });
+      track(SEARCH_EVENTS.FACET_CLEARED, { facet, surface: inSheet ? 'sheet' : 'rail' });
       setAnnouncement(`${CLEAR_LABELS[facet]} filter cleared`);
     },
-    [clearArray, setTimeframe, setRate]
+    [clearArray, setTimeframe, setRate, inSheet]
   );
   const clearSupportTypes = useCallback(() => clearSection('support_types'), [clearSection]);
   const clearTimeframe = useCallback(() => clearSection('timeframe'), [clearSection]);

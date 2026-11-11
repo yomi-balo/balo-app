@@ -139,8 +139,8 @@ function availabilityGatePredicates(now: Date): SQL[] {
 
 // ── Query-shape and rating-floor helpers ─────────────────────────
 
-/** Headline and name trigram matching apply only to queries of at most this many tokens. */
-export const FUZZY_MAX_QUERY_TOKENS = 3;
+/** Headline trigram and forward product-name trigram matching apply only to queries of at most this many tokens. */
+export const SHORT_QUERY_MAX_TOKENS = 3;
 
 /**
  * A product counts as mentioned in a query when `word_similarity(product, q)` reaches this.
@@ -150,9 +150,13 @@ export const FUZZY_MAX_QUERY_TOKENS = 3;
  */
 const PRODUCT_MENTION_MIN_WORD_SIMILARITY = 0.8;
 
-/** Trims `q`, then true when it has at most `FUZZY_MAX_QUERY_TOKENS` whitespace-separated tokens. */
-export function allowsFuzzyNameAndHeadlineMatch(q: string): boolean {
-  return q.trim().split(/\s+/).length <= FUZZY_MAX_QUERY_TOKENS;
+/**
+ * Trims `q`, then true when it has at most `SHORT_QUERY_MAX_TOKENS` whitespace-separated tokens.
+ * Gates the headline trigram and the forward product-name trigram; the name trigram applies to
+ * every query length.
+ */
+export function isShortQuery(q: string): boolean {
+  return q.trim().split(/\s+/).length <= SHORT_QUERY_MAX_TOKENS;
 }
 
 /**
@@ -182,9 +186,10 @@ function ratingCountsInSearch(proficiency: AnyColumn | SQL): SQL {
  *   - Timeframe (user filter, gate-independent): require a cached slot on/before
  *     `now + N days` — self-gates even when the availability flag is off.
  *   - Rate bounds exclude null-rate experts only when a bound is set.
- *   - Full-text match (only when `q` present): strict FTS @@ OR, for short queries only,
- *     trigram fuzzy on headline and name OR a product name (counting only ratings at or above
- *     `SEARCH_MIN_PROFICIENCY`) similar to or mentioned in the query.
+ *   - Full-text match (only when `q` present): strict FTS @@ OR trigram fuzzy on the expert's
+ *     name OR, for short queries only, trigram fuzzy on the headline OR a product name
+ *     (counting only ratings at or above `SEARCH_MIN_PROFICIENCY`) similar to or mentioned in
+ *     the query.
  *
  * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here. The owner's
  * soft delete lives on `users` and is covered by `expertOwnerIsLive`.
@@ -278,11 +283,12 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
   // Full-text match: strict FTS OR trigram fuzzy (name + headline) OR product match.
   // Only added when `q` is present — no per-product subquery on a wide-open browse.
   //
-  // Headline and name trigram matching apply to short queries only
-  // (`allowsFuzzyNameAndHeadlineMatch`). Against a sentence, `word_similarity(q, headline)`
-  // fires on a single shared word: "I need help with Slack implementation" scored 0.378
-  // against a headline that merely contained "implementations". Longer queries therefore
-  // match through FTS and product mention only.
+  // The headline trigram applies to short queries only (`isShortQuery`). Against a sentence,
+  // `word_similarity(q, headline)` fires on a single shared word: "I need help with Slack
+  // implementation" scored 0.378 against a headline that merely contained "implementations".
+  // The name trigram applies to every query length: against a sentence
+  // `word_similarity(q, name)` is about 0, and gating it would hide a four-token name such as
+  // "Maria de la Cruz". Longer queries therefore match through FTS, name and product mention.
   //
   // Product match (ratings at or above `SEARCH_MIN_PROFICIENCY` only): the forward direction
   // `word_similarity(q, s.name) > 0.3` finds a typed product name ("sales clod") and applies to
@@ -315,17 +321,16 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
   // function is not index-accelerated anyway; it runs over the narrowed set).
   const q = normalizeQuery(params.query);
   if (q) {
-    const fuzzyHeadlineAndName = allowsFuzzyNameAndHeadlineMatch(q)
+    const shortQuery = isShortQuery(q);
+    const fuzzyHeadline = shortQuery
       ? sql`
-        OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
-        OR word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3`
+        OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3`
       : sql``;
-    const productTypedMatch = allowsFuzzyNameAndHeadlineMatch(q)
-      ? sql`word_similarity(${q}, s.name) > 0.3 OR `
-      : sql``;
+    const productTypedMatch = shortQuery ? sql`word_similarity(${q}, s.name) > 0.3 OR ` : sql``;
     conditions.push(
       sql`(
-        ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})${fuzzyHeadlineAndName}
+        ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})${fuzzyHeadline}
+        OR word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3
         OR EXISTS (
           SELECT 1 FROM ${expertCompetency} es
           JOIN ${products} s ON s.id = es.product_id
@@ -406,9 +411,9 @@ function normalizeQuery(query: string | undefined): string | null {
  * only by full-text matching on prose. Emits literal `0` when `q` is
  * absent (no FTS / product subquery runs at all).
  *
- * The headline bump and the name term follow the same `allowsFuzzyNameAndHeadlineMatch`
- * gate as the WHERE clause, so a long query's rank never depends on terms that cannot
- * admit a row.
+ * The headline bump follows the same `isShortQuery` gate as the WHERE clause, so a long
+ * query's rank never depends on a term that cannot admit a row. The name term applies at
+ * every query length, like its WHERE branch.
  *
  * Name term (BAL-263): the expert's NAME lives on `users` (joined as `u`), not
  * in the stored search_vector, so without an explicit term a perfect name match
@@ -424,34 +429,29 @@ function normalizeQuery(query: string | undefined): string | null {
  */
 export function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
-  const fuzzyTerms = allowsFuzzyNameAndHeadlineMatch(q)
+  const headlineBump = isShortQuery(q)
     ? sql`
-    + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
-    + (CASE
-         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
-         THEN 10
-         ELSE 0
-       END)`
+    + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))`
     : sql``;
   return sql`(
     ts_rank(${expertProfiles.searchVector}, websearch_to_tsquery('english', ${q}))
     + COALESCE((
         SELECT MAX(ts_rank(setweight(to_tsvector('english', s.name), 'C'),
                            websearch_to_tsquery('english', ${q})))
+               + (CASE
+                    WHEN MAX(word_similarity(s.name, ${q})) >= ${PRODUCT_MENTION_MIN_WORD_SIMILARITY}
+                    THEN 0.5
+                    ELSE 0
+                  END)
         FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
         WHERE es.expert_profile_id = ${expertProfiles.id}
           AND ${ratingCountsInSearch(sql`es.proficiency`)}
-      ), 0)
+      ), 0)${headlineBump}
     + (CASE
-         WHEN (
-           SELECT MAX(word_similarity(s.name, ${q}))
-           FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
-           WHERE es.expert_profile_id = ${expertProfiles.id}
-             AND ${ratingCountsInSearch(sql`es.proficiency`)}
-         ) >= ${PRODUCT_MENTION_MIN_WORD_SIMILARITY}
-         THEN 0.5
+         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
+         THEN 10
          ELSE 0
-       END)${fuzzyTerms}
+       END)
   )`;
 }
 

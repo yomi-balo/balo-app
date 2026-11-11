@@ -232,7 +232,10 @@ describe('FacetControls — per-section Clear', () => {
     expect(url).not.toContain('supportTypes');
     expect(url).toContain('languages=l1');
     expect(url).not.toContain('page=');
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, { facet: 'support_types' });
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'support_types',
+      surface: 'rail',
+    });
   });
 
   it('clears the timeframe', async () => {
@@ -242,7 +245,10 @@ describe('FacetControls — per-section Clear', () => {
     await user.click(screen.getByRole('button', { name: 'Clear Availability' }));
     vi.advanceTimersByTime(500);
     expect(mockReplace).toHaveBeenCalledWith('/experts', { scroll: false });
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, { facet: 'timeframe' });
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'timeframe',
+      surface: 'rail',
+    });
   });
 
   it('clears the rate range', async () => {
@@ -253,7 +259,10 @@ describe('FacetControls — per-section Clear', () => {
     vi.advanceTimersByTime(500);
     expect(mockReplace).toHaveBeenCalledTimes(1);
     expect(mockReplace.mock.calls[0]![0]).not.toContain('rateMin');
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, { facet: 'rate' });
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'rate',
+      surface: 'rail',
+    });
   });
 
   it('announces the cleared facet in a polite status region', async () => {
@@ -317,7 +326,10 @@ describe('FacetControls — per-section Clear', () => {
     );
     vi.advanceTimersByTime(500);
     expect(mockReplace).not.toHaveBeenCalled();
-    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, { facet: 'languages' });
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'languages',
+      surface: 'sheet',
+    });
   });
 });
 

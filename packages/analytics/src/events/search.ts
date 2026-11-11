@@ -79,7 +79,10 @@ export interface SearchEventMap {
   [SEARCH_EVENTS.PRODUCT_SELECTOR_SEARCHED]: { had_results: boolean };
   [SEARCH_EVENTS.PRODUCT_GROUP_EXPANDED]: { group: string };
   [SEARCH_EVENTS.COMPOSER_CLEARED]: { surface: 'hero_bar' | 'compact_bar' | 'rail' | 'sheet' };
-  [SEARCH_EVENTS.FACET_CLEARED]: { facet: SearchClearableFacet };
+  [SEARCH_EVENTS.FACET_CLEARED]: {
+    facet: SearchClearableFacet;
+    surface: 'rail' | 'sheet';
+  };
 }
 
 export const SEARCH_SERVER_EVENTS = {

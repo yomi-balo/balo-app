@@ -19,7 +19,7 @@ let buildWhereConditions: ExpertSearchModule['buildWhereConditions'];
 let buildOrderBy: ExpertSearchModule['buildOrderBy'];
 let timeframeBoundary: ExpertSearchModule['timeframeBoundary'];
 let relevanceExpression: ExpertSearchModule['relevanceExpression'];
-let allowsFuzzyNameAndHeadlineMatch: ExpertSearchModule['allowsFuzzyNameAndHeadlineMatch'];
+let isShortQuery: ExpertSearchModule['isShortQuery'];
 
 beforeAll(async () => {
   // Loaded dynamically so `client.ts` evaluates with DATABASE_URL already set
@@ -29,7 +29,7 @@ beforeAll(async () => {
   buildOrderBy = mod.buildOrderBy;
   timeframeBoundary = mod.timeframeBoundary;
   relevanceExpression = mod.relevanceExpression;
-  allowsFuzzyNameAndHeadlineMatch = mod.allowsFuzzyNameAndHeadlineMatch;
+  isShortQuery = mod.isShortQuery;
 });
 
 const dialect = new PgDialect();
@@ -233,15 +233,15 @@ describe('buildWhereConditions — full-text query', () => {
     expect(sql).toContain('"headline"');
   });
 
-  it('a sentence q drops the headline and name terms but keeps FTS and product mention', () => {
+  it('a sentence q drops the headline and forward product terms but keeps FTS, name and product mention', () => {
     const sql = toSql(
       buildWhereConditions(params({ query: 'I need help with Slack implementation' }), NOW)[4]
     );
-    expect(sql).not.toContain('u.first_name');
+    expect(sql).toContain('u.first_name');
     expect(sql).not.toContain('"headline"');
+    expect(sql).not.toContain('s.name) > 0.3');
     expect(sql).toContain('websearch_to_tsquery');
-    expect(sql).not.toContain('> 0.3');
-    expect(sql).toContain('word_similarity(s.name, $3) >=');
+    expect(sql).toContain('word_similarity(s.name, $4) >=');
     expect(sql).toContain('es.proficiency >=');
   });
 
@@ -250,13 +250,13 @@ describe('buildWhereConditions — full-text query', () => {
   });
 });
 
-describe('allowsFuzzyNameAndHeadlineMatch', () => {
+describe('isShortQuery', () => {
   it.each([
     ['sales cloud', true],
     ['a b c', true],
     ['  a   b  c  d ', false],
   ])('%j → %s', (q, expected) => {
-    expect(allowsFuzzyNameAndHeadlineMatch(q)).toBe(expected);
+    expect(isShortQuery(q)).toBe(expected);
   });
 });
 
@@ -277,13 +277,13 @@ describe('relevanceExpression', () => {
     }
   });
 
-  it('keeps the name term for a short q and drops the fuzzy terms for a long one', () => {
+  it('keeps the name term at every length and drops the headline bump for a long q', () => {
     const short = toSql(relevanceExpression('charles'));
     expect(short).toContain('THEN 10');
     expect(short).toContain('0.1 * word_similarity');
 
     const long = toSql(relevanceExpression('I need help with Slack implementation'));
-    expect(long).not.toContain('THEN 10');
+    expect(long).toContain('THEN 10');
     expect(long).not.toContain('0.1 * word_similarity');
     expect(long).toContain('ts_rank');
   });
