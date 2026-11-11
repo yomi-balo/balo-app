@@ -307,6 +307,7 @@ const ADOPTERS: readonly string[] = [
   ...[
     'save-rate',
     'save-payout-details',
+    'get-payout-form-schema',
     'save-profile',
     'save-work-history',
     'save-certifications',

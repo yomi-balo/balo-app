@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { withAuth } from '@/lib/auth/with-auth';
 import { resolveApprovedExpert, APPROVED_EXPERT_REQUIRED_ERROR } from '@/lib/auth/approved-expert';
 import { payoutsRepository, type BeneficiaryStatus } from '@balo/db';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 
@@ -88,6 +89,17 @@ export const savePayoutDetailsAction = withAuth(
       const gate = await resolveApprovedExpert(session.user);
       if (!gate.ok) {
         return { success: false, error: APPROVED_EXPERT_REQUIRED_ERROR };
+      }
+
+      if (isImpersonatedSession(session.user)) {
+        log.warn('Payout details save refused — impersonated session', {
+          userId: session.user.id,
+          impersonatorUserId: session.user.impersonatorUserId,
+        });
+        return {
+          success: false,
+          error: "Bank details can't be changed while you're viewing as this expert.",
+        };
       }
 
       const { expertProfileId } = gate;

@@ -38,6 +38,7 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => Promise.resolve(mockSessionObj)),
 }));
 
+import { log } from '@/lib/logging';
 import { savePayoutDetailsAction } from './save-payout-details';
 import {
   APPROVED_PROFILE_ROW,
@@ -107,6 +108,25 @@ describe('savePayoutDetailsAction', () => {
       });
       expect(mockUpsertPayoutDetails).not.toHaveBeenCalled();
     });
+  });
+
+  it('refuses an impersonated session before any write', async () => {
+    mockSessionObj = {
+      user: { ...EXPERT_SESSION.user, isImpersonating: true, impersonatorUserId: 'admin-1' },
+      save: mockSave,
+    };
+    const result = await savePayoutDetailsAction(INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: "Bank details can't be changed while you're viewing as this expert.",
+    });
+    expect(mockFindByExpertProfileId).not.toHaveBeenCalled();
+    expect(mockUpsertPayoutDetails).not.toHaveBeenCalled();
+    expect(mockLoggedFetch).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('impersonated'),
+      expect.objectContaining({ userId: 'user-1', impersonatorUserId: 'admin-1' })
+    );
   });
 
   describe('persistence', () => {

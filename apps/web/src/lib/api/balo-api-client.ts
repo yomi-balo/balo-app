@@ -14,7 +14,7 @@ import { jsonBodyInit } from './json-body-init';
  * which had re-declared it byte-for-byte (`getApiUrl`, `safeParse`, `readString`, `readInstant`,
  * `readRetryAfter`, and the whole `postJson`/`callBookingApi` body) — the exact SonarCloud
  * new-code duplication shape a prior docblock called "deliberate" while doing precisely what
- * CPD penalises. Every `apps/web` → `apps/api` server-only hop with a single `requireAuth`-gated
+ * CPD penalises. Every `apps/web` → `apps/api` server-only hop (GET or POST) with a single `requireAuth`-gated
  * route and a WorkOS-Bearer-resolved-server-side auth posture goes through this module now; each
  * caller keeps only its own `parse*Response` functions and route paths.
  *
@@ -146,7 +146,19 @@ export async function postBaloApiJson<T>(
   parse: (parsed: Record<string, unknown>) => T | null,
   logLabel: string
 ): Promise<BaloApiResult<T>> {
-  return (await callBaloApi(path, body, parse, logLabel)).result;
+  return (await callBaloApi('POST', path, body, parse, logLabel)).result;
+}
+
+/**
+ * {@link postBaloApiJson} for a `GET` route: no body, no Content-Type. The caller builds the
+ * query string into `path`. Same fail-closed credential gate and typed-failure mapping.
+ */
+export async function getBaloApiJson<T>(
+  path: string,
+  parse: (parsed: Record<string, unknown>) => T | null,
+  logLabel: string
+): Promise<BaloApiResult<T>> {
+  return (await callBaloApi('GET', path, undefined, parse, logLabel)).result;
 }
 
 /**
@@ -161,12 +173,13 @@ export async function postBaloApiJsonWithFailureDetail<T, F>(
   parseFailure: (parsed: Record<string, unknown>) => F,
   logLabel: string
 ): Promise<BaloApiDetailedResult<T, F>> {
-  const { result, failureBody } = await callBaloApi(path, body, parse, logLabel);
+  const { result, failureBody } = await callBaloApi('POST', path, body, parse, logLabel);
   if (result.ok) return result;
   return { ...result, detail: parseFailure(failureBody) };
 }
 
 async function callBaloApi<T>(
+  method: 'GET' | 'POST',
   path: string,
   body: unknown,
   parse: (parsed: Record<string, unknown>) => T | null,
@@ -179,10 +192,10 @@ async function callBaloApi<T>(
   }
 
   try {
-    const init = jsonBodyInit('POST', body);
+    const init = jsonBodyInit(method, body);
     const response = await loggedFetch(`${getApiUrl()}${path}`, {
       service: 'balo-api',
-      method: 'POST',
+      method,
       headers: { ...init.headers, Authorization: `Bearer ${accessToken}` },
       ...(init.body === undefined ? {} : { body: init.body }),
     });

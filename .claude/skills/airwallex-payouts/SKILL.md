@@ -208,7 +208,7 @@ interface FormSchemaField {
 ```ts
 // GET /api/payouts/schema?country=AU&method=LOCAL&currency=AUD
 
-fastify.get('/api/payouts/schema', async (req, reply) => {
+fastify.get('/api/payouts/schema', { preHandler: [requireAuth] }, async (req, reply) => {
   const {
     country,
     method = 'LOCAL',

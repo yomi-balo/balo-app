@@ -5,6 +5,43 @@ vi.mock('../../services/airwallex/client.js', () => ({
   airwallexRequest: (...args: unknown[]) => mockAirwallexRequest(...args),
 }));
 
+const mockCaptureException = vi.fn();
+vi.mock('@sentry/node', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
+const auth = vi.hoisted(() => ({ mode: 'authenticated' as 'authenticated' | 'unauthenticated' }));
+vi.mock('../../lib/require-auth.js', () => ({
+  requireAuth: async (
+    request: { userId?: string },
+    reply: { status: (code: number) => { send: (body: unknown) => void } }
+  ) => {
+    if (auth.mode === 'authenticated') {
+      request.userId = 'user_1';
+      return;
+    }
+    reply.status(401).send({ error: 'Unauthorized' });
+  },
+}));
+
+const limiter = vi.hoisted(() => ({
+  options: undefined as Record<string, unknown> | undefined,
+  exceeded: false,
+}));
+vi.mock('../../lib/rate-limit-prehandler.js', () => ({
+  createRateLimitPreHandler: (options: Record<string, unknown>) => {
+    limiter.options = options;
+    return async (
+      _request: unknown,
+      reply: { status: (code: number) => { send: (body: unknown) => void } }
+    ) => {
+      if (limiter.exceeded) {
+        reply.status(429).send({ error: 'Too many requests' });
+      }
+    };
+  },
+}));
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import { schemaRoute } from './schema.js';
 import {
@@ -30,10 +67,64 @@ describe('GET /api/payouts/schema', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    auth.mode = 'authenticated';
+    limiter.exceeded = false;
   });
 
   const get = (query = 'country=AU&currency=AUD') =>
     app.inject({ method: 'GET', url: `/api/payouts/schema?${query}` });
+
+  it('registers a per-user, fail-open limiter of 30 requests a minute', () => {
+    expect(limiter.options).toMatchObject({
+      config: { keyPrefix: 'ratelimit:payout-form-schema', maxRequests: 30, windowSeconds: 60 },
+      failOpen: true,
+      logIdentifier: true,
+    });
+    const identifier = limiter.options?.identifier as (r: { userId: string }) => string;
+    expect(identifier({ userId: 'user_9' })).toBe('user_9');
+  });
+
+  it('does not reach the limiter when unauthenticated (limiter runs after requireAuth)', async () => {
+    auth.mode = 'unauthenticated';
+    limiter.exceeded = true;
+    const res = await get();
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 429 and does not call Airwallex when the limiter refuses', async () => {
+    limiter.exceeded = true;
+    const res = await get();
+    expect(res.statusCode).toBe(429);
+    expect(mockAirwallexRequest).not.toHaveBeenCalled();
+  });
+
+  it('fixes the payout rail: drops local_clearing_system from fields and defaults it', async () => {
+    const path = 'beneficiary.bank_details.local_clearing_system';
+    mockAirwallexRequest.mockResolvedValue({
+      condition: {},
+      fields: [
+        {
+          path,
+          required: false,
+          enabled: true,
+          field: {
+            key: 'local_clearing_system',
+            label: 'Transfer methods',
+            type: 'INPUT',
+            default: 'ACH',
+            options: [
+              { label: 'ACH', value: 'ACH' },
+              { label: 'Fedwire', value: 'FEDWIRE' },
+            ],
+          },
+        },
+      ],
+    });
+    const res = await get('country=US&currency=USD');
+    const body = res.json();
+    expect(body.fields.map((f: { path: string }) => f.path)).not.toContain(path);
+    expect(body.hiddenDefaults[path]).toBe('ACH');
+  });
 
   it('returns normalized fields and hidden defaults on success', async () => {
     mockAirwallexRequest.mockResolvedValue({
@@ -77,6 +168,16 @@ describe('GET /api/payouts/schema', () => {
     );
   });
 
+  it('returns 401 without a session and never calls Airwallex', async () => {
+    auth.mode = 'unauthenticated';
+
+    const res = await get();
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'Unauthorized' });
+    expect(mockAirwallexRequest).not.toHaveBeenCalled();
+  });
+
   it('returns 400 for invalid query parameters without calling Airwallex', async () => {
     const res = await get('country=AUS');
     expect(res.statusCode).toBe(400);
@@ -88,6 +189,7 @@ describe('GET /api/payouts/schema', () => {
     const res = await get();
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/not supported/);
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
   it('logs the Airwallex status and body on a 502 from an API error', async () => {
@@ -107,6 +209,17 @@ describe('GET /api/payouts/schema', () => {
       }),
       'Airwallex schema fetch failed'
     );
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [captured, context] = mockCaptureException.mock.calls[0] ?? [];
+    expect(captured).toBeInstanceOf(AirwallexApiError);
+    expect(context.extra).toEqual({
+      countryCode: 'AU',
+      method: 'LOCAL',
+      currency: 'AUD',
+      airwallexStatus: 401,
+      op: 'payout_form_schema',
+    });
+    expect(context.extra).not.toHaveProperty('airwallexBody');
   });
 
   it('logs the login status on a 502 from an auth error', async () => {
@@ -118,6 +231,12 @@ describe('GET /api/payouts/schema', () => {
     expect(logError).toHaveBeenCalledWith(
       expect.objectContaining({ airwallexStatus: 401, airwallexBody: 'bad key' }),
       'Airwallex schema fetch failed'
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(AirwallexAuthError),
+      expect.objectContaining({
+        extra: expect.objectContaining({ airwallexStatus: 401, op: 'payout_form_schema' }),
+      })
     );
   });
 
@@ -134,5 +253,22 @@ describe('GET /api/payouts/schema', () => {
       }),
       'Airwallex schema fetch failed'
     );
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(AirwallexConfigError),
+      expect.objectContaining({
+        extra: expect.objectContaining({ countryCode: 'AU', op: 'payout_form_schema' }),
+      })
+    );
+  });
+
+  it('caps the logged Airwallex body at 2048 characters', async () => {
+    mockAirwallexRequest.mockRejectedValue(new AirwallexApiError(500, '/x', 'a'.repeat(3000)));
+
+    await get();
+
+    const [logged] = logError.mock.calls[0] ?? [];
+    expect(logged.airwallexBody).toHaveLength(2048);
+    const [captured] = mockCaptureException.mock.calls[0] ?? [];
+    expect(captured.message.length).toBeLessThanOrEqual(2048 + 100);
   });
 });

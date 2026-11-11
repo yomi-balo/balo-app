@@ -148,9 +148,37 @@ describe('SetupBanner — arriving from the checklist (?setup=)', () => {
 
     expect(screen.getByText('connect calendar').tagName).toBe('STRONG');
     expect(bannerText()).toBe(
-      'Not visible to clients yet — step 4 of 6, connect calendar (2 more steps after this)'
+      'Not visible to clients yet — step 4 of 6, connect calendar (2 other steps still to do)'
     );
     expect(screen.queryByText('complete your profile')).not.toBeInTheDocument();
+  });
+
+  it('counts every other open step for the chosen step, even when it is the last', () => {
+    render(
+      <SetupBanner
+        status={statusWithOpen('profile', 'phone', 'rate', 'calendar', 'availability', 'payouts')}
+        activeTab="payouts"
+        setupStep="payouts"
+      />
+    );
+
+    expect(bannerText()).toBe(
+      'Not visible to clients yet — step 6 of 6, set up payouts (5 other steps still to do)'
+    );
+  });
+
+  it('uses the singular when one other step is open for the chosen step', () => {
+    render(
+      <SetupBanner
+        status={statusWithOpen('profile', 'calendar')}
+        activeTab="schedule"
+        setupStep="calendar"
+      />
+    );
+
+    expect(bannerText()).toBe(
+      'Not visible to clients yet — step 4 of 6, connect calendar (1 other step still to do)'
+    );
   });
 
   it('hides Continue setup while the chosen step is on its own tab', () => {

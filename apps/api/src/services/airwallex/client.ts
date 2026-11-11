@@ -94,6 +94,8 @@ export async function airwallexRequest<T>(
 
   // Any 401 means the cached token is no longer accepted — clear it and retry once
   if (res.status === 401 && !options?.isRetry) {
+    // Release the unread body so the connection is not held.
+    await res.body?.cancel().catch(() => undefined);
     tokenCache = null;
     return airwallexRequest(method, path, body, { ...options, isRetry: true });
   }
