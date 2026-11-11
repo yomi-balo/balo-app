@@ -9,7 +9,7 @@ import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import type { KickoffUpfront } from '@/lib/project-request/request-detail-view';
 import { useViewerClock } from '@/hooks/use-viewer-clock';
-import { formatNextCallWhen } from '@/app/(dashboard)/dashboard/_lib/up-next-presentation';
+import { formatNextCallWhen } from '@/lib/meetings/up-next-presentation';
 import { RequestCard } from '../request-card';
 import { useClientBookCall } from '../expert-call-bridge';
 import { ClientBillingAffordance } from './billing-details-dialog';

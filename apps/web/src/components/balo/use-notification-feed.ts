@@ -6,6 +6,10 @@ import * as Sentry from '@sentry/nextjs';
 import { track, NOTIFICATION_EVENTS } from '@/lib/analytics';
 import { isAutoReadablePath } from '@/lib/notifications/auto-read-path';
 import {
+  dispatchMeetingsChanged,
+  hasNewMeetingChange,
+} from '@/lib/meetings/meetings-changed-event';
+import {
   LOAD_TOAST_DELAY_MS,
   POLL_HIDDEN_MS,
   POLL_VISIBLE_MS,
@@ -100,6 +104,7 @@ export function useNotificationFeed(): NotificationFeed {
   const pathnameRef = useRef(pathname);
   const cursorRef = useRef<number | null>(null);
   const announcedIdsRef = useRef(new Set<string>());
+  const meetingSignalIdsRef = useRef<Set<string> | null>(null);
   const autoReadAttemptedRef = useRef(new Set<string>());
   const loadPendingRef = useRef(true);
   const toastKeyRef = useRef(0);
@@ -284,6 +289,11 @@ export function useNotificationFeed(): NotificationFeed {
 
       commitList(list);
       setUnreadCount(Math.max(0, (data.unreadCount ?? 0) - matched.length));
+
+      // The call pill refetches on this signal. It fires from a hidden tab too, so the pill is
+      // current when the viewer returns; the first load only seeds the known ids.
+      if (hasNewMeetingChange(meetingSignalIdsRef.current, list)) dispatchMeetingsChanged();
+      meetingSignalIdsRef.current = new Set(list.map((n) => n.id));
 
       if (isHidden() || impersonatingRef.current) return;
       if (loadPendingRef.current) {

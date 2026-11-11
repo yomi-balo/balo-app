@@ -19,6 +19,10 @@ import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 
 const MS_PER_MINUTE = 60_000;
 
+/** BAL-574 — the nudge's own tick cadence. Deliberately NOT `VIEWER_CLOCK_TICK_MS` (60s): the
+ *  countdown must reach zero without a visible half-minute of staleness at the boundary. */
+export const JOIN_CLOCK_TICK_MS = 30_000;
+
 /**
  * The instant the calendar's Join affordance CLOSES: the scheduled end plus the product's overrun
  * grace. ONE definition, consumed by `calendarJoinAffordanceVisible` AND by `calendarMeetingTiming`'s

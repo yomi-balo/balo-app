@@ -11,6 +11,7 @@ import { JoinCountdown } from '@/components/balo/meetings/join-countdown';
 import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 import { roomSettingUpNudgeBody } from '@/lib/meetings/room-setting-up-copy';
 import {
+  JOIN_CLOCK_TICK_MS,
   joinAffordanceAriaLabel,
   joinAffordanceTimingLabel,
   joinCountdownLabel,
@@ -402,10 +403,6 @@ type UpcomingJoinClock =
       readonly minutes: null;
       readonly timingLabel: null;
     });
-
-/** BAL-574 — the nudge's own tick cadence. Deliberately NOT `VIEWER_CLOCK_TICK_MS` (60s): the
- *  countdown must reach zero without a visible half-minute of staleness at the boundary. */
-export const JOIN_CLOCK_TICK_MS = 30_000;
 
 /**
  * The ONE client clock the `'upcoming'` arm needs, ticking on a 30s interval regardless of

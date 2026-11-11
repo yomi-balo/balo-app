@@ -13,10 +13,10 @@ import {
   formatUpNextWhen,
   resolveRescheduleNote,
   resolveUpNextRowTiming,
-} from '../_lib/up-next-presentation';
-import { UP_NEXT_JOIN } from '../_lib/up-next-copy';
+} from '@/lib/meetings/up-next-presentation';
+import { UP_NEXT_JOIN } from '@/lib/meetings/up-next-copy';
 import type { ViewerClock } from '@/hooks/use-viewer-clock';
-import type { UpNextRowView, UpNextWorkspaceType } from '../_lib/up-next-view-types';
+import type { UpNextRowView, UpNextWorkspaceType } from '@/lib/meetings/up-next-view-types';
 
 interface UpNextRowProps {
   readonly row: UpNextRowView;

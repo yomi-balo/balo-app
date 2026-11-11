@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { NotificationBell } from '@/components/balo/notification-bell';
 import { Breadcrumbs } from './breadcrumbs';
+import { NavCallPill } from './call-pill/nav-call-pill';
 import { CommandPalette } from './command-palette';
 
 interface TopNavProps {
@@ -24,6 +25,9 @@ export function TopNav({ creditsChip = null }: Readonly<TopNavProps>): React.JSX
         {/* Spacer — the ⌘K palette sits between it and the chip, per the design reference. */}
         <div className="flex-1" />
         <CommandPalette />
+        {/* BAL-636 — the call pill renders nothing until it has data, so like the chip it is
+            never wrapped: an absent pill must not leave a stray flex item behind. */}
+        <NavCallPill />
         {/* BAL-499 F7 — no wrapper `<div>` around the chip: a classless wrapper is still a flex
             item (and so still consumes this row's `gap-3`) even when its content resolves to
             `null` (the slot's error path) or is CSS-hidden below `sm` (the chip's own `hidden

@@ -13,7 +13,7 @@ import {
 } from '@/lib/calendar/join-window';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deliveryWorkspaceHref } from '@/lib/engagement/delivery-workspace-href';
-import { formatNextCallWhen } from '@/app/(dashboard)/dashboard/_lib/up-next-presentation';
+import { formatNextCallWhen } from '@/lib/meetings/up-next-presentation';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
 import { JoinCountdown } from '@/components/balo/meetings/join-countdown';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover';

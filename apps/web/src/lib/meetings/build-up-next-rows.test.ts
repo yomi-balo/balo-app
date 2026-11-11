@@ -16,6 +16,8 @@ vi.mock('@balo/db', () => ({
 
 import {
   buildUpNextRowViews,
+  companyRowToEnrichable,
+  expertRowToEnrichable,
   toUpNextRowView,
   type UpNextEnrichableRow,
 } from './build-up-next-rows';
@@ -381,5 +383,73 @@ describe('toUpNextRowView — view-model key set (BAL-566 §11)', () => {
     const [view] = await buildUpNextRowViews([row()], 'company');
     const keys = Object.keys(view ?? {}).sort((a, b) => a.localeCompare(b));
     expect(keys).toEqual([...UP_NEXT_ROW_VIEW_KEYS].sort((a, b) => a.localeCompare(b)));
+  });
+});
+
+const FIXTURE_NOW = new Date('2026-09-17T12:00:00.000Z');
+
+function companyMeeting(overrides: Record<string, unknown> = {}) {
+  return {
+    meetingId: 'm-1',
+    scheduledStart: new Date(FIXTURE_NOW.getTime() + 30 * 60_000),
+    scheduledEnd: new Date(FIXTURE_NOW.getTime() + 60 * 60_000),
+    status: 'scheduled',
+    contextType: 'case',
+    contextId: 'eng-1',
+    projectRequestId: null,
+    expertProfileId: 'profile-1',
+    owningRowFound: true,
+    roomReady: true,
+    ...overrides,
+  };
+}
+
+function expertMeeting(overrides: Record<string, unknown> = {}) {
+  return {
+    meetingId: 'm-2',
+    scheduledStart: new Date(FIXTURE_NOW.getTime() + 30 * 60_000),
+    scheduledEnd: new Date(FIXTURE_NOW.getTime() + 60 * 60_000),
+    status: 'scheduled',
+    contextType: 'case',
+    contextId: 'eng-2',
+    engagementType: 'case',
+    projectRequestId: null,
+    counterpartyCompanyName: 'Northwind Industrial',
+    owningRowFound: true,
+    roomReady: true,
+    ...overrides,
+  };
+}
+
+describe('companyRowToEnrichable / expertRowToEnrichable — explicit projection', () => {
+  it('companyRowToEnrichable nulls counterpartyCompanyName and carries the parent expertProfileId', () => {
+    const enrichable = companyRowToEnrichable(
+      companyMeeting({ expertProfileId: 'profile-9' }) as never
+    );
+    expect(enrichable.counterpartyCompanyName).toBeNull();
+    expect(enrichable.expertProfileId).toBe('profile-9');
+  });
+
+  it('expertRowToEnrichable uses the SESSION profile id, never a field off the row', () => {
+    const enrichable = expertRowToEnrichable(expertMeeting() as never, 'session-profile');
+    expect(enrichable.expertProfileId).toBe('session-profile');
+    expect(enrichable.counterpartyCompanyName).toBe('Northwind Industrial');
+  });
+
+  it('BAL-581 — both projections copy roomReady through, true and false', () => {
+    expect(companyRowToEnrichable(companyMeeting({ roomReady: true }) as never).roomReady).toBe(
+      true
+    );
+    expect(companyRowToEnrichable(companyMeeting({ roomReady: false }) as never).roomReady).toBe(
+      false
+    );
+    expect(
+      expertRowToEnrichable(expertMeeting({ roomReady: true }) as never, 'session-profile')
+        .roomReady
+    ).toBe(true);
+    expect(
+      expertRowToEnrichable(expertMeeting({ roomReady: false }) as never, 'session-profile')
+        .roomReady
+    ).toBe(false);
   });
 });

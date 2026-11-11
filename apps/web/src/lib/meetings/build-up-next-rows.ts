@@ -3,6 +3,8 @@ import 'server-only';
 import {
   rescheduleProposalsRepository,
   upcomingMeetingsRepository,
+  type CompanyUpcomingMeeting,
+  type ExpertCalendarMeeting,
   type ExpertPartyNames,
   type UpcomingMeetingTitles,
 } from '@balo/db';
@@ -31,6 +33,48 @@ export interface UpNextEnrichableRow extends UpNextCandidate {
   readonly expertProfileId: string | null;
   /** Expert rows only; company rows: `null`. */
   readonly counterpartyCompanyName: string | null;
+}
+
+/** A candidate row before enrichment — satisfies both `selectUpNextRows` and the enrichment step. */
+export type EnrichableCandidate = UpNextCandidate &
+  Pick<UpNextEnrichableRow, 'expertProfileId' | 'counterpartyCompanyName'>;
+
+/** Explicit projection (never a spread) into the enrichable shape. Exported for tests. */
+export function companyRowToEnrichable(row: CompanyUpcomingMeeting): EnrichableCandidate {
+  return {
+    meetingId: row.meetingId,
+    scheduledStart: row.scheduledStart,
+    scheduledEnd: row.scheduledEnd,
+    status: row.status,
+    contextType: row.contextType,
+    contextId: row.contextId,
+    projectRequestId: row.projectRequestId,
+    owningRowFound: row.owningRowFound,
+    expertProfileId: row.expertProfileId,
+    counterpartyCompanyName: null,
+    roomReady: row.roomReady,
+  };
+}
+
+/** Explicit projection (never a spread) into the enrichable shape. Exported for tests. The
+ *  session's own `expertProfileId` is passed in, never read off the row. */
+export function expertRowToEnrichable(
+  row: ExpertCalendarMeeting,
+  expertProfileId: string
+): EnrichableCandidate {
+  return {
+    meetingId: row.meetingId,
+    scheduledStart: row.scheduledStart,
+    scheduledEnd: row.scheduledEnd,
+    status: row.status,
+    contextType: row.contextType,
+    contextId: row.contextId,
+    projectRequestId: row.projectRequestId,
+    owningRowFound: row.owningRowFound,
+    expertProfileId,
+    counterpartyCompanyName: row.counterpartyCompanyName,
+    roomReady: row.roomReady,
+  };
 }
 
 export interface UpNextLookups {
@@ -235,7 +279,7 @@ export function toUpNextRowView(
 
 /**
  * `[]` in → `[]` out with ZERO queries. Otherwise ONE `Promise.all` of three batched reads over
- * ≤4 rows (`UP_NEXT_ROW_LIMIT`).
+ * ≤ the caller's limit.
  */
 export async function buildUpNextRowViews(
   rows: readonly UpNextEnrichableRow[],

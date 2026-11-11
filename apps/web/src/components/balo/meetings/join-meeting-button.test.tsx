@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@/test/utils';
 import { resolveRouteDir } from '@/invariants/_source-scan';
 import { JoinMeetingButton } from './join-meeting-button';
+import { LiveJoinRegistryProvider, useLiveJoinOnPage } from './live-join-registry';
+
+function Probe({ joinUrl }: Readonly<{ joinUrl: string }>): React.JSX.Element {
+  return <span data-testid="probe">{String(useLiveJoinOnPage(joinUrl))}</span>;
+}
 
 /**
  * BAL-511 / ADR-1053 — the Join live cue: a ping ring, `ambient  live-call ping ring 1.8s`,
@@ -79,6 +84,68 @@ describe('JoinMeetingButton — the DOM', () => {
     // mode, below WCAG 1.4.11's 3:1 floor. This pins FULL opacity so re-adding an alpha fails.
     expect(button.className).not.toContain('motion-reduce:ring-primary/');
     expect(button.className).not.toContain('animate-pulse');
+  });
+
+  it('liveCue={false} drops every before: utility and wears the static ring unconditionally', () => {
+    render(
+      <JoinMeetingButton
+        joinUrl="https://balo.expert/meetings/m-1/call"
+        ariaLabel="Join now"
+        onJoin={vi.fn()}
+        liveCue={false}
+      >
+        Join
+      </JoinMeetingButton>
+    );
+
+    const classes = screen.getByRole('button', { name: 'Join now' }).className.split(' ');
+    expect(classes.filter((c) => c.includes('before:'))).toEqual([]);
+    expect(classes).toContain('ring-2');
+    expect(classes).toContain('ring-primary');
+    expect(classes).not.toContain('motion-reduce:ring-2');
+    // The hit area and the positioning context are not part of the cue.
+    expect(classes).toContain('relative');
+    expect(classes).toContain('after:absolute');
+  });
+
+  it('liveCue defaults to on: the ring is motion-reduce-only, never unconditional', () => {
+    render(
+      <JoinMeetingButton
+        joinUrl="https://balo.expert/meetings/m-1/call"
+        ariaLabel="Join now"
+        onJoin={vi.fn()}
+      >
+        Join
+      </JoinMeetingButton>
+    );
+
+    const classes = screen.getByRole('button', { name: 'Join now' }).className.split(' ');
+    expect(classes).not.toContain('ring-2');
+    expect(classes).not.toContain('ring-primary');
+  });
+
+  it('registers its joinUrl on the page by default, and not when registerOnPage={false}', () => {
+    const url = '/meetings/m-1/call';
+    const tree = (registerOnPage: boolean): React.JSX.Element => (
+      <LiveJoinRegistryProvider>
+        <Probe joinUrl={url} />
+        <JoinMeetingButton
+          joinUrl={url}
+          ariaLabel="Join now"
+          onJoin={vi.fn()}
+          registerOnPage={registerOnPage}
+        >
+          Join
+        </JoinMeetingButton>
+      </LiveJoinRegistryProvider>
+    );
+
+    const { unmount } = render(tree(true));
+    expect(screen.getByTestId('probe')).toHaveTextContent('true');
+    unmount();
+
+    render(tree(false));
+    expect(screen.getByTestId('probe')).toHaveTextContent('false');
   });
 
   it('D6 — a call-site className="absolute …" still wins over the baked-in relative', () => {

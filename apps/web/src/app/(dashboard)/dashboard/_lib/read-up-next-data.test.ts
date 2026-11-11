@@ -6,7 +6,7 @@ vi.mock('@/lib/logging', () => ({
 
 import { readUpNextData } from './read-up-next-data';
 import { log } from '@/lib/logging';
-import type { UpNextRowView } from './up-next-view-types';
+import type { UpNextRowView } from '@/lib/meetings/up-next-view-types';
 
 beforeEach(() => {
   vi.clearAllMocks();

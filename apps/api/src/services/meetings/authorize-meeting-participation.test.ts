@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 const {
   mockMeetingFindById,
@@ -35,7 +35,10 @@ vi.mock('./authorize-engagement-host.js', () => ({
 // ⚠ `@balo/shared/authz` and `@balo/shared/meetings` are deliberately NOT mocked — the real
 // `roleHasCapability` map and the real precedence rule ARE what is under test at their steps.
 
-import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
+import {
+  authorizeMeetingParticipation,
+  type AuthorizeMeetingParticipationInput,
+} from './authorize-meeting-participation.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
@@ -143,6 +146,24 @@ describe('authorizeMeetingParticipation — the EXPERT side (engagement axis)', 
   it('denies when the actor holds neither axis', async () => {
     const result = await authorizeMeetingParticipation({ meetingId: MEETING_ID, userId: USER_ID });
     expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
+  });
+
+  it('⚠ authorizes the expert while their ACTIVE workspace is another company — the gate has no workspace input', async () => {
+    // The actor is a live member of some OTHER company (the workspace the TopNav pill is rendered
+    // in) and no member of the owning company. Membership on the owning company is the only
+    // membership read; the delivery identity alone grants the expert side.
+    mockGetMemberRole.mockResolvedValue(undefined);
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    const result = await authorizeMeetingParticipation({ meetingId: MEETING_ID, userId: USER_ID });
+
+    expect(result).toMatchObject({ ok: true, side: 'expert', companyId: COMPANY_ID });
+    expect(mockGetMemberRole).toHaveBeenCalledTimes(1);
+    expect(mockGetMemberRole).toHaveBeenCalledWith('company', COMPANY_ID, USER_ID);
+    expectTypeOf<AuthorizeMeetingParticipationInput>().toEqualTypeOf<{
+      meetingId: string;
+      userId: string;
+    }>();
   });
 });
 

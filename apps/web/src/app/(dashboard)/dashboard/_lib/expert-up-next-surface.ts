@@ -1,5 +1,5 @@
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
-import type { UpNextData } from './up-next-view-types';
+import type { UpNextData } from '@/lib/meetings/up-next-view-types';
 
 /**
  * BAL-566 (R2) — bookings ALWAYS win over the ghost card. `'ghost'` ONLY when the read succeeded
