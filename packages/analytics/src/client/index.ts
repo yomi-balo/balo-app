@@ -68,6 +68,8 @@ export {
   NAV_EVENTS,
   NAV_ITEM_KEYS,
   NAV_SURFACES,
+  // BAL-636 — the top-nav call pill's source vocabulary.
+  NAV_CALL_SOURCES,
   // BAL-496 — the switcher's CLIENT event. ⚠ THE RE-EXPORT ALLOWLIST: omitting a name here
   // fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
   // ⚠⚠ `WORKSPACE_SERVER_EVENTS` must NEVER join this list — it is server-only and is exported
@@ -244,6 +246,9 @@ export type {
   NavEventMap,
   NavItemKey,
   NavSurface,
+  // BAL-636 — the top-nav call pill's source vocabulary and shared event properties.
+  NavCallSource,
+  NavCallEventBase,
   // BAL-496 — the workspace switcher's client event payload.
   WorkspaceEventMap,
   // BAL-502 — the marketing chrome's event payload and link/surface vocabularies.

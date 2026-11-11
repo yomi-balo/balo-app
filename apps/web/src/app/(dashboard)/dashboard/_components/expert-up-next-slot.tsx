@@ -1,11 +1,11 @@
 import { loadExpertUpNext } from '../_lib/load-up-next';
 import { readUpNextData } from '../_lib/read-up-next-data';
 import { resolveExpertUpNextSurface } from '../_lib/expert-up-next-surface';
-import { UP_NEXT_COPY } from '../_lib/up-next-copy';
+import { UP_NEXT_COPY } from '@/lib/meetings/up-next-copy';
 import { UpNextCard } from './up-next-card';
 import { GhostConsultationsCard } from './ghost-consultations-card';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
-import type { UpNextFooterLink } from '../_lib/up-next-view-types';
+import type { UpNextFooterLink } from '@/lib/meetings/up-next-view-types';
 
 interface ExpertUpNextSlotProps {
   readonly userId: string;

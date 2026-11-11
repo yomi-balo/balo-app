@@ -20,6 +20,7 @@ import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { ViewerTimezoneProvider } from '@/components/balo/date/viewer-timezone-context';
+import { LiveJoinRegistryProvider } from '@/components/balo/meetings/live-join-registry';
 import { TimezoneMismatchGate } from '@/components/balo/timezone-mismatch/timezone-mismatch-gate';
 import { loadViewerTimezoneContext } from '@/lib/timezone/load-viewer-timezone-context';
 
@@ -120,27 +121,29 @@ export default async function DashboardLayout({
           <TimezoneMismatchGate mismatchPrompt={timezoneContext.mismatchPrompt} />
         ) : null}
         <BreadcrumbProvider>
-          {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
-            than the visible viewport, which would leave phantom scroll under the sticky tab
-            bar. `100dvh === 100vh` on desktop, so this is inert there. */}
-          <div className="bg-background min-h-dvh">
-            <div className="flex">
-              <Sidebar />
-              {/* `min-w-0` lets the column shrink below its content's min-content width, so a
-                horizontal rail (dashboard Your move) scrolls inside itself instead of widening
-                the page past the viewport. */}
-              <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
-                <TopNav creditsChip={creditsChip} />
-                <main className="flex-1 p-6 lg:p-8">
-                  <div className="mx-auto max-w-7xl">{children}</div>
-                </main>
-                {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
-                  extra bottom padding and `AppFooter` (rendered by the root layout, outside
-                  this tree) needs no changes. */}
-                <MobileTabBar />
+          <LiveJoinRegistryProvider>
+            {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
+              than the visible viewport, which would leave phantom scroll under the sticky tab
+              bar. `100dvh === 100vh` on desktop, so this is inert there. */}
+            <div className="bg-background min-h-dvh">
+              <div className="flex">
+                <Sidebar />
+                {/* `min-w-0` lets the column shrink below its content's min-content width, so a
+                  horizontal rail (dashboard Your move) scrolls inside itself instead of widening
+                  the page past the viewport. */}
+                <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
+                  <TopNav creditsChip={creditsChip} />
+                  <main className="flex-1 p-6 lg:p-8">
+                    <div className="mx-auto max-w-7xl">{children}</div>
+                  </main>
+                  {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
+                    extra bottom padding and `AppFooter` (rendered by the root layout, outside
+                    this tree) needs no changes. */}
+                  <MobileTabBar />
+                </div>
               </div>
             </div>
-          </div>
+          </LiveJoinRegistryProvider>
         </BreadcrumbProvider>
       </ViewerTimezoneProvider>
     </SidebarProvider>

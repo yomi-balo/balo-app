@@ -1,4 +1,5 @@
 import type { Workspace } from '@balo/shared/workspaces';
+import type { DashboardUpNextMeetingType } from './dashboard';
 
 /**
  * BAL-495 / ADR-1053 — ⚠ THE CANONICAL NAV KEY TUPLE. `apps/web`'s `nav-registry.ts` types its
@@ -65,7 +66,31 @@ export const NAV_EVENTS = {
    *  member of this family rather than a `surface` on ITEM_CLICKED. Precedent:
    *  `WORKSPACE_EVENTS.SWITCHER_OPENED`. Emitted on open only. */
   MORE_OPENED: 'nav_more_opened',
+  /** BAL-636 — a meeting first became the top-nav call pill's primary in this TopNav mount. */
+  CALL_PILL_SHOWN: 'nav_call_pill_shown',
+  /** BAL-636 — Join was activated in the pill or in its "+N" list. */
+  CALL_JOIN_CLICKED: 'nav_call_join_clicked',
+  /** BAL-636 — the pill's "+N" list was opened. Emitted on open only. */
+  CALL_LIST_OPENED: 'nav_call_list_opened',
 } as const;
+
+/** BAL-636 — where a call Join was clicked: the pill itself or a row of its "+N" list. */
+export const NAV_CALL_SOURCES = ['pill', 'list'] as const;
+export type NavCallSource = (typeof NAV_CALL_SOURCES)[number];
+
+/**
+ * BAL-636 — the properties every call-pill event carries. `minutes_to_start` is signed and never
+ * floored (negative once the call has started); `quiet` is true when the pill's Join is not the
+ * one that animates; `other_workspace` is true for an expert-side call seen from a company
+ * workspace.
+ */
+export interface NavCallEventBase {
+  meeting_type: DashboardUpNextMeetingType;
+  minutes_to_start: number;
+  quiet: boolean;
+  other_workspace: boolean;
+  workspace_type: Workspace['type'];
+}
 
 export interface NavEventMap {
   [NAV_EVENTS.ITEM_CLICKED]: {
@@ -75,4 +100,7 @@ export interface NavEventMap {
     workspace_type: Workspace['type'];
   };
   [NAV_EVENTS.MORE_OPENED]: { workspace_type: Workspace['type'] };
+  [NAV_EVENTS.CALL_PILL_SHOWN]: NavCallEventBase;
+  [NAV_EVENTS.CALL_JOIN_CLICKED]: NavCallEventBase & { source: NavCallSource };
+  [NAV_EVENTS.CALL_LIST_OPENED]: NavCallEventBase & { count: number };
 }

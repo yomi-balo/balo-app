@@ -3,8 +3,8 @@ import {
   resolveNavItems,
   type NavContext,
 } from '@/components/layout/nav-registry';
-import { UP_NEXT_OPEN_CALENDAR } from './up-next-copy';
-import type { UpNextFooterLink, UpNextWorkspaceType } from './up-next-view-types';
+import { UP_NEXT_OPEN_CALENDAR } from '@/lib/meetings/up-next-copy';
+import type { UpNextFooterLink, UpNextWorkspaceType } from '@/lib/meetings/up-next-view-types';
 
 /**
  * BAL-566 (D12) — the Up next card's footer links, resolved through the nav registry so the

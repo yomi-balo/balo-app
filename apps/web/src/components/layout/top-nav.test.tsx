@@ -32,6 +32,10 @@ vi.mock('@/components/balo/notification-bell', () => ({
   NotificationBell: () => <div data-testid="notification-bell" />,
 }));
 
+vi.mock('./call-pill/nav-call-pill', () => ({
+  NavCallPill: () => <div data-testid="nav-call-pill" />,
+}));
+
 import { TopNav } from './top-nav';
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -73,6 +77,23 @@ describe('TopNav', () => {
     // intermediate wrapper.
     const row = screen.getByRole('banner').firstElementChild;
     expect(chip.parentElement).toBe(row);
+  });
+
+  it('BAL-636: renders exactly one call pill, after the ⌘K trigger and before the chip, unwrapped', () => {
+    render(<TopNav creditsChip={<div data-testid="chip-stub">chip</div>} />);
+
+    const pills = screen.getAllByTestId('nav-call-pill');
+    expect(pills).toHaveLength(1);
+    const [pill] = pills;
+    const trigger = screen.getByRole('button', { name: 'Search' });
+    const chip = screen.getByTestId('chip-stub');
+    expect(trigger.compareDocumentPosition(pill as HTMLElement)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect((pill as HTMLElement).compareDocumentPosition(chip)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect(pill?.parentElement).toBe(screen.getByRole('banner').firstElementChild);
   });
 
   it('renders the ⌘K trigger after the spacer and before the credits chip', () => {

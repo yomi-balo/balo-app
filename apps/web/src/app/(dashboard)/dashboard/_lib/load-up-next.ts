@@ -4,56 +4,16 @@ import {
   meetingsRepository,
   partyMembershipsRepository,
   upcomingMeetingsRepository,
-  type CompanyUpcomingMeeting,
-  type ExpertCalendarMeeting,
 } from '@balo/db';
 import { resolveCompanyParticipation } from '@balo/shared/authz';
 import { log } from '@/lib/logging';
-import { buildUpNextRowViews, type UpNextEnrichableRow } from './build-up-next-rows';
-import { selectUpNextRows, upNextWindow, type UpNextCandidate } from './select-up-next-rows';
-import type { UpNextRowView } from './up-next-view-types';
-
-/** A candidate row before enrichment — satisfies both `selectUpNextRows` and the enrichment step. */
-type EnrichableCandidate = UpNextCandidate &
-  Pick<UpNextEnrichableRow, 'expertProfileId' | 'counterpartyCompanyName'>;
-
-/** Explicit projection (never a spread) into the enrichable shape. Exported for tests. */
-export function companyRowToEnrichable(row: CompanyUpcomingMeeting): EnrichableCandidate {
-  return {
-    meetingId: row.meetingId,
-    scheduledStart: row.scheduledStart,
-    scheduledEnd: row.scheduledEnd,
-    status: row.status,
-    contextType: row.contextType,
-    contextId: row.contextId,
-    projectRequestId: row.projectRequestId,
-    owningRowFound: row.owningRowFound,
-    expertProfileId: row.expertProfileId,
-    counterpartyCompanyName: null,
-    roomReady: row.roomReady,
-  };
-}
-
-/** Explicit projection (never a spread) into the enrichable shape. Exported for tests. The
- *  session's own `expertProfileId` is passed in, never read off the row. */
-export function expertRowToEnrichable(
-  row: ExpertCalendarMeeting,
-  expertProfileId: string
-): EnrichableCandidate {
-  return {
-    meetingId: row.meetingId,
-    scheduledStart: row.scheduledStart,
-    scheduledEnd: row.scheduledEnd,
-    status: row.status,
-    contextType: row.contextType,
-    contextId: row.contextId,
-    projectRequestId: row.projectRequestId,
-    owningRowFound: row.owningRowFound,
-    expertProfileId,
-    counterpartyCompanyName: row.counterpartyCompanyName,
-    roomReady: row.roomReady,
-  };
-}
+import {
+  buildUpNextRowViews,
+  companyRowToEnrichable,
+  expertRowToEnrichable,
+} from '@/lib/meetings/build-up-next-rows';
+import { selectUpNextRows, upNextWindow } from '@/lib/meetings/select-up-next-rows';
+import type { UpNextRowView } from '@/lib/meetings/up-next-view-types';
 
 /**
  * The COMPANY flow (R1). `null` ⇒ the viewer does not participate in the workspace company ⇒

@@ -26,14 +26,9 @@ vi.mock('@/lib/logging', () => ({
   log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import {
-  loadCompanyUpNext,
-  loadExpertUpNext,
-  companyRowToEnrichable,
-  expertRowToEnrichable,
-} from './load-up-next';
+import { loadCompanyUpNext, loadExpertUpNext } from './load-up-next';
 import { log } from '@/lib/logging';
-import { UP_NEXT_ROW_VIEW_KEYS } from './up-next-view-types';
+import { UP_NEXT_ROW_VIEW_KEYS } from '@/lib/meetings/up-next-view-types';
 
 /** `packages/db/src/repositories/meetings.ts`'s `MAX_CALENDAR_RANGE_DAYS` — mirrored here rather
  *  than imported, since `@balo/db` is mocked whole in this file. */
@@ -169,39 +164,6 @@ describe('loadExpertUpNext', () => {
     mockListCalendarForExpert.mockResolvedValue([]);
     const result = await loadExpertUpNext({ expertProfileId: 'profile-1', now: NOW });
     expect(result).toEqual([]);
-  });
-});
-
-describe('companyRowToEnrichable / expertRowToEnrichable — explicit projection', () => {
-  it('companyRowToEnrichable nulls counterpartyCompanyName and carries the parent expertProfileId', () => {
-    const enrichable = companyRowToEnrichable(
-      companyMeeting({ expertProfileId: 'profile-9' }) as never
-    );
-    expect(enrichable.counterpartyCompanyName).toBeNull();
-    expect(enrichable.expertProfileId).toBe('profile-9');
-  });
-
-  it('expertRowToEnrichable uses the SESSION profile id, never a field off the row', () => {
-    const enrichable = expertRowToEnrichable(expertMeeting() as never, 'session-profile');
-    expect(enrichable.expertProfileId).toBe('session-profile');
-    expect(enrichable.counterpartyCompanyName).toBe('Northwind Industrial');
-  });
-
-  it('BAL-581 — both projections copy roomReady through, true and false', () => {
-    expect(companyRowToEnrichable(companyMeeting({ roomReady: true }) as never).roomReady).toBe(
-      true
-    );
-    expect(companyRowToEnrichable(companyMeeting({ roomReady: false }) as never).roomReady).toBe(
-      false
-    );
-    expect(
-      expertRowToEnrichable(expertMeeting({ roomReady: true }) as never, 'session-profile')
-        .roomReady
-    ).toBe(true);
-    expect(
-      expertRowToEnrichable(expertMeeting({ roomReady: false }) as never, 'session-profile')
-        .roomReady
-    ).toBe(false);
   });
 });
 

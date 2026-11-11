@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, within } from '@/test/utils';
 import { joinCountdownLabel } from '@/lib/calendar/join-window';
-import { formatNextCallWhen } from '@/app/(dashboard)/dashboard/_lib/up-next-presentation';
+import { formatNextCallWhen } from '@/lib/meetings/up-next-presentation';
 import type { UpcomingCallView } from '@/lib/project-request/conversation-view-types';
 import type { ViewerClock } from '@/hooks/use-viewer-clock';
 import type { CallSlot } from './thread-actions';

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveExpertUpNextSurface } from './expert-up-next-surface';
-import type { UpNextRowView } from './up-next-view-types';
+import type { UpNextRowView } from '@/lib/meetings/up-next-view-types';
 
 const ROW = {} as UpNextRowView;
 

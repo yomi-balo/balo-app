@@ -3,6 +3,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Sentry from '@sentry/nextjs';
 import { track, NOTIFICATION_EVENTS } from '@/lib/analytics';
+import { MEETINGS_CHANGED_EVENT } from '@/lib/meetings/meetings-changed-event';
 import { NotificationBell } from './notification-bell';
 
 // ── Polyfills ───────────────────────────────────────────────────
@@ -470,6 +471,66 @@ describe('NotificationBell', () => {
       expect(callsTo('/api/notifications/read-by-path')).toHaveLength(1);
       expect(screen.getByRole('status')).toBeEmptyDOMElement();
       expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    });
+  });
+
+  describe('meetings-changed signal', () => {
+    function listenForSignal(): ReturnType<typeof vi.fn> {
+      const listener = vi.fn<EventListener>();
+      globalThis.addEventListener(MEETINGS_CHANGED_EVENT, listener);
+      signalListeners.push(listener);
+      return listener;
+    }
+
+    const signalListeners: ReturnType<typeof vi.fn<EventListener>>[] = [];
+
+    afterEach(() => {
+      for (const listener of signalListeners.splice(0)) {
+        globalThis.removeEventListener(MEETINGS_CHANGED_EVENT, listener);
+      }
+    });
+
+    it('dispatches nothing on the first load, even when it carries a booking', async () => {
+      setFeed({ notifications: [makeNotification({ id: 'seed' })], unreadCount: 1 });
+      const listener = listenForSignal();
+      render(<NotificationBell />);
+      await flush(1);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('dispatches exactly once when a later poll carries a new booking notification', async () => {
+      setFeed({ notifications: [makeNotification({ id: 'seed' })], unreadCount: 1 });
+      const listener = listenForSignal();
+      render(<NotificationBell />);
+      await flush(1);
+
+      setFeed({
+        notifications: [
+          makeNotification({ id: 'fresh', event: 'booking.confirmed' }),
+          makeNotification({ id: 'seed' }),
+        ],
+        unreadCount: 2,
+      });
+      await flush(30_000);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      await flush(30_000);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays silent for a new notification outside the meeting namespaces', async () => {
+      const listener = listenForSignal();
+      render(<NotificationBell />);
+      await flush(1);
+
+      setFeed({
+        notifications: [makeNotification({ id: 'chat', event: 'conversation.message' })],
+        unreadCount: 1,
+      });
+      await flush(30_000);
+
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 

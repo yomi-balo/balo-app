@@ -3,6 +3,7 @@
 import { useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useLiveJoinRegistration } from './live-join-registry';
 
 interface JoinMeetingButtonProps {
   /**
@@ -17,6 +18,18 @@ interface JoinMeetingButtonProps {
   readonly onJoin: () => void;
   readonly size?: React.ComponentProps<typeof Button>['size'];
   readonly className?: string;
+  /**
+   * Whether the ping-ring cue animates. Default `true`. Pass `false` ONLY for a second Join for
+   * the same meeting on one screen (the TopNav call pill, BAL-636) — it then wears the static
+   * ring instead, so only one control moves.
+   */
+  readonly liveCue?: boolean;
+  /**
+   * Whether this button publishes its `joinUrl` to `LiveJoinRegistryProvider` while mounted, so
+   * the TopNav pill can tell a page-level Join is already ringing. Default `true`. The pill's own
+   * Join and the list rows pass `false`: they must not suppress themselves.
+   */
+  readonly registerOnPage?: boolean;
   readonly children: React.ReactNode;
 }
 
@@ -61,8 +74,13 @@ interface JoinMeetingButtonProps {
  * ⚠ BAL-513 EXTENDED THAT WINDOW to `scheduledEnd + MEETING_OVERRUN_GRACE_MINUTES` and moved
  * `isPast` onto the SAME boundary (`join-window.ts`'s `calendarMeetingTiming`), precisely so this
  * paragraph stays true: a meeting that ran over is still joinable, still ping-rings, and is NOT
- * muted. No `showLiveCue` prop was added, and none should be — if a future caller renders this
- * outside the gate, add the prop then rather than deleting the cue.
+ * muted.
+ *
+ * ⚠ BAL-636 ADDED `liveCue` (default `true`, so the cue is still on at every call site above).
+ * `liveCue={false}` exists only for a SECOND Join for the same meeting on one screen — the TopNav
+ * call pill — so that only one control moves; that Join wears the static ring instead. Never
+ * pass it to hide the cue on a lone Join. `registerOnPage` (default `true`) publishes `joinUrl`
+ * to `LiveJoinRegistryProvider` so the pill can see a page-level Join is already live.
  */
 export function JoinMeetingButton({
   joinUrl,
@@ -70,8 +88,12 @@ export function JoinMeetingButton({
   onJoin,
   size,
   className,
+  liveCue = true,
+  registerOnPage = true,
   children,
 }: Readonly<JoinMeetingButtonProps>): React.JSX.Element {
+  useLiveJoinRegistration(joinUrl, registerOnPage);
+
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       // The whole card behind this control is its own link target — Join must not also trigger it.
@@ -119,9 +141,11 @@ export function JoinMeetingButton({
         // chip is `rounded-full`, the others `rounded-md`.
         // ⚠ `pointer-events-none`: the layer is decoration and must never join hit-testing — the
         // ≥44px tap target is `after:`'s job alone.
-        'motion-safe:before:pointer-events-none motion-safe:before:absolute motion-safe:before:inset-0',
-        "motion-safe:before:text-primary motion-safe:before:rounded-[inherit] motion-safe:before:content-['']",
-        'motion-safe:before:animate-ping-slow',
+        liveCue &&
+          'motion-safe:before:pointer-events-none motion-safe:before:absolute motion-safe:before:inset-0',
+        liveCue &&
+          "motion-safe:before:text-primary motion-safe:before:rounded-[inherit] motion-safe:before:content-['']",
+        liveCue && 'motion-safe:before:animate-ping-slow',
         // The static "this is live" affordance under reduced motion. Moved here from two of the
         // three call sites so the third (the compact popover) gains it too — it had neither the
         // pulse nor this fallback (BAL-511 D2 / O2).
@@ -132,7 +156,9 @@ export function JoinMeetingButton({
         // NET-NEW third site, shipping `/40` would spread a failing value rather than merely
         // inherit it. Full opacity measures 5.05:1 light / 5.21-5.44:1 dark and keeps token
         // parity with the animated ring above (BAL-511 UX phase; supersedes the ticket text).
-        'motion-reduce:ring-primary motion-reduce:ring-2',
+        // ⚠ `liveCue={false}` (the pill's second Join): no `before:` halo at all, and the same
+        // full-opacity ring applied UNCONDITIONALLY rather than only under reduced motion.
+        liveCue ? 'motion-reduce:ring-primary motion-reduce:ring-2' : 'ring-primary ring-2',
         className
       )}
     >

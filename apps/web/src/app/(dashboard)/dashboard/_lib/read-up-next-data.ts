@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { log } from '@/lib/logging';
-import type { UpNextData, UpNextRowView } from './up-next-view-types';
+import type { UpNextData, UpNextRowView } from '@/lib/meetings/up-next-view-types';
 
 /**
  * BAL-566 — the catch boundary. Both slots pass this a thunk (`() => loadCompanyUpNext(...)` /

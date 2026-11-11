@@ -392,6 +392,10 @@ export {
   type NavItemKey,
   NAV_SURFACES,
   type NavSurface,
+  // BAL-636 — the top-nav call pill's source vocabulary and shared event properties.
+  NAV_CALL_SOURCES,
+  type NavCallSource,
+  type NavCallEventBase,
 } from './nav';
 // BAL-502 / ADR-1053 — the public marketing chrome's CLIENT event family. Deliberately
 // separate from `./nav`, which is the DASHBOARD nav registry's server-resolved family.

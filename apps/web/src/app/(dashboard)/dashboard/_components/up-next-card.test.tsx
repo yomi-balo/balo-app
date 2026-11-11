@@ -14,8 +14,12 @@ vi.mock('@/hooks/use-viewer-clock', () => ({
 
 import { UpNextCard } from './up-next-card';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
-import { UP_NEXT_COPY, upNextStartsIn } from '../_lib/up-next-copy';
-import type { UpNextRowView, UpNextData, UpNextFooterLink } from '../_lib/up-next-view-types';
+import { UP_NEXT_COPY, upNextStartsIn } from '@/lib/meetings/up-next-copy';
+import type {
+  UpNextRowView,
+  UpNextData,
+  UpNextFooterLink,
+} from '@/lib/meetings/up-next-view-types';
 
 const NOW = new Date('2026-09-17T12:00:00.000Z');
 const MIN = 60_000;

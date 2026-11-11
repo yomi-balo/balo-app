@@ -21,7 +21,7 @@ import { ApplicationReviewBannerSlot } from './_components/application-review-ba
 import { resolveUpNextFooterLinks } from './_lib/up-next-footer-links';
 import { log } from '@/lib/logging';
 import { DASHBOARD_WALLET_SLOT_CLASS } from '@/lib/credit/display-constants';
-import type { UpNextFooterLink } from './_lib/up-next-view-types';
+import type { UpNextFooterLink } from '@/lib/meetings/up-next-view-types';
 
 /**
  * The expert-workspace branch. Unchanged checklist try/catch + `log.warn`; the new Up next slot

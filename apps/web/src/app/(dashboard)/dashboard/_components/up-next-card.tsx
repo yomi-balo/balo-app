@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { track, DASHBOARD_EVENTS } from '@/lib/analytics';
 import { DASHBOARD_UP_NEXT_MEETING_TYPES } from '@balo/analytics/events';
 import { useViewerClock } from '@/hooks/use-viewer-clock';
-import { resolveUpNextRowTiming } from '../_lib/up-next-presentation';
+import { resolveUpNextRowTiming } from '@/lib/meetings/up-next-presentation';
 import {
   UP_NEXT_COPY,
   UP_NEXT_EMPTY_TITLE,
@@ -20,9 +20,13 @@ import {
   UP_NEXT_FIND_EXPERT_HREF,
   UP_NEXT_RETRY,
   UP_NEXT_TITLE,
-} from '../_lib/up-next-copy';
+} from '@/lib/meetings/up-next-copy';
 import { UpNextRow } from './up-next-row';
-import type { UpNextData, UpNextFooterLink, UpNextWorkspaceType } from '../_lib/up-next-view-types';
+import type {
+  UpNextData,
+  UpNextFooterLink,
+  UpNextWorkspaceType,
+} from '@/lib/meetings/up-next-view-types';
 
 interface UpNextCardProps {
   readonly data: UpNextData;

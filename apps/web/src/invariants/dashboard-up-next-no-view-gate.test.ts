@@ -30,6 +30,11 @@ const DASHBOARD_ROUTE_DIR = resolveRouteDir([
   'apps/web/src/app/(dashboard)/dashboard',
 ]);
 const HOOKS_DIR = resolveRouteDir(['src/hooks', 'apps/web/src/hooks']);
+const MEETINGS_LIB_DIR = resolveRouteDir(['src/lib/meetings', 'apps/web/src/lib/meetings']);
+const NAV_CALLS_ROUTE_DIR = resolveRouteDir([
+  'src/app/api/meetings/nav-calls',
+  'apps/web/src/app/api/meetings/nav-calls',
+]);
 
 /**
  * ⚠⚠ AN ALLOW-LIST, NOT THE WHOLE `_lib`/`_components` DIRECTORY. `_components/getting-started-
@@ -46,7 +51,9 @@ function isUpNextFile(rel: string): boolean {
     rel.includes('up-next') ||
     rel.includes('your-move') ||
     rel.includes('move-card') ||
-    rel === '_lib/expert-up-next-surface.ts'
+    rel === '_lib/expert-up-next-surface.ts' ||
+    rel === 'lib/meetings/load-nav-calls.ts' ||
+    rel === 'app/api/meetings/nav-calls/route.ts'
   );
 }
 
@@ -54,6 +61,12 @@ function scanDashboardUpNextFiles(): { rel: string; code: string; raw: string }[
   return [
     ...scanRouteSources(DASHBOARD_LIB_DIR, '_lib', []).filter((file) => isUpNextFile(file.rel)),
     ...scanRouteSources(DASHBOARD_COMPONENTS_DIR, '_components', []).filter((file) =>
+      isUpNextFile(file.rel)
+    ),
+    ...scanRouteSources(MEETINGS_LIB_DIR, 'lib/meetings', []).filter((file) =>
+      isUpNextFile(file.rel)
+    ),
+    ...scanRouteSources(NAV_CALLS_ROUTE_DIR, 'app/api/meetings/nav-calls', []).filter((file) =>
       isUpNextFile(file.rel)
     ),
   ];
@@ -71,13 +84,15 @@ const VIEWER_CLOCK_FILE = resolveRouteDir([
 /** The files this invariant pins BY NAME, so a rename or deletion fails loudly here rather than
  *  quietly dropping out of the scan. */
 const PINNED_FILES: readonly string[] = [
-  '_lib/up-next-view-types.ts',
-  '_lib/select-up-next-rows.ts',
-  '_lib/build-up-next-rows.ts',
+  'lib/meetings/up-next-view-types.ts',
+  'lib/meetings/select-up-next-rows.ts',
+  'lib/meetings/build-up-next-rows.ts',
   '_lib/load-up-next.ts',
   '_lib/read-up-next-data.ts',
-  '_lib/up-next-presentation.ts',
-  '_lib/up-next-copy.ts',
+  'lib/meetings/up-next-presentation.ts',
+  'lib/meetings/up-next-copy.ts',
+  'lib/meetings/load-nav-calls.ts',
+  'app/api/meetings/nav-calls/route.ts',
   '_lib/up-next-footer-links.ts',
   '_lib/expert-up-next-surface.ts',
   '_components/up-next-card.tsx',
@@ -119,6 +134,8 @@ describe('invariant: the dashboard Up next card never gates on a view (BAL-566)'
     expect(DASHBOARD_COMPONENTS_DIR).not.toBe('');
     expect(DASHBOARD_ROUTE_DIR).not.toBe('');
     expect(HOOKS_DIR).not.toBe('');
+    expect(MEETINGS_LIB_DIR).not.toBe('');
+    expect(NAV_CALLS_ROUTE_DIR).not.toBe('');
     expect(PAGE_FILE).not.toBe('');
     expect(VIEWER_CLOCK_FILE).not.toBe('');
     expect(scanned.length).toBeGreaterThan(0);
@@ -203,6 +220,13 @@ describe('invariant: the dashboard Up next card never gates on a view (BAL-566)'
 
   it('load-up-next.ts calls resolveCompanyParticipation exactly once (D14)', () => {
     const loader = scanned.find((file) => file.rel === '_lib/load-up-next.ts');
+    expect(loader).toBeDefined();
+    const code = loader?.code ?? '';
+    expect([...code.matchAll(/resolveCompanyParticipation\(/g)]).toHaveLength(1);
+  });
+
+  it('load-nav-calls.ts calls resolveCompanyParticipation exactly once (BAL-636)', () => {
+    const loader = scanned.find((file) => file.rel === 'lib/meetings/load-nav-calls.ts');
     expect(loader).toBeDefined();
     const code = loader?.code ?? '';
     expect([...code.matchAll(/resolveCompanyParticipation\(/g)]).toHaveLength(1);

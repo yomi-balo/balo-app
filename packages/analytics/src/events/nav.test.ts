@@ -1,14 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { NAV_EVENTS, NAV_ITEM_KEYS, NAV_SURFACES } from './nav';
+import { NAV_CALL_SOURCES, NAV_EVENTS, NAV_ITEM_KEYS, NAV_SURFACES } from './nav';
 
 describe('NAV_EVENTS', () => {
   it('has exactly the expected keys', () => {
-    expect(Object.keys(NAV_EVENTS)).toEqual(['ITEM_CLICKED', 'MORE_OPENED']);
+    expect(Object.keys(NAV_EVENTS)).toEqual([
+      'ITEM_CLICKED',
+      'MORE_OPENED',
+      'CALL_PILL_SHOWN',
+      'CALL_JOIN_CLICKED',
+      'CALL_LIST_OPENED',
+    ]);
   });
 
   it('maps each constant to its snake_case event name', () => {
     expect(NAV_EVENTS.ITEM_CLICKED).toBe('nav_item_clicked');
     expect(NAV_EVENTS.MORE_OPENED).toBe('nav_more_opened');
+    expect(NAV_EVENTS.CALL_PILL_SHOWN).toBe('nav_call_pill_shown');
+    expect(NAV_EVENTS.CALL_JOIN_CLICKED).toBe('nav_call_join_clicked');
+    expect(NAV_EVENTS.CALL_LIST_OPENED).toBe('nav_call_list_opened');
   });
 
   it('values follow the naming convention {feature}_{noun}_{past_tense_verb}', () => {
@@ -66,5 +75,11 @@ describe('NAV_ITEM_KEYS', () => {
 describe('NAV_SURFACES', () => {
   it('is the exact pinned tuple, in order', () => {
     expect(NAV_SURFACES).toEqual(['sidebar', 'bottom_tabs', 'more_sheet', 'command_palette']);
+  });
+});
+
+describe('NAV_CALL_SOURCES', () => {
+  it('is the exact pinned tuple, in order', () => {
+    expect(NAV_CALL_SOURCES).toEqual(['pill', 'list']);
   });
 });

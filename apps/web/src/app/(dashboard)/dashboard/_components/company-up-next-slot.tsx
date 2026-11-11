@@ -1,8 +1,8 @@
 import { loadCompanyUpNext } from '../_lib/load-up-next';
 import { readUpNextData } from '../_lib/read-up-next-data';
-import { UP_NEXT_COPY } from '../_lib/up-next-copy';
+import { UP_NEXT_COPY } from '@/lib/meetings/up-next-copy';
 import { UpNextCard } from './up-next-card';
-import type { UpNextFooterLink } from '../_lib/up-next-view-types';
+import type { UpNextFooterLink } from '@/lib/meetings/up-next-view-types';
 
 interface CompanyUpNextSlotProps {
   readonly actorUserId: string;

@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 2
 published: true
-updated: 2026-10-31
+updated: 2026-11-11
 related: [booking-a-consultation, your-cases]
 ---
 
@@ -23,6 +23,12 @@ to the same page when it arrives.
 
 On your project request page, **Join** also appears in the conversation header once a call with your
 expert is booked. It opens at the same time and shows a countdown until then.
+
+**Join from anywhere.** Once a call is 3 minutes from starting, **Join** also appears in the top bar
+on any page, so you don't need to find the case first. The bar shows calls for the workspace you're
+in, plus calls you host as an expert. If more than one call is open, the latest to start gets the
+button and **+N** lists the others. When a call's room is still being set up, the bar shows "Setting
+up room" until it's ready.
 
 If you're signed in to Balo and you're part of the consultation, opening the link takes you
 straight in. There's no name or email step.
