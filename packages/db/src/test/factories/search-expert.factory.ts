@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { SEARCH_MIN_PROFICIENCY } from '@balo/shared/experts';
 import { db } from '../../client';
 import {
   availabilityCache,
@@ -122,15 +123,17 @@ export async function searchExpertFactory(
   }
 
   // Competencies (product + support_type pairings). The fixture is self-rated like a real
-  // applicant write, so selfProficiency follows proficiency (BAL-593 invariant).
+  // applicant write, so selfProficiency follows proficiency (BAL-593 invariant). The default
+  // rating counts in search; a fixture passes a lower value to exercise the rating floor.
   if (overrides.competencies?.length) {
+    const defaultProficiency = SEARCH_MIN_PROFICIENCY + 1;
     await db.insert(expertCompetency).values(
       overrides.competencies.map((c) => ({
         expertProfileId: profile.id,
         productId: c.productId,
         supportTypeId: c.supportTypeId,
-        proficiency: c.proficiency ?? 3,
-        selfProficiency: c.proficiency ?? 3,
+        proficiency: c.proficiency ?? defaultProficiency,
+        selfProficiency: c.proficiency ?? defaultProficiency,
       }))
     );
   }

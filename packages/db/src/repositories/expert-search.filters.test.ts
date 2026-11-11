@@ -18,6 +18,8 @@ type ExpertSearchModule = typeof import('./expert-search');
 let buildWhereConditions: ExpertSearchModule['buildWhereConditions'];
 let buildOrderBy: ExpertSearchModule['buildOrderBy'];
 let timeframeBoundary: ExpertSearchModule['timeframeBoundary'];
+let relevanceExpression: ExpertSearchModule['relevanceExpression'];
+let allowsFuzzyNameAndHeadlineMatch: ExpertSearchModule['allowsFuzzyNameAndHeadlineMatch'];
 
 beforeAll(async () => {
   // Loaded dynamically so `client.ts` evaluates with DATABASE_URL already set
@@ -26,6 +28,8 @@ beforeAll(async () => {
   buildWhereConditions = mod.buildWhereConditions;
   buildOrderBy = mod.buildOrderBy;
   timeframeBoundary = mod.timeframeBoundary;
+  relevanceExpression = mod.relevanceExpression;
+  allowsFuzzyNameAndHeadlineMatch = mod.allowsFuzzyNameAndHeadlineMatch;
 });
 
 const dialect = new PgDialect();
@@ -77,7 +81,7 @@ describe('buildWhereConditions — base visibility', () => {
 });
 
 describe('buildWhereConditions — facet filters (OR-within / AND-across)', () => {
-  it('adds one EXISTS per non-empty facet (AND-across)', () => {
+  it('products+supportTypes share one competency EXISTS; languages and industries one each', () => {
     const conds = buildWhereConditions(
       params({
         productIds: ['p1'],
@@ -87,8 +91,8 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
       }),
       NOW
     );
-    // 4 base + 4 facet exists
-    expect(conds).toHaveLength(8);
+    // 4 base + 1 shared competency exists + languages + industries
+    expect(conds).toHaveLength(7);
   });
 
   it('emits an IN list for OR-within a facet (multiple product ids)', () => {
@@ -97,6 +101,28 @@ describe('buildWhereConditions — facet filters (OR-within / AND-across)', () =
     expect(existsSql).toContain('exists');
     expect(existsSql).toContain('"expert_competency"');
     expect(existsSql).toContain('"product_id" in ($1, $2, $3)');
+  });
+
+  it.each<[string, Partial<ExpertSearchParams>]>([
+    ['products only', { productIds: ['p1'] }],
+    ['support types only', { supportTypeIds: ['st1'] }],
+    ['products and support types', { productIds: ['p1'], supportTypeIds: ['st1'] }],
+  ])('%s: one competency term carrying the rating floor', (_label, overrides) => {
+    const conds = buildWhereConditions(params(overrides), NOW);
+    const competencyTerms = conds.map(toSql).filter((t) => t.includes('"expert_competency"'));
+    expect(competencyTerms).toHaveLength(1);
+    expect(competencyTerms[0]).toContain('"proficiency" >=');
+  });
+
+  it('with both facets set, the one competency term filters product and support type', () => {
+    const conds = buildWhereConditions(
+      params({ productIds: ['p1'], supportTypeIds: ['st1'] }),
+      NOW
+    );
+    expect(conds).toHaveLength(5);
+    const existsSql = toSql(conds[4]);
+    expect(existsSql).toContain('"product_id" in');
+    expect(existsSql).toContain('"support_type_id" in');
   });
 
   it('uses support_type_id for the supportTypes facet', () => {
@@ -200,8 +226,66 @@ describe('buildWhereConditions — full-text query', () => {
     );
   });
 
+  it('a short q keeps the headline and name trigram terms', () => {
+    const sql = toSql(buildWhereConditions(params({ query: 'agentforce' }), NOW)[4]);
+    expect(sql).toContain('word_similarity($5, s.name) > 0.3');
+    expect(sql).toContain('u.first_name');
+    expect(sql).toContain('"headline"');
+  });
+
+  it('a sentence q drops the headline and name terms but keeps FTS and product mention', () => {
+    const sql = toSql(
+      buildWhereConditions(params({ query: 'I need help with Slack implementation' }), NOW)[4]
+    );
+    expect(sql).not.toContain('u.first_name');
+    expect(sql).not.toContain('"headline"');
+    expect(sql).toContain('websearch_to_tsquery');
+    expect(sql).not.toContain('> 0.3');
+    expect(sql).toContain('word_similarity(s.name, $3) >=');
+    expect(sql).toContain('es.proficiency >=');
+  });
+
   it('treats a blank/whitespace q as absent', () => {
     expect(buildWhereConditions(params({ query: '   ' }), NOW)).toHaveLength(4);
+  });
+});
+
+describe('allowsFuzzyNameAndHeadlineMatch', () => {
+  it.each([
+    ['sales cloud', true],
+    ['a b c', true],
+    ['  a   b  c  d ', false],
+  ])('%j → %s', (q, expected) => {
+    expect(allowsFuzzyNameAndHeadlineMatch(q)).toBe(expected);
+  });
+});
+
+describe('relevanceExpression', () => {
+  it('renders 0 when q is null', () => {
+    expect(toSql(relevanceExpression(null))).toBe('0');
+  });
+
+  it('counts only ratings at or above the floor in the product term', () => {
+    expect(toSql(relevanceExpression('sales cloud'))).toContain('es.proficiency >=');
+  });
+
+  it('adds a product-mention term counting only floor-rated products, at any query length', () => {
+    for (const q of ['slack', 'I need help with Slack implementation']) {
+      const sql = toSql(relevanceExpression(q));
+      expect(sql).toContain('MAX(word_similarity(s.name,');
+      expect(sql).toContain('THEN 0.5');
+    }
+  });
+
+  it('keeps the name term for a short q and drops the fuzzy terms for a long one', () => {
+    const short = toSql(relevanceExpression('charles'));
+    expect(short).toContain('THEN 10');
+    expect(short).toContain('0.1 * word_similarity');
+
+    const long = toSql(relevanceExpression('I need help with Slack implementation'));
+    expect(long).not.toContain('THEN 10');
+    expect(long).not.toContain('0.1 * word_similarity');
+    expect(long).toContain('ts_rank');
   });
 });
 

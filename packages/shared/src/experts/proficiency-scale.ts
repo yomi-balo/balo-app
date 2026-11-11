@@ -66,6 +66,9 @@ export const PROFICIENCY_SCALE: readonly ProficiencyScaleLevel[] = [
   },
 ];
 
+/** A competency rating counts in expert search only at or above this value. Experts are not shown it. */
+export const SEARCH_MIN_PROFICIENCY = 7;
+
 /** Looks a level up by value, rounding to the nearest integer and clamping to 0..10. */
 export function proficiencyScaleLevel(value: number): ProficiencyScaleLevel {
   const index = Math.max(0, Math.min(10, Math.round(value)));

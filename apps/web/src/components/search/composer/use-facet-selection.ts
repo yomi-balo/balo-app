@@ -35,6 +35,8 @@ export interface FacetSelectionApi {
   setTimeframe: (value: string) => void;
   /** Commit the rate range (`null` bounds clear that side). */
   setRate: (next: { min: number | null; max: number | null }) => void;
+  /** Clear every selected id in one repeated facet group, in one mirror update + one commit. */
+  clearArray: (key: FacetArrayKey) => void;
   /** Clear every selected product in one mirror update + one commit. */
   clearProducts: () => void;
 }
@@ -193,19 +195,21 @@ export function useFacetSelection({ filters, sink }: UseFacetSelectionOptions): 
     }
   }, []);
 
-  const clearProducts = useCallback(() => {
+  const clearArray = useCallback((key: FacetArrayKey) => {
     const active = sinkRef.current;
-    const toRemove = mirrorRef.current.products;
-    setMirror((prev) => ({ ...prev, products: [] }));
+    const toRemove = mirrorRef.current[key];
+    setMirror((prev) => ({ ...prev, [key]: [] }));
     if (active.mode === 'committed') {
       // Single navigation: the buffered `useFacetRequery` setters mutate one
       // `URLSearchParams` and collapse into one debounced `router.replace`. Removing
       // an id absent from the live URL buffer is a harmless no-op.
-      for (const id of toRemove) active.requery.setArrayValue('products', id, false);
+      for (const id of toRemove) active.requery.setArrayValue(key, id, false);
     } else {
-      active.onPendingChange({ ...active.filters, products: [] });
+      active.onPendingChange({ ...active.filters, [key]: [] });
     }
   }, []);
 
-  return { values: mirror, toggleArray, setTimeframe, setRate, clearProducts };
+  const clearProducts = useCallback(() => clearArray('products'), [clearArray]);
+
+  return { values: mirror, toggleArray, setTimeframe, setRate, clearArray, clearProducts };
 }

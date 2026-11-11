@@ -1,4 +1,17 @@
-import { and, desc, eq, gte, lte, isNotNull, inArray, exists, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  lte,
+  isNotNull,
+  inArray,
+  exists,
+  sql,
+  type AnyColumn,
+  type SQL,
+} from 'drizzle-orm';
+import { SEARCH_MIN_PROFICIENCY } from '@balo/shared/experts';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { db } from '../client';
 import {
@@ -124,6 +137,33 @@ function availabilityGatePredicates(now: Date): SQL[] {
   ];
 }
 
+// ── Query-shape and rating-floor helpers ─────────────────────────
+
+/** Headline and name trigram matching apply only to queries of at most this many tokens. */
+export const FUZZY_MAX_QUERY_TOKENS = 3;
+
+/**
+ * A product counts as mentioned in a query when `word_similarity(product, q)` reaches this.
+ * A single long word shared with a product name scores about 0.58-0.72 ("case management"
+ * against "Order Management"), while a whole-name mention scores 0.94 or higher, so 0.8
+ * separates a genuine mention from an incidental shared word.
+ */
+const PRODUCT_MENTION_MIN_WORD_SIMILARITY = 0.8;
+
+/** Trims `q`, then true when it has at most `FUZZY_MAX_QUERY_TOKENS` whitespace-separated tokens. */
+export function allowsFuzzyNameAndHeadlineMatch(q: string): boolean {
+  return q.trim().split(/\s+/).length <= FUZZY_MAX_QUERY_TOKENS;
+}
+
+/**
+ * The ONE "this rating counts" predicate for expert search: `proficiency >= SEARCH_MIN_PROFICIENCY`.
+ * Takes a column reference because the aliased `es` subqueries cannot use the typed
+ * `expert_competency` column (Postgres rejects the unaliased table name once it is aliased).
+ */
+function ratingCountsInSearch(proficiency: AnyColumn | SQL): SQL {
+  return sql`${proficiency} >= ${SEARCH_MIN_PROFICIENCY}`;
+}
+
 // ── Pure helper: WHERE conditions ────────────────────────────────
 
 /**
@@ -135,13 +175,16 @@ function availabilityGatePredicates(now: Date): SQL[] {
  *     zero-results recount and (via `facetEligibilityConditions`) facet totals.
  *   - Filters: OR-within a facet (via `inArray` inside one `exists`), AND-across
  *     facets (each facet contributes one `exists` term combined by the caller's
- *     `and(...)`). Empty facet arrays are skipped (no invalid `IN ()`).
+ *     `and(...)`). Empty facet arrays are skipped (no invalid `IN ()`). Products and support
+ *     types share ONE competency term carrying the rating floor, so a single rating row at or
+ *     above `SEARCH_MIN_PROFICIENCY` must match both. Languages and industries are one term each.
  *   - Availability gate (env-flagged): when enabled, require a future cached slot.
  *   - Timeframe (user filter, gate-independent): require a cached slot on/before
  *     `now + N days` — self-gates even when the availability flag is off.
  *   - Rate bounds exclude null-rate experts only when a bound is set.
- *   - Full-text match (only when `q` present): strict FTS @@ OR trigram fuzzy on
- *     headline OR trigram fuzzy on any product name.
+ *   - Full-text match (only when `q` present): strict FTS @@ OR, for short queries only,
+ *     trigram fuzzy on headline and name OR a product name (counting only ratings at or above
+ *     `SEARCH_MIN_PROFICIENCY`) similar to or mentioned in the query.
  *
  * NOTE: `expert_profiles` has NO `deleted_at` column — do NOT filter it here. The owner's
  * soft delete lives on `users` and is covered by `expertOwnerIsLive`.
@@ -154,8 +197,9 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
     expertOwnerIsLive,
   ];
 
-  // OR-within / AND-across facet filters via correlated EXISTS.
-  if (params.productIds.length) {
+  // OR-within / AND-across facet filters via correlated EXISTS. Products and support types
+  // share one competency term so a single rating row must satisfy both and the rating floor.
+  if (params.productIds.length || params.supportTypeIds.length) {
     conditions.push(
       exists(
         db
@@ -164,23 +208,13 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
           .where(
             and(
               eq(expertCompetency.expertProfileId, expertProfiles.id),
-              inArray(expertCompetency.productId, params.productIds)
-            )
-          )
-      )
-    );
-  }
-
-  if (params.supportTypeIds.length) {
-    conditions.push(
-      exists(
-        db
-          .select({ x: sql`1` })
-          .from(expertCompetency)
-          .where(
-            and(
-              eq(expertCompetency.expertProfileId, expertProfiles.id),
-              inArray(expertCompetency.supportTypeId, params.supportTypeIds)
+              params.productIds.length
+                ? inArray(expertCompetency.productId, params.productIds)
+                : undefined,
+              params.supportTypeIds.length
+                ? inArray(expertCompetency.supportTypeId, params.supportTypeIds)
+                : undefined,
+              ratingCountsInSearch(expertCompetency.proficiency)
             )
           )
       )
@@ -241,10 +275,24 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
     conditions.push(sql`ac.earliest_available_at <= ${boundary.toISOString()}::timestamptz`);
   }
 
-  // Full-text match: strict FTS OR trigram fuzzy (name + headline + product names).
+  // Full-text match: strict FTS OR trigram fuzzy (name + headline) OR product match.
   // Only added when `q` is present — no per-product subquery on a wide-open browse.
   //
-  // Fuzzy term uses `word_similarity(q, text) > 0.3` (NOT the whole-string `%`
+  // Headline and name trigram matching apply to short queries only
+  // (`allowsFuzzyNameAndHeadlineMatch`). Against a sentence, `word_similarity(q, headline)`
+  // fires on a single shared word: "I need help with Slack implementation" scored 0.378
+  // against a headline that merely contained "implementations". Longer queries therefore
+  // match through FTS and product mention only.
+  //
+  // Product match (ratings at or above `SEARCH_MIN_PROFICIENCY` only): the forward direction
+  // `word_similarity(q, s.name) > 0.3` finds a typed product name ("sales clod") and applies to
+  // short queries only, because one long shared word lifts it past 0.3 for a sentence ("help
+  // with case management" scores 0.423 against "Order Management"). The reverse
+  // `word_similarity(s.name, q) >= PRODUCT_MENTION_MIN_WORD_SIMILARITY` finds a product named
+  // inside a query of any length. For "Slack" within a sentence the forward score is 0.162 and
+  // the reverse score is 1.000.
+  //
+  // Fuzzy terms use `word_similarity(q, text) > 0.3` (NOT the whole-string `%`
   // operator): `%` compares the ENTIRE headline/product string to q, so any
   // multi-word headline ("Salesforce platform architect") scores far below the
   // 0.3 `%` threshold and a real typo ("salezforce") would never match. The
@@ -267,16 +315,25 @@ export function buildWhereConditions(params: ExpertSearchParams, now: Date): SQL
   // function is not index-accelerated anyway; it runs over the narrowed set).
   const q = normalizeQuery(params.query);
   if (q) {
+    const fuzzyHeadlineAndName = allowsFuzzyNameAndHeadlineMatch(q)
+      ? sql`
+        OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
+        OR word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3`
+      : sql``;
+    const productTypedMatch = allowsFuzzyNameAndHeadlineMatch(q)
+      ? sql`word_similarity(${q}, s.name) > 0.3 OR `
+      : sql``;
     conditions.push(
       sql`(
-        ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})
-        OR word_similarity(${q}, coalesce(${expertProfiles.headline}, '')) > 0.3
-        OR word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.3
+        ${expertProfiles.searchVector} @@ websearch_to_tsquery('english', ${q})${fuzzyHeadlineAndName}
         OR EXISTS (
           SELECT 1 FROM ${expertCompetency} es
           JOIN ${products} s ON s.id = es.product_id
           WHERE es.expert_profile_id = ${expertProfiles.id}
-            AND word_similarity(${q}, s.name) > 0.3
+            AND ${ratingCountsInSearch(sql`es.proficiency`)}
+            AND (
+              ${productTypedMatch}word_similarity(s.name, ${q}) >= ${PRODUCT_MENTION_MIN_WORD_SIMILARITY}
+            )
         )
       )`
     );
@@ -341,9 +398,17 @@ function normalizeQuery(query: string | undefined): string | null {
 
 /**
  * Relevance expression. A/B from the stored vector dominate; product names
- * participate via a real `setweight(..., 'C')` term; a small trigram bump keeps
- * fuzzy-only hits above non-matches. Emits literal `0` when `q` is absent (no
- * FTS / product subquery runs at all).
+ * participate via a real `setweight(..., 'C')` term over ratings that count in search
+ * (`SEARCH_MIN_PROFICIENCY`), so a sub-floor product never boosts rank; for short queries a
+ * small trigram bump keeps fuzzy-only hits above non-matches. A product named in the query
+ * (`PRODUCT_MENTION_MIN_WORD_SIMILARITY`, counting the same ratings) adds a fixed 0.5 at any
+ * query length, so a sentence naming a product ranks that product's experts above rows admitted
+ * only by full-text matching on prose. Emits literal `0` when `q` is
+ * absent (no FTS / product subquery runs at all).
+ *
+ * The headline bump and the name term follow the same `allowsFuzzyNameAndHeadlineMatch`
+ * gate as the WHERE clause, so a long query's rank never depends on terms that cannot
+ * admit a row.
  *
  * Name term (BAL-263): the expert's NAME lives on `users` (joined as `u`), not
  * in the stored search_vector, so without an explicit term a perfect name match
@@ -357,8 +422,17 @@ function normalizeQuery(query: string | undefined): string | null {
  * won't clear the 0.5 threshold against a distinct name, so topical ranking is
  * left untouched (the boost is 0 below threshold).
  */
-function relevanceExpression(q: string | null): SQL {
+export function relevanceExpression(q: string | null): SQL {
   if (!q) return sql`0`;
+  const fuzzyTerms = allowsFuzzyNameAndHeadlineMatch(q)
+    ? sql`
+    + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
+    + (CASE
+         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
+         THEN 10
+         ELSE 0
+       END)`
+    : sql``;
   return sql`(
     ts_rank(${expertProfiles.searchVector}, websearch_to_tsquery('english', ${q}))
     + COALESCE((
@@ -366,13 +440,18 @@ function relevanceExpression(q: string | null): SQL {
                            websearch_to_tsquery('english', ${q})))
         FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
         WHERE es.expert_profile_id = ${expertProfiles.id}
+          AND ${ratingCountsInSearch(sql`es.proficiency`)}
       ), 0)
-    + 0.1 * word_similarity(${q}, coalesce(${expertProfiles.headline}, ''))
     + (CASE
-         WHEN word_similarity(${q}, coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')) > 0.5
-         THEN 10
+         WHEN (
+           SELECT MAX(word_similarity(s.name, ${q}))
+           FROM ${expertCompetency} es JOIN ${products} s ON s.id = es.product_id
+           WHERE es.expert_profile_id = ${expertProfiles.id}
+             AND ${ratingCountsInSearch(sql`es.proficiency`)}
+         ) >= ${PRODUCT_MENTION_MIN_WORD_SIMILARITY}
+         THEN 0.5
          ELSE 0
-       END)
+       END)${fuzzyTerms}
   )`;
 }
 
@@ -630,7 +709,9 @@ export const expertSearchRepository = {
    * base visibility + availability gate ONLY — EXCLUDES `q` and all facet
    * selections, so the result depends solely on `(verticalId, gateOn)`.
    * `count(DISTINCT expert_profile_id)` prevents double-counting an expert with
-   * multiple competencies mapping to one facet value.
+   * multiple competencies mapping to one facet value. Product and support-type totals
+   * count only ratings at or above `SEARCH_MIN_PROFICIENCY`, so a single option's count
+   * equals the result count for selecting it.
    */
   async facetCounts(
     verticalId: string,
@@ -659,7 +740,12 @@ export const expertSearchRepository = {
         })
         .from(expertCompetency)
         .innerJoin(products, eq(products.id, expertCompetency.productId))
-        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
+        .where(
+          and(
+            inArray(expertCompetency.expertProfileId, eligibleSet),
+            ratingCountsInSearch(expertCompetency.proficiency)
+          )
+        )
         .groupBy(products.id, products.name),
 
       db
@@ -670,7 +756,12 @@ export const expertSearchRepository = {
         })
         .from(expertCompetency)
         .innerJoin(supportTypes, eq(supportTypes.id, expertCompetency.supportTypeId))
-        .where(inArray(expertCompetency.expertProfileId, eligibleSet))
+        .where(
+          and(
+            inArray(expertCompetency.expertProfileId, eligibleSet),
+            ratingCountsInSearch(expertCompetency.proficiency)
+          )
+        )
         .groupBy(supportTypes.id, supportTypes.name),
 
       db

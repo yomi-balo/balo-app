@@ -67,6 +67,8 @@ export {
 } from './dashboard';
 export {
   SEARCH_EVENTS,
+  SEARCH_CLEARABLE_FACETS,
+  type SearchClearableFacet,
   type SearchEventMap,
   SEARCH_SERVER_EVENTS,
   type SearchServerEventMap,

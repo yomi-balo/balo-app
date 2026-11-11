@@ -1211,6 +1211,302 @@ describe('expertSearchRepository.search — row field hydration', () => {
   });
 });
 
+// ── BAL-639: sentence queries, ranking pins, the 7+ rating rule ─────
+
+describe('expertSearchRepository.search — sentence queries (BAL-639)', () => {
+  it('finds a product named in a sentence, not an expert whose headline shares one word', async () => {
+    const verticalId = await getVerticalId();
+    const slack = await createProduct(verticalId, 'Slack');
+    const govCloud = await createProduct(verticalId, 'Government Cloud');
+    const stId = await createSupportType(verticalId, 'Technical');
+
+    const headlineOnly = await searchExpertFactory({
+      verticalId,
+      headline: 'non-profit Government Cloud implementations done right',
+      competencies: [{ productId: govCloud, supportTypeId: stId, proficiency: 8 }],
+    });
+    const slackStrong = await searchExpertFactory({
+      verticalId,
+      headline: 'CRM specialist',
+      bio: 'Works on opportunities',
+      competencies: [{ productId: slack, supportTypeId: stId, proficiency: 8 }],
+    });
+    const slackWeak = await searchExpertFactory({
+      verticalId,
+      headline: 'CRM specialist',
+      bio: 'Works on opportunities',
+      competencies: [{ productId: slack, supportTypeId: stId, proficiency: 3 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'I need help with Slack implementation', pageSize: 50 })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(slackStrong.id);
+    expect(ids).not.toContain(headlineOnly.id);
+    expect(ids).not.toContain(slackWeak.id);
+  });
+
+  it('does not treat a shared generic word as a product mention', async () => {
+    const verticalId = await getVerticalId();
+    const dataCloud = await createProduct(verticalId, 'Data Cloud');
+    const stId = await createSupportType(verticalId, 'Technical');
+    const dataExpert = await searchExpertFactory({
+      verticalId,
+      headline: 'CRM specialist',
+      bio: 'Works on opportunities',
+      competencies: [{ productId: dataCloud, supportTypeId: stId, proficiency: 8 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'I need help with Sales Cloud', pageSize: 50 })
+    );
+    expect(rows.map((r) => r.id)).not.toContain(dataExpert.id);
+  });
+});
+
+describe('expertSearchRepository.search — product mention threshold (BAL-639)', () => {
+  const neutral = { headline: 'CRM specialist', bio: 'Works on opportunities' };
+
+  it.each([
+    ['help with case management', 'Order Management'],
+    ['invoice approvals', 'Voice'],
+  ])('%j does not admit a %s expert on an incidental shared word', async (query, productName) => {
+    const verticalId = await getVerticalId();
+    const product = await createProduct(verticalId, productName);
+    const stId = await createSupportType(verticalId, 'Technical');
+    const expert = await searchExpertFactory({
+      verticalId,
+      ...neutral,
+      competencies: [{ productId: product, supportTypeId: stId, proficiency: 8 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query, pageSize: 50 })
+    );
+    expect(rows.map((r) => r.id)).not.toContain(expert.id);
+  });
+
+  it('admits a Sales Cloud expert when a sentence names Sales Cloud', async () => {
+    const verticalId = await getVerticalId();
+    const product = await createProduct(verticalId, 'Sales Cloud');
+    const stId = await createSupportType(verticalId, 'Technical');
+    const expert = await searchExpertFactory({
+      verticalId,
+      ...neutral,
+      competencies: [{ productId: product, supportTypeId: stId, proficiency: 8 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'help setting up Sales Cloud for my team', pageSize: 50 })
+    );
+    expect(rows.map((r) => r.id)).toContain(expert.id);
+  });
+});
+
+describe('expertSearchRepository.search — name and product ranking (BAL-639)', () => {
+  it('puts the expert named Charles ahead of a Charleston headline match', async () => {
+    const verticalId = await getVerticalId();
+    const charlesUser = await userFactory({ firstName: 'Charles', lastName: 'Whitlock' });
+    const charles = await searchExpertFactory({
+      verticalId,
+      userId: charlesUser.id,
+      headline: 'Senior delivery lead',
+      bio: 'Rollouts',
+    });
+    const charleston = await searchExpertFactory({
+      verticalId,
+      headline: 'Charleston Salesforce admin',
+      bio: 'General work',
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'charles', pageSize: 50 })
+    );
+    expect(rows[0]?.id).toBe(charles.id);
+    expect(rows.map((r) => r.id)).toContain(charleston.id);
+  });
+
+  it('ranks a Sales Cloud expert ahead of a Service Cloud one and drops a sub-7 Sales Cloud one', async () => {
+    const verticalId = await getVerticalId();
+    const salesCloud = await createProduct(verticalId, 'Sales Cloud');
+    const serviceCloud = await createProduct(verticalId, 'Service Cloud');
+    const stId = await createSupportType(verticalId, 'Technical');
+    const neutral = { headline: 'CRM specialist', bio: 'Works on opportunities' };
+
+    const sales = await searchExpertFactory({
+      verticalId,
+      ...neutral,
+      competencies: [{ productId: salesCloud, supportTypeId: stId, proficiency: 8 }],
+    });
+    const service = await searchExpertFactory({
+      verticalId,
+      ...neutral,
+      competencies: [{ productId: serviceCloud, supportTypeId: stId, proficiency: 8 }],
+    });
+    const salesWeak = await searchExpertFactory({
+      verticalId,
+      ...neutral,
+      competencies: [{ productId: salesCloud, supportTypeId: stId, proficiency: 3 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, query: 'Sales Cloud', pageSize: 50 })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(sales.id);
+    expect(ids).toContain(service.id);
+    expect(ids.indexOf(sales.id)).toBeLessThan(ids.indexOf(service.id));
+    expect(ids).not.toContain(salesWeak.id);
+  });
+});
+
+describe('expertSearchRepository.search — the 7+ rating rule (BAL-639)', () => {
+  it('counts a product rating of 7 and ignores one of 6', async () => {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stId = await createSupportType(verticalId, 'Technical');
+    const atFloor = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: stId, proficiency: 7 }],
+    });
+    const belowFloor = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: stId, proficiency: 6 }],
+    });
+
+    const { rows, total } = await expertSearchRepository.search(
+      params({ verticalId, productIds: [productId] })
+    );
+    expect(rows.map((r) => r.id)).toEqual([atFloor.id]);
+    expect(total).toBe(1);
+    expect(rows.map((r) => r.id)).not.toContain(belowFloor.id);
+  });
+
+  it('a support-type filter counts a 7+ rating on any product', async () => {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const training = await createSupportType(verticalId, uniq('Training'));
+    const strong = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: training, proficiency: 8 }],
+    });
+    const weak = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: training, proficiency: 2 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, supportTypeIds: [training] })
+    );
+    expect(rows.map((r) => r.id)).toEqual([strong.id]);
+    expect(rows.map((r) => r.id)).not.toContain(weak.id);
+  });
+
+  it('product + support type must match on one 7+ rating row', async () => {
+    const verticalId = await getVerticalId();
+    const salesCloud = await createProduct(verticalId, uniq('SalesCloud'));
+    const other = await createProduct(verticalId, uniq('Other'));
+    const implementation = await createSupportType(verticalId, uniq('Implementation'));
+    const training = await createSupportType(verticalId, uniq('Training'));
+
+    const split = await searchExpertFactory({
+      verticalId,
+      competencies: [
+        { productId: salesCloud, supportTypeId: implementation, proficiency: 2 },
+        { productId: other, supportTypeId: training, proficiency: 8 },
+      ],
+    });
+    const single = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId: salesCloud, supportTypeId: training, proficiency: 8 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, productIds: [salesCloud], supportTypeIds: [training] })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(single.id);
+    expect(ids).not.toContain(split.id);
+  });
+
+  it('excludes an expert whose 7+ ratings split across the selected product and support type', async () => {
+    const verticalId = await getVerticalId();
+    const salesCloud = await createProduct(verticalId, uniq('SalesCloud'));
+    const other = await createProduct(verticalId, uniq('Other'));
+    const implementation = await createSupportType(verticalId, uniq('Implementation'));
+    const training = await createSupportType(verticalId, uniq('Training'));
+
+    const split = await searchExpertFactory({
+      verticalId,
+      competencies: [
+        { productId: salesCloud, supportTypeId: implementation, proficiency: 8 },
+        { productId: other, supportTypeId: training, proficiency: 8 },
+      ],
+    });
+    const single = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId: salesCloud, supportTypeId: training, proficiency: 8 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(
+      params({ verticalId, productIds: [salesCloud], supportTypeIds: [training] })
+    );
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(single.id);
+    expect(ids).not.toContain(split.id);
+  });
+
+  it('browse with no product, support-type or q filter still returns a sub-7 expert', async () => {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const stId = await createSupportType(verticalId, 'Technical');
+    const lowOnly = await searchExpertFactory({
+      verticalId,
+      competencies: [{ productId, supportTypeId: stId, proficiency: 3 }],
+    });
+
+    const { rows } = await expertSearchRepository.search(params({ verticalId, pageSize: 50 }));
+    expect(rows.map((r) => r.id)).toContain(lowOnly.id);
+  });
+
+  it('facet counts equal the result count for selecting that option', async () => {
+    const verticalId = await getVerticalId();
+    const productId = await createProduct(verticalId, uniq('Skill'));
+    const otherProduct = await createProduct(verticalId, uniq('Other'));
+    const stId = await createSupportType(verticalId, uniq('Technical'));
+    const supportType = await createSupportType(verticalId, uniq('Coaching'));
+
+    for (const proficiency of [8, 7, 6]) {
+      await searchExpertFactory({
+        verticalId,
+        competencies: [{ productId, supportTypeId: stId, proficiency }],
+      });
+    }
+    for (const proficiency of [8, 5]) {
+      await searchExpertFactory({
+        verticalId,
+        competencies: [{ productId: otherProduct, supportTypeId: supportType, proficiency }],
+      });
+    }
+
+    const facets = await expertSearchRepository.facetCounts(verticalId, false, NOW);
+    const productCount = facets.products.find((f) => f.id === productId)?.count;
+    const supportTypeCount = facets.supportTypes.find((f) => f.id === supportType)?.count;
+    expect(productCount).toBe(2);
+    expect(supportTypeCount).toBe(1);
+
+    const byProduct = await expertSearchRepository.search(
+      params({ verticalId, productIds: [productId] })
+    );
+    const bySupportType = await expertSearchRepository.search(
+      params({ verticalId, supportTypeIds: [supportType] })
+    );
+    expect(byProduct.total).toBe(productCount);
+    expect(bySupportType.total).toBe(supportTypeCount);
+  });
+});
+
 // ── Pure helper unit-style coverage (executed against the real DB run) ──
 
 describe('buildWhereConditions / buildOrderBy / timeframeBoundary (pure)', () => {
@@ -1221,7 +1517,7 @@ describe('buildWhereConditions / buildOrderBy / timeframeBoundary (pure)', () =>
     expect(conds).toHaveLength(4);
   });
 
-  it('adds one EXISTS condition per non-empty facet (AND across)', () => {
+  it('products+supportTypes share one competency EXISTS; languages and industries one each', () => {
     const verticalId = '00000000-0000-0000-0000-000000000000';
     const conds = buildWhereConditions(
       params({
@@ -1233,8 +1529,8 @@ describe('buildWhereConditions / buildOrderBy / timeframeBoundary (pure)', () =>
       }),
       NOW
     );
-    // 4 base + 4 facet EXISTS.
-    expect(conds).toHaveLength(8);
+    // 4 base + 1 shared competency EXISTS + languages + industries.
+    expect(conds).toHaveLength(7);
   });
 
   it('adds gate predicates when the gate is enabled', () => {

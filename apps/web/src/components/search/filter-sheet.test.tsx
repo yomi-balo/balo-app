@@ -189,6 +189,22 @@ describe('FilterSheet', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it('commits without a facet cleared by its section Clear, keeping the others', async () => {
+    const user = userEvent.setup();
+    renderSheet({
+      filters: make({ supportTypes: ['s1'], languages: ['l1'], page: 4 }),
+      total: 100,
+    });
+    await user.click(screen.getByRole('button', { name: 'Clear Type of help' }));
+    expect(mockPush).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /Show/ }));
+    expect(mockPush).toHaveBeenCalledTimes(1);
+    const url = mockPush.mock.calls[0]![0] as string;
+    expect(url).not.toContain('supportTypes');
+    expect(url).toContain('languages=l1');
+    expect(url).not.toMatch(/page=([2-9]|\d{2,})/);
+  });
+
   it('does not write the URL before Show is pressed (pending only)', async () => {
     const user = userEvent.setup();
     renderSheet({ total: 100 });

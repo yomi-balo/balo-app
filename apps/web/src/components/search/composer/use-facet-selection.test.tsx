@@ -173,6 +173,27 @@ describe('useFacetSelection — committed mode', () => {
     expect(setArrayValue).toHaveBeenCalledWith('products', 'p1', false);
     expect(setArrayValue).toHaveBeenCalledWith('products', 'p2', false);
   });
+
+  it('clearArray empties only the named group and fires unchecked per id', () => {
+    const setArrayValue = vi.fn();
+    const requery = { setArrayValue, setTimeframe: vi.fn(), setRate: vi.fn() };
+    const { result } = renderHook(() =>
+      useFacetSelection({
+        filters: filters({ languages: ['l1', 'l2'], supportTypes: ['s1'] }),
+        sink: { mode: 'committed', requery },
+      })
+    );
+
+    act(() => {
+      result.current.clearArray('languages');
+    });
+
+    expect(result.current.values.languages).toEqual([]);
+    expect(result.current.values.supportTypes).toEqual(['s1']);
+    expect(setArrayValue).toHaveBeenCalledTimes(2);
+    expect(setArrayValue).toHaveBeenCalledWith('languages', 'l1', false);
+    expect(setArrayValue).toHaveBeenCalledWith('languages', 'l2', false);
+  });
 });
 
 describe('useFacetSelection — reconcile to committed filters', () => {
@@ -265,6 +286,27 @@ describe('useFacetSelection — pending mode', () => {
     expect(result.current.values.products).toEqual([]);
     expect(onPendingChange).toHaveBeenCalledTimes(1);
     expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ products: [] }));
+  });
+
+  it('clearArray lifts an empty array for the named group and keeps the other fields', () => {
+    const onPendingChange = vi.fn();
+    const base = filters({ languages: ['l1'], supportTypes: ['s1'] });
+    const { result } = renderHook(() =>
+      useFacetSelection({
+        filters: base,
+        sink: { mode: 'pending', filters: base, onPendingChange },
+      })
+    );
+
+    act(() => {
+      result.current.clearArray('languages');
+    });
+
+    expect(result.current.values.languages).toEqual([]);
+    expect(onPendingChange).toHaveBeenCalledTimes(1);
+    expect(onPendingChange).toHaveBeenCalledWith(
+      expect.objectContaining({ languages: [], supportTypes: ['s1'] })
+    );
   });
 
   it('setTimeframe maps the "any" sentinel to null via onPendingChange', () => {
