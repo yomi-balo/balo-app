@@ -24,6 +24,24 @@ vi.mock('../../lib/require-auth.js', () => ({
   },
 }));
 
+const limiter = vi.hoisted(() => ({
+  options: undefined as Record<string, unknown> | undefined,
+  exceeded: false,
+}));
+vi.mock('../../lib/rate-limit-prehandler.js', () => ({
+  createRateLimitPreHandler: (options: Record<string, unknown>) => {
+    limiter.options = options;
+    return async (
+      _request: unknown,
+      reply: { status: (code: number) => { send: (body: unknown) => void } }
+    ) => {
+      if (limiter.exceeded) {
+        reply.status(429).send({ error: 'Too many requests' });
+      }
+    };
+  },
+}));
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import { schemaRoute } from './schema.js';
 import {
@@ -50,10 +68,63 @@ describe('GET /api/payouts/schema', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     auth.mode = 'authenticated';
+    limiter.exceeded = false;
   });
 
   const get = (query = 'country=AU&currency=AUD') =>
     app.inject({ method: 'GET', url: `/api/payouts/schema?${query}` });
+
+  it('registers a per-user, fail-open limiter of 30 requests a minute', () => {
+    expect(limiter.options).toMatchObject({
+      config: { keyPrefix: 'ratelimit:payout-form-schema', maxRequests: 30, windowSeconds: 60 },
+      failOpen: true,
+      logIdentifier: true,
+    });
+    const identifier = limiter.options?.identifier as (r: { userId: string }) => string;
+    expect(identifier({ userId: 'user_9' })).toBe('user_9');
+  });
+
+  it('does not reach the limiter when unauthenticated (limiter runs after requireAuth)', async () => {
+    auth.mode = 'unauthenticated';
+    limiter.exceeded = true;
+    const res = await get();
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 429 and does not call Airwallex when the limiter refuses', async () => {
+    limiter.exceeded = true;
+    const res = await get();
+    expect(res.statusCode).toBe(429);
+    expect(mockAirwallexRequest).not.toHaveBeenCalled();
+  });
+
+  it('fixes the payout rail: drops local_clearing_system from fields and defaults it', async () => {
+    const path = 'beneficiary.bank_details.local_clearing_system';
+    mockAirwallexRequest.mockResolvedValue({
+      condition: {},
+      fields: [
+        {
+          path,
+          required: false,
+          enabled: true,
+          field: {
+            key: 'local_clearing_system',
+            label: 'Transfer methods',
+            type: 'INPUT',
+            default: 'ACH',
+            options: [
+              { label: 'ACH', value: 'ACH' },
+              { label: 'Fedwire', value: 'FEDWIRE' },
+            ],
+          },
+        },
+      ],
+    });
+    const res = await get('country=US&currency=USD');
+    const body = res.json();
+    expect(body.fields.map((f: { path: string }) => f.path)).not.toContain(path);
+    expect(body.hiddenDefaults[path]).toBe('ACH');
+  });
 
   it('returns normalized fields and hidden defaults on success', async () => {
     mockAirwallexRequest.mockResolvedValue({

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import { requireAuth } from '../../lib/require-auth.js';
+import { createRateLimitPreHandler } from '../../lib/rate-limit-prehandler.js';
 import { airwallexRequest } from '../../services/airwallex/client.js';
 import {
   AirwallexApiError,
@@ -65,6 +66,12 @@ const WIDE_FIELD_KEYS = new Set([
   'beneficiary.company_name',
 ]);
 
+/**
+ * Paths Balo fixes to the schema's own default: never offered to the expert, always sent in the
+ * save payload. The payout rail (`local_clearing_system`) is Balo's choice, not the expert's.
+ */
+const FORCED_DEFAULT_PATHS = new Set(['beneficiary.bank_details.local_clearing_system']);
+
 function normalizeField(f: FormSchemaField): NormalizedField {
   const isChoice = f.field.type === 'SELECT' || f.field.type === 'RADIO';
   return {
@@ -90,7 +97,7 @@ function normalizeField(f: FormSchemaField): NormalizedField {
 function collectHiddenDefaults(fields: FormSchemaField[]): Record<string, string> {
   const hiddenDefaults: Record<string, string> = {};
   for (const f of fields) {
-    if (!f.enabled && f.required && f.field.default) {
+    if (f.field.default && ((!f.enabled && f.required) || FORCED_DEFAULT_PATHS.has(f.path))) {
       hiddenDefaults[f.path] = f.field.default;
     }
   }
@@ -99,74 +106,89 @@ function collectHiddenDefaults(fields: FormSchemaField[]): Record<string, string
 
 // ── Route ───────────────────────────────────────────────────────
 
+// failOpen: a miss costs a free Airwallex schema call, and a Redis outage must not take the Payouts form down.
+const payoutSchemaRateLimit = createRateLimitPreHandler({
+  config: { keyPrefix: 'ratelimit:payout-form-schema', maxRequests: 30, windowSeconds: 60 },
+  failOpen: true,
+  label: 'payout-form-schema',
+  identifier: (request) => request.userId,
+  logIdentifier: true,
+});
+
 export function schemaRoute(fastify: FastifyInstance): Promise<void> {
-  fastify.get('/api/payouts/schema', { preHandler: [requireAuth] }, async (request, reply) => {
-    const parsed = querySchema.safeParse(request.query);
+  fastify.get(
+    '/api/payouts/schema',
+    { preHandler: [requireAuth, payoutSchemaRateLimit] },
+    async (request, reply) => {
+      const parsed = querySchema.safeParse(request.query);
 
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: 'Invalid query parameters',
-        details: parsed.error.issues.map((i: { message: string }) => i.message),
-      });
-    }
-
-    const { country, method, currency, entity_type } = parsed.data;
-
-    try {
-      const schema = await airwallexRequest<AirwallexSchemaResponse>(
-        'POST',
-        '/beneficiary_form_schemas/generate',
-        {
-          bank_country_code: country,
-          transfer_method: method,
-          ...(currency ? { account_currency: currency } : {}),
-          entity_type,
-        }
-      );
-
-      const fields = schema.fields.filter((f) => f.enabled).map(normalizeField);
-      const hiddenDefaults = collectHiddenDefaults(schema.fields);
-
-      return reply.send({ fields, hiddenDefaults, condition: schema.condition });
-    } catch (err: unknown) {
-      if (err instanceof AirwallexApiError && err.status === 400) {
-        fastify.log.warn(
-          { countryCode: country, method, currency, status: err.status },
-          'Airwallex schema fetch failed — unsupported combination'
-        );
+      if (!parsed.success) {
         return reply.status(400).send({
-          error: 'This country/currency/method combination is not supported for payouts.',
+          error: 'Invalid query parameters',
+          details: parsed.error.issues.map((i: { message: string }) => i.message),
         });
       }
 
-      const airwallexErr =
-        err instanceof AirwallexApiError || err instanceof AirwallexAuthError ? err : undefined;
+      const { country, method, currency, entity_type } = parsed.data;
 
-      fastify.log.error(
-        {
-          countryCode: country,
-          method,
-          currency,
-          airwallexStatus: airwallexErr?.status,
-          airwallexBody: airwallexErr && truncateAirwallexDetail(airwallexErr.detail),
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        },
-        'Airwallex schema fetch failed'
-      );
-      Sentry.captureException(err, {
-        extra: {
-          countryCode: country,
-          method,
-          currency,
-          airwallexStatus: airwallexErr?.status,
-          op: 'payout_form_schema',
-        },
-      });
-      return reply.status(502).send({
-        error: 'Failed to fetch payout form schema. Please try again.',
-      });
+      try {
+        const schema = await airwallexRequest<AirwallexSchemaResponse>(
+          'POST',
+          '/beneficiary_form_schemas/generate',
+          {
+            bank_country_code: country,
+            transfer_method: method,
+            ...(currency ? { account_currency: currency } : {}),
+            entity_type,
+          }
+        );
+
+        const fields = schema.fields
+          .filter((f) => f.enabled && !FORCED_DEFAULT_PATHS.has(f.path))
+          .map(normalizeField);
+        const hiddenDefaults = collectHiddenDefaults(schema.fields);
+
+        return reply.send({ fields, hiddenDefaults, condition: schema.condition });
+      } catch (err: unknown) {
+        if (err instanceof AirwallexApiError && err.status === 400) {
+          fastify.log.warn(
+            { countryCode: country, method, currency, status: err.status },
+            'Airwallex schema fetch failed — unsupported combination'
+          );
+          return reply.status(400).send({
+            error: 'This country/currency/method combination is not supported for payouts.',
+          });
+        }
+
+        const airwallexErr =
+          err instanceof AirwallexApiError || err instanceof AirwallexAuthError ? err : undefined;
+
+        fastify.log.error(
+          {
+            countryCode: country,
+            method,
+            currency,
+            airwallexStatus: airwallexErr?.status,
+            airwallexBody: airwallexErr && truncateAirwallexDetail(airwallexErr.detail),
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          },
+          'Airwallex schema fetch failed'
+        );
+        Sentry.captureException(err, {
+          extra: {
+            countryCode: country,
+            method,
+            currency,
+            airwallexStatus: airwallexErr?.status,
+            op: 'payout_form_schema',
+          },
+        });
+        return reply.status(502).send({
+          error: 'Failed to fetch payout form schema. Please try again.',
+        });
+      }
     }
-  });
+  );
   return Promise.resolve();
 }

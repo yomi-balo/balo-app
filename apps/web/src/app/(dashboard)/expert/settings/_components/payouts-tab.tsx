@@ -17,6 +17,7 @@ import { PayoutSavedState } from './payout-saved-state';
 import { SettingsPageHeader } from './settings-page-header';
 import { SettingsEyebrow } from './settings-card';
 import { applyPayoutFieldCopy } from '../_constants/payout-labels';
+import type { NormalizedField } from '../_types/payout-schema';
 import type { BeneficiaryStatus } from '@balo/db';
 import { savePayoutDetailsAction } from '../_actions/save-payout-details';
 import {
@@ -25,21 +26,6 @@ import {
 } from '../_actions/get-payout-form-schema';
 
 // ── Types ───────────────────────────────────────────────────────
-
-export interface NormalizedField {
-  path: string;
-  required: boolean;
-  label: string;
-  description?: string;
-  placeholder?: string;
-  tip?: string;
-  type: 'text' | 'enum';
-  options?: Array<{ label: string; value: string }>;
-  defaultValue?: string;
-  refresh: boolean;
-  validation?: { pattern: string };
-  wide?: boolean;
-}
 
 export interface PayoutDetailsSummary {
   countryCode: string;

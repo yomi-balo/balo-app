@@ -23,7 +23,7 @@ interface SetupStep {
   /** 1-based position in `CHECKLIST_ITEMS`. */
   readonly position: number;
   /** The other incomplete items, so the count never includes `key` itself. */
-  readonly remainingAfter: number;
+  readonly otherOpenSteps: number;
   /** True when this is the `?setup=` step the expert arrived to do, not simply the next one. */
   readonly chosen: boolean;
 }
@@ -47,7 +47,7 @@ function findSetupStep(
     key: step.key,
     label: step.label,
     position: CHECKLIST_ITEMS.findIndex((item) => item.key === step.key) + 1,
-    remainingAfter: open.length - 1,
+    otherOpenSteps: open.length - 1,
     chosen: chosen !== undefined,
   };
 }
@@ -87,10 +87,10 @@ export function SetupBanner({
 
   const showContinue = expertSettingsTabFor(step.key) !== activeTab;
   const showDashboard = setupStep !== null;
-  const stepNoun = step.remainingAfter === 1 ? 'step' : 'steps';
+  const stepNoun = step.otherOpenSteps === 1 ? 'step' : 'steps';
   const remainingCopy = step.chosen
-    ? `${step.remainingAfter} other ${stepNoun} still to do`
-    : `${step.remainingAfter} more ${stepNoun} after that`;
+    ? `${step.otherOpenSteps} other ${stepNoun} still to do`
+    : `${step.otherOpenSteps} more ${stepNoun} after that`;
 
   return (
     <div className="border-warning/40 bg-warning/10 flex flex-col gap-3 rounded-[10px] border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
@@ -100,7 +100,7 @@ export function SetupBanner({
           Not visible to clients yet —{' '}
           {step.chosen ? `step ${step.position} of ${CHECKLIST_ITEMS.length}, ` : 'next, '}
           <strong className="font-semibold">{lowerFirst(step.label)}</strong>
-          {step.remainingAfter > 0 && <span> ({remainingCopy})</span>}
+          {step.otherOpenSteps > 0 && <span> ({remainingCopy})</span>}
         </p>
       </div>
       {(showDashboard || showContinue) && (

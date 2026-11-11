@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import type { NormalizedField } from '@/app/(dashboard)/expert/settings/_components/payouts-tab';
+import type { NormalizedField } from '../_types/payout-schema';
 
 interface PayoutDynamicFormProps {
   fields: NormalizedField[];

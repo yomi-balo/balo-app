@@ -9,7 +9,7 @@ import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
 import { getBaloApiJson, isExpiredCredentialFailure } from '@/lib/api/balo-api-client';
 import { log } from '@/lib/logging';
-import type { NormalizedField } from '../_components/payouts-tab';
+import type { NormalizedField } from '../_types/payout-schema';
 
 /** Mirrors `apps/api`'s payout schema `querySchema` (routes/payouts/schema.ts). */
 const inputSchema = z.object({

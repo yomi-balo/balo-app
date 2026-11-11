@@ -1,4 +1,4 @@
-import type { NormalizedField } from '../_components/payouts-tab';
+import type { NormalizedField } from '../_types/payout-schema';
 
 export const COMPANY_LABEL_OVERRIDES: Record<string, string> = {
   'beneficiary.bank_details.account_name': 'Account Holder Name',

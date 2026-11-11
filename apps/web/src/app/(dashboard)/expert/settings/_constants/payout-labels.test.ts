@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { NormalizedField } from '../_components/payouts-tab';
+import type { NormalizedField } from '../_types/payout-schema';
 import {
   applyPayoutFieldCopy,
   savedPayoutFieldLabel,

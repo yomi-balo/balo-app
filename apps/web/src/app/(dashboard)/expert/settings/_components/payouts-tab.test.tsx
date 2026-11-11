@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { PayoutsTab, type PayoutDetailsSummary, type NormalizedField } from './payouts-tab';
+import { PayoutsTab, type PayoutDetailsSummary } from './payouts-tab';
+import type { NormalizedField } from '../_types/payout-schema';
 
 const mockGetSchema = vi.fn();
 
@@ -155,7 +156,7 @@ describe('PayoutsTab — schema loading and copy', () => {
     expect(mockGetSchema).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the action error and a Try again button on a failed load', async () => {
+  it('shows the action error and no Try again button on a non-retryable failure', async () => {
     mockGetSchema.mockResolvedValue({
       ok: false,
       code: 'unsupported',
