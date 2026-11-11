@@ -32,6 +32,7 @@ vi.mock('@/lib/auth/api-account-refusal', () => ({
 import { log } from '@/lib/logging';
 import {
   getApiUrl,
+  getBaloApiJson,
   isExpiredCredentialFailure,
   postBaloApiJson,
   postBaloApiJsonWithFailureDetail,
@@ -193,6 +194,39 @@ describe('postBaloApiJson', () => {
     const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
 
     expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated' });
+  });
+});
+
+describe('getBaloApiJson', () => {
+  it('sends a GET with the Bearer and no body or Content-Type', async () => {
+    mockLoggedFetch.mockResolvedValue(response(200, { fields: [] }));
+
+    const result = await getBaloApiJson('/x?a=1', (p) => p, 'Widget');
+
+    expect(result).toEqual({ ok: true, data: { fields: [] } });
+    const [url, init] = mockLoggedFetch.mock.calls.at(-1) as [
+      string,
+      { method: string; body?: string; headers: Record<string, string> },
+    ];
+    expect(url.endsWith('/x?a=1')).toBe(true);
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
+    expect(init.headers['Content-Type']).toBeUndefined();
+    expect(init.headers.Authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+  });
+
+  it('fails closed with unauthenticated when the session has no access token', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'user-1' }, accessToken: undefined });
+    const result = await getBaloApiJson('/x', (p) => p, 'Widget');
+    expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated' });
+    expect(mockLoggedFetch).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the refusal code on a marked 401', async () => {
+    mockLoggedFetch.mockResolvedValue(response(401, { error: 'Unauthorized' }));
+    mockConsumeApiAccountRefusal.mockResolvedValue('account_suspended');
+    const result = await getBaloApiJson('/x', (p) => p, 'Widget');
+    expect(result).toEqual({ ok: false, status: 401, code: 'account_suspended' });
   });
 });
 

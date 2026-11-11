@@ -2,17 +2,7 @@
 
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { motion } from 'motion/react';
-import {
-  CreditCard,
-  AlertCircle,
-  RefreshCw,
-  Lock,
-  Globe,
-  ShieldCheck,
-  Zap,
-  Check,
-  Building2,
-} from 'lucide-react';
+import { CreditCard, AlertCircle, RefreshCw, Lock, ShieldCheck, Zap, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,9 +15,14 @@ import { PayoutCountrySelector } from './payout-country-selector';
 import { PayoutDynamicForm } from './payout-dynamic-form';
 import { PayoutSavedState } from './payout-saved-state';
 import { SettingsPageHeader } from './settings-page-header';
-import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
+import { SettingsEyebrow } from './settings-card';
+import { applyPayoutFieldCopy } from '../_constants/payout-labels';
 import type { BeneficiaryStatus } from '@balo/db';
 import { savePayoutDetailsAction } from '../_actions/save-payout-details';
+import {
+  getPayoutFormSchemaAction,
+  type PayoutFormSchemaFailureCode,
+} from '../_actions/get-payout-form-schema';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -62,6 +57,16 @@ interface PayoutsTabProps {
 }
 
 type TabState = 'empty' | 'form' | 'saved';
+type TransferMethod = 'LOCAL' | 'SWIFT';
+type EntityType = 'PERSONAL' | 'COMPANY';
+
+const SCHEMA_LOAD_ERROR = "We couldn't load the bank details form. Please try again.";
+
+/** Failures a retry can fix; the rest (unsupported country, refused actor) repeat identically. */
+const RETRYABLE_SCHEMA_FAILURES: ReadonlySet<PayoutFormSchemaFailureCode> = new Set([
+  'request_failed',
+  'session_expired',
+]);
 
 // ── Fields auto-populated from country selection (hide from form) ──
 
@@ -105,8 +110,12 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   const [state, setState] = useState<TabState>(initialPayoutDetails ? 'saved' : 'empty');
   const [countryCode, setCountryCode] = useState(initialPayoutDetails?.countryCode ?? '');
   const [currency, setCurrency] = useState(initialPayoutDetails?.currency ?? '');
-  const [transferMethod] = useState(initialPayoutDetails?.transferMethod ?? 'LOCAL');
-  const [entityType] = useState(initialPayoutDetails?.entityType ?? 'COMPANY');
+  const [transferMethod] = useState<TransferMethod>(
+    (initialPayoutDetails?.transferMethod as TransferMethod | undefined) ?? 'LOCAL'
+  );
+  const [entityType] = useState<EntityType>(
+    (initialPayoutDetails?.entityType as EntityType | undefined) ?? 'COMPANY'
+  );
 
   const [tradingName, setTradingName] = useState(initialPayoutDetails?.tradingName ?? '');
   const [sameAsAccountName, setSameAsAccountName] = useState(() => {
@@ -124,6 +133,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
   const [isFetchingSchema, setIsFetchingSchema] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [schemaCanRetry, setSchemaCanRetry] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formBannerError, setFormBannerError] = useState<string | null>(null);
   const [savedDetails, setSavedDetails] = useState<PayoutDetailsSummary | null>(
@@ -131,8 +141,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
   );
 
   const formStartedRef = useRef(false);
-  const formValuesRef = useRef(formValues);
-  formValuesRef.current = formValues;
 
   const handleFormValuesChange = useCallback((values: Record<string, string>) => {
     setFormValues(values);
@@ -178,19 +186,13 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
   // Visible fields: strip auto-populated metadata fields and single-option enums.
   // Also strip by label as a catch-all — Airwallex returns transfer_method in varying shapes.
-  // Apply business-context label overrides for company entity type fields.
   const visibleFields =
-    schemaFields
-      ?.filter(
-        (f) =>
-          !HIDDEN_FIELD_KEYS.has(f.path) &&
-          !(f.type === 'enum' && f.options && f.options.length <= 1) &&
-          !f.label.toLowerCase().includes('transfer method')
-      )
-      .map((f) => ({
-        ...f,
-        label: COMPANY_LABEL_OVERRIDES[f.path] ?? f.label,
-      })) ?? null;
+    schemaFields?.filter(
+      (f) =>
+        !HIDDEN_FIELD_KEYS.has(f.path) &&
+        !(f.type === 'enum' && f.options && f.options.length <= 1) &&
+        !f.label.toLowerCase().includes('transfer method')
+    ) ?? null;
 
   // ── Schema fetching ─────────────────────────────────────────
 
@@ -198,43 +200,39 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     async (
       country: string,
       curr?: string,
-      method?: string,
-      entType?: string,
+      method?: TransferMethod,
+      entType?: EntityType,
       preserveValues?: Record<string, string>
     ) => {
       setIsFetchingSchema(true);
       setSchemaError(null);
+      setSchemaCanRetry(false);
       setSchemaFields(null);
 
       try {
-        const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002';
-        const params = new URLSearchParams({ country });
-        if (curr) params.set('currency', curr);
-        if (method) params.set('method', method);
-        if (entType) params.set('entity_type', entType);
+        const result = await getPayoutFormSchemaAction({
+          country,
+          ...(curr ? { currency: curr } : {}),
+          ...(method ? { method } : {}),
+          ...(entType ? { entityType: entType } : {}),
+        });
 
-        const res = await fetch(`${apiBase}/api/payouts/schema?${params.toString()}`);
-
-        if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(data.error ?? 'Failed to fetch schema');
+        if (!result.ok) {
+          setSchemaError(result.error);
+          setSchemaCanRetry(RETRYABLE_SCHEMA_FAILURES.has(result.code));
+          return;
         }
 
-        const data = (await res.json()) as {
-          fields: NormalizedField[];
-          hiddenDefaults?: Record<string, string>;
-        };
-        setSchemaFields(data.fields);
+        const fields = applyPayoutFieldCopy(result.fields, result.hiddenDefaults);
+        setSchemaFields(fields);
 
         // Populate defaults and preserve existing values
         const defaults: Record<string, string> = {};
 
         // Start with hidden defaults (disabled-but-required fields like account_routing_type1)
-        if (data.hiddenDefaults) {
-          Object.assign(defaults, data.hiddenDefaults);
-        }
+        Object.assign(defaults, result.hiddenDefaults);
 
-        for (const field of data.fields) {
+        for (const field of fields) {
           if (preserveValues?.[field.path] != null) {
             defaults[field.path] = preserveValues[field.path] as string;
           } else if (field.defaultValue) {
@@ -249,10 +247,9 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           formStartedRef.current = true;
           track(EXPERT_PAYOUT_EVENTS.PAYOUT_FORM_STARTED, { country_code: country });
         }
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Failed to fetch payout form schema';
-        setSchemaError(message);
+      } catch {
+        setSchemaError(SCHEMA_LOAD_ERROR);
+        setSchemaCanRetry(true);
       } finally {
         setIsFetchingSchema(false);
       }
@@ -273,10 +270,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
     },
     [fetchSchema, transferMethod, entityType]
   );
-
-  const handleRefreshField = useCallback(() => {
-    fetchSchema(countryCode, currency, transferMethod, entityType, formValuesRef.current);
-  }, [fetchSchema, countryCode, currency, transferMethod, entityType]);
 
   const handleEdit = useCallback(() => {
     setState('form');
@@ -444,12 +437,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
         <Card className="px-7 pt-6 pb-7">
           {/* Country section — wrapped so Card's gap-6 doesn't split label from selector */}
           <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
-              <Globe className="h-4 w-4 text-amber-600" />
-              <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
-                Country
-              </span>
-            </div>
+            <SettingsEyebrow>Country</SettingsEyebrow>
             <PayoutCountrySelector
               value={countryCode}
               onCountryChange={handleCountryChange}
@@ -459,7 +447,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
           {/* Schema loading shimmer */}
           {isFetchingSchema && (
-            <div className="space-y-4">
+            <div className="space-y-4" role="status" aria-label="Loading bank details form">
               <div className="bg-muted h-10 animate-pulse rounded-md" />
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted h-10 animate-pulse rounded-md" />
@@ -471,30 +459,27 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
 
           {/* Schema error */}
           {schemaError && (
-            <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <div role="alert" className="flex flex-col items-center gap-3 py-6 text-center">
               <AlertCircle className="text-destructive h-8 w-8" />
               <p className="text-destructive text-sm">{schemaError}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => fetchSchema(countryCode, currency, transferMethod, entityType)}
-                className="gap-2"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Try again
-              </Button>
+              {schemaCanRetry && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchSchema(countryCode, currency, transferMethod, entityType)}
+                  className="gap-2"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Try again
+                </Button>
+              )}
             </div>
           )}
 
           {/* Business details section */}
           {visibleFields && !isFetchingSchema && (
             <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-amber-600" />
-                <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
-                  Business Details
-                </span>
-              </div>
+              <SettingsEyebrow>Business details</SettingsEyebrow>
 
               <div className="space-y-3">
                 <div>
@@ -510,7 +495,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                     id="tradingName"
                     value={tradingName}
                     onChange={(e) => handleTradingNameChange(e.target.value)}
-                    placeholder="e.g. Acme Consulting Pty Ltd"
+                    placeholder="e.g. Acme Consulting"
                     className="h-10"
                   />
                   <p className="text-muted-foreground mt-1 text-xs">
@@ -539,12 +524,7 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
           {/* Bank details section — wrapped so Card's gap-6 doesn't split label from form */}
           {visibleFields && !isFetchingSchema && (
             <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-2">
-                <CreditCard className="h-4 w-4 text-amber-600" />
-                <span className="text-xs font-semibold tracking-wider text-amber-600 uppercase">
-                  Bank Details
-                </span>
-              </div>
+              <SettingsEyebrow>Bank details</SettingsEyebrow>
 
               {/* Form-level error banner */}
               {formBannerError && (
@@ -558,7 +538,6 @@ export function PayoutsTab({ initialPayoutDetails }: PayoutsTabProps): React.JSX
                 fields={visibleFields}
                 formValues={formValues}
                 onFormValuesChange={handleFormValuesChange}
-                onRefreshField={handleRefreshField}
                 validationErrors={validationErrors}
                 disabledFields={disabledFields}
               />

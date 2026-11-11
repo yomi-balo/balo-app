@@ -40,6 +40,31 @@ describe('airwallexRequest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it('cancels the unread 401 body before retrying', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream({ cancel });
+    fetchMock
+      .mockResolvedValueOnce(loginOk('stale'))
+      .mockResolvedValueOnce(new Response(stream, { status: 401 }))
+      .mockResolvedValueOnce(loginOk('fresh'))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+
+    await expect(airwallexRequest('GET', '/x')).resolves.toEqual({ ok: true });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    const retryFetchOrder = fetchMock.mock.invocationCallOrder[3] ?? 0;
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(retryFetchOrder);
+  });
+
+  it('retries a 401 that has no body', async () => {
+    fetchMock
+      .mockResolvedValueOnce(loginOk('stale'))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(loginOk('fresh'))
+      .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+
+    await expect(airwallexRequest('GET', '/x')).resolves.toEqual({ ok: true });
+  });
+
   it('throws the 401 after a single retry instead of looping', async () => {
     fetchMock
       .mockResolvedValueOnce(loginOk('a'))

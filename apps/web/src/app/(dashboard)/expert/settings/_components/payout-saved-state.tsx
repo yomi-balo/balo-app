@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { getCountryByCode } from '@/lib/constants/countries';
-import { COMPANY_LABEL_OVERRIDES } from '../_constants/payout-labels';
+import { savedPayoutFieldLabel } from '../_constants/payout-labels';
 import type { PayoutDetailsSummary } from '@/app/(dashboard)/expert/settings/_components/payouts-tab';
 
 interface PayoutSavedStateProps {
@@ -47,13 +47,11 @@ export function PayoutSavedState({ details, onEdit }: PayoutSavedStateProps): Re
   // Build display fields from formValues (already masked), with label overrides
   const displayFields = Object.entries(details.formValues)
     .filter(([path]) => !hiddenPaths.has(path))
-    .map(([path, value]) => {
-      const overrideLabel = COMPANY_LABEL_OVERRIDES[path];
-      const lastSegment = path.split('.').pop() ?? path;
-      const label =
-        overrideLabel ?? lastSegment.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-      return { path, label, value };
-    });
+    .map(([path, value]) => ({
+      path,
+      label: savedPayoutFieldLabel(path, details.formValues),
+      value,
+    }));
 
   // Check if trading name matches account holder name for badge display
   const accountHolderName = details.formValues['beneficiary.bank_details.account_name'] ?? '';

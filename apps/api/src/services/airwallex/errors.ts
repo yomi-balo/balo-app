@@ -1,9 +1,16 @@
+// A vendor error body is unbounded, so anything logged or reported from it is capped.
+export const AIRWALLEX_DETAIL_LIMIT = 2048;
+
+export function truncateAirwallexDetail(detail: string): string {
+  return detail.slice(0, AIRWALLEX_DETAIL_LIMIT);
+}
+
 export class AirwallexAuthError extends Error {
   constructor(
     public readonly detail: string,
     public readonly status?: number
   ) {
-    super(`Airwallex auth failed: ${detail}`);
+    super(`Airwallex auth failed: ${truncateAirwallexDetail(detail)}`);
     this.name = 'AirwallexAuthError';
   }
 }
@@ -14,7 +21,7 @@ export class AirwallexApiError extends Error {
     public readonly path: string,
     public readonly detail: string
   ) {
-    super(`Airwallex API error ${status} at ${path}: ${detail}`);
+    super(`Airwallex API error ${status} at ${path}: ${truncateAirwallexDetail(detail)}`);
     this.name = 'AirwallexApiError';
   }
 }

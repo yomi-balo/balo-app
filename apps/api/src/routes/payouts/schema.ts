@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
+import * as Sentry from '@sentry/node';
 import { z } from 'zod';
+import { requireAuth } from '../../lib/require-auth.js';
 import { airwallexRequest } from '../../services/airwallex/client.js';
-import { AirwallexApiError, AirwallexAuthError } from '../../services/airwallex/errors.js';
+import {
+  AirwallexApiError,
+  AirwallexAuthError,
+  truncateAirwallexDetail,
+} from '../../services/airwallex/errors.js';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -62,10 +68,7 @@ const WIDE_FIELD_KEYS = new Set([
 // ── Route ───────────────────────────────────────────────────────
 
 export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
-  // TODO: Add preHandler: [fastify.requireAuth] once the auth plugin is built (BAL-191)
-  // This endpoint returns only public Airwallex form metadata, no user data.
-  // CORS is locked to CORS_ORIGIN, limiting cross-origin access.
-  fastify.get('/api/payouts/schema', async (request, reply) => {
+  fastify.get('/api/payouts/schema', { preHandler: [requireAuth] }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
 
     if (!parsed.success) {
@@ -130,24 +133,30 @@ export async function schemaRoute(fastify: FastifyInstance): Promise<void> {
         });
       }
 
+      const airwallexErr =
+        err instanceof AirwallexApiError || err instanceof AirwallexAuthError ? err : undefined;
+
       fastify.log.error(
         {
           countryCode: country,
           method,
           currency,
-          airwallexStatus:
-            err instanceof AirwallexApiError || err instanceof AirwallexAuthError
-              ? err.status
-              : undefined,
-          airwallexBody:
-            err instanceof AirwallexApiError || err instanceof AirwallexAuthError
-              ? err.detail
-              : undefined,
+          airwallexStatus: airwallexErr?.status,
+          airwallexBody: airwallexErr && truncateAirwallexDetail(airwallexErr.detail),
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
         },
         'Airwallex schema fetch failed'
       );
+      Sentry.captureException(err, {
+        extra: {
+          countryCode: country,
+          method,
+          currency,
+          airwallexStatus: airwallexErr?.status,
+          op: 'payout_form_schema',
+        },
+      });
       return reply.status(502).send({
         error: 'Failed to fetch payout form schema. Please try again.',
       });

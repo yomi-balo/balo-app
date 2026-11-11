@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -18,7 +17,6 @@ interface PayoutDynamicFormProps {
   fields: NormalizedField[];
   formValues: Record<string, string>;
   onFormValuesChange: (values: Record<string, string>) => void;
-  onRefreshField: () => void;
   validationErrors: Record<string, string>;
   disabledFields?: Set<string>;
 }
@@ -27,19 +25,14 @@ export function PayoutDynamicForm({
   fields,
   formValues,
   onFormValuesChange,
-  onRefreshField,
   validationErrors,
   disabledFields,
 }: PayoutDynamicFormProps): React.JSX.Element {
   const handleChange = useCallback(
-    (path: string, value: string, refresh: boolean) => {
-      const updated = { ...formValues, [path]: value };
-      onFormValuesChange(updated);
-      if (refresh) {
-        onRefreshField();
-      }
+    (path: string, value: string) => {
+      onFormValuesChange({ ...formValues, [path]: value });
     },
-    [formValues, onFormValuesChange, onRefreshField]
+    [formValues, onFormValuesChange]
   );
 
   return (
@@ -61,15 +54,12 @@ export function PayoutDynamicForm({
                   Optional
                 </Badge>
               )}
-              {field.refresh && (
-                <RefreshCw className="text-muted-foreground h-3 w-3" aria-hidden="true" />
-              )}
             </div>
 
             {field.type === 'enum' && field.options ? (
               <Select
                 value={formValues[field.path] ?? field.defaultValue ?? ''}
-                onValueChange={(val) => handleChange(field.path, val, field.refresh)}
+                onValueChange={(val) => handleChange(field.path, val)}
                 disabled={isDisabled}
               >
                 <SelectTrigger
@@ -90,7 +80,7 @@ export function PayoutDynamicForm({
               <Input
                 id={field.path}
                 value={formValues[field.path] ?? ''}
-                onChange={(e) => handleChange(field.path, e.target.value, field.refresh)}
+                onChange={(e) => handleChange(field.path, e.target.value)}
                 placeholder={field.placeholder}
                 disabled={isDisabled}
                 className={`h-10 ${isDisabled ? 'bg-muted' : ''} ${error ? 'border-destructive focus-visible:ring-destructive' : ''}`}
