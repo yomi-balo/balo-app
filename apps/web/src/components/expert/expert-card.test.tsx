@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { axe } from '@/test/axe';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -375,5 +376,165 @@ describe('ExpertCard', () => {
   it('renders the favorite heart in the list variant too', () => {
     render(<ExpertCard expert={makeExpert()} variant="list" />);
     expect(screen.getByRole('button', { name: /add to favorites/i })).toBeInTheDocument();
+  });
+});
+
+// ── Profile links (BAL-640) ─────────────────────────────────────
+
+describe('ExpertCard — profile links', () => {
+  const SIX_PRODUCTS = [
+    'Sales Cloud',
+    'Service Cloud',
+    'Experience Cloud',
+    'CPQ',
+    'Pardot',
+    'MuleSoft',
+  ];
+  const manyProducts = makeExpert({
+    expertise: SIX_PRODUCTS.map((product) => ({ product, skills: ['technical' as const] })),
+  });
+
+  function renderLinked(variant: 'grid' | 'list', expert = manyProducts) {
+    const onProfileLinkClick = vi.fn();
+    const onBook = vi.fn();
+    const utils = render(
+      <ExpertCard
+        expert={expert}
+        variant={variant}
+        profileHref="/experts/jane"
+        onProfileLinkClick={onProfileLinkClick}
+        onBook={onBook}
+      />
+    );
+    return { ...utils, onProfileLinkClick, onBook };
+  }
+
+  it.each(['grid', 'list'] as const)(
+    'exposes exactly one link named for the expert, to the profile (%s)',
+    async (variant) => {
+      const user = userEvent.setup();
+      const { onProfileLinkClick } = renderLinked(variant);
+
+      const link = screen.getByRole('link', { name: 'Jane Doe' });
+      expect(link).toHaveAttribute('href', '/experts/jane');
+
+      await user.click(link);
+      expect(onProfileLinkClick).toHaveBeenCalledExactlyOnceWith('card');
+    }
+  );
+
+  it.each(['grid', 'list'] as const)('tracks a middle-click on the name link (%s)', (variant) => {
+    const { onProfileLinkClick } = renderLinked(variant);
+    const link = screen.getByRole('link', { name: 'Jane Doe' });
+
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    expect(onProfileLinkClick).not.toHaveBeenCalled();
+
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(onProfileLinkClick).toHaveBeenCalledExactlyOnceWith('card');
+  });
+
+  it.each(['grid', 'list'] as const)(
+    'keeps the View profile link out of the tab order and accessibility tree (%s)',
+    async (variant) => {
+      const user = userEvent.setup();
+      const { container, onProfileLinkClick } = renderLinked(variant);
+
+      const viewProfile = container.querySelector<HTMLAnchorElement>('a[tabindex="-1"]');
+      expect(viewProfile).not.toBeNull();
+      expect(viewProfile).toHaveAttribute('href', '/experts/jane');
+      expect(viewProfile).toHaveAttribute('aria-hidden', 'true');
+      expect(screen.queryByRole('link', { name: /view profile/i })).not.toBeInTheDocument();
+
+      await user.click(viewProfile as HTMLAnchorElement);
+      expect(onProfileLinkClick).toHaveBeenCalledExactlyOnceWith('button');
+    }
+  );
+
+  it.each(['grid', 'list'] as const)(
+    'tabs heart → name link → more products → Book a call (%s)',
+    async (variant) => {
+      const user = userEvent.setup();
+      renderLinked(variant);
+
+      await user.tab();
+      expect(screen.getByRole('button', { name: /add to favorites/i })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('link', { name: 'Jane Doe' })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('link', { name: /more products/i })).toHaveFocus();
+      await user.tab();
+      expect(screen.getByRole('button', { name: /book a call/i })).toHaveFocus();
+    }
+  );
+
+  it('links "+N more products" to the profile expertise section (grid)', async () => {
+    const user = userEvent.setup();
+    const { onProfileLinkClick } = renderLinked('grid');
+
+    const more = screen.getByRole('link', { name: '+2 more products' });
+    expect(more).toHaveAttribute('href', '/experts/jane#section-expertise');
+
+    await user.click(more);
+    expect(onProfileLinkClick).toHaveBeenCalledExactlyOnceWith('more_products');
+  });
+
+  it('links "+N more products" in the list variant after five visible products', () => {
+    renderLinked('list');
+    expect(screen.getByRole('link', { name: '+1 more products' })).toHaveAttribute(
+      'href',
+      '/experts/jane#section-expertise'
+    );
+  });
+
+  it('tracks a middle-click on the more-products link', () => {
+    const { onProfileLinkClick } = renderLinked('grid');
+    fireEvent(
+      screen.getByRole('link', { name: '+2 more products' }),
+      new MouseEvent('auxclick', { bubbles: true, button: 1 })
+    );
+    expect(onProfileLinkClick).toHaveBeenCalledExactlyOnceWith('more_products');
+  });
+
+  it('renders no more-products link when expertise fits the limit', () => {
+    renderLinked('grid', makeExpert());
+    expect(screen.queryByText(/more products/)).not.toBeInTheDocument();
+  });
+
+  it.each(['grid', 'list'] as const)(
+    'fires Book and the heart on their own handlers, not the profile link (%s)',
+    async (variant) => {
+      const user = userEvent.setup();
+      const { onBook, onProfileLinkClick } = renderLinked(variant);
+
+      await user.click(screen.getByRole('button', { name: /book a call/i }));
+      await user.click(screen.getByRole('button', { name: /add to favorites/i }));
+
+      expect(onBook).toHaveBeenCalledOnce();
+      expect(onProfileLinkClick).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /remove from favorites/i })).toBeInTheDocument();
+    }
+  );
+
+  it.each(['grid', 'list'] as const)(
+    'renders the same text but no links without profileHref (%s)',
+    (variant) => {
+      render(<ExpertCard expert={manyProducts} variant={variant} />);
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(screen.getByText('Jane Doe')).toBeInTheDocument();
+      expect(
+        screen.getByText(variant === 'grid' ? '+2 more products' : '+1 more products')
+      ).toBeInTheDocument();
+    }
+  );
+
+  it('keeps the onViewProfile button when there is no profileHref', () => {
+    render(<ExpertCard expert={makeExpert()} onViewProfile={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /view profile/i })).toBeInTheDocument();
+  });
+
+  it.each(['grid', 'list'] as const)('has no axe violations when linked (%s)', async (variant) => {
+    const { container } = renderLinked(variant);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

@@ -5,6 +5,7 @@ export type { ExpertiseCompetencyInput } from './expert-card.utils';
 export type {
   ExpertCardData,
   ExpertCardProps,
+  ExpertCardProfileTarget,
   ExpertCardLanguage,
   ExpertCardAgency,
   ExpertCardDistinctions,

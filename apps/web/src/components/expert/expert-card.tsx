@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { motion } from 'motion/react';
 import {
   Heart,
@@ -27,6 +28,7 @@ import { cn } from '@/lib/utils';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type {
   ExpertCardProps,
+  ExpertCardProfileTarget,
   ExpertCardData,
   ExpertCardAgency,
   ExpertCardDistinctions,
@@ -42,6 +44,7 @@ import {
   getCountryDisplay,
   getDistinctionList,
   SKILL_LABELS,
+  PROFILE_EXPERTISE_HASH,
 } from './expert-card.utils';
 import type { AvailabilityTone } from './expert-card.utils';
 
@@ -63,6 +66,27 @@ const AVAILABILITY_TONE_COLOR: Record<AvailabilityTone, string> = {
   later: 'text-amber-700 dark:text-warning',
   none: 'text-muted-foreground',
 };
+
+type ProfileLinkCallback = ((target: ExpertCardProfileTarget) => void) | undefined;
+
+/**
+ * Click handlers shared by every profile link on the card. `onClick` covers plain, ctrl/cmd-click
+ * and keyboard activation; `onAuxClick` covers middle-click (open in a new tab) only.
+ */
+function profileLinkHandlers(
+  target: ExpertCardProfileTarget,
+  onProfileLinkClick: ProfileLinkCallback
+): {
+  onClick: () => void;
+  onAuxClick: (event: React.MouseEvent) => void;
+} {
+  return {
+    onClick: () => onProfileLinkClick?.(target),
+    onAuxClick: (event) => {
+      if (event.button === 1) onProfileLinkClick?.(target);
+    },
+  };
+}
 
 // ── Avatar header (photo or initials fallback) ───────────────────
 
@@ -132,7 +156,7 @@ function AvailabilityPill({
   return (
     <div
       className={cn(
-        'absolute top-3 left-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-black/5 px-2.5 py-1 text-[11px] font-semibold',
+        'pointer-events-none absolute top-3 left-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-black/5 px-2.5 py-1 text-[11px] font-semibold',
         'bg-white shadow-[0_1px_4px_rgba(0,0,0,0.18)] dark:bg-zinc-900',
         color
       )}
@@ -161,7 +185,7 @@ function AgencyBadge({
     return (
       <div
         className={cn(
-          'absolute right-3 bottom-3 z-[3] flex h-[34px] items-center rounded-[9px] px-1.5 py-1',
+          'pointer-events-none absolute right-3 bottom-3 z-[3] flex h-[34px] items-center rounded-[9px] px-1.5 py-1',
           FLOAT_CHIP
         )}
       >
@@ -180,7 +204,7 @@ function AgencyBadge({
   return (
     <div
       className={cn(
-        'absolute right-3 bottom-3 z-[3] flex h-7 items-center rounded-lg px-3',
+        'pointer-events-none absolute right-3 bottom-3 z-[3] flex h-7 items-center rounded-lg px-3',
         FLOAT_CHIP
       )}
     >
@@ -212,7 +236,7 @@ function RatingBadge({
   return (
     <div
       className={cn(
-        'absolute bottom-3 left-3 z-[3] flex h-7 items-center gap-1 rounded-lg px-2.5',
+        'pointer-events-none absolute bottom-3 left-3 z-[3] flex h-7 items-center gap-1 rounded-lg px-2.5',
         FLOAT_CHIP
       )}
     >
@@ -236,6 +260,7 @@ function HeartButton(): React.JSX.Element {
       type="button"
       className={cn(
         'absolute top-3 right-3 z-[3] flex h-[34px] w-[34px] items-center justify-center rounded-full',
+        'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
         FLOAT_CHIP
       )}
       onClick={() => setLiked((prev) => !prev)}
@@ -287,6 +312,69 @@ function DistinctionBadges({
   );
 }
 
+// ── "+N more products" overflow item ─────────────────────────────
+
+function MoreProducts({
+  count,
+  href,
+  onProfileLinkClick,
+}: Readonly<{
+  count: number;
+  href?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
+}>): React.JSX.Element {
+  const content = (
+    <>
+      <span className="text-primary text-xs font-semibold">+{count} more products</span>
+      <ChevronRight className="text-primary h-3 w-3" />
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="focus-visible:ring-ring relative z-[2] flex items-center gap-0.5 rounded px-1 py-[5px] focus-visible:ring-2 focus-visible:outline-none"
+        {...profileLinkHandlers('more_products', onProfileLinkClick)}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return <div className="flex items-center gap-0.5 px-1 py-[5px]">{content}</div>;
+}
+
+// ── Expert name (stretched profile link when linked) ──────────────
+
+function ExpertName({
+  name,
+  className,
+  profileHref,
+  onProfileLinkClick,
+}: Readonly<{
+  name: string;
+  className: string;
+  profileHref?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
+}>): React.JSX.Element {
+  if (!profileHref) {
+    return <p className={className}>{name}</p>;
+  }
+
+  return (
+    <p className={className}>
+      <Link
+        href={profileHref}
+        className="focus-visible:after:ring-ring after:absolute after:inset-0 after:z-[1] after:rounded-2xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset"
+        {...profileLinkHandlers('card', onProfileLinkClick)}
+      >
+        {name}
+      </Link>
+    </p>
+  );
+}
+
 // ── Expertise pills ──────────────────────────────────────────────
 
 function ExpertisePills({
@@ -294,11 +382,16 @@ function ExpertisePills({
   max,
   showHeading,
   pad,
+  moreHref,
+  onProfileLinkClick,
 }: Readonly<{
   expertise: ExpertiseItem[];
   max?: number;
   showHeading?: boolean;
   pad?: boolean;
+  /** When set, the "+N more products" overflow item links here. */
+  moreHref?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
 }>): React.JSX.Element | null {
   if (expertise.length === 0) return null;
 
@@ -333,7 +426,7 @@ function ExpertisePills({
                       return (
                         <Tooltip key={skill}>
                           <TooltipTrigger asChild>
-                            <span className="inline-flex h-[22px] w-[22px] cursor-default items-center justify-center">
+                            <span className="relative z-[2] inline-flex h-[22px] w-[22px] cursor-default items-center justify-center">
                               <Icon className="h-3 w-3" />
                             </span>
                           </TooltipTrigger>
@@ -347,12 +440,11 @@ function ExpertisePills({
             </div>
           ))}
           {overflowCount > 0 && (
-            <div className="flex items-center gap-0.5 px-1 py-[5px]">
-              <span className="text-primary text-xs font-semibold">
-                +{overflowCount} more products
-              </span>
-              <ChevronRight className="text-primary h-3 w-3" />
-            </div>
+            <MoreProducts
+              count={overflowCount}
+              href={moreHref}
+              onProfileLinkClick={onProfileLinkClick}
+            />
           )}
         </div>
       </div>
@@ -498,9 +590,32 @@ function buildHeadline(expert: ExpertCardData): string {
 
 // ── CTA buttons ──────────────────────────────────────────────────
 
-function ViewProfileButton({ onClick }: Readonly<{ onClick?: () => void }>): React.JSX.Element {
+function ViewProfileButton({
+  onClick,
+  href,
+  onProfileLinkClick,
+}: Readonly<{
+  onClick?: () => void;
+  href?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
+}>): React.JSX.Element {
   const className =
-    'border-border text-foreground flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border text-xs font-medium transition-colors hover:bg-muted';
+    'border-border text-foreground relative z-[2] flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border text-xs font-medium transition-colors hover:bg-muted';
+  if (href) {
+    // Keyboard and screen-reader users reach the profile once, through the name link.
+    return (
+      <Link
+        href={href}
+        tabIndex={-1}
+        aria-hidden="true"
+        className={className}
+        {...profileLinkHandlers('button', onProfileLinkClick)}
+      >
+        <User className="h-4 w-4" />
+        View profile
+      </Link>
+    );
+  }
   if (onClick) {
     return (
       <motion.button
@@ -527,7 +642,7 @@ function BookCallButton({
   pending = false,
 }: Readonly<{ onClick?: () => void; pending?: boolean }>): React.JSX.Element {
   const className =
-    'from-primary flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md aria-disabled:cursor-wait dark:to-violet-500';
+    'from-primary relative z-[2] flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-gradient-to-r to-violet-600 text-xs font-semibold text-white shadow-sm transition-shadow hover:shadow-md aria-disabled:cursor-wait dark:to-violet-500';
   if (onClick) {
     return (
       <motion.button
@@ -538,7 +653,10 @@ function BookCallButton({
         onClick={pending ? undefined : onClick}
         aria-disabled={pending}
         aria-busy={pending}
-        className={className}
+        className={cn(
+          className,
+          'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
+        )}
       >
         {pending ? (
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -567,6 +685,8 @@ function GridCard({
   onBook,
   bookPending,
   onViewProfile,
+  profileHref,
+  onProfileLinkClick,
 }: Readonly<{
   expert: ExpertCardData;
   orderedExpertise: ExpertiseItem[];
@@ -575,14 +695,18 @@ function GridCard({
   onBook?: () => void;
   bookPending?: boolean;
   onViewProfile?: () => void;
+  profileHref?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
 }>): React.JSX.Element {
+  const moreHref = profileHref ? `${profileHref}${PROFILE_EXPERTISE_HASH}` : undefined;
+
   return (
     <motion.div
       className="h-full"
       whileHover={{ y: -4 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-      <Card className="hover:border-primary/30 flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
+      <Card className="hover:border-primary/30 relative flex h-full w-full flex-col gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
         {/* Photo header */}
         <div className="relative aspect-[5/4]">
           <AvatarHeader expert={expert} initialsTextClass="text-3xl" />
@@ -595,7 +719,12 @@ function GridCard({
         {/* Name + rate strip */}
         <div className="bg-card flex items-start justify-between px-4 pt-3.5 pb-1">
           <div className="min-w-0">
-            <p className="text-foreground text-[17px] font-semibold">{expert.name}</p>
+            <ExpertName
+              name={expert.name}
+              className="text-foreground text-[17px] font-semibold"
+              profileHref={profileHref}
+              onProfileLinkClick={onProfileLinkClick}
+            />
             <DistinctionBadges distinctions={expert.distinctions} />
           </div>
           <GridRate rate={expert.rate} />
@@ -631,11 +760,22 @@ function GridCard({
         )}
 
         {/* Expertise pills */}
-        <ExpertisePills expertise={orderedExpertise} max={4} showHeading pad />
+        <ExpertisePills
+          expertise={orderedExpertise}
+          max={4}
+          showHeading
+          pad
+          moreHref={moreHref}
+          onProfileLinkClick={onProfileLinkClick}
+        />
 
         {/* CTA row */}
         <div className="mx-4 mt-auto flex gap-2 pt-3.5 pb-4">
-          <ViewProfileButton onClick={onViewProfile} />
+          <ViewProfileButton
+            onClick={onViewProfile}
+            href={profileHref}
+            onProfileLinkClick={onProfileLinkClick}
+          />
           <BookCallButton onClick={onBook} pending={bookPending} />
         </div>
       </Card>
@@ -653,6 +793,8 @@ function ListRow({
   onBook,
   bookPending,
   onViewProfile,
+  profileHref,
+  onProfileLinkClick,
 }: Readonly<{
   expert: ExpertCardData;
   orderedExpertise: ExpertiseItem[];
@@ -661,11 +803,14 @@ function ListRow({
   onBook?: () => void;
   bookPending?: boolean;
   onViewProfile?: () => void;
+  profileHref?: string;
+  onProfileLinkClick?: ProfileLinkCallback;
 }>): React.JSX.Element {
   const meta = buildListMeta(expert);
+  const moreHref = profileHref ? `${profileHref}${PROFILE_EXPERTISE_HASH}` : undefined;
 
   return (
-    <Card className="hover:border-primary/30 flex min-h-[256px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
+    <Card className="hover:border-primary/30 relative flex min-h-[256px] flex-row gap-0 overflow-hidden rounded-2xl border py-0 transition-colors">
       {/* Photo panel */}
       <div className="relative w-60 shrink-0 self-stretch overflow-hidden">
         <AvatarHeader expert={expert} initialsTextClass="text-[28px]" />
@@ -679,7 +824,12 @@ function ListRow({
       <div className="flex min-w-0 flex-1 flex-col p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-foreground text-lg font-semibold">{expert.name}</p>
+            <ExpertName
+              name={expert.name}
+              className="text-foreground text-lg font-semibold"
+              profileHref={profileHref}
+              onProfileLinkClick={onProfileLinkClick}
+            />
             <div className="text-muted-foreground mt-1 flex flex-wrap gap-2 text-[13px]">
               {meta.map((m, i) => (
                 <span key={m} className="flex items-center gap-2">
@@ -706,14 +856,25 @@ function ListRow({
         )}
 
         <div className="mt-3 mb-4">
-          <ExpertisePills expertise={orderedExpertise} max={5} showHeading={false} pad={false} />
+          <ExpertisePills
+            expertise={orderedExpertise}
+            max={5}
+            showHeading={false}
+            pad={false}
+            moreHref={moreHref}
+            onProfileLinkClick={onProfileLinkClick}
+          />
         </div>
 
         {/* CTAs pinned to the bottom; shorter cards get whitespace above them so
             every row matches the tallest card's height. */}
         <div className="mt-auto flex gap-2.5">
           <div className="flex max-w-[200px] flex-1">
-            <ViewProfileButton onClick={onViewProfile} />
+            <ViewProfileButton
+              onClick={onViewProfile}
+              href={profileHref}
+              onProfileLinkClick={onProfileLinkClick}
+            />
           </div>
           <div className="flex max-w-[200px] flex-1">
             <BookCallButton onClick={onBook} pending={bookPending} />
@@ -733,6 +894,8 @@ export function ExpertCard({
   onBook,
   bookPending,
   onViewProfile,
+  profileHref,
+  onProfileLinkClick,
 }: Readonly<ExpertCardProps>): React.JSX.Element {
   const orderedExpertise = useMemo(
     () => getOrderedExpertise(expert.expertise, orderBy),
@@ -753,6 +916,8 @@ export function ExpertCard({
         onBook={onBook}
         bookPending={bookPending}
         onViewProfile={onViewProfile}
+        profileHref={profileHref}
+        onProfileLinkClick={onProfileLinkClick}
       />
     );
   }
@@ -766,6 +931,8 @@ export function ExpertCard({
       onBook={onBook}
       bookPending={bookPending}
       onViewProfile={onViewProfile}
+      profileHref={profileHref}
+      onProfileLinkClick={onProfileLinkClick}
     />
   );
 }

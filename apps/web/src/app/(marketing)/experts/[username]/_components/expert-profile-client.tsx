@@ -132,6 +132,18 @@ export function ExpertProfileClient({
     []
   );
 
+  // Deep link `/experts/{u}#section-expertise`: this route has a loading.tsx, so the browser's
+  // hash scroll lands on the skeleton and the hash is spent before these anchors exist. Honour
+  // it once on mount through the same jump the nav uses.
+  const hashJumpFiredRef = useRef(false);
+  useEffect(() => {
+    if (hashJumpFiredRef.current) return;
+    hashJumpFiredRef.current = true;
+    const hash = globalThis.location.hash;
+    const target = sections.find((s) => hash === `#section-${s.key}`);
+    if (target) handleJump(target.key);
+  }, [sections, handleJump]);
+
   // Scroll-spy: observe only the mounted section anchors.
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') return;
