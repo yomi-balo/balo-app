@@ -33,8 +33,8 @@ export const MAX_GALLERY_CELLS = 10;
 
 /**
  * ⚠ MOBILE SCROLLS FROM SEVEN. Two columns × 4–5 rows exceeds the stage, so the mobile gallery
- * scrolls with row snapping — and the active speaker is sorted into the first row, so scrolling
- * is always optional.
+ * scrolls with row snapping. Tiles do not reorder for the active speaker (`orderTiles`), so on a
+ * phone the speaker can be below the fold; their audio plays and their tile is highlighted.
  */
 export const GALLERY_MOBILE_SCROLL_FROM = 7;
 
