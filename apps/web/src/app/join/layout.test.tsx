@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@/test/utils';
 import JoinLayout, { metadata } from './layout';
+import {
+  GUEST_CALL_VIEWPORT_ATTRIBUTE,
+  GuestCallViewport,
+} from '@/components/balo/meetings/guest-call-viewport';
 
 describe('join layout', () => {
   /**
@@ -25,5 +29,32 @@ describe('join layout', () => {
 
     expect(screen.getByText('Join body')).toBeInTheDocument();
     expect(screen.getByRole('main')).toBeInTheDocument();
+  });
+
+  /**
+   * An admitted guest's call must fill the viewport like a member's does, not sit in the
+   * 560px invitation column. The layout keys that on the viewport's marker attribute, which it
+   * has to spell literally (Tailwind only emits classes it can read) — so pin that the literal
+   * still matches the component's attribute, or the call silently shrinks back into the column.
+   */
+  it('releases the narrow column for the guest call viewport', () => {
+    render(
+      <JoinLayout>
+        <GuestCallViewport>
+          <p>Call stage</p>
+        </GuestCallViewport>
+      </JoinLayout>
+    );
+
+    const main = screen.getByRole('main');
+    expect(main).toHaveClass(
+      `has-[[${GUEST_CALL_VIEWPORT_ATTRIBUTE}]]:max-w-none`,
+      `has-[[${GUEST_CALL_VIEWPORT_ATTRIBUTE}]]:p-0`
+    );
+    expect(main.parentElement).toHaveClass(`has-[[${GUEST_CALL_VIEWPORT_ATTRIBUTE}]]:min-h-0`);
+
+    const viewport = screen.getByText('Call stage').parentElement;
+    expect(viewport).toHaveAttribute(GUEST_CALL_VIEWPORT_ATTRIBUTE);
+    expect(viewport).toHaveClass('h-dvh', 'w-full');
   });
 });

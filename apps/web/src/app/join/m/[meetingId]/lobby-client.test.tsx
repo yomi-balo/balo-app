@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { GUEST_CALL_VIEWPORT_ATTRIBUTE } from '@/components/balo/meetings/guest-call-viewport';
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -458,6 +459,12 @@ describe('LobbyClient — polling', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
+    // The call fills the viewport like a member's — not the 560px lobby column.
+    expect(
+      screen
+        .getByRole('heading', { name: /ready to join/i })
+        .closest(`[${GUEST_CALL_VIEWPORT_ATTRIBUTE}]`)
+    ).not.toBeNull();
   });
 
   it('⚠ clears the stored token once admitted — the credential is spent', async () => {

@@ -29,14 +29,19 @@ export const metadata: Metadata = {
  * recipient is by definition not a Balo user and arrived from an email. Geist + the theme
  * tokens come from the root layout; this supplies a narrow, centred frame and the design's
  * single top-centre primary wash (deliberately more saturated in dark, per the UI skill).
+ *
+ * Once a guest is admitted the call renders inside `GuestCallViewport`, and the shell lets go
+ * of the column (no max width, no padding, no `100vh` floor) so the call fills the viewport
+ * exactly as it does for members. The `has-[…]` variants win over `px-4` / `sm:py-16` by
+ * specificity — `:has()` adds the attribute selector's weight — not by source order.
  */
 export default function JoinLayout({ children }: Readonly<JoinLayoutProps>): React.JSX.Element {
   return (
-    <div className="bg-background relative min-h-screen overflow-hidden">
+    <div className="bg-background relative min-h-screen overflow-hidden has-[[data-guest-call-viewport]]:min-h-0">
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
         <div className="bg-primary/10 dark:bg-primary/25 absolute -top-40 left-1/2 h-[420px] w-[680px] max-w-[140vw] -translate-x-1/2 rounded-full blur-3xl" />
       </div>
-      <main className="relative z-10 mx-auto w-full max-w-[560px] px-4 py-10 sm:py-16">
+      <main className="relative z-10 mx-auto w-full max-w-[560px] px-4 py-10 has-[[data-guest-call-viewport]]:max-w-none has-[[data-guest-call-viewport]]:p-0 sm:py-16">
         {children}
       </main>
     </div>

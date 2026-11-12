@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
+import { GUEST_CALL_VIEWPORT_ATTRIBUTE } from '@/components/balo/meetings/guest-call-viewport';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -447,6 +448,16 @@ describe('⚠⚠ JoinControl — the admitted phase replaces the card', () => {
     });
 
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+  });
+
+  it('renders the call in the full-viewport frame, not the invitation column', async () => {
+    const user = userEvent.setup();
+    renderControl();
+
+    await user.click(screen.getByRole('button', { name: /join the call/i }));
+    const heading = await screen.findByRole('heading', { name: /ready to join/i });
+
+    expect(heading.closest(`[${GUEST_CALL_VIEWPORT_ATTRIBUTE}]`)).not.toBeNull();
   });
 
   it('the refusal card also replaces it — stale invitation details are misleading', async () => {
