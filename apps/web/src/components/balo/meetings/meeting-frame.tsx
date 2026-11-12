@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { CallNoticeWell } from './call-notice-well';
 import { MeetingConnectingCard } from './meeting-connecting-card';
 import type { MeetingFrameProps } from './meeting-frame-types';
 
@@ -17,12 +18,18 @@ import type { MeetingFrameProps } from './meeting-frame-types';
  *
  * ⚠ THE `loading:` FALLBACK IS THE **SHIPPED** "Connecting…" CARD, byte for byte — already an
  * `<output>` live region, already `aria-busy`-free. The chunk fetch is now what it announces.
+ * It sits in `CallNoticeWell` because it takes the place of a full-viewport stage, where the bare
+ * card would be pinned to the top edge.
  */
 export const MeetingFrame = dynamic<MeetingFrameProps>(
   () => import('./meeting-frame-impl').then((mod) => mod.MeetingFrame),
   {
     ssr: false,
-    loading: () => <MeetingConnectingCard />,
+    loading: () => (
+      <CallNoticeWell>
+        <MeetingConnectingCard />
+      </CallNoticeWell>
+    ),
   }
 );
 

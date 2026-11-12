@@ -139,8 +139,8 @@ export function GalleryLayout({
         'grid h-full w-full content-center gap-3',
         scrolls ? 'auto-rows-min sm:auto-rows-fr' : 'auto-rows-fr',
         galleryGridClass(cellCount),
-        // ⚠ MOBILE ONLY, AND ONLY FROM SEVEN. The active speaker is sorted into the first row, so
-        // scrolling is optional and never required.
+        // ⚠ MOBILE ONLY, AND ONLY FROM SEVEN. Tiles keep their places when someone speaks, so the
+        // speaker can be below the fold here; their audio plays and their tile is highlighted.
         scrolls ? 'snap-y snap-mandatory overflow-y-auto sm:overflow-visible' : ''
       )}
     >

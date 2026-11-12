@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
+import { CallNoticeWell } from '@/components/balo/meetings/call-notice-well';
 import { JoinNotOpenYetNotice, JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
 import { MemberJoinNotice } from '@/components/balo/meetings/member-join-notice';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
@@ -674,34 +675,34 @@ export function CallClient({
 
   if (phase === 'unavailable') {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
         <DashboardLink />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
   if (phase === 'not_open_yet') {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <JoinNotOpenYetNotice opensAt={opensAt} headingRef={headingRef} onRetry={handleRetry} />
         <DashboardLink />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
   if (phase === 'not_open') {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <MemberJoinNotice reason="not_open" headingRef={headingRef} />
         <DashboardLink />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
   if (phase === 'setting_up') {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <MemberJoinNotice reason="not_provisioned" headingRef={headingRef} onRetry={handleRetry} />
         {isExhausted ? (
           <p className="text-muted-foreground mt-4 max-w-md text-center text-[12.5px] leading-relaxed">
@@ -709,13 +710,13 @@ export function CallClient({
           </p>
         ) : null}
         <DashboardLink />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
   if (phase === 'retrying') {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <JoinRetryNotice headingRef={headingRef} onRetry={handleRetry} />
         {isExhausted ? (
           <p className="text-muted-foreground mt-4 max-w-md text-center text-[12.5px] leading-relaxed">
@@ -723,15 +724,15 @@ export function CallClient({
           </p>
         ) : null}
         <DashboardLink />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
   if (phase === 'connecting' || response === null) {
     return (
-      <CallShell>
+      <CallNoticeWell>
         <MeetingConnectingCard headingRef={headingRef} />
-      </CallShell>
+      </CallNoticeWell>
     );
   }
 
@@ -803,15 +804,6 @@ function MeetingStateStalledNotice({
           {MEETING_STATE_RETRY_LABEL}
         </button>
       </output>
-    </div>
-  );
-}
-
-/** The centred well every pre-call notice renders in. */
-function CallShell({ children }: Readonly<{ children: React.ReactNode }>): React.JSX.Element {
-  return (
-    <div className="flex h-full w-full flex-col items-center justify-center px-4 py-8">
-      {children}
     </div>
   );
 }

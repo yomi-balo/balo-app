@@ -6,6 +6,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, LogIn } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
+import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import {
   JoinRetryNotice,
   JoinUnavailableNotice,
@@ -276,6 +278,9 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
       setIsSubmitting(true);
       setFormError(null);
       setNotOpenYetMessage(null);
+      // Fetch the call chunk while the visitor waits to be admitted, so admission does not land
+      // them on "Connecting…" waiting for the download.
+      preloadMeetingFrame();
       // ⚠ DELIBERATELY NOT AWAITED — a React event handler must stay synchronous, and every
       // outcome (including the transport arm) is handled in the chain below.
       //
@@ -397,30 +402,32 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
   let content: React.JSX.Element;
   if (state === 'admitted' && grant !== null) {
     content = (
-      <MeetingRouteContextProvider
-        meetingId={null}
-        viewerName={null}
-        title={null}
-        backTo={null}
-        contextNoun="call"
-        waiting={null}
-        panels={panels}
-        resolveExitReason={resolveExitReason}
-      >
-        <MeetingCallSurface
-          roomUrl={grant.roomUrl}
-          token={grant.token}
-          isOwner={grant.isOwner}
-          // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is — see
-          // `join-control.tsx`. PASSED THROUGH, never defaulted here.
-          canEndMeeting={grant.canEndMeeting}
-          expiresAt={grant.expiresAt}
-          participantId={grant.participantId}
-          // ⚠ THE TRANSITION THAT MATTERS MOST. Without this the one state the visitor actually
-          // waited for — "you're in" — was the only one that moved focus nowhere.
-          headingRef={headingRef}
-        />
-      </MeetingRouteContextProvider>
+      <GuestCallViewport>
+        <MeetingRouteContextProvider
+          meetingId={null}
+          viewerName={null}
+          title={null}
+          backTo={null}
+          contextNoun="call"
+          waiting={null}
+          panels={panels}
+          resolveExitReason={resolveExitReason}
+        >
+          <MeetingCallSurface
+            roomUrl={grant.roomUrl}
+            token={grant.token}
+            isOwner={grant.isOwner}
+            // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is — see
+            // `join-control.tsx`. PASSED THROUGH, never defaulted here.
+            canEndMeeting={grant.canEndMeeting}
+            expiresAt={grant.expiresAt}
+            participantId={grant.participantId}
+            // ⚠ THE TRANSITION THAT MATTERS MOST. Without this the one state the visitor actually
+            // waited for — "you're in" — was the only one that moved focus nowhere.
+            headingRef={headingRef}
+          />
+        </MeetingRouteContextProvider>
+      </GuestCallViewport>
     );
   } else if (state === 'retry_later') {
     // ⚠ "Try again" returns to the FORM, not to a re-poll: the token was cleared by `fail`, so

@@ -115,6 +115,15 @@ describe('MeetingCallSurface — the loading seam (BAL-132, still true)', () => 
     expect(screen.getByText(/connecting/i)).toBeInTheDocument();
   });
 
+  it('centres the Connecting card in the stage — not pinned to the top edge', () => {
+    render(<MeetingCallSurface {...PROPS} />);
+
+    const well = screen
+      .getByRole('heading', { name: /connecting/i })
+      .closest('output')?.parentElement;
+    expect(well).toHaveClass('h-full', 'items-center', 'justify-center', 'px-4', 'py-8');
+  });
+
   it('announces itself to assistive tech via <output>, not role="status"', () => {
     // ⚠ `<output>`, not `role="status"` — SonarCloud S6819 flags the ARIA role where a native
     // element exists.
@@ -344,6 +353,15 @@ describe('MeetingCallSurface — ⚠⚠ the grant gate runs BEFORE the vendor SD
       expect(track).toHaveBeenCalledWith(MEETING_CALL_EVENTS.GRANT_REJECTED, { reason });
     });
   }
+
+  it('centres the refusal card in the stage — not pinned to the top edge', () => {
+    render(<MeetingCallSurface {...PROPS} token="" />);
+
+    const well = screen
+      .getByRole('heading', { name: JOIN_UNAVAILABLE_TITLE })
+      .closest('output')?.parentElement;
+    expect(well).toHaveClass('h-full', 'items-center', 'justify-center', 'px-4', 'py-8');
+  });
 
   it('⚠ says nothing about WHY — no parse error, no offending value, no retry', () => {
     const { container } = render(

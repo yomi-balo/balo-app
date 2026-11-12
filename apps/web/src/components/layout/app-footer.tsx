@@ -44,8 +44,11 @@ export function AppFooter() {
    */
   if (isCallSurface || isMarketingHome) return null;
 
+  // A guest's call has no call path to match — `/join/{token}` is the invitation AND the call —
+  // so it is hidden by the call's own marker instead (see `GuestCallViewport`). Rendered, it
+  // sits under the full-viewport call and makes the page scroll.
   return (
-    <footer className="text-muted-foreground py-4 text-center text-xs">
+    <footer className="text-muted-foreground py-4 text-center text-xs [body:has([data-guest-call-viewport])_&]:hidden">
       <span title={`Branch: ${APP_VERSION.branch} | Built: ${APP_VERSION.buildTime}`}>
         {getVersionString()}
       </span>

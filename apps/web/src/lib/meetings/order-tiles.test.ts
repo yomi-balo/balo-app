@@ -14,15 +14,21 @@ function person(sessionId: string, overrides: Partial<TileCandidate> = {}): Tile
 const ids = (tiles: readonly TileCandidate[]): string[] => tiles.map((tile) => tile.sessionId);
 
 describe('orderTiles', () => {
-  it('puts the active speaker first', () => {
-    const result = orderTiles(
-      [person('a', { joinedAtMs: 1 }), person('b', { joinedAtMs: 2 }), person('c')],
-      'c'
-    );
-    expect(ids(result.visible)[0]).toBe('c');
+  it('⚠⚠ leaves the active speaker in place — the grid does not reorder when someone speaks', () => {
+    const roster = [
+      person('a', { joinedAtMs: 1 }),
+      person('b', { joinedAtMs: 2 }),
+      person('c', { joinedAtMs: 3 }),
+      person('me', { isLocal: true, joinedAtMs: 0 }),
+    ];
+    const silent = ids(orderTiles(roster, null).visible);
+    expect(silent).toEqual(['a', 'b', 'c', 'me']);
+    for (const speaker of ['a', 'b', 'c', 'me']) {
+      expect(ids(orderTiles(roster, speaker).visible)).toEqual(silent);
+    }
   });
 
-  it('puts a screen-sharer second, behind the active speaker', () => {
+  it('puts a screen-sharer first', () => {
     const result = orderTiles(
       [
         person('speaker', { joinedAtMs: 5 }),
@@ -31,7 +37,7 @@ describe('orderTiles', () => {
       ],
       'speaker'
     );
-    expect(ids(result.visible)).toEqual(['speaker', 'sharer', 'other']);
+    expect(ids(result.visible)).toEqual(['sharer', 'other', 'speaker']);
   });
 
   it('orders the remaining remotes by join time', () => {
@@ -76,13 +82,23 @@ describe('orderTiles', () => {
     expect(result.overflow).toHaveLength(5);
   });
 
-  it('⚠⚠ ALWAYS promotes the active speaker out of overflow, however late they joined', () => {
+  it('⚠⚠ ALWAYS promotes a remote active speaker out of overflow — into the LAST cell only', () => {
     const roster = Array.from({ length: 14 }, (_unused, index) =>
       person(`p${index}`, { joinedAtMs: index })
     );
     const result = orderTiles(roster, 'p13');
-    expect(ids(result.visible)[0]).toBe('p13');
-    expect(ids(result.overflow)).not.toContain('p13');
+    expect(ids(result.visible)).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p13']);
+    expect(ids(result.overflow)).toEqual(['p8', 'p9', 'p10', 'p11', 'p12']);
+  });
+
+  it('does not promote SELF out of overflow for speaking', () => {
+    const roster = [
+      ...Array.from({ length: 12 }, (_unused, index) => person(`p${index}`, { joinedAtMs: index })),
+      person('me', { isLocal: true, joinedAtMs: 0 }),
+    ];
+    const result = orderTiles(roster, 'me');
+    expect(ids(result.visible)).toEqual(ids(orderTiles(roster, null).visible));
+    expect(ids(result.overflow)).toContain('me');
   });
 
   it('does not mutate the caller’s array', () => {

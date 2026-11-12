@@ -7,6 +7,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { FileText, Loader2, Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
+import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import {
   JoinRetryNotice,
   JoinUnavailableNotice,
@@ -265,6 +267,9 @@ export function JoinControl({
     if (phase === 'joining') return;
     setPhase('joining');
     setNotOpenYetMessage(null);
+    // Fetch the call chunk alongside the admission check, as the member route does, so an
+    // admitted guest is not left on "Connecting…" waiting for the download.
+    preloadMeetingFrame();
 
     // ⚠ NOT AWAITED, AND NOT `void`-PREFIXED — see the note on the lobby's `handleSubmit`.
     pollGuestAdmissionAction({ meetingId, guestToken: token })
@@ -441,30 +446,32 @@ function JoinPhaseContent({
     // read-only `panels` and EVERY OTHER PROP AT ITS EMPTY VALUE, so mounting it changes
     // NOTHING except `panels`. `MeetingCallSurface`'s own prop contract stays frozen.
     return (
-      <MeetingRouteContextProvider
-        meetingId={null}
-        viewerName={null}
-        title={null}
-        backTo={null}
-        contextNoun="call"
-        waiting={null}
-        panels={panels}
-        resolveExitReason={resolveExitReason}
-      >
-        <MeetingCallSurface
-          roomUrl={grant.roomUrl}
-          token={grant.token}
-          isOwner={grant.isOwner}
-          // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is: a guest
-          // holds no company membership and is not on the engagement axis, so they see Leave only
-          // (BAL-134 edge case 24). It is PASSED THROUGH, never defaulted here.
-          canEndMeeting={grant.canEndMeeting}
-          expiresAt={grant.expiresAt}
-          participantId={grant.participantId}
-          // ⚠ THE TRANSITION THAT MATTERS MOST — see `MeetingCallSurface.headingRef`.
-          headingRef={headingRef}
-        />
-      </MeetingRouteContextProvider>
+      <GuestCallViewport>
+        <MeetingRouteContextProvider
+          meetingId={null}
+          viewerName={null}
+          title={null}
+          backTo={null}
+          contextNoun="call"
+          waiting={null}
+          panels={panels}
+          resolveExitReason={resolveExitReason}
+        >
+          <MeetingCallSurface
+            roomUrl={grant.roomUrl}
+            token={grant.token}
+            isOwner={grant.isOwner}
+            // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is: a guest
+            // holds no company membership and is not on the engagement axis, so they see Leave only
+            // (BAL-134 edge case 24). It is PASSED THROUGH, never defaulted here.
+            canEndMeeting={grant.canEndMeeting}
+            expiresAt={grant.expiresAt}
+            participantId={grant.participantId}
+            // ⚠ THE TRANSITION THAT MATTERS MOST — see `MeetingCallSurface.headingRef`.
+            headingRef={headingRef}
+          />
+        </MeetingRouteContextProvider>
+      </GuestCallViewport>
     );
   }
   if (phase === 'unavailable') {
