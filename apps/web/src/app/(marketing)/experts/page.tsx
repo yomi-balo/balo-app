@@ -32,16 +32,21 @@ interface ExpertsPageProps {
   searchParams: Promise<RawSearchParams>;
 }
 
-/** Builds an id→name lookup per facet group for chip labels. */
-function buildLabelMaps(facetCounts: {
-  products: FacetCountDTO[];
-  supportTypes: FacetCountDTO[];
-  languages: FacetCountDTO[];
-}): FacetLabelMaps {
+/**
+ * Builds an id→name lookup per facet group for chip labels. Products label from the full
+ * taxonomy rather than the facet rows, so a selected product with no supply still has a chip.
+ */
+function buildLabelMaps(
+  productNameMap: Record<string, string>,
+  facetCounts: {
+    supportTypes: FacetCountDTO[];
+    languages: FacetCountDTO[];
+  }
+): FacetLabelMaps {
   const toMap = (facets: FacetCountDTO[]): Record<string, string> =>
     Object.fromEntries(facets.map((f) => [f.id, f.name]));
   return {
-    products: toMap(facetCounts.products),
+    products: productNameMap,
     supportTypes: toMap(facetCounts.supportTypes),
     languages: toMap(facetCounts.languages),
   };
@@ -77,8 +82,8 @@ export default async function ExpertsPage({
 
   const { experts: rawExperts, total, facetCounts, wasAvailabilityGated } = response;
   const experts = rawExperts.map(mapSearchResultToCardData);
-  const labelMaps = buildLabelMaps(facetCounts);
   const productNameMap = buildProductNameMap(taxonomy);
+  const labelMaps = buildLabelMaps(productNameMap, facetCounts);
   const hasResults = total > 0;
 
   // Distinguish "no matches at all" from "this page is past the end of the results".

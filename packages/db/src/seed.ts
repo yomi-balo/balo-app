@@ -428,8 +428,8 @@ async function seedAcmeExperts(acmeVerticalId: string): Promise<void> {
             expertProfileId: profile.id,
             productId: productId,
             supportTypeId,
-            proficiency: 4,
-            selfProficiency: 4,
+            proficiency: 8,
+            selfProficiency: 8,
           })
           .onConflictDoNothing();
       }

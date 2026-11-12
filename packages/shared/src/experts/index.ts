@@ -37,6 +37,7 @@ export { PROJECT_COUNT_RANGES, type ProjectCountRange, projectRangeLabel } from 
 // BAL-643 — the 0–10 self-assessment scale: one title and description per number.
 export {
   PROFICIENCY_SCALE,
+  SEARCH_MIN_PROFICIENCY,
   type ProficiencyScaleLevel,
   proficiencyScaleLevel,
 } from './proficiency-scale';

@@ -139,7 +139,7 @@ export function generateExperts(input: GenerateExpertsInput): GeneratedExpert[] 
       competencies.push({
         productId: entry.product.id,
         supportTypeId,
-        proficiency: rng.int(1, 5),
+        proficiency: rng.int(3, 10),
       });
     }
 

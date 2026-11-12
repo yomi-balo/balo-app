@@ -17,7 +17,13 @@ export const SEARCH_EVENTS = {
   PRODUCT_SELECTOR_SEARCHED: 'search_product_selector_searched',
   PRODUCT_GROUP_EXPANDED: 'search_product_group_expanded',
   COMPOSER_CLEARED: 'search_composer_cleared',
+  FACET_CLEARED: 'search_facet_cleared',
 } as const;
+
+/** The facet sections that carry their own Clear control (`search_facet_cleared`). */
+export const SEARCH_CLEARABLE_FACETS = ['support_types', 'timeframe', 'rate', 'languages'] as const;
+
+export type SearchClearableFacet = (typeof SEARCH_CLEARABLE_FACETS)[number];
 
 /**
  * Shared property snapshot carried by both `search_submitted` and `search_refined`.
@@ -93,6 +99,10 @@ export interface SearchEventMap {
   [SEARCH_EVENTS.PRODUCT_SELECTOR_SEARCHED]: { had_results: boolean };
   [SEARCH_EVENTS.PRODUCT_GROUP_EXPANDED]: { group: string };
   [SEARCH_EVENTS.COMPOSER_CLEARED]: { surface: 'hero_bar' | 'compact_bar' | 'rail' | 'sheet' };
+  [SEARCH_EVENTS.FACET_CLEARED]: {
+    facet: SearchClearableFacet;
+    surface: 'rail' | 'sheet';
+  };
 }
 
 export const SEARCH_SERVER_EVENTS = {

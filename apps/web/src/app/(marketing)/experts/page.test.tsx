@@ -119,6 +119,14 @@ describe('ExpertsPage — success state', () => {
   });
 });
 
+describe('ExpertsPage — active filter chips', () => {
+  it('labels a selected product from the taxonomy when the facet rows omit it', async () => {
+    mockSearchExperts.mockResolvedValue(makeResponse({ experts: [makeExpert()], total: 1 }));
+    await renderPage({ products: ['p1'] });
+    expect(screen.getByRole('button', { name: 'Remove filter Agentforce' })).toBeInTheDocument();
+  });
+});
+
 describe('ExpertsPage — empty states', () => {
   it('shows the not-gated copy when total is 0 and not availability-gated', async () => {
     mockSearchExperts.mockResolvedValue(makeResponse({ total: 0, wasAvailabilityGated: false }));

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { SEARCH_EVENTS } from '@balo/analytics/events';
+import { SEARCH_CLEARABLE_FACETS, SEARCH_EVENTS } from '@balo/analytics/events';
 import { track } from '@/lib/analytics';
 import { EMPTY_FILTERS, type SearchFilters } from '@/lib/search/filters';
 import type { FacetCountDTO } from '@/lib/search/search-data';
@@ -202,6 +202,134 @@ describe('FacetControls — pending mode', () => {
     renderPending(onPendingChange);
     await user.click(screen.getByRole('button', { name: 'This week' }));
     expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ timeframe: 'week' }));
+  });
+});
+
+describe('FacetControls — per-section Clear', () => {
+  it('shows no Clear control when nothing is selected', () => {
+    renderCommitted();
+    expect(screen.queryByRole('button', { name: /^Clear / })).not.toBeInTheDocument();
+  });
+
+  it('clears only Type of help, keeping languages, and resets the page', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('supportTypes=s1&languages=l1&page=3'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted({ supportTypes: ['s1'], languages: ['l1'] });
+    expect(screen.getByRole('button', { name: 'Clear Languages' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Type of help' }));
+    // Painted unselected before the debounce.
+    vi.advanceTimersByTime(0);
+    expect(screen.getByRole('button', { name: 'Technical fix' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(500);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    const url = mockReplace.mock.calls[0]![0] as string;
+    expect(url).not.toContain('supportTypes');
+    expect(url).toContain('languages=l1');
+    expect(url).not.toContain('page=');
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'support_types',
+      surface: 'rail',
+    });
+  });
+
+  it('clears the timeframe', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('timeframe=week'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted({ timeframe: 'week' });
+    await user.click(screen.getByRole('button', { name: 'Clear Availability' }));
+    vi.advanceTimersByTime(500);
+    expect(mockReplace).toHaveBeenCalledWith('/experts', { scroll: false });
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'timeframe',
+      surface: 'rail',
+    });
+  });
+
+  it('clears the rate range', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('rateMin=2'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted({ rateMinDollars: 2 });
+    await user.click(screen.getByRole('button', { name: 'Clear Rate' }));
+    vi.advanceTimersByTime(500);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace.mock.calls[0]![0]).not.toContain('rateMin');
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'rate',
+      surface: 'rail',
+    });
+  });
+
+  it('announces the cleared facet in a polite status region', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('languages=l1'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted({ languages: ['l1'] });
+    const status = screen.getByRole('status');
+    expect(status).toBeEmptyDOMElement();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Languages' }));
+    expect(status).toHaveTextContent('Languages filter cleared');
+  });
+
+  it('moves focus to the section heading after Clear so the keyboard position is kept', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('languages=l1'));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCommitted({ languages: ['l1'] });
+    await user.click(screen.getByRole('button', { name: 'Clear Languages' }));
+    expect(document.activeElement).toHaveClass('focus-visible:ring-2');
+    expect(document.activeElement).toHaveTextContent('Languages');
+  });
+
+  it('has a Clear control for every clearable facet', () => {
+    mockUseSearchParams.mockReturnValue(
+      new URLSearchParams('supportTypes=s1&timeframe=week&rateMin=2&languages=l1')
+    );
+    renderCommitted({
+      supportTypes: ['s1'],
+      timeframe: 'week',
+      rateMinDollars: 2,
+      languages: ['l1'],
+    });
+    expect(screen.getAllByRole('button', { name: /^Clear (?!all)/ })).toHaveLength(
+      SEARCH_CLEARABLE_FACETS.length
+    );
+  });
+
+  it('shows Clear for a selected support type absent from the facet counts', () => {
+    renderCommitted({ supportTypes: ['gone'] });
+    expect(screen.getByRole('button', { name: 'Clear Type of help' })).toBeInTheDocument();
+  });
+
+  it('in pending mode lifts the cleared facet and never writes the URL', async () => {
+    const onPendingChange = vi.fn();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(
+      <FacetControls
+        mode="pending"
+        taxonomy={taxonomy}
+        facetCounts={facetCounts}
+        productNameMap={{ p1: 'Agentforce' }}
+        filters={{ ...EMPTY_FILTERS, languages: ['l1'], supportTypes: ['s1'] }}
+        onPendingChange={onPendingChange}
+        productSurface="sheet"
+        inSheet
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Clear Languages' }));
+    expect(onPendingChange).toHaveBeenCalledWith(
+      expect.objectContaining({ languages: [], supportTypes: ['s1'] })
+    );
+    vi.advanceTimersByTime(500);
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(SEARCH_EVENTS.FACET_CLEARED, {
+      facet: 'languages',
+      surface: 'sheet',
+    });
   });
 });
 

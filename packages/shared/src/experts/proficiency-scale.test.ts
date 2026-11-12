@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { PROFICIENCY_SCALE, proficiencyScaleLevel } from './proficiency-scale';
+import {
+  PROFICIENCY_SCALE,
+  SEARCH_MIN_PROFICIENCY,
+  proficiencyScaleLevel,
+} from './proficiency-scale';
+
+describe('SEARCH_MIN_PROFICIENCY', () => {
+  it('is 7, the Advanced level', () => {
+    expect(SEARCH_MIN_PROFICIENCY).toBe(7);
+    expect(proficiencyScaleLevel(SEARCH_MIN_PROFICIENCY).title).toBe('Advanced');
+  });
+});
 
 describe('PROFICIENCY_SCALE', () => {
   it('has eleven entries whose value matches the index', () => {
