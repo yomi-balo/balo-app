@@ -4,6 +4,7 @@ import { useEffect, useMemo } from 'react';
 import { MEETING_CALL_EVENTS, track } from '@/lib/analytics';
 import { validateGrant } from '@/lib/meetings/validate-grant';
 import { JoinUnavailableNotice } from './join-notice-card';
+import { CallNoticeWell } from './call-notice-well';
 import { MeetingFrame } from './meeting-frame';
 
 /**
@@ -131,7 +132,11 @@ export const MeetingCallSurface: MeetingCallSurfaceComponent = ({
       URL", no toast, no retry. That component is propless-apart-from-the-ref BY DESIGN and the
       type system enforces it — do not add a `reason` prop.
     */
-    return <JoinUnavailableNotice headingRef={headingRef} />;
+    return (
+      <CallNoticeWell>
+        <JoinUnavailableNotice headingRef={headingRef} />
+      </CallNoticeWell>
+    );
   }
 
   /*

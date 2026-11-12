@@ -7,6 +7,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { FileText, Loader2, Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
+import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import {
   JoinRetryNotice,
   JoinUnavailableNotice,
@@ -26,7 +28,6 @@ import type { GuestExitCause } from '@/lib/meetings/guest-exit-cause';
 // ⚠ C5 — RELATIVE IMPORTS. `join-link-never-writes.test.ts` fails on any occurrence of the
 // literal `/join/` in non-comment code under `app/join/`; `'../_actions/…'` does not contain it.
 import { pollGuestAdmissionAction } from '../_actions/poll-guest-admission';
-import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
 import { listGuestMeetingFilesAction } from '../_actions/list-guest-meeting-files';
 import { getGuestMeetingFileDownloadAction } from '../_actions/get-guest-meeting-file-download';
 import { fetchGuestMeetingThreadAction } from '../_actions/fetch-guest-meeting-thread';
@@ -266,6 +267,9 @@ export function JoinControl({
     if (phase === 'joining') return;
     setPhase('joining');
     setNotOpenYetMessage(null);
+    // Fetch the call chunk alongside the admission check, as the member route does, so an
+    // admitted guest is not left on "Connecting…" waiting for the download.
+    preloadMeetingFrame();
 
     // ⚠ NOT AWAITED, AND NOT `void`-PREFIXED — see the note on the lobby's `handleSubmit`.
     pollGuestAdmissionAction({ meetingId, guestToken: token })

@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GUEST_CALL_VIEWPORT_ATTRIBUTE } from '@/components/balo/meetings/guest-call-viewport';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -27,6 +28,12 @@ vi.mock('motion/react', async () => {
 
 // jsdom has no `matchMedia`; the repo's convention is to mock the hook, not stub `matchMedia`.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+
+// The real frame still mounts (the admitted tests need it); only the preload is observed.
+vi.mock('@/components/balo/meetings/meeting-frame', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/balo/meetings/meeting-frame')>()),
+  preloadMeetingFrame: vi.fn(),
+}));
 
 const mockClaim = vi.fn();
 const mockPoll = vi.fn();
@@ -149,6 +156,15 @@ describe('LobbyClient — the identify state', () => {
     expect(screen.getByRole('button', { name: /already asked to join/i })).toBeInTheDocument();
     expect(mockClaim).not.toHaveBeenCalled();
     expect(mockReentry).not.toHaveBeenCalled();
+  });
+
+  it('starts downloading the call on Ask to join, so it is ready by the time they are admitted', async () => {
+    renderLobby();
+    expect(preloadMeetingFrame).not.toHaveBeenCalled();
+
+    await identify();
+
+    expect(preloadMeetingFrame).toHaveBeenCalledTimes(1);
   });
 
   it('renders a labelled name and email form', () => {

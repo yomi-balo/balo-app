@@ -32,12 +32,19 @@ vi.mock('motion/react', async () => {
 // jsdom has no `matchMedia`; the repo's convention is to mock the hook, not stub `matchMedia`.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
+// The real frame still mounts (the admitted tests need it); only the preload is observed.
+vi.mock('@/components/balo/meetings/meeting-frame', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/balo/meetings/meeting-frame')>()),
+  preloadMeetingFrame: vi.fn(),
+}));
+
 const mockPoll = vi.fn();
 vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
   pollGuestAdmissionAction: (...args: unknown[]) => mockPoll(...args),
 }));
 
 import { toast } from 'sonner';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import { installMediaStubs, resetDailyMock } from '@/test/mocks/daily';
 import { JoinControl } from './join-control';
 import {
@@ -127,6 +134,16 @@ describe('JoinControl — the invited guest`s join', () => {
       expect(screen.getByRole('button', { name: /join the call/i })).toBeInTheDocument();
     });
     expect(mockPoll).not.toHaveBeenCalled();
+  });
+
+  it('starts downloading the call on Join, not on mount — so admission is not held up by it', async () => {
+    const user = userEvent.setup();
+    renderControl();
+    expect(preloadMeetingFrame).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /join the call/i }));
+
+    expect(preloadMeetingFrame).toHaveBeenCalledTimes(1);
   });
 
   it('renders the invitation content it was handed, plus the closing lines', () => {

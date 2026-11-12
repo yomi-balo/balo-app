@@ -6,6 +6,8 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, LogIn } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
+import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
+import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import {
   JoinRetryNotice,
   JoinUnavailableNotice,
@@ -27,7 +29,6 @@ import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panel
 // ⚠ C5 — RELATIVE IMPORTS, one level deeper than `join-control.tsx`'s (`_actions` sits at
 // `app/join/_actions`, this route is `app/join/m/[meetingId]`).
 import { claimLobbyPlaceAction } from '../../_actions/claim-lobby-place';
-import { GuestCallViewport } from '@/components/balo/meetings/guest-call-viewport';
 import { listGuestMeetingFilesAction } from '../../_actions/list-guest-meeting-files';
 import { getGuestMeetingFileDownloadAction } from '../../_actions/get-guest-meeting-file-download';
 import type { JoinGrant } from '@/lib/meetings/join-api-client';
@@ -277,6 +278,9 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
       setIsSubmitting(true);
       setFormError(null);
       setNotOpenYetMessage(null);
+      // Fetch the call chunk while the visitor waits to be admitted, so admission does not land
+      // them on "Connecting…" waiting for the download.
+      preloadMeetingFrame();
       // ⚠ DELIBERATELY NOT AWAITED — a React event handler must stay synchronous, and every
       // outcome (including the transport arm) is handled in the chain below.
       //
