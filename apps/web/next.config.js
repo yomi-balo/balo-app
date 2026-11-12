@@ -1,6 +1,9 @@
 // next.config.js - balo-web
 import { withSentryConfig } from '@sentry/nextjs';
 
+/** apps/api's `GET /auth/apiroc/callback` (`apps/api/src/routes/calendar/auth.ts`). */
+const APIROC_CALLBACK_PATH = '/auth/apiroc/callback';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   devIndicators: {
@@ -37,6 +40,29 @@ const nextConfig = {
    */
   async redirects() {
     return [{ source: '/consultations', destination: '/cases', permanent: true }];
+  },
+  /**
+   * The Apiroc OAuth callback is served on the WEB origin and proxied to apps/api.
+   *
+   * The connect flow's CSRF nonce cookie is set by apps/web with `Domain` = the web host
+   * (`calendarConnectCookieDomain()` in `@balo/shared/calendar`), and the API's
+   * `GET /auth/apiroc/callback` must read it back. A browser only sends that cookie to the API
+   * when the API is a subdomain of the web host (`balo.expert` + `api.balo.expert`). The deployed
+   * apps run on unrelated hosts (`*.vercel.app` + `*.up.railway.app`), so a callback pointed
+   * straight at Railway never carries the cookie and fails closed with `state_csrf_mismatch`.
+   * Proxying keeps the browser on the web host: the cookie rides along, and the API's response
+   * (its cookie-clearing `Set-Cookie` and its redirect back to `APP_URL`) passes through unchanged.
+   *
+   * Pairs with `APIROC_REDIRECT_URI=<web origin>/auth/apiroc/callback` on apps/api, the same URL
+   * in the Apiroc dashboard's Authorized Redirect URIs, and the `PUBLIC_PATHS` entry in
+   * `src/lib/auth/route-config.ts`. Skipped when `API_URL` is unset, because a rewrite needs an
+   * absolute destination.
+   */
+  async rewrites() {
+    const rawApiUrl = process.env.API_URL;
+    if (!rawApiUrl) return [];
+    const apiUrl = rawApiUrl.endsWith('/') ? rawApiUrl.slice(0, -1) : rawApiUrl;
+    return [{ source: APIROC_CALLBACK_PATH, destination: `${apiUrl}${APIROC_CALLBACK_PATH}` }];
   },
   env: {
     NEXT_PUBLIC_APP_VERSION: process.env.npm_package_version || '0.0.0',

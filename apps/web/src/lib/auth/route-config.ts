@@ -52,6 +52,11 @@ export const PUBLIC_PATHS = new Set([
   // carries a session cookie, so any real path this string could ever name must never require
   // one either.
   '/opengraph-image',
+  // The Apiroc OAuth callback, proxied to apps/api by the `rewrites()` block in `next.config.js`.
+  // Public because the session is not what authenticates it: the API verifies the signed `state`
+  // against the connect nonce cookie. An Edge redirect to `/login` here would park the vendor's
+  // `state` and `endUserAccountId` in a `returnTo` URL and stall the connect behind a sign-in.
+  '/auth/apiroc/callback',
 ]);
 
 /** Prefix-based public paths */
