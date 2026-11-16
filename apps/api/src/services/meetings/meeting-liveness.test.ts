@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockEngagementFindById, mockInfo, mockWarn } = vi.hoisted(() => ({
+const { mockEngagementFindById, mockFindRinging, mockInfo, mockWarn } = vi.hoisted(() => ({
   mockEngagementFindById: vi.fn(),
+  mockFindRinging: vi.fn(),
   mockInfo: vi.fn(),
   mockWarn: vi.fn(),
 }));
@@ -11,11 +12,13 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: mockEngagementFindById },
+  meetingRingsRepository: { findRingingForMeeting: mockFindRinging },
 }));
 // ⚠ `@balo/shared/meetings` is deliberately NOT mocked — `PrimaryMeetingContext` is a type
 // and the real module carries no behaviour this file needs to stub.
 
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
+import { RING_TOKEN_GRACE_MS } from '@balo/shared/meetings';
 import {
   assertMeetingJoinable,
   expiresAtUnixFor,
@@ -49,6 +52,7 @@ const REQUEST_SUBJECT = { contextType: 'project_discovery', contextId: REQUEST_I
 beforeEach(() => {
   vi.clearAllMocks();
   mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
+  mockFindRinging.mockResolvedValue(undefined);
 });
 
 describe('assertMeetingJoinable — the meeting`s own state', () => {
@@ -270,6 +274,140 @@ describe("assertMeetingJoinable — ⚠⚠ D16: the join window's SERVER-SIDE lo
       new Date(START.getTime() - 60_000)
     );
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('assertMeetingJoinable — BAL-649: a live Call now ring opens the join window early', () => {
+  const START = new Date('2026-09-01T10:00:00.000Z');
+  const EARLY = new Date(START.getTime() - 60 * 60_000);
+  const OPENS_AT = new Date(START.getTime() - CASE_JOIN_WINDOW_MINUTES * 60_000);
+
+  const CALLER = 'user-caller';
+  const CALLEE = 'user-callee';
+
+  function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'ring-1',
+      callerUserId: CALLER,
+      calleeUserId: CALLEE,
+      status: 'ringing',
+      placement: 'in_place',
+      createdAt: new Date(EARLY.getTime() - 1_000),
+      expiresAt: new Date(EARLY.getTime() + 45_000),
+      endedAt: null,
+      ...overrides,
+    };
+  }
+
+  it('does not read the ring when the join window is already open', async () => {
+    const result = await assertMeetingJoinable(
+      meeting(),
+      ENGAGEMENT_SUBJECT,
+      new Date(START.getTime() - 60_000),
+      CALLER
+    );
+    expect(result.ok).toBe(true);
+    expect(mockFindRinging).not.toHaveBeenCalled();
+  });
+
+  it('admits an early join while a ring is live, and logs the bypass', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+    expect(result.ok).toBe(true);
+    expect(mockFindRinging).toHaveBeenCalledWith(MEETING_ID);
+    expect(mockInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, ringId: 'ring-1', userId: CALLER, reason: 'live_ring' },
+      'Join window bypassed — live ring'
+    );
+  });
+
+  it('admits the callee early too', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLEE);
+    expect(result.ok).toBe(true);
+  });
+
+  it('⚠ a token minted ONLY because of the ring expires one grace period after the ring', async () => {
+    const ringExpiresAt = new Date(EARLY.getTime() + 45_000);
+    mockFindRinging.mockResolvedValue(ring({ expiresAt: ringExpiresAt }));
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+    if (!result.ok) throw new Error('expected ok');
+    const expected = ringExpiresAt.getTime() + RING_TOKEN_GRACE_MS;
+    expect(RING_TOKEN_GRACE_MS).toBe(60_000);
+    expect(result.expiresAt.getTime()).toBe(expected);
+    expect(result.expiresAtUnix).toBe(expected / 1000);
+  });
+
+  it('a join inside the normal window keeps the scheduled-end expiry even with a live ring', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(
+      meeting(),
+      ENGAGEMENT_SUBJECT,
+      new Date(START.getTime() - 60_000),
+      CALLER
+    );
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.expiresAtUnix).toBe(expiresAtUnixFor(SCHEDULED_END));
+    expect(result.expiresAt.getTime()).toBe(
+      SCHEDULED_END.getTime() + MEETING_TOKEN_TTL_AFTER_END_MS
+    );
+  });
+
+  it('⚠ refuses anyone else on the meeting — another member or an observer — while the ring is live', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(
+      meeting(),
+      ENGAGEMENT_SUBJECT,
+      EARLY,
+      'user-colleague'
+    );
+    expect(result).toEqual({ ok: false, reason: 'join_window_not_open', opensAt: OPENS_AT });
+  });
+
+  it('⚠ never applies without a member (guest, lobby, re-entry): the ring is not even read', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY);
+    expect(result).toEqual({ ok: false, reason: 'join_window_not_open', opensAt: OPENS_AT });
+    expect(mockFindRinging).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the ring is still `ringing` but past its expiry', async () => {
+    mockFindRinging.mockResolvedValue(ring({ expiresAt: new Date(EARLY.getTime() - 1) }));
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+    expect(result).toEqual({ ok: false, reason: 'join_window_not_open', opensAt: OPENS_AT });
+  });
+
+  it('refuses when there is no ring', async () => {
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+    expect(result).toEqual({ ok: false, reason: 'join_window_not_open', opensAt: OPENS_AT });
+  });
+
+  it.each(['connected', 'unanswered', 'declined', 'stopped'] as const)(
+    'refuses when the ring is `%s`',
+    async (status) => {
+      mockFindRinging.mockResolvedValue(ring({ status, endedAt: EARLY }));
+      const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+      expect(result).toMatchObject({ ok: false, reason: 'join_window_not_open' });
+    }
+  );
+
+  it('a terminal meeting wins over a live ring and the ring is never read', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    const result = await assertMeetingJoinable(
+      meeting({ status: 'ended' }),
+      ENGAGEMENT_SUBJECT,
+      EARLY,
+      CALLER
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'meeting_terminal' });
+    expect(mockFindRinging).not.toHaveBeenCalled();
+  });
+
+  it('an inactive engagement wins over a live ring', async () => {
+    mockFindRinging.mockResolvedValue(ring());
+    mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'completed' });
+    const result = await assertMeetingJoinable(meeting(), ENGAGEMENT_SUBJECT, EARLY, CALLER);
+    expect(result).toMatchObject({ ok: false, reason: 'engagement_not_active' });
   });
 });
 

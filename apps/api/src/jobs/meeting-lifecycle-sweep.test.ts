@@ -30,6 +30,10 @@ const {
   mockCountFailedByStage,
   mockTransaction,
   mockApplyRecordedVisit,
+  mockListRingsForMeeting,
+  mockListOverdueRinging,
+  mockEndRing,
+  mockTerminateNoAnswer,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockListStranded: vi.fn(),
@@ -60,6 +64,10 @@ const {
   mockCountFailedByStage: vi.fn(),
   mockTransaction: vi.fn(),
   mockApplyRecordedVisit: vi.fn(),
+  mockListRingsForMeeting: vi.fn(),
+  mockListOverdueRinging: vi.fn(),
+  mockEndRing: vi.fn(),
+  mockTerminateNoAnswer: vi.fn(),
 }));
 
 /** See the `./recording-capture.js` mock below — a stand-in cap, not the real constant. */
@@ -81,6 +89,11 @@ vi.mock('@balo/db', () => ({
     hasOpenAdmittedLinkGuest: mockHasLinkGuest,
   },
   meetingContextsRepository: { listByMeeting: mockListContexts },
+  // BAL-649 — the ring reads behind the candidate facts and the overdue-ring pass.
+  meetingRingsRepository: {
+    listForMeeting: mockListRingsForMeeting,
+    listOverdueRinging: mockListOverdueRinging,
+  },
   // BAL-480 — MANDATORY: `needsRecordingEnsure` calls `findCapturingForMeeting` directly. A
   // vitest factory mock throws on any export the import graph touches but the factory omits, so
   // omitting this fails EVERY test in this file at import.
@@ -114,6 +127,11 @@ vi.mock('../services/meetings/presence-writer.js', () => ({
   applyRecordedVisit: mockApplyRecordedVisit,
   closePresenceEffectForRow: mockClosePresenceEffectForRow,
   reconcileMeetingStatus: mockReconcileMeetingStatus,
+}));
+// BAL-649 — the Call now ring services; their own behaviour is covered beside them.
+vi.mock('../services/call-now/end-ring.js', () => ({
+  endRing: mockEndRing,
+  terminateNoAnswerMeeting: mockTerminateNoAnswer,
 }));
 vi.mock('../services/meetings/delivering-party.js', () => ({
   deliveringPartyName: mockDeliveringPartyName,
@@ -166,6 +184,7 @@ import {
   DEFAULT_MEETING_TIMERS,
 } from '@balo/shared/meetings';
 import {
+  CALL_NOW_OVERDUE_RING_BATCH_LIMIT,
   MAX_RECONCILER_CLOSES_PER_TICK,
   MAX_RECORDING_ENSURES_PER_SWEEP_TICK,
   MAX_ROOM_PRESENCE_READS_PER_TICK,
@@ -272,6 +291,10 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockListCandidates.mockResolvedValue([]);
     mockListStranded.mockResolvedValue([]);
     mockListByMeeting.mockResolvedValue([]);
+    mockListRingsForMeeting.mockResolvedValue([]);
+    mockListOverdueRinging.mockResolvedValue([]);
+    mockEndRing.mockResolvedValue({ ended: true });
+    mockTerminateNoAnswer.mockResolvedValue(true);
     mockHasLinkGuest.mockResolvedValue(false);
     mockListContexts.mockResolvedValue([
       { meetingId: MEETING_ID, contextType: 'case', contextId: 'ctx-1' },
@@ -3357,6 +3380,273 @@ describe('rotateForTick', () => {
     const input = [...ITEMS];
     expect(rotateForTick(input, atMinute(4))).toEqual(['a', 'b', 'c', 'd']);
     expect(input).toEqual(['a', 'b', 'c', 'd']);
+  });
+});
+
+/** BAL-649 — Call now: the overdue-ring pass, the `no_answer` rule's delegation and the in-place facts. */
+describe('runMeetingLifecycleSweep — BAL-649 Call now', () => {
+  const RING_ID = '88888888-8888-4888-8888-888888888888';
+  const RING_MS = 45_000;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListCandidates.mockResolvedValue([]);
+    mockListStranded.mockResolvedValue([]);
+    mockListByMeeting.mockResolvedValue([]);
+    mockListRingsForMeeting.mockResolvedValue([]);
+    mockListOverdueRinging.mockResolvedValue([]);
+    mockEndRing.mockResolvedValue({ ended: true });
+    mockTerminateNoAnswer.mockResolvedValue(true);
+    mockHasLinkGuest.mockResolvedValue(false);
+    mockListContexts.mockResolvedValue([
+      { meetingId: MEETING_ID, contextType: 'case', contextId: 'ctx-1' },
+    ]);
+    mockResolveOwner.mockResolvedValue({
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+      deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+    });
+    mockEndMeeting.mockResolvedValue({ meeting: meeting({ status: 'ended' }), closedIntervals: 1 });
+    mockFindMeetingById.mockResolvedValue(meeting());
+    mockReconcileMeetingStatus.mockResolvedValue(null);
+    mockDeliveringPartyName.mockResolvedValue('CloudPeak');
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'not_a_case_meeting',
+    });
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    mockCountFailedByStage.mockResolvedValue(0);
+  });
+
+  function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: RING_ID,
+      meetingId: MEETING_ID,
+      placement: 'new_meeting',
+      status: 'ringing',
+      createdAt: START,
+      expiresAt: new Date(START.getTime() + RING_MS),
+      endedAt: null,
+      ...overrides,
+    };
+  }
+
+  describe('the overdue-ring pass', () => {
+    it('pins the batch limit', () => {
+      expect(CALL_NOW_OVERDUE_RING_BATCH_LIMIT).toBe(50);
+    });
+
+    it('ends each overdue ring as unanswered with a null actor, and warns that the job was late or lost', async () => {
+      const overdue = [ring({ id: 'ring-a' }), ring({ id: 'ring-b' })];
+      mockListOverdueRinging.mockResolvedValue(overdue);
+
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(mockListOverdueRinging).toHaveBeenCalledWith({
+        now: at(2),
+        limit: CALL_NOW_OVERDUE_RING_BATCH_LIMIT,
+      });
+      expect(mockEndRing).toHaveBeenCalledTimes(2);
+      expect(mockEndRing).toHaveBeenCalledWith({
+        ringId: 'ring-a',
+        to: 'unanswered',
+        actorUserId: null,
+        now: at(2),
+      });
+      expect(mockWarn).toHaveBeenCalledWith(
+        { ringId: 'ring-a', lateMs: at(2).getTime() - START.getTime() - RING_MS },
+        'Overdue ring ended by the sweep — expiry job late or lost'
+      );
+      expect(result.ringsExpired).toBe(2);
+    });
+
+    it('runs BEFORE the candidate read', async () => {
+      mockListOverdueRinging.mockResolvedValue([ring()]);
+
+      await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      const endOrder = mockEndRing.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+      const candidateOrder = mockListCandidates.mock.invocationCallOrder[0] ?? 0;
+      expect(endOrder).toBeLessThan(candidateOrder);
+    });
+
+    it('a thrown endRing does not abort the tick — the next ring still ends and the error is logged', async () => {
+      mockListOverdueRinging.mockResolvedValue([ring({ id: 'ring-a' }), ring({ id: 'ring-b' })]);
+      mockEndRing
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValueOnce({ ended: true });
+
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(mockEndRing).toHaveBeenCalledTimes(2);
+      expect(mockErrorLog).toHaveBeenCalledWith(
+        { ringId: 'ring-a', error: 'db down' },
+        'Overdue ring could not be ended by the sweep'
+      );
+      expect(result.ringsExpired).toBe(1);
+    });
+
+    it('a ring another writer already ended is not counted', async () => {
+      mockListOverdueRinging.mockResolvedValue([ring()]);
+      mockEndRing.mockResolvedValue({ ended: false, status: 'connected' });
+
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(result.ringsExpired).toBe(0);
+    });
+
+    it('warns when the batch FILLS — never a silent cap', async () => {
+      mockListOverdueRinging.mockResolvedValue(
+        Array.from({ length: CALL_NOW_OVERDUE_RING_BATCH_LIMIT }, (_unused, index) =>
+          ring({ id: `ring-${index}` })
+        )
+      );
+
+      await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(mockWarn).toHaveBeenCalledWith(
+        { limit: CALL_NOW_OVERDUE_RING_BATCH_LIMIT },
+        expect.stringContaining('FILLED')
+      );
+    });
+
+    it('reports zero when no ring is overdue', async () => {
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(result.ringsExpired).toBe(0);
+      expect(mockEndRing).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a `call_now` meeting', () => {
+    it('past its ring expiry delegates to terminateNoAnswerMeeting and runs none of the generic end', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([ring({ status: 'unanswered', endedAt: at(1) })]);
+
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(mockTerminateNoAnswer).toHaveBeenCalledWith({ meetingId: MEETING_ID, now: at(2) });
+      expect(result.terminated).toBe(1);
+      expect(mockEndMeeting).not.toHaveBeenCalled();
+      expect(mockEmitMeetingEnded).not.toHaveBeenCalled();
+      expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingStop).not.toHaveBeenCalled();
+      expect(mockDeleteRoom).not.toHaveBeenCalled();
+      expect(mockTrackServer).not.toHaveBeenCalledWith('meeting_missed_call', expect.anything());
+      expect(mockTrackServer).not.toHaveBeenCalledWith(
+        'meeting_waiting_abandoned',
+        expect.anything()
+      );
+    });
+
+    it('is not terminated when terminateNoAnswerMeeting lost the race', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([ring({ status: 'unanswered', endedAt: at(1) })]);
+      mockTerminateNoAnswer.mockResolvedValue(false);
+
+      const result = await runMeetingLifecycleSweep(at(2), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(0);
+      expect(mockEndMeeting).not.toHaveBeenCalled();
+    });
+
+    it('with a LIVE ring fires no rule at all', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([ring()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+
+      const result = await runMeetingLifecycleSweep(at(0.5), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(0);
+      expect(mockTerminateNoAnswer).not.toHaveBeenCalled();
+      expect(mockEndMeeting).not.toHaveBeenCalled();
+    });
+
+    it('⚠ AC3 — arms neither absence reminder, whoever is in the room and however late', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([ring()]);
+
+      await runMeetingLifecycleSweep(at(0.5), () => {}, EMPTY_READER);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+      await runMeetingLifecycleSweep(at(0.5), () => {}, EMPTY_READER);
+
+      expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
+      expect(mockScheduleClientAbsent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a BOOKED meeting after an unanswered in-place ring (AC5)', () => {
+    /** The expert rang from the room 30 minutes before the booked start, then gave up and left. */
+    const RING_START = at(-30);
+    const unansweredInPlace = ring({
+      placement: 'in_place',
+      status: 'unanswered',
+      createdAt: RING_START,
+      expiresAt: new Date(RING_START.getTime() + RING_MS),
+      endedAt: new Date(RING_START.getTime() + RING_MS),
+    });
+    const ringAttemptVisit = {
+      party: 'expert',
+      joinedAt: RING_START,
+      leftAt: new Date(RING_START.getTime() + RING_MS),
+    };
+
+    it('is `missed_call` at its booked start + 10 min with an empty room — never `abandoned_wait`', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([unansweredInPlace]);
+      mockListByMeeting.mockResolvedValue([ringAttemptVisit]);
+
+      const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(1);
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalRule: { rule: 'missed_call', arm: null } })
+      );
+      expect(mockTerminateNoAnswer).not.toHaveBeenCalled();
+    });
+
+    it('without the ring the same presence would have read as `abandoned_wait` — the filter is what changes it', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListByMeeting.mockResolvedValue([ringAttemptVisit]);
+
+      await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalRule: { rule: 'abandoned_wait', arm: null } })
+      );
+    });
+
+    it('a ring-time visit that stays past the window open is clipped to it, not dropped — the expert reads as present', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([unansweredInPlace]);
+      mockListByMeeting.mockResolvedValue([{ ...ringAttemptVisit, leftAt: at(5) }]);
+
+      await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+      expect(mockEndMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalRule: { rule: 'abandoned_wait', arm: null } })
+      );
+    });
+
+    it('still arms the expert-absent alert at its booked start', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListRingsForMeeting.mockResolvedValue([unansweredInPlace]);
+      mockListByMeeting.mockResolvedValue([ringAttemptVisit]);
+
+      await runMeetingLifecycleSweep(at(3), () => {}, EMPTY_READER);
+
+      expect(mockScheduleExpertAbsent).toHaveBeenCalledTimes(1);
+    });
+
+    it('a connected in-place ring leaves the presence unfiltered', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockListRingsForMeeting.mockResolvedValue([{ ...unansweredInPlace, status: 'connected' }]);
+      mockListByMeeting.mockResolvedValue([ringAttemptVisit]);
+
+      const result = await runMeetingLifecycleSweep(at(3), () => {}, EMPTY_READER);
+
+      expect(result.terminated).toBe(0);
+    });
   });
 });
 

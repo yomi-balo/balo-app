@@ -8,6 +8,7 @@ const {
   mockOpen,
   mockFindUserIdByProfileId,
   mockGetMemberRole,
+  mockListRings,
   DB,
 } = vi.hoisted(() => ({
   mockResolveSubject: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockOpen: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
   mockGetMemberRole: vi.fn(),
+  mockListRings: vi.fn(),
   DB: { __db: true },
 }));
 
@@ -31,6 +33,7 @@ vi.mock('@balo/db', () => ({
   creditSessionsRepository: { open: mockOpen },
   expertsRepository: { findUserIdByProfileId: mockFindUserIdByProfileId },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
+  meetingRingsRepository: { listForMeeting: mockListRings },
 }));
 vi.mock('./case-billing-subject.js', () => ({ resolveCaseBillingSubject: mockResolveSubject }));
 
@@ -64,6 +67,7 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
     mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1' });
     mockFindUserIdByProfileId.mockResolvedValue({ user: { id: 'expert-user-1' } });
     mockGetMemberRole.mockResolvedValue('member');
+    mockListRings.mockResolvedValue([]);
   });
 
   describe('resolveMeetingBooker', () => {
@@ -134,6 +138,103 @@ describe('open-on-behalf-of-booker (BAL-474, D3 / D4 / D5.6 / D5.9 / D7.5)', () 
       });
       expect(result.ok && result.open.initiatingMemberId).toBe('booker-1');
       expect(mockFindBooker).toHaveBeenCalledTimes(1);
+    });
+
+    describe('⚠ BAL-649 (D16) — the fallback booker on a Call now meeting an EXPERT created', () => {
+      const EXPERT_RANG = {
+        placement: 'new_meeting',
+        callerSide: 'expert',
+        callerUserId: 'expert-user-1',
+        calleeUserId: 'rung-member-1',
+      };
+
+      /** `start-billing.ts` with guest-only presence: no present member, so the fallback decides. */
+      const billingStartGuestOnly = () =>
+        resolveOnBehalfOpenInput({
+          meetingId: MEETING_ID,
+          openedBy: 'system',
+          trigger: 'billing_start',
+          attended: true,
+        });
+
+      /** `settle-sessionless-case-meeting.ts`: never passes a present member. */
+      const sessionlessSettle = () =>
+        resolveOnBehalfOpenInput({
+          meetingId: MEETING_ID,
+          openedBy: 'system',
+          trigger: 'meeting_lifecycle_sweep',
+          window: { scheduledStart: START, scheduledEnd: END },
+          attended: true,
+        });
+
+      it.each([
+        ['start-billing (guest-only presence)', billingStartGuestOnly],
+        ['settle-sessionless-case-meeting', sessionlessSettle],
+      ])(
+        '%s: attributes the rung client member, after a live-membership check — never the expert',
+        async (_label, run) => {
+          mockListRings.mockResolvedValue([EXPERT_RANG]);
+          mockFindBooker.mockResolvedValue('expert-user-1');
+
+          const result = await run();
+
+          expect(result.ok && result.open.initiatingMemberId).toBe('rung-member-1');
+          expect(mockListRings).toHaveBeenCalledWith(MEETING_ID);
+          expect(mockGetMemberRole).toHaveBeenCalledWith('company', 'company-1', 'rung-member-1');
+          expect(mockFindBooker).not.toHaveBeenCalled();
+        }
+      );
+
+      it.each([
+        ['start-billing (guest-only presence)', billingStartGuestOnly],
+        ['settle-sessionless-case-meeting', sessionlessSettle],
+      ])(
+        '%s: a rung member who has since left the company is `booker_unattributable` — no wallet',
+        async (_label, run) => {
+          mockListRings.mockResolvedValue([EXPERT_RANG]);
+          mockGetMemberRole.mockResolvedValue(undefined);
+
+          await expect(run()).resolves.toEqual({
+            ok: false,
+            code: 'booker_unattributable',
+            companyId: 'company-1',
+          });
+          expect(mockEnsureForCompany).not.toHaveBeenCalled();
+          expect(mockFindBooker).not.toHaveBeenCalled();
+        }
+      );
+
+      it('a Call now meeting a CLIENT created keeps the `meeting.booked` actor', async () => {
+        mockListRings.mockResolvedValue([{ ...EXPERT_RANG, callerSide: 'client' }]);
+
+        const result = await billingStartGuestOnly();
+
+        expect(result.ok && result.open.initiatingMemberId).toBe('booker-1');
+        expect(mockGetMemberRole).not.toHaveBeenCalled();
+      });
+
+      it('an in-place ring an expert placed does not change the booked meeting`s booker', async () => {
+        mockListRings.mockResolvedValue([{ ...EXPERT_RANG, placement: 'in_place' }]);
+
+        const result = await sessionlessSettle();
+
+        expect(result.ok && result.open.initiatingMemberId).toBe('booker-1');
+      });
+
+      it('a present member still wins: no ring read runs', async () => {
+        mockListRings.mockResolvedValue([EXPERT_RANG]);
+
+        const result = await resolveOnBehalfOpenInput({
+          meetingId: MEETING_ID,
+          openedBy: 'system',
+          trigger: 'billing_start',
+          attended: true,
+          onBehalfOfUserId: 'present-member-1',
+        });
+
+        expect(result.ok && result.open.initiatingMemberId).toBe('present-member-1');
+        expect(mockListRings).not.toHaveBeenCalled();
+      });
     });
 
     it('builds the tolerant, presence-sourced input on the booker, with the wallet PROVISIONED on `db` first', async () => {

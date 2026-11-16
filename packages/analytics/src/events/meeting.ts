@@ -319,10 +319,16 @@ export interface MeetingServerEventMap {
      * ⚠ `null` IS A REAL VALUE, NOT "unknown" (D5). The two HUMAN paths and the abandoned wait
      * deliberately leave it unset — the ender never sets the outcome.
      */
-    outcome: 'completed' | 'no_show_client' | 'missed_call' | 'venue_unavailable' | null;
-    /** `meetings.ended_by`. ⚠ ALL FIVE system rules report `system_idle`; `outcome` separates them. */
+    outcome:
+      | 'completed'
+      | 'no_show_client'
+      | 'missed_call'
+      | 'venue_unavailable'
+      | 'no_answer'
+      | null;
+    /** `meetings.ended_by`. ⚠ EVERY system rule reports `system_idle`; `outcome` separates them. */
     ended_by: 'client_principal' | 'expert_host' | 'system_idle';
-    /** The acting user on a human End; the MEETING id on all five system paths. */
+    /** The acting user on a human End; the MEETING id on every system path. */
     distinct_id: string;
   };
 

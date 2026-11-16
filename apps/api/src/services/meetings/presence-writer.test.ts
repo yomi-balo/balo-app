@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockAuthorizeParticipation,
@@ -16,6 +16,13 @@ const {
   mockWarn,
   mockError,
   mockStartBillingIfDue,
+  mockFindRinging,
+  mockConnectRing,
+  mockInfo,
+  mockDebug,
+  mockMeetingFindById,
+  mockRingFindById,
+  mockListRingsForMeeting,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockDeliveringUserId: vi.fn(),
@@ -33,10 +40,20 @@ const {
   mockError: vi.fn(),
   /** BAL-474 (Rule A) — the level-triggered start-billing seam. */
   mockStartBillingIfDue: vi.fn(),
+  /** BAL-649 — the ring read and the connect service. No ring by default. */
+  mockFindRinging: vi.fn<(meetingId: string) => Promise<unknown>>(async () => undefined),
+  mockConnectRing: vi.fn(),
+  mockInfo: vi.fn(),
+  mockDebug: vi.fn(),
+  /** BAL-649 — the re-reads after a missed connect. */
+  mockMeetingFindById: vi.fn(),
+  mockRingFindById: vi.fn(),
+  /** BAL-649 — the rings that scope the before-the-window hold. */
+  mockListRingsForMeeting: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: mockError }),
+  createLogger: () => ({ debug: mockDebug, info: mockInfo, warn: mockWarn, error: mockError }),
 }));
 vi.mock('@balo/db', () => ({
   meetingGuestsRepository: { findLiveById: mockFindLiveGuest },
@@ -46,9 +63,15 @@ vi.mock('@balo/db', () => ({
     insertClosed: mockInsertClosed,
     listOpen: mockListOpen,
   },
+  meetingRingsRepository: {
+    findRingingForMeeting: mockFindRinging,
+    findById: mockRingFindById,
+    listForMeeting: mockListRingsForMeeting,
+  },
   meetingsRepository: {
     markWaitingForParticipants: mockMarkWaiting,
     markInProgress: mockMarkInProgress,
+    findById: mockMeetingFindById,
   },
 }));
 vi.mock('./delivering-party.js', () => ({
@@ -67,6 +90,9 @@ vi.mock('../../notifications/scheduling/schedule.js', () => ({
 }));
 vi.mock('../credit-session/start-billing.js', () => ({
   startBillingIfDue: mockStartBillingIfDue,
+}));
+vi.mock('../call-now/connect-ring.js', () => ({
+  connectRingIfRinging: mockConnectRing,
 }));
 // ⚠ `@balo/shared/meetings` is NOT mocked: `parseDailyParticipantId` and
 // `presencePartyForGuest` (THE MONEY RULE) are precisely what the party-derivation rows assert.
@@ -696,5 +722,193 @@ describe('reconcileMeetingStatus — BAL-474 (Rule A, D13), the level-triggered 
     await reconcileMeetingStatus(MEETING, END);
 
     expect(mockStartBillingIfDue).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcileMeetingStatus — BAL-649, a Call now ring', () => {
+  const OPEN_ROWS = [
+    { party: 'expert', joinedAt: START, leftAt: null, userId: USER_ID },
+    { party: 'client', joinedAt: START, leftAt: null, userId: DELIVERING_USER_ID },
+  ];
+  const NOW = new Date('2026-08-14T09:59:00.000Z');
+  const RING_ID = '88888888-8888-4888-8888-888888888888';
+  const MOVED = { ...(MEETING as object), status: 'in_progress', scheduledStart: NOW } as never;
+
+  function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: RING_ID,
+      status: 'ringing',
+      placement: 'in_place',
+      createdAt: new Date(NOW.getTime() - 20_000),
+      expiresAt: new Date(NOW.getTime() + 25_000),
+      endedAt: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCancelScheduled.mockResolvedValue(1);
+    mockMarkWaiting.mockResolvedValue({ id: MEETING_ID, status: 'waiting_for_participants' });
+    mockMarkInProgress.mockResolvedValue({ id: MEETING_ID, status: 'in_progress' });
+    mockStartBillingIfDue.mockResolvedValue({ kind: 'not_due' });
+    mockFindRinging.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    mockFindRinging.mockResolvedValue(undefined);
+  });
+
+  it('co-presence with a ring connects it, then starts billing on the MOVED meeting', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+    mockFindRinging.mockResolvedValue(ring());
+    mockConnectRing.mockResolvedValue({ connected: true, meeting: MOVED, ring: ring() });
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBe('in_progress');
+
+    expect(mockConnectRing).toHaveBeenCalledWith({ meeting: MEETING, now: NOW });
+    expect(mockStartBillingIfDue).toHaveBeenCalledWith({
+      meeting: MOVED,
+      openRows: OPEN_ROWS,
+      now: NOW,
+    });
+    expect(mockMarkInProgress).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith('meeting_started', {
+      meeting_id: MEETING_ID,
+      seconds_from_scheduled_start: 0,
+      participant_count: 2,
+      distinct_id: MEETING_ID,
+    });
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, trigger: 'call_now_connect' }),
+      'Meeting status transition'
+    );
+  });
+
+  it('⚠ a connect miss re-reads the meeting and the ring and NEVER starts the booking', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+    mockFindRinging.mockResolvedValue(ring());
+    mockConnectRing.mockResolvedValue({ connected: false });
+    mockMeetingFindById.mockResolvedValue({ ...(MEETING as object), status: 'scheduled' });
+    mockRingFindById.mockResolvedValue(ring({ status: 'unanswered', endedAt: NOW }));
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBeNull();
+
+    expect(mockMeetingFindById).toHaveBeenCalledWith(MEETING_ID);
+    expect(mockRingFindById).toHaveBeenCalledWith(RING_ID);
+    expect(mockMarkInProgress).not.toHaveBeenCalled();
+    expect(mockMarkWaiting).not.toHaveBeenCalled();
+    expect(mockStartBillingIfDue).not.toHaveBeenCalled();
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ ringStatus: 'unanswered', meetingStatus: 'scheduled' }),
+      expect.stringContaining('connect missed')
+    );
+  });
+
+  it('a connect miss to a concurrent connect only re-asks billing on the re-read, already-started meeting', async () => {
+    const running = { ...(MEETING as object), status: 'in_progress', scheduledStart: NOW };
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+    mockFindRinging.mockResolvedValue(ring());
+    mockConnectRing.mockResolvedValue({ connected: false });
+    mockMeetingFindById.mockResolvedValue(running);
+    mockRingFindById.mockResolvedValue(ring({ status: 'connected', endedAt: NOW }));
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBeNull();
+
+    expect(mockMarkInProgress).not.toHaveBeenCalled();
+    expect(mockStartBillingIfDue).toHaveBeenCalledWith({
+      meeting: running,
+      openRows: OPEN_ROWS,
+      now: NOW,
+    });
+  });
+
+  it('co-presence with no ring never calls the connect service', async () => {
+    mockListOpen.mockResolvedValue(OPEN_ROWS);
+
+    await reconcileMeetingStatus(MEETING, NOW);
+
+    expect(mockConnectRing).not.toHaveBeenCalled();
+    expect(mockMarkInProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it('one side present while the ring is live holds the meeting — no waiting transition', async () => {
+    mockListOpen.mockResolvedValue([{ party: 'expert' }]);
+    mockFindRinging.mockResolvedValue(ring());
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBeNull();
+
+    expect(mockMarkWaiting).not.toHaveBeenCalled();
+    expect(mockDebug).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, ringId: RING_ID },
+      expect.stringContaining('held')
+    );
+  });
+
+  it('⚠ a ringing ring past its expiry still holds the meeting until the ring is ended', async () => {
+    mockListOpen.mockResolvedValue([{ party: 'expert' }]);
+    mockFindRinging.mockResolvedValue(ring({ expiresAt: new Date(NOW.getTime() - 1) }));
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBeNull();
+    expect(mockMarkWaiting).not.toHaveBeenCalled();
+  });
+
+  describe('⚠ no transition before its own join window on a booking an unanswered in-place ring touched', () => {
+    /** 14:00 for a 16:00 booking — the in-place caller still in the room after the ring ended. */
+    const BOOKED = {
+      ...(MEETING as object),
+      scheduledStart: new Date('2026-08-14T16:00:00.000Z'),
+      scheduledEnd: new Date('2026-08-14T16:30:00.000Z'),
+    } as never;
+    const TWO_PM = new Date('2026-08-14T14:00:00.000Z');
+
+    beforeEach(() => {
+      mockListRingsForMeeting.mockResolvedValue([ring({ status: 'declined', endedAt: TWO_PM })]);
+    });
+
+    afterEach(() => {
+      mockListRingsForMeeting.mockResolvedValue([]);
+    });
+
+    it('without an unanswered in-place ring, early co-presence starts the meeting exactly as before', async () => {
+      mockListRingsForMeeting.mockResolvedValue([]);
+      mockListOpen.mockResolvedValue(OPEN_ROWS);
+
+      await reconcileMeetingStatus(BOOKED, TWO_PM);
+      expect(mockMarkInProgress).toHaveBeenCalledTimes(1);
+    });
+
+    it('one side still in the room: the booking stays `scheduled`', async () => {
+      mockListOpen.mockResolvedValue([{ party: 'client' }]);
+
+      await expect(reconcileMeetingStatus(BOOKED, TWO_PM)).resolves.toBeNull();
+      expect(mockMarkWaiting).not.toHaveBeenCalled();
+    });
+
+    it('both sides still in the room: no start and no billing', async () => {
+      mockListOpen.mockResolvedValue(OPEN_ROWS);
+
+      await expect(reconcileMeetingStatus(BOOKED, TWO_PM)).resolves.toBeNull();
+      expect(mockMarkInProgress).not.toHaveBeenCalled();
+      expect(mockStartBillingIfDue).not.toHaveBeenCalled();
+    });
+
+    it('a meeting already past `scheduled` is not held by the window', async () => {
+      mockListOpen.mockResolvedValue(OPEN_ROWS);
+      const waiting = { ...(BOOKED as object), status: 'waiting_for_participants' } as never;
+
+      await reconcileMeetingStatus(waiting, TWO_PM);
+      expect(mockMarkInProgress).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('an observer beside the expert is not co-presence — a live ring neither connects nor transitions', async () => {
+    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'observer' }]);
+    mockFindRinging.mockResolvedValue(ring());
+
+    await expect(reconcileMeetingStatus(MEETING, NOW)).resolves.toBeNull();
+
+    expect(mockConnectRing).not.toHaveBeenCalled();
+    expect(mockMarkWaiting).not.toHaveBeenCalled();
   });
 });

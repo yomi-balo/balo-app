@@ -1,10 +1,13 @@
-import { and, asc, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { joinWindowOpensAt } from '@balo/shared/engagements';
 import {
   clampIntervalsToStart,
+  clipUnansweredRingIntervals,
   computeMeetingClocks,
   coPresentMsBefore,
   expertPresentFromStartMs,
   summarisePresence,
+  type CallRingFacts,
   type LifecyclePresenceInterval,
   type MeetingClocks,
   type PresenceFacts,
@@ -16,6 +19,7 @@ import {
   meetingContexts,
   meetingGuests,
   meetingPresence,
+  meetingRings,
   meetings,
   type MeetingParticipantParty,
   type MeetingPresence,
@@ -267,6 +271,20 @@ async function resolveClockCeiling(meetingId: string): Promise<Date> {
     return meeting.endedAt;
   }
   return new Date();
+}
+
+/** BAL-649 — a meeting's live Call now rings, reduced to the facts `clipUnansweredRingIntervals` reads. */
+async function listRingFactsForMeeting(meetingId: string): Promise<CallRingFacts[]> {
+  return db
+    .select({
+      placement: meetingRings.placement,
+      status: meetingRings.status,
+      createdAt: meetingRings.createdAt,
+      expiresAt: meetingRings.expiresAt,
+      endedAt: meetingRings.endedAt,
+    })
+    .from(meetingRings)
+    .where(and(eq(meetingRings.meetingId, meetingId), isNull(meetingRings.deletedAt)));
 }
 
 /**
@@ -715,6 +733,11 @@ export const meetingPresenceRepository = {
    * An object parameter, not a positional
    * `Date`, so a caller cannot silently pass the start where `now` was expected.
    *
+   * ⚠ BAL-649 — "RAW" here means after `clipUnansweredRingIntervals`: an interval that joined during a failed
+   * in-place Call now ring (or its token grace) counts from the booking's join-window open at the earliest, and
+   * one that left before it is dropped. So two parties who rang at 2 pm and stayed together never bill the
+   * hours before a 4 pm booking. The rings are a second query, run alongside the presence read.
+   *
    * `now` resolves exactly as {@link clocks} resolves it (an explicit instant wins; otherwise
    * `meetings.ended_at` for a terminal meeting, else the wall clock), and the SAME instant is
    * used for both reductions — a second `resolveClockCeiling` call could land a millisecond
@@ -743,10 +766,26 @@ export const meetingPresenceRepository = {
     /** D15.3 — the expert's gap-inclusive span from their first presence at or after `scheduledStart`, over the RAW rows. */
     expertPresentFromStartMs: number;
   }> {
-    const rows = await this.listByMeeting(meetingId);
+    const [rows, rings] = await Promise.all([
+      this.listByMeeting(meetingId),
+      listRingFactsForMeeting(meetingId),
+    ]);
     const ceiling = input.now ?? (await resolveClockCeiling(meetingId));
 
-    const rawIntervals: PresenceInterval[] = rows.map((row) => ({
+    // BAL-649 — every figure reads the rows AFTER a failed in-place ring's presence is clipped to the
+    // booking's join window, so time spent ringing (or rejoining on the ring's token) before the window
+    // never bills as time together. The lifecycle sweep applies the same clip.
+    const ringClipped = clipUnansweredRingIntervals(
+      rows.map((row) => ({
+        party: row.party,
+        joinedAt: row.joinedAt,
+        leftAt: row.leftAt,
+        meetingGuestId: row.meetingGuestId,
+      })),
+      rings,
+      joinWindowOpensAt(input.scheduledStart)
+    );
+    const rawIntervals: PresenceInterval[] = ringClipped.map((row) => ({
       party: row.party,
       joinedAt: row.joinedAt,
       leftAt: row.leftAt,
@@ -754,12 +793,7 @@ export const meetingPresenceRepository = {
     const factIntervals: LifecyclePresenceInterval[] = rawIntervals;
     // R6F-4a — the together term drops the delivering expert's own invited guests; nothing else reads this list.
     const togetherIntervals: PresenceInterval[] = await omitExpertInvitedGuestRows(
-      rows.map((row) => ({
-        party: row.party,
-        joinedAt: row.joinedAt,
-        leftAt: row.leftAt,
-        meetingGuestId: row.meetingGuestId,
-      })),
+      ringClipped,
       input.resolveExpertProfileId ?? (() => Promise.resolve(null))
     );
 
@@ -1015,5 +1049,61 @@ export const meetingPresenceRepository = {
       )
       .limit(1);
     return row !== undefined;
+  },
+
+  /**
+   * BAL-649 — is this user in a call right now, on ANY meeting? The Call now busy gate: a
+   * callee already in a live call is not rung.
+   *
+   * Busy is either of:
+   *   · an OPEN live interval for the user as a PARTY (`party` `expert` or `client` — an
+   *     `observer` row is somebody watching, not somebody on a call) on a live meeting that is
+   *     `waiting_for_participants` or `in_progress`. An open interval left behind on a
+   *     `scheduled`, `ended` or `cancelled` meeting does not count, so a dropped leave webhook on
+   *     a finished call cannot mark someone busy forever;
+   *   · the user is the caller or the callee of a live `ringing` ring (`expires_at > now`) — a
+   *     ringing meeting is still `scheduled`, so the presence arm cannot see it.
+   *
+   * Guest-token rows carry no `user_id` and never match. Rides `meeting_presence_open_user_idx`
+   * and the ring caller/callee indexes.
+   */
+  async isUserInLiveMeeting(
+    userId: string,
+    now: Date = new Date(),
+    exec: DbExecutor = db
+  ): Promise<boolean> {
+    const [inCall] = await exec
+      .select({ id: meetingPresence.id })
+      .from(meetingPresence)
+      .innerJoin(meetings, eq(meetings.id, meetingPresence.meetingId))
+      .where(
+        and(
+          eq(meetingPresence.userId, userId),
+          inArray(meetingPresence.party, ['expert', 'client']),
+          isNull(meetingPresence.leftAt),
+          isNull(meetingPresence.deletedAt),
+          // Status literals at QUERY time are always safe — the house restriction is on index
+          // predicates and CHECKs.
+          inArray(meetings.status, ['waiting_for_participants', 'in_progress']),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .limit(1);
+    if (inCall !== undefined) {
+      return true;
+    }
+    const [ringing] = await exec
+      .select({ id: meetingRings.id })
+      .from(meetingRings)
+      .where(
+        and(
+          or(eq(meetingRings.callerUserId, userId), eq(meetingRings.calleeUserId, userId)),
+          eq(meetingRings.status, 'ringing'),
+          gt(meetingRings.expiresAt, now),
+          isNull(meetingRings.deletedAt)
+        )
+      )
+      .limit(1);
+    return ringing !== undefined;
   },
 };

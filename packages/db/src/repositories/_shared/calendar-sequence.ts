@@ -45,7 +45,8 @@ const PARTY_ORDER: Readonly<Record<MeetingCalendarEventParty, number>> = { clien
  * Increments the RFC 5545 SEQUENCE of every LIVE calendar row of one meeting by exactly 1 and
  * returns the post-bump rows (client first, then expert).
  *
- * ⚠ CALLED ONLY INSIDE `meetingsRepository.updateSchedule`'s TRANSACTION (step 4b), under that
+ * ⚠ CALLED ONLY INSIDE A SCHEDULE-MOVE TRANSACTION — `meetingsRepository.updateSchedule`'s (step 4b) and
+ * `meetingRingsRepository.connect`'s, both via `applyScheduleMoveTx` — under that
  * transaction's `FOR UPDATE` lock on the meeting row. So the bump commits or rolls back WITH
  * the move, two concurrent moves serialise and each bumps exactly once, and a rolled-back move
  * bumps nothing. No BullMQ job, publisher or delivery path writes `sequence` — which is what

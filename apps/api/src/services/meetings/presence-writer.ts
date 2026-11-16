@@ -50,12 +50,15 @@
 import {
   meetingGuestsRepository,
   meetingPresenceRepository,
+  meetingRingsRepository,
   meetingsRepository,
   type Meeting,
   type MeetingParticipantParty,
+  type MeetingRing,
   type PresenceWindow,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
+import { withinJoinWindow } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
 import {
   parseDailyParticipantId,
@@ -66,6 +69,7 @@ import { MEETING_TOKEN_TTL_AFTER_END_MS } from './meeting-liveness.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { deliveringExpertProfileIdForMeeting, deliveringExpertUserId } from './delivering-party.js';
 import { startBillingIfDue } from '../credit-session/start-billing.js';
+import { connectRingIfRinging } from '../call-now/connect-ring.js';
 import {
   clientAbsentKey,
   expertAbsentKey,
@@ -481,6 +485,12 @@ export async function applyRecordedVisit(
 /** What {@link reconcileMeetingStatus} moved the meeting to, or `null` for no transition. */
 export type MeetingStatusTransition = 'waiting_for_participants' | 'in_progress' | null;
 
+/** Whether an `in_place` Call now ring on this meeting ended without connecting. */
+async function hasUnansweredInPlaceRing(meetingId: string): Promise<boolean> {
+  const rings = await meetingRingsRepository.listForMeeting(meetingId);
+  return rings.some((ring) => ring.placement === 'in_place' && ring.status !== 'connected');
+}
+
 /**
  * PHASE 3 — POST-COMMIT. Move the meeting's status to match the room, and arm/disarm what
  * follows from that.
@@ -495,6 +505,19 @@ export type MeetingStatusTransition = 'waiting_for_participants' | 'in_progress'
  * ⚠ BAL-474 (Rule A) — WHENEVER an expert and a client side are both open (whatever the `in_progress`
  * compare-and-set returned), it also asks `startBillingIfDue` whether the METER should start: never before the
  * scheduled start, and at `max(start, co-presence)` — the minutes together before the start bill at settlement.
+ *
+ * ⚠ BAL-649 — WHILE A CALL NOW RING IS `ringing` (past its `expires_at` or not — a stale ring holds until it is
+ * ENDED): co-presence connects it (`connectRingIfRinging` moves the start to this instant and starts the meeting
+ * in one transaction, then billing starts on the MOVED meeting), and anything short of a connect leaves the
+ * meeting where it is. A connect that LOSES (the expiry job, a stop or a decline ended the ring first) re-reads
+ * the meeting and the ring and NEVER falls through to `markInProgress` / `waiting_for_participants`: an in-place
+ * booking whose ring was not answered is never touched.
+ *
+ * ⚠ BAL-649 — NO TRANSITION ON A `scheduled` BOOKING THAT AN UNANSWERED IN-PLACE RING TOUCHED, BEFORE ITS OWN
+ * JOIN WINDOW OPENS (`scheduled_start − CASE_JOIN_WINDOW_MINUTES`). It is what keeps the room the ring parties
+ * are still leaving from flipping a 4 pm booking to `waiting_for_participants` at 2 pm. It is scoped to meetings
+ * with such a ring ON PURPOSE: early co-presence on an ordinary booking still starts it exactly as before (the
+ * F12 invariant in `a-client-no-show-consumes-exactly-the-floor` pins that).
  *
  * ⚠ `observer` COUNTS TOWARDS NEITHER SIDE OF THE `in_progress` TEST. A Balo staffer joining a
  * room the expert is already in must not start the consultation clock.
@@ -514,6 +537,23 @@ export async function reconcileMeetingStatus(
   const clientPresent = open.some((row) => row.party === 'client');
 
   await cancelAbsenceReminders({ meetingId: meeting.id, expertPresent, clientPresent });
+
+  const ring = await meetingRingsRepository.findRingingForMeeting(meeting.id);
+  if (ring !== undefined) {
+    return reconcileWhileRinging({ meeting, ring, open, expertPresent, clientPresent, now });
+  }
+
+  if (
+    meeting.status === 'scheduled' &&
+    !withinJoinWindow(now, meeting.scheduledStart) &&
+    (await hasUnansweredInPlaceRing(meeting.id))
+  ) {
+    log.debug(
+      { meetingId: meeting.id, scheduledStart: meeting.scheduledStart.toISOString() },
+      'No status transition — the join window of the meeting has not opened'
+    );
+    return null;
+  }
 
   if (expertPresent && clientPresent) {
     const started = await meetingsRepository.markInProgress(meeting.id, now);
@@ -564,6 +604,73 @@ export async function reconcileMeetingStatus(
     return 'waiting_for_participants';
   }
 
+  return null;
+}
+
+/**
+ * BAL-649 — {@link reconcileMeetingStatus} while the meeting has a `ringing` ring. Co-presence connects it; a
+ * one-sided room HOLDS the meeting (it stays `scheduled`, so an in-place booking is still cancellable and
+ * reschedulable if the ring goes unanswered).
+ *
+ * A connect that misses re-reads the meeting and the ring. The only thing it may then do is level-triggered
+ * billing on a meeting that is ALREADY `in_progress` (a concurrent reconcile won the connect); it never starts
+ * or moves the meeting itself.
+ */
+async function reconcileWhileRinging(input: {
+  meeting: Meeting;
+  ring: MeetingRing;
+  open: Awaited<ReturnType<typeof meetingPresenceRepository.listOpen>>;
+  expertPresent: boolean;
+  clientPresent: boolean;
+  now: Date;
+}): Promise<MeetingStatusTransition> {
+  const { meeting, ring, open, now } = input;
+  if (!input.expertPresent || !input.clientPresent) {
+    log.debug(
+      { meetingId: meeting.id, ringId: ring.id },
+      'Status transition held — a Call now ring is ringing'
+    );
+    return null;
+  }
+
+  const connected = await connectRingIfRinging({ meeting, now });
+  if (connected.connected) {
+    log.info(
+      {
+        meetingId: meeting.id,
+        from: meeting.status,
+        to: 'in_progress',
+        trigger: 'call_now_connect',
+      },
+      'Meeting status transition'
+    );
+    trackServer(MEETING_SERVER_EVENTS.MEETING_STARTED, {
+      meeting_id: meeting.id,
+      seconds_from_scheduled_start: 0,
+      participant_count: open.length,
+      distinct_id: meeting.id,
+    });
+    // ⚠ THE MOVED MEETING: billing starts at the connect instant, not the pre-move start.
+    await startBillingIfDue({ meeting: connected.meeting, openRows: open, now });
+    return 'in_progress';
+  }
+
+  const [fresh, freshRing] = await Promise.all([
+    meetingsRepository.findById(meeting.id),
+    meetingRingsRepository.findById(ring.id),
+  ]);
+  log.info(
+    {
+      meetingId: meeting.id,
+      ringId: ring.id,
+      ringStatus: freshRing?.status ?? null,
+      meetingStatus: fresh?.status ?? null,
+    },
+    'Call now connect missed — the meeting is left as it is'
+  );
+  if (fresh?.status === 'in_progress') {
+    await startBillingIfDue({ meeting: fresh, openRows: open, now });
+  }
   return null;
 }
 

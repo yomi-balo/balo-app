@@ -22,6 +22,7 @@ const {
   mockCaptureException,
   mockRaiseAdminAlert,
   mockOpenOnBehalf,
+  mockFindRinging,
   mockLogInfo,
   mockLogWarn,
 } = vi.hoisted(() => ({
@@ -52,6 +53,8 @@ const {
   mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
   /** BAL-474 — a client-side guest's admission opens the billed session on behalf of the booker. */
   mockOpenOnBehalf: vi.fn(),
+  /** BAL-649 — the live-ring read behind the admission hold and the join-window bypass. */
+  mockFindRinging: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -69,6 +72,7 @@ vi.mock('@balo/shared/logging', () => ({
 // pruned, since an unused factory key is harmless.
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
+  meetingRingsRepository: { findRingingForMeeting: mockFindRinging },
   meetingContextsRepository: { listByMeeting: mockListByMeeting },
   engagementsRepository: { findById: mockEngagementFindById },
   meetingGuestsRepository: {
@@ -259,6 +263,7 @@ beforeEach(() => {
   // BAL-474 — a successful guest-admission open, by default (every existing pre-admitted client-party
   // guest fixture now reaches it).
   mockOpenOnBehalf.mockResolvedValue({ ok: true, sessionId: 'sess-guest', toleratedGates: [] });
+  mockFindRinging.mockResolvedValue(undefined);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
@@ -1881,6 +1886,69 @@ describe('⚠⚠ INVARIANT (D16): the join window opens CASE_JOIN_WINDOW_MINUTES
     });
     expect(result).toMatchObject({ ok: false, code: 'meeting_not_open_yet' });
   });
+
+  describe('BAL-649 — a live in-place ring opens the window early for ITS caller and callee only, on the member path only', () => {
+    const EARLY = 2 * 60 * 60_000;
+    function liveRing(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        id: 'ring-1',
+        status: 'ringing',
+        placement: 'in_place',
+        callerUserId: USER_ID,
+        calleeUserId: 'expert-user-1',
+        createdAt: new Date(FROZEN_NOW.getTime() - 5_000),
+        expiresAt: new Date(FROZEN_NOW.getTime() + 40_000),
+        endedAt: null,
+        ...overrides,
+      };
+    }
+
+    it('the member who placed the ring is admitted hours early', async () => {
+      mockFindRinging.mockResolvedValue(liveRing());
+      const { result } = await memberJoin(EARLY);
+      expect(result).toMatchObject({ ok: true });
+    });
+
+    it('⚠ the early token expires with the ring, and that expiry reaches the mint and the grant', async () => {
+      mockFindRinging.mockResolvedValue(liveRing());
+      const { result, minter } = await memberJoin(EARLY);
+      const ringTokenExpiry = new Date(FROZEN_NOW.getTime() + 40_000 + 60_000);
+      expect(minter.requests[0]?.expiresAtUnix).toBe(ringTokenExpiry.getTime() / 1000);
+      expect(result).toMatchObject({
+        ok: true,
+        grant: { expiresAt: ringTokenExpiry.toISOString() },
+      });
+    });
+
+    it('⚠ another member of the meeting is still refused while the ring is live', async () => {
+      mockFindRinging.mockResolvedValue(
+        liveRing({ callerUserId: 'other-member', calleeUserId: 'expert-user-1' })
+      );
+      const { result, minter } = await memberJoin(EARLY);
+      expect(result).toMatchObject({ ok: false, code: 'meeting_not_open_yet' });
+      expect(minter.requests).toHaveLength(0);
+    });
+
+    it.each(['pre_admitted', 'admitted'])(
+      '⚠ an %s guest of the booking is still refused while the ring is live',
+      async (admission) => {
+        mockFindRinging.mockResolvedValue(liveRing());
+        const { result, minter } = await guestJoin(EARLY, admission);
+        expect(result).toMatchObject({ ok: false, code: 'meeting_not_open_yet' });
+        expect(minter.requests).toHaveLength(0);
+      }
+    );
+
+    it('⚠ the anonymous lobby still answers `meeting_not_open_yet` — a ring is not observable', async () => {
+      mockFindRinging.mockResolvedValue(liveRing());
+      await expect(knock(EARLY)).resolves.toEqual({
+        ok: false,
+        code: 'meeting_not_open_yet',
+        opensAt: OPENS_AT(EARLY),
+      });
+      expect(mockGuestClaimLobbyPlace).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('joinMeetingAsGuest — ⚠⚠ THE EXIT-REASON DISCRIMINATOR, PINNED (BAL-476)', () => {
@@ -2216,5 +2284,81 @@ describe('joinMeetingAsGuest — the billed session opens at a client-side guest
     expect(mockCaptureException).toHaveBeenCalledWith(failure, {
       extra: expect.objectContaining({ companyId: null, openedBy: 'guest' }),
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// BAL-649 — no billed session opens while a Call now ring is live
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+describe('BAL-649 — an admission during a live ring opens no session (member and guest arms)', () => {
+  const RING = { id: 'ring-1', status: 'ringing', placement: 'new_meeting' };
+
+  it('member arm: a ringing ring skips the open, never refuses the join', async () => {
+    mockFindRinging.mockResolvedValue(RING);
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockOpenSession).not.toHaveBeenCalled();
+    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, ringId: 'ring-1' },
+      'Admission during a live ring — no session opened; billing opens at connect'
+    );
+  });
+
+  it('member arm: no ring leaves the open unchanged', async () => {
+    await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(mockOpenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('member arm: a failed ring read is absorbed by the open`s own catch — the join still succeeds', async () => {
+    mockFindRinging.mockRejectedValue(new Error('db down'));
+
+    const result = await joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      minter: createJwtMinter(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockOpenSession).not.toHaveBeenCalled();
+  });
+
+  it('guest arm: a ringing ring skips the open on behalf of the booker', async () => {
+    mockFindRinging.mockResolvedValue(RING);
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ invitedById: 'inviter-1' }));
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mockOpenOnBehalf).not.toHaveBeenCalled();
+    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+  });
+
+  it('guest arm: no ring leaves the open unchanged', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ invitedById: 'inviter-1' }));
+
+    await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+    });
+
+    expect(mockOpenOnBehalf).toHaveBeenCalledTimes(1);
   });
 });

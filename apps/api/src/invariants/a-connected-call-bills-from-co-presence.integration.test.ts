@@ -195,6 +195,7 @@ async function startRing(
     callerSide: 'client',
     reachedBy: 'app',
     expiresAt: plusMs(start, CALL_NOW_RING_MS),
+    now: start,
     scheduledStart: start,
     scheduledEnd: plusMinutes(start, CALL_NOW_SCHEDULED_MINUTES),
   });

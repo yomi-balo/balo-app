@@ -801,7 +801,29 @@ export {
   type EndMeetingResult,
   // BAL-498 — the expert calendar's read row shape.
   type ExpertCalendarMeeting,
+  // BAL-649 — the statuses a meeting may START from; the Call now connect shares the edge.
+  IN_PROGRESS_FROM,
 } from './meetings';
+// ── Call now rings (BAL-649) ──
+// ⚠ Every mutator hands its caller a POST-COMMIT obligation (availability rebuild, calendar amend,
+// Daily teardown, domain events) — see `meetingRingsRepository`'s docblock.
+export {
+  meetingRingsRepository,
+  MeetingRingAlreadyLiveError,
+  type StartRingInput,
+  type StartedRing,
+  type ConnectedRing,
+  type EndedRing,
+  type EndRingStatus,
+} from './meeting-rings';
+export type {
+  MeetingRing,
+  NewMeetingRing,
+  MeetingRingStatus,
+  MeetingRingPlacement,
+  MeetingRingReach,
+  MeetingRingSide,
+} from '../schema';
 // ── Dashboard Up next read model (BAL-566) ──
 // ⚠ READ-ONLY. `listForCompany` runs AFTER the caller's company-level `PARTICIPATE` check and
 // never trusts a `meeting_contexts.context_id` it did not reach through a company-owned parent.

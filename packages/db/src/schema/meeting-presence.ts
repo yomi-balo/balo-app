@@ -183,6 +183,13 @@ export const meetingPresence = pgTable(
       .where(sql`${t.leftAt} IS NULL AND ${t.deletedAt} IS NULL`),
     // BAL-408 — the guest FK's own read path (and its `set null` delete-time scan).
     index('meeting_presence_guest_idx').on(t.meetingGuestId),
+    // BAL-649 — "is this person in a call right now, on any meeting": the Call now busy gate
+    // (`meetingPresenceRepository.isUserInLiveMeeting`). The indexes above all lead with
+    // `meeting_id`, so none serves a lookup by user alone. The predicate names columns only
+    // (the house rule below).
+    index('meeting_presence_open_user_idx')
+      .on(t.userId)
+      .where(sql`${t.userId} IS NOT NULL AND ${t.leftAt} IS NULL AND ${t.deletedAt} IS NULL`),
     // At most ONE open interval per authenticated participant — a duplicate join webhook
     // cannot create a second open interval that would double-count the clocks.
     // ⚠ THE GUEST GAP BAL-418 LEFT HERE IS CLOSED BY THE SIBLING INDEX BELOW, not by this

@@ -208,7 +208,47 @@ describe('settleSessionlessCaseMeeting (BAL-474, ADR-1040 Amendment 7 §C.6)', (
         trigger: 'human_end',
       });
       expect(mockOpenAndSettle).not.toHaveBeenCalled();
-      expect(mockMeetingFindById).not.toHaveBeenCalled();
+      expect(mockMeetingFindById).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('BAL-649 — an unanswered Call now ring (`no_answer`) is never billable', () => {
+    it('a `no_answer` meeting with no session is not billable and opens nothing', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_answer' }));
+
+      await expect(settleSessionlessCaseMeeting(INPUT)).resolves.toEqual({
+        kind: 'not_billable',
+        reason: 'no_answer',
+      });
+
+      expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+      expect(mockCompute).not.toHaveBeenCalled();
+      expect(mockOpenAndSettle).not.toHaveBeenCalled();
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        { meetingId: MEETING_ID, trigger: 'lifecycle_sweep' },
+        'Sessionless settlement skipped — unanswered call'
+      );
+    });
+
+    it('a `no_answer` meeting WITH a stray session is still not billable — it is never settled', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_answer' }));
+      mockFindIdByMeetingId.mockResolvedValue({ id: 'session-stray' });
+
+      await expect(settleSessionlessCaseMeeting(INPUT)).resolves.toEqual({
+        kind: 'not_billable',
+        reason: 'no_answer',
+      });
+
+      expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+    });
+
+    it('every other outcome is unchanged', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_show_client' }));
+
+      const result = await settleSessionlessCaseMeeting(INPUT);
+
+      expect(result.kind).toBe('opened_and_settled');
     });
   });
 

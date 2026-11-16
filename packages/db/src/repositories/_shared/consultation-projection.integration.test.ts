@@ -671,6 +671,9 @@ describe('consultation projection — lifecycle', () => {
     ] as const) {
       expect(consultationStatusForMeeting(status)).toBe('confirmed');
     }
+    // An unanswered Call now ring ends the meeting as `no_answer` and frees its slot too.
+    expect(consultationStatusForMeeting('ended', 'no_answer')).toBe('cancelled');
+    expect(consultationStatusForMeeting('ended', 'completed')).toBe('confirmed');
   });
 });
 

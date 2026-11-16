@@ -45,6 +45,7 @@ import type { RecordingServerEventMap } from './events/recording';
 import type { ReviewServerEventMap, ReviewEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
+import type { CallNowServerEventMap } from './events/call-now';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap, BookingServerEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
@@ -210,6 +211,9 @@ export type ServerEvents = ExpertServerEventMap &
   // BAL-478 — SERVER-ONLY: deliberately absent from `AllEvents` above. The refusal is decided
   // entirely inside `enforceBookingFunding` (apps/web, `import 'server-only'`); no browser code
   // emits it.
-  BookingServerEventMap;
+  BookingServerEventMap &
+  // BAL-649 — SERVER-ONLY: deliberately absent from `AllEvents` above. The ring's terminal
+  // compare-and-set in `apps/api` is the ONE dispatch point.
+  CallNowServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

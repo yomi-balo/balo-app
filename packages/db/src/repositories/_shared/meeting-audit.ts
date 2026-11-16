@@ -1,5 +1,5 @@
 import { auditEventsRepository } from '../audit-events';
-import type { MeetingContextType } from '../../schema';
+import type { MeetingContextType, MeetingRing } from '../../schema';
 import type { DbExecutor } from './db-executor';
 
 /**
@@ -64,7 +64,28 @@ export type MeetingAuditAction =
    * actor on the SYSTEM path (the lifecycle sweep's terminations) and with the acting human
    * on the End-button path. Same ADR-1030 system-actor exemption, same reading.
    */
-  | 'meeting.outcome_resolved';
+  | 'meeting.outcome_resolved'
+  /**
+   * BAL-649 — a Call now ring started on this meeting (`meetingRingsRepository.startWithNewMeeting`
+   * / `startOnMeeting`), written with the CALLER as actor on the same transaction as the ring row.
+   * Metadata: `{ ringId, placement, callerSide, reachedBy, calleeUserId, expiresAt }`.
+   */
+  | 'meeting.ring_started'
+  /**
+   * BAL-649 — a Call now ring left `ringing` (connected, unanswered, declined or stopped), written
+   * on the same transaction as the ring's compare-and-set. The actor is the decliner or stopper,
+   * NULL on expiry and on connect (co-presence is a machine observation — the ADR-1030 system-actor
+   * exemption). Metadata: `{ ringId, status, placement, ringMs }`.
+   *
+   * ⚠ NEITHER RING ACTION IS A SCHEDULING ACTION (see below). A ring that creates a meeting writes
+   * `meeting.booked` through `createMeetingTx`, and a ring that connects in place writes
+   * `meeting.rescheduled` through `applyScheduleMoveTx`; those rows already carry the scheduling
+   * fact, so counting the ring rows too would hold the case open twice for one event.
+   */
+  | 'meeting.ring_ended';
+
+/** Why a `meeting.rescheduled` row was written, when it was not a party moving the booking. */
+export type MeetingRescheduleReason = 'call_now_connected';
 
 /** Subject of a meeting audit row is always the meeting (entity_id = `meetings.id`). */
 export type MeetingAuditEntityType = 'meeting';
@@ -198,6 +219,10 @@ export async function recordMeetingBooked(
  *
  * `previous` is the pre-image read inside the SAME transaction (before the compare-and-set), so
  * a "history of one meeting" read can show the from/to window without a second query.
+ *
+ * `reason` (BAL-649) marks a move no party asked for: `'call_now_connected'` is a Call now ring
+ * connecting on a booked meeting, which moves its start to the connect instant. Written as
+ * `metadata.reason` only when present, so a party's reschedule row keeps its exact shape.
  */
 export async function recordMeetingRescheduled(
   exec: DbExecutor,
@@ -209,6 +234,7 @@ export async function recordMeetingRescheduled(
     scheduledEnd: Date;
     expertProfileId: string | null;
     guestLinksExtended: number;
+    reason?: MeetingRescheduleReason;
   }
 ): Promise<string> {
   return recordMeetingAudit(exec, {
@@ -222,6 +248,7 @@ export async function recordMeetingRescheduled(
       scheduledEnd: input.scheduledEnd.toISOString(),
       expertProfileId: input.expertProfileId,
       guestLinksExtended: input.guestLinksExtended,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     },
   });
 }
@@ -278,6 +305,53 @@ export async function recordMeetingCancelled(
       scheduledStart: input.scheduledStart.toISOString(),
       scheduledEnd: input.scheduledEnd.toISOString(),
       expertProfileId: input.expertProfileId,
+    },
+  });
+}
+
+/**
+ * BAL-649 — record the `meeting.ring_started` row for ONE ring, inside the ring's start
+ * transaction, AFTER the ring row is inserted. The actor is the caller.
+ *
+ * ⚠ `expiresAt` IS AN ISO STRING, NOT `Date` — the jsonb rule `recordMeetingBooked` states.
+ */
+export async function recordMeetingRingStarted(exec: DbExecutor, ring: MeetingRing): Promise<void> {
+  await recordMeetingAudit(exec, {
+    actorUserId: ring.callerUserId,
+    action: 'meeting.ring_started',
+    meetingId: ring.meetingId,
+    metadata: {
+      ringId: ring.id,
+      placement: ring.placement,
+      callerSide: ring.callerSide,
+      reachedBy: ring.reachedBy,
+      calleeUserId: ring.calleeUserId,
+      expiresAt: ring.expiresAt.toISOString(),
+    },
+  });
+}
+
+/**
+ * BAL-649 — record the `meeting.ring_ended` row for ONE ring, LAST in the transaction that moved
+ * it out of `ringing`. `ring` is the post-CAS row, so `status` and `endedAt` are the values just
+ * written; `ringMs` is how long it rang (`ended_at − created_at`).
+ *
+ * `actorUserId` is REQUIRED but NULLABLE: the decliner or stopper, or `null` on expiry and on
+ * connect (the ADR-1030 system-actor exemption — an unattributed row, never a fabricated actor).
+ */
+export async function recordMeetingRingEnded(
+  exec: DbExecutor,
+  input: { ring: MeetingRing; endedAt: Date; actorUserId: string | null }
+): Promise<void> {
+  await recordMeetingAudit(exec, {
+    actorUserId: input.actorUserId,
+    action: 'meeting.ring_ended',
+    meetingId: input.ring.meetingId,
+    metadata: {
+      ringId: input.ring.id,
+      status: input.ring.status,
+      placement: input.ring.placement,
+      ringMs: Math.max(0, input.endedAt.getTime() - input.ring.createdAt.getTime()),
     },
   });
 }

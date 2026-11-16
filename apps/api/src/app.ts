@@ -11,6 +11,7 @@ import { expertsRoutes } from './routes/experts/index.js';
 import { stripeRoutes } from './routes/stripe/index.js';
 import { sessionsRoutes } from './routes/sessions/index.js';
 import { creditRoutes } from './routes/credit/index.js';
+import { callNowRoutes } from './routes/call-now/index.js';
 import { meetingsRoutes } from './routes/meetings/index.js';
 import { dailyRoutes } from './routes/daily/index.js';
 import { muxRoutes } from './routes/mux/index.js';
@@ -83,6 +84,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // Meeting booking + Daily room provisioning (BAL-129). Ships INERT — no live producer
   // until BAL-400's booking UI calls it.
   await fastify.register(meetingsRoutes);
+  // BAL-649 (ADR-1058) — Call now: ring a case's other party right now instead of booking a time.
+  await fastify.register(callNowRoutes);
   // BAL-134 — the Daily presence webhook. Raw-body scoped INSIDE this plugin, exactly as the
   // Stripe one is; a global registration would corrupt JSON parsing on every other route.
   await fastify.register(dailyRoutes);

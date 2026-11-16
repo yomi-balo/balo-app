@@ -207,6 +207,7 @@ async function startUnansweredCandidate(
     callerSide: 'client',
     reachedBy: 'app',
     expiresAt: new Date(start.getTime() + CALL_NOW_RING_MS),
+    now: start,
     scheduledStart: start,
     scheduledEnd: plusMinutes(start, CALL_NOW_SCHEDULED_MINUTES),
   });

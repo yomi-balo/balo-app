@@ -30,11 +30,26 @@
  * opening boundary from (D17.5), so the button and the server cannot disagree about WHEN it opens even though
  * each keeps its own boolean formula (`case-join-window.ts`'s docblock states why: a deliberate duplicate, not
  * a shared function call). It applies to every join path because every one of them calls this function.
+ *
+ * A live Call now ring opens the window early (BAL-649) — FOR THE TWO PEOPLE ON THE RING, AND ONLY ON THE MEMBER
+ * PATH. The ring is the callee's invitation to join NOW, so while one rings on the meeting (`status = 'ringing'`
+ * and not past `expires_at`) step 3 lets the join through to the token window when the joining member is that
+ * ring's caller or callee (`ringPartyUserId`). ⚠ Nobody else gets in early: not another company member, not an
+ * agency observer, not an admitted guest, not the anonymous lobby, not the re-entry link. Those callers pass no
+ * user, so the ring is never read for them and an in-place ring stays unobservable (the lobby still answers
+ * `meeting_not_open_yet`). The ring is read ONLY once the window is shut, so a join inside it costs nothing
+ * extra, and steps 1–2 still refuse a terminal meeting or an inactive engagement first. A join let in ONLY by
+ * the ring is minted a token that expires with the ring (`RING_TOKEN_GRACE_MS`), not at `scheduled_end + 24h`.
  */
-import { engagementsRepository, type Meeting } from '@balo/db';
+import { engagementsRepository, meetingRingsRepository, type Meeting } from '@balo/db';
 import { joinWindowOpensAt, withinJoinWindow } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
-import { MEETING_CLOSED_TO_JOIN, type PrimaryMeetingContext } from '@balo/shared/meetings';
+import {
+  MEETING_CLOSED_TO_JOIN,
+  RING_TOKEN_GRACE_MS,
+  isRingLive,
+  type PrimaryMeetingContext,
+} from '@balo/shared/meetings';
 
 const log = createLogger('meeting-liveness');
 
@@ -146,11 +161,15 @@ export function expiresAtUnixFor(scheduledEnd: Date): number {
  *
  * `now` is injected rather than read, so the boundary cases (exactly at, just before, just
  * after) are testable without faking the clock.
+ *
+ * `ringPartyUserId` is the AUTHENTICATED MEMBER joining, passed ONLY by the member join path; it is
+ * what lets a live ring's caller or callee in before the window. Every other path omits it.
  */
 export async function assertMeetingJoinable(
   meeting: Meeting,
   subject: PrimaryMeetingContext,
-  now: Date = new Date()
+  now: Date = new Date(),
+  ringPartyUserId: string | null = null
 ): Promise<MeetingJoinableResult> {
   // 1. THE MEETING'S OWN STATE. Terminal set, never an allow-list.
   if (MEETING_CLOSED_TO_JOIN.has(meeting.status)) {
@@ -194,7 +213,15 @@ export async function assertMeetingJoinable(
   //    (a stale page, a link opened ahead of time), so it is logged at `info`, not `warn`. Every meeting is
   //    subject to it — the web's join window is context-agnostic — and the probe path never reaches this
   //    branch with a side effect: it only reads the result.
-  if (!withinJoinWindow(now, meeting.scheduledStart)) {
+  //    A join admitted ONLY by the ring exception gets a token that expires `RING_TOKEN_GRACE_MS` after the
+  //    ring (`@balo/shared/meetings`, the same grace `clipUnansweredRingIntervals` reads). It is an early-entry
+  //    key, safe because `eject_at_token_exp` stays `false`: `exp` gates NEW joins only, so a connected call
+  //    is never cut. A join inside the window never reads the ring and keeps the normal expiry.
+  const windowOpen = withinJoinWindow(now, meeting.scheduledStart);
+  const ringExpiresAt = windowOpen
+    ? null
+    : await liveRingExpiryForParty(meeting.id, ringPartyUserId, now);
+  if (!windowOpen && ringExpiresAt === null) {
     const opensAt = joinWindowOpensAt(meeting.scheduledStart);
     log.info(
       {
@@ -212,7 +239,10 @@ export async function assertMeetingJoinable(
   //    until BAL-134 ships, so a call whose end passed 25 hours ago is still `scheduled` and
   //    sails through step 1. Without this, Daily is handed an `exp` in the past and issues a
   //    DEAD token — a confusing failure two layers downstream of its cause.
-  const expiresAtUnix = expiresAtUnixFor(meeting.scheduledEnd);
+  const expiresAtUnix =
+    ringExpiresAt === null
+      ? expiresAtUnixFor(meeting.scheduledEnd)
+      : Math.floor((ringExpiresAt.getTime() + RING_TOKEN_GRACE_MS) / 1000);
   const expiresAt = new Date(expiresAtUnix * 1000);
   if (expiresAt.getTime() <= now.getTime()) {
     return deny('token_window_elapsed', {
@@ -223,6 +253,34 @@ export async function assertMeetingJoinable(
   }
 
   return { ok: true, expiresAtUnix, expiresAt };
+}
+
+/**
+ * When `userId` is the caller or the callee of a Call now ring live on this meeting right now, that
+ * ring's `expires_at`; otherwise `null`. Only called once the join window is shut. `null` without a
+ * read when no member is joining. A ring that has timed out but not yet been swept (`ringing`, past
+ * `expires_at`) does not count.
+ */
+async function liveRingExpiryForParty(
+  meetingId: string,
+  userId: string | null,
+  now: Date
+): Promise<Date | null> {
+  if (userId === null) {
+    return null;
+  }
+  const ring = await meetingRingsRepository.findRingingForMeeting(meetingId);
+  if (ring === undefined || !isRingLive(ring, now)) {
+    return null;
+  }
+  if (ring.callerUserId !== userId && ring.calleeUserId !== userId) {
+    return null;
+  }
+  log.info(
+    { meetingId, ringId: ring.id, userId, reason: 'live_ring' },
+    'Join window bypassed — live ring'
+  );
+  return ring.expiresAt;
 }
 
 /** The single fail-closed exit. The SHAPE goes to the log; the wire gets one literal. */

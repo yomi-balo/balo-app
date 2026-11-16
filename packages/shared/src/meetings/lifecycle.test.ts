@@ -25,6 +25,12 @@ import {
   type TerminalRuleInput,
 } from './lifecycle';
 import { DEFAULT_MEETING_TIMERS } from './timers';
+import {
+  NO_CALL_NOW_FACTS,
+  callNowFactsFromRings,
+  type CallNowFacts,
+  type CallRingFacts,
+} from './call-now';
 
 const MINUTE = 60_000;
 
@@ -252,7 +258,15 @@ interface TerminalRow {
   /** Defaults to `START + 60 min`. */
   readonly scheduledEnd?: Date;
   readonly expected: MeetingTerminalRuleName | null;
-  readonly outcome?: 'completed' | 'no_show_client' | 'missed_call' | 'venue_unavailable' | null;
+  readonly outcome?:
+    | 'completed'
+    | 'no_show_client'
+    | 'missed_call'
+    | 'venue_unavailable'
+    | 'no_answer'
+    | null;
+  /** BAL-649 — defaults to {@link NO_CALL_NOW_FACTS}: a booked meeting no ring ever touched. */
+  readonly callNow?: CallNowFacts;
   /**
    * BAL-581 — `undefined` ⇒ {@link VENUE_READY_AT_BOOKING} (every existing row's PRE-BAL-581
    * meaning, unchanged); `null` ⇒ never ready; a number ⇒ `at(n)`.
@@ -276,6 +290,7 @@ function inputFor(row: TerminalRow): TerminalRuleInput {
     now: at(row.nowMinutes),
     venueReadyAt: venueReadyAtFor(row),
     admittedLinkGuestPresent: false,
+    callNow: row.callNow ?? NO_CALL_NOW_FACTS,
   };
 }
 
@@ -303,6 +318,27 @@ const OVERRUN_BOOKINGS: ReadonlyArray<{
 }> = [
   { booking: '60-min booking', endMinutes: 60, ceilingMinutes: 270 },
   { booking: '300-min booking', endMinutes: 300, ceilingMinutes: 330 },
+];
+
+/** BAL-649 — one ring on the case, stated in whole minutes from `START`. */
+function ringAt(overrides: Partial<CallRingFacts> = {}): CallRingFacts {
+  return {
+    placement: 'new_meeting',
+    status: 'ringing',
+    createdAt: at(0),
+    expiresAt: at(1),
+    endedAt: null,
+    ...overrides,
+  };
+}
+
+/** A `call_now` meeting whose only ring ended with `status` at the end of its window. */
+function callNowFactsFor(status: CallRingFacts['status']): CallNowFacts {
+  return callNowFactsFromRings([ringAt({ status, endedAt: at(1) })]);
+}
+
+const EXPERT_ALONE: readonly LifecyclePresenceInterval[] = [
+  { party: 'expert', joinedAt: at(0), leftAt: null },
 ];
 
 /**
@@ -683,6 +719,115 @@ const TERMINAL_ROWS: readonly TerminalRow[] = [
     ])
   ),
 
+  // ── RULE 7 — NO ANSWER (BAL-649). Owns a `call_now` meeting that never started. ────────
+  {
+    label: 'RULE 7 no answer — call_now, ring window elapsed, nobody connected',
+    status: 'scheduled',
+    intervals: [],
+    nowMinutes: 2,
+    callNow: callNowFactsFromRings([ringAt()]),
+    expected: 'no_answer',
+    outcome: 'no_answer',
+  },
+  {
+    label: 'RULE 7 no answer — the ring row was ended explicitly (declined)',
+    status: 'waiting_for_participants',
+    intervals: EXPERT_ALONE,
+    nowMinutes: 1,
+    callNow: callNowFactsFromRings([ringAt({ status: 'declined', endedAt: at(1) })]),
+    expected: 'no_answer',
+    outcome: 'no_answer',
+  },
+  {
+    label: '⚠ call_now with the expert alone past the no-show floor is NO-ANSWER, never no_show',
+    status: 'waiting_for_participants',
+    intervals: EXPERT_ALONE,
+    nowMinutes: 20,
+    callNow: callNowFactsFromRings([ringAt({ status: 'unanswered', endedAt: at(1) })]),
+    expected: 'no_answer',
+    outcome: 'no_answer',
+  },
+  {
+    label:
+      '⚠ call_now past the missed-call window with nobody in the room is NO-ANSWER, never missed_call',
+    status: 'scheduled',
+    intervals: [],
+    nowMinutes: 30,
+    callNow: callNowFactsFor('unanswered'),
+    expected: 'no_answer',
+    outcome: 'no_answer',
+  },
+  {
+    label: 'near-miss — a call_now ring still live holds rule 7',
+    status: 'scheduled',
+    intervals: [],
+    nowMinutes: 0,
+    callNow: callNowFactsFromRings([ringAt()]),
+    expected: null,
+  },
+  {
+    label: '⚠ a live in-place ring holds the no-show on a booked meeting the expert is alone in',
+    status: 'waiting_for_participants',
+    intervals: EXPERT_ALONE,
+    nowMinutes: 16,
+    callNow: callNowFactsFromRings([ringAt({ placement: 'in_place', expiresAt: at(20) })]),
+    expected: null,
+  },
+  {
+    label: '⚠ a live in-place ring holds the missed call on a booked meeting',
+    status: 'scheduled',
+    intervals: [],
+    nowMinutes: 12,
+    callNow: callNowFactsFromRings([ringAt({ placement: 'in_place', expiresAt: at(20) })]),
+    expected: null,
+  },
+  {
+    label: '⚠ a live in-place ring holds the venue-unavailable rule too',
+    status: 'scheduled',
+    intervals: [],
+    nowMinutes: 12,
+    venueReadyMinutes: null,
+    callNow: callNowFactsFromRings([ringAt({ placement: 'in_place', expiresAt: at(20) })]),
+    expected: null,
+  },
+  {
+    label:
+      'an ended in-place ring releases the hold — the booked meeting no-shows as if nobody rang',
+    status: 'waiting_for_participants',
+    intervals: EXPERT_ALONE,
+    nowMinutes: 16,
+    callNow: callNowFactsFromRings([
+      ringAt({ placement: 'in_place', status: 'unanswered', endedAt: at(1) }),
+    ]),
+    expected: 'no_show',
+    outcome: 'no_show_client',
+  },
+  {
+    label: 'a connected call_now meeting in_progress idle-ends like any meeting',
+    status: 'in_progress',
+    intervals: [
+      { party: 'expert', joinedAt: at(0), leftAt: at(30) },
+      { party: 'client', joinedAt: at(1), leftAt: at(30) },
+    ],
+    nowMinutes: 35,
+    callNow: callNowFactsFromRings([ringAt({ status: 'connected', endedAt: null })]),
+    expected: 'idle_end',
+    outcome: 'completed',
+  },
+  {
+    label:
+      'a connected call_now meeting in_progress is stopped at the overrun ceiling like any meeting',
+    status: 'in_progress',
+    intervals: [
+      { party: 'expert', joinedAt: at(0), leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ],
+    nowMinutes: 270,
+    callNow: callNowFactsFromRings([ringAt({ status: 'connected', endedAt: null })]),
+    expected: 'overrun_stop',
+    outcome: 'completed',
+  },
+
   // ── THE HUMAN END IS NOT A SWEEP RULE ─────────────────────────────────────────────────
   {
     label:
@@ -723,8 +868,8 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
   });
 
   /**
-   * ⚠⚠ THE DISJOINTNESS PROOF. The six rules are mutually exclusive BY PRECONDITION, which is
-   * stronger than an evaluation order — so this evaluates all six PREDICATES independently and
+   * ⚠⚠ THE DISJOINTNESS PROOF. The seven rules are mutually exclusive BY PRECONDITION, which is
+   * stronger than an evaluation order — so this evaluates all seven PREDICATES independently and
    * asserts at most one holds. Written against `MEETING_TERMINAL_PREDICATES` rather than
    * against `resolveTerminalRule`'s if-chain, so it is a real proof and not a restatement.
    */
@@ -735,7 +880,7 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
     expect(firing[0]?.rule ?? null).toBe(row.expected);
   });
 
-  it('the predicate list names all six rules, once each', () => {
+  it('the predicate list names all seven rules, once each', () => {
     expect(MEETING_TERMINAL_PREDICATES.map((entry) => entry.rule)).toEqual([
       'idle_end',
       'no_show',
@@ -743,6 +888,7 @@ describe('resolveTerminalRule — the precedence table (BAL-134 §4.2)', () => {
       'venue_unavailable',
       'abandoned_wait',
       'overrun_stop',
+      'no_answer',
     ]);
   });
 
@@ -800,6 +946,8 @@ describe('MeetingTerminalDecision.dueAt (BAL-584)', () => {
       timers: DEFAULT_MEETING_TIMERS,
       now: at(500),
       venueReadyAt: VENUE_READY_AT_BOOKING,
+      admittedLinkGuestPresent: false,
+      callNow: NO_CALL_NOW_FACTS,
     });
     expect(decision?.rule).toBe('overrun_stop');
     expect(decision?.dueAt).toEqual(overrunStopCeiling(START, at(60), DEFAULT_MEETING_TIMERS));
@@ -1047,6 +1195,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
         now: at(LONG_AFTER),
         venueReadyAt,
         admittedLinkGuestPresent,
+        callNow: NO_CALL_NOW_FACTS,
       };
 
       expect(summarisePresence(intervals).anyOpen).toBe(false);
@@ -1072,6 +1221,7 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
       timers: DEFAULT_MEETING_TIMERS,
       venueReadyAt: at(-1440),
       admittedLinkGuestPresent: false,
+      callNow: NO_CALL_NOW_FACTS,
     };
 
     expect(resolveTerminalRule({ ...base, status: 'in_progress', now: at(269) })).toBeNull();
@@ -1111,10 +1261,253 @@ describe('⚠⚠ resolveTerminalRule is TOTAL over an empty room (C2)', () => {
         now: at(LONG_AFTER),
         venueReadyAt: at(-1440),
         admittedLinkGuestPresent: false,
+        callNow: NO_CALL_NOW_FACTS,
       };
       expect(resolveTerminalRule(input)?.rule).not.toBe('overrun_stop');
     }
   );
+});
+
+/**
+ * BAL-649 — THE CALL-NOW DIMENSION. Rule 7 and the ring hold are executed over the full
+ * status × presence × venue × ring product, so disjointness and totality are proven for the
+ * seven rules rather than believed.
+ */
+describe('⚠⚠ the call-now dimension (BAL-649)', () => {
+  const STATUSES: readonly MeetingLifecycleStatus[] = [
+    'scheduled',
+    'waiting_for_participants',
+    'in_progress',
+  ];
+
+  const PRESENCE: ReadonlyArray<{
+    presenceLabel: string;
+    intervals: readonly LifecyclePresenceInterval[];
+  }> = [
+    { presenceLabel: 'nobody ever joined', intervals: [] },
+    { presenceLabel: 'expert alone, still in', intervals: EXPERT_ALONE },
+    {
+      presenceLabel: 'expert came and went',
+      intervals: [{ party: 'expert', joinedAt: at(0), leftAt: at(20) }],
+    },
+    {
+      presenceLabel: 'both in the room',
+      intervals: [
+        { party: 'expert', joinedAt: at(0), leftAt: null },
+        { party: 'client', joinedAt: at(1), leftAt: null },
+      ],
+    },
+    {
+      presenceLabel: 'both came and went',
+      intervals: [
+        { party: 'expert', joinedAt: at(0), leftAt: at(30) },
+        { party: 'client', joinedAt: at(1), leftAt: at(30) },
+      ],
+    },
+  ];
+
+  const VENUES: ReadonlyArray<{ venueLabel: string; venueReadyAt: Date | null }> = [
+    { venueLabel: 'venue ready', venueReadyAt: at(-1440) },
+    { venueLabel: 'venue never ready', venueReadyAt: null },
+  ];
+
+  /** The ring windows below end at minute 1, or are still open at the far end of the probe range. */
+  const LONG_AFTER = 24 * 60;
+  const LIVE_UNTIL = LONG_AFTER + 10;
+
+  const CALL_NOW_SHAPES: ReadonlyArray<{
+    callNowLabel: string;
+    live: boolean;
+    callNow: CallNowFacts;
+  }> = [
+    { callNowLabel: 'booked, no ring', live: false, callNow: NO_CALL_NOW_FACTS },
+    {
+      callNowLabel: 'booked, live in-place ring',
+      live: true,
+      callNow: callNowFactsFromRings([
+        ringAt({ placement: 'in_place', expiresAt: at(LIVE_UNTIL) }),
+      ]),
+    },
+    {
+      callNowLabel: 'booked, ended in-place ring',
+      live: false,
+      callNow: callNowFactsFromRings([
+        ringAt({ placement: 'in_place', status: 'stopped', endedAt: at(1) }),
+      ]),
+    },
+    {
+      callNowLabel: 'call_now, live ring',
+      live: true,
+      callNow: callNowFactsFromRings([ringAt({ expiresAt: at(LIVE_UNTIL) })]),
+    },
+    {
+      callNowLabel: 'call_now, ended ring',
+      live: false,
+      callNow: callNowFactsFromRings([ringAt({ status: 'unanswered', endedAt: at(1) })]),
+    },
+  ];
+
+  const MATRIX = STATUSES.flatMap((status) =>
+    PRESENCE.flatMap((presence) =>
+      VENUES.flatMap((venue) =>
+        CALL_NOW_SHAPES.map((shape) => ({ status, ...presence, ...venue, ...shape }))
+      )
+    )
+  );
+
+  function matrixInput(cell: (typeof MATRIX)[number], nowMinutes: number): TerminalRuleInput {
+    return {
+      status: cell.status,
+      scheduledStart: START,
+      scheduledEnd: at(60),
+      presence: summarisePresence(cell.intervals),
+      timers: DEFAULT_MEETING_TIMERS,
+      now: at(nowMinutes),
+      venueReadyAt: cell.venueReadyAt,
+      admittedLinkGuestPresent: false,
+      callNow: cell.callNow,
+    };
+  }
+
+  it.each(MATRIX)(
+    '⚠ disjoint: $status + $presenceLabel + $venueLabel + $callNowLabel holds at most one rule at any instant',
+    (cell) => {
+      for (const nowMinutes of [0, 1, 2, 10, 16, 31, 270, LONG_AFTER]) {
+        const input = matrixInput(cell, nowMinutes);
+        expect(
+          MEETING_TERMINAL_PREDICATES.filter((entry) => entry.applies(input)).length
+        ).toBeLessThanOrEqual(1);
+      }
+    }
+  );
+
+  it.each(MATRIX.filter((cell) => cell.live))(
+    '⚠ a LIVE ring holds every rule: $status + $presenceLabel + $venueLabel + $callNowLabel',
+    (cell) => {
+      const input = matrixInput(cell, LONG_AFTER);
+      expect(resolveTerminalRule(input)).toBeNull();
+      expect(MEETING_TERMINAL_PREDICATES.filter((entry) => entry.applies(input))).toHaveLength(0);
+    }
+  );
+
+  it.each(
+    MATRIX.filter(
+      (cell) => cell.callNow.origin === 'call_now' && cell.status !== 'in_progress' && !cell.live
+    )
+  )(
+    '⚠ a not-started call_now meeting resolves ONLY to no_answer: $status + $presenceLabel + $venueLabel',
+    (cell) => {
+      for (const nowMinutes of [1, 2, 10, 16, 31, 270, LONG_AFTER]) {
+        const decision = resolveTerminalRule(matrixInput(cell, nowMinutes));
+        expect(decision).toMatchObject({ rule: 'no_answer', outcome: 'no_answer', arm: null });
+      }
+    }
+  );
+
+  it.each(
+    MATRIX.filter((cell) => cell.callNow.origin === 'call_now' && cell.status !== 'in_progress')
+  )(
+    '⚠ no_show and missed_call NEVER fire on a not-started call_now meeting, at any instant: $status + $presenceLabel + $callNowLabel',
+    (cell) => {
+      for (let nowMinutes = 0; nowMinutes <= 600; nowMinutes += 5) {
+        const rule = resolveTerminalRule(matrixInput(cell, nowMinutes))?.rule ?? null;
+        expect([null, 'no_answer']).toContain(rule);
+      }
+    }
+  );
+
+  it.each(
+    MATRIX.filter(
+      (cell) => !cell.live && !(cell.callNow.origin === 'call_now' && cell.status !== 'in_progress')
+    )
+  )(
+    '⚠ an ordinary meeting keeps the six rules once its ring is not live: $status + $presenceLabel + $venueLabel + $callNowLabel',
+    (cell) => {
+      const withoutCallNow = { ...matrixInput(cell, LONG_AFTER), callNow: NO_CALL_NOW_FACTS };
+      expect(resolveTerminalRule(matrixInput(cell, LONG_AFTER))).toEqual(
+        resolveTerminalRule(withoutCallNow)
+      );
+    }
+  );
+
+  it.each(
+    MATRIX.filter(
+      (cell) => cell.callNow.origin === 'call_now' && cell.status !== 'in_progress' && !cell.live
+    )
+  )(
+    '⚠⚠ total: a call_now meeting past its ring window always fires a rule — $status + $presenceLabel + $venueLabel',
+    (cell) => {
+      expect(resolveTerminalRule(matrixInput(cell, LONG_AFTER))).not.toBeNull();
+    }
+  );
+
+  it('rule 7 is due at the ring end when recorded, else at the window end, else at the start', () => {
+    const base = matrixInput(
+      {
+        status: 'scheduled',
+        ...PRESENCE[0]!,
+        ...VENUES[0]!,
+        callNowLabel: 'x',
+        live: false,
+        callNow: callNowFactsFromRings([ringAt({ status: 'declined', endedAt: at(1) })]),
+      },
+      5
+    );
+    expect(resolveTerminalRule(base)?.dueAt).toEqual(at(1));
+
+    const expired = { ...base, callNow: callNowFactsFromRings([ringAt({ expiresAt: at(2) })]) };
+    expect(resolveTerminalRule(expired)?.dueAt).toEqual(at(2));
+
+    const noRing: TerminalRuleInput = { ...base, callNow: { origin: 'call_now', ring: null } };
+    expect(resolveTerminalRule(noRing)?.dueAt).toEqual(START);
+  });
+
+  it('rule 7 does not fire before its due instant', () => {
+    const input: TerminalRuleInput = {
+      ...matrixInput(
+        {
+          status: 'scheduled',
+          ...PRESENCE[0]!,
+          ...VENUES[0]!,
+          callNowLabel: 'x',
+          live: false,
+          callNow: callNowFactsFromRings([ringAt({ status: 'declined', endedAt: at(3) })]),
+        },
+        2
+      ),
+    };
+    expect(resolveTerminalRule(input)).toBeNull();
+    expect(resolveTerminalRule({ ...input, now: at(3) })).toMatchObject({ rule: 'no_answer' });
+  });
+
+  it('a connected call_now meeting that is in_progress resolves rules 1 and 6 like any meeting', () => {
+    const connected = callNowFactsFromRings([ringAt({ status: 'connected' })]);
+    const both: readonly LifecyclePresenceInterval[] = [
+      { party: 'expert', joinedAt: at(0), leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ];
+    const inProgress = (intervals: readonly LifecyclePresenceInterval[], nowMinutes: number) =>
+      resolveTerminalRule({
+        status: 'in_progress',
+        scheduledStart: START,
+        scheduledEnd: at(60),
+        presence: summarisePresence(intervals),
+        timers: DEFAULT_MEETING_TIMERS,
+        now: at(nowMinutes),
+        venueReadyAt: at(-1440),
+        admittedLinkGuestPresent: false,
+        callNow: connected,
+      });
+
+    expect(inProgress(both, 100)).toBeNull();
+    expect(inProgress(both, 270)).toMatchObject({ rule: 'overrun_stop' });
+    expect(
+      inProgress(
+        both.map((interval) => ({ ...interval, leftAt: at(30) })),
+        36
+      )
+    ).toMatchObject({ rule: 'idle_end' });
+  });
 });
 
 // ── THE SERVER-COMPUTED WAITING PHASE (§7.1) ──────────────────────────────────────────────
@@ -1323,6 +1716,7 @@ describe('rule 4 ceiling arm — the expert left while an observer stays', () =>
       now: at(nowMinutes),
       venueReadyAt: at(-1440),
       admittedLinkGuestPresent,
+      callNow: NO_CALL_NOW_FACTS,
     };
   }
 
@@ -1368,6 +1762,7 @@ describe('no-show held by an admitted link guest', () => {
     now: at(30),
     venueReadyAt: at(-1440),
     admittedLinkGuestPresent: false,
+    callNow: NO_CALL_NOW_FACTS,
   };
   const ceiling = overrunStopCeiling(START, at(60), DEFAULT_MEETING_TIMERS);
 

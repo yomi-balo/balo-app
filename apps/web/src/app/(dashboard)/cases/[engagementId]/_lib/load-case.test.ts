@@ -1454,6 +1454,17 @@ function convFile(id: string, uploadedByUserId: string, iso: string): Record<str
 }
 
 describe('loadCase — per-consultation counts and the transcript indicator', () => {
+  it('gives a no_answer meeting NO row and no count (an unanswered Call now is not a consultation)', async () => {
+    m.listMeetings.mockResolvedValue([
+      meeting('m1'),
+      meeting('m-ring', { status: 'ended', outcome: 'no_answer' }),
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations.map((row) => row.meetingId)).toEqual(['m1']);
+  });
+
   it('counts action items and meeting files against their own consultation', async () => {
     m.listMeetings.mockResolvedValue([meeting('m1'), meeting('m2')]);
     m.listActionItems.mockResolvedValue([

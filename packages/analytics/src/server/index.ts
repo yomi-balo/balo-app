@@ -96,6 +96,10 @@ export type { MeetingBookingContextType } from '../events/meeting';
 // both import from `@balo/analytics/server`; omitting this line makes the constants
 // unimportable and fails `apps/api`'s typecheck, not this package's.
 export { GUEST_SERVER_EVENTS } from '../events/guest';
+// BAL-649 — THE SAME FOURTH STEP: `apps/api`'s call-now ring service imports from
+// `@balo/analytics/server` ONLY.
+export { CALL_NOW_SERVER_EVENTS } from '../events/call-now';
+export type { CallNowRingOutcome } from '../events/call-now';
 export type { GuestInviteEntryPoint, GuestJoinMethod } from '../events/guest';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../events/engagement';
 // BAL-416 — the MOVED BAL-235 date-override events. `apps/api`'s routes import from

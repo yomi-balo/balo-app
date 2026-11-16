@@ -228,6 +228,15 @@ async function resolveRescheduleProposalForNudge(
 }
 
 /**
+ * An unanswered Call now ends its meeting as `no_answer`. That is a ring that nobody picked up,
+ * not a consultation, so it gets no row, no count and no nudge: it is dropped before any of them
+ * is built.
+ */
+function withoutNoAnswerMeetings(meetings: readonly Meeting[]): readonly Meeting[] {
+  return meetings.filter((meeting) => meeting.outcome !== 'no_answer');
+}
+
+/**
  * BAL-581 — `isMeetingVenueReady` for the meeting `id`, or `false` when the loader's own read
  * carries no such meeting. `undefined` → `false` is FAIL CLOSED: a meeting the loader cannot see
  * gets no Join, never a guess.
@@ -659,7 +668,7 @@ export const loadCase = cache(
     const { lens, companyId, expertProfileId, conversationId } = access;
 
     const [
-      meetings,
+      allMeetings,
       actionItems,
       company,
       profile,
@@ -690,6 +699,8 @@ export const loadCase = cache(
       // the `earnings` read immediately above.
       resolveProjectConversionIfClient(lens, engagementId, expertProfileId),
     ]);
+
+    const meetings = withoutNoAnswerMeetings(allMeetings);
 
     const clientCompanyName = company?.name ?? 'the client';
 

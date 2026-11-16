@@ -6,9 +6,10 @@
  *   1. {@link MEETING_TRANSITIONS} — the legal-edge map (§4.1), plus
  *      {@link assertMeetingTransition}. Total, pure, and asserted by all three
  *      `meetingsRepository` status mutators against their own compare-and-set FROM sets.
- *   2. {@link resolveTerminalRule} — which of the six SYSTEM termination rules (§4.2)
- *      applies to a meeting, or `null`. The human End is a further path — user-initiated
- *      and therefore not resolvable from facts; see that function's docblock.
+ *   2. {@link resolveTerminalRule} — which of the seven SYSTEM termination rules (§4.2, plus
+ *      BAL-649's `no_answer`) applies to a meeting, or `null`. The human End is a further
+ *      path — user-initiated and therefore not resolvable from facts; see that function's
+ *      docblock.
  *   3. {@link resolveWaitingPhase} — the server-computed waiting-stage label.
  *
  * ⚠⚠ THIS MODULE READS NO CLOCK, NO ENV AND NO DATABASE. `now` and `timers` are INJECTED on
@@ -25,6 +26,7 @@
  */
 
 import { MAX_SESSION_MINUTES } from '../pricing';
+import { isRingLive, type CallNowFacts } from './call-now';
 import type { MeetingTimers } from './timers';
 
 /**
@@ -295,7 +297,7 @@ export function expertClockStart(
     : scheduledStart;
 }
 
-// ── THE SIX SYSTEM TERMINAL RULES (§4.2) ─────────────────────────────────────────────────
+// ── THE SEVEN SYSTEM TERMINAL RULES (§4.2) ───────────────────────────────────────────────
 
 /** Which system rule fired. The human End is not one of these — see {@link resolveTerminalRule}. */
 export type MeetingTerminalRuleName =
@@ -304,17 +306,19 @@ export type MeetingTerminalRuleName =
   | 'missed_call'
   | 'venue_unavailable'
   | 'abandoned_wait'
-  | 'overrun_stop';
+  | 'overrun_stop'
+  | 'no_answer';
 
 /** Which ceiling arm of the overrun stop fired. Only one exists today. */
 export type OverrunStopArm = 'hard_ceiling';
 
-/** The four `meeting_outcome` labels this feature writes. `null` = "BAL-412 resolves it". */
+/** The five `meeting_outcome` labels this feature writes. `null` = "BAL-412 resolves it". */
 export type MeetingTerminalOutcome =
   | 'completed'
   | 'no_show_client'
   | 'missed_call'
-  | 'venue_unavailable';
+  | 'venue_unavailable'
+  | 'no_answer';
 
 /** What a fired rule instructs the sweep to write. */
 export interface MeetingTerminalDecision {
@@ -368,6 +372,13 @@ export interface TerminalRuleInput {
    * answer it.
    */
   readonly admittedLinkGuestPresent: boolean;
+  /**
+   * BAL-649 — the meeting's Call now history. Required for the same reason as
+   * {@link admittedLinkGuestPresent}: a caller that forgot it would silently run the six
+   * ordinary rules over a call-now meeting, and a live ring would not hold them.
+   * The `ring` is the latest one by `createdAt`.
+   */
+  readonly callNow: CallNowFacts;
 }
 
 /**
@@ -406,6 +417,51 @@ function isPreInProgress(status: MeetingLifecycleStatus): boolean {
   return status === 'scheduled' || status === 'waiting_for_participants';
 }
 
+/** `true` while a ring on this meeting is still ringing. */
+function ringIsLive(input: TerminalRuleInput): boolean {
+  const { ring } = input.callNow;
+  return ring !== null && isRingLive(ring, input.now);
+}
+
+/**
+ * BAL-649 — `true` when the six ordinary rules must stand down.
+ *
+ * ⚠ TWO CASES, BOTH PRECONDITIONS RATHER THAN ORDERING:
+ *   · a LIVE ring holds every ordinary rule, so nobody waiting for an answer is timed out;
+ *   · a `call_now` meeting that has not started belongs to rule 7 ALONE. Its absence rules
+ *     (no-show, missed call, venue, abandoned wait) are measured from a scheduled start that
+ *     the ring itself set to "now", and none of them describes a call nobody answered.
+ */
+function ringHoldsMeeting(input: TerminalRuleInput): boolean {
+  if (ringIsLive(input)) {
+    return true;
+  }
+  return input.callNow.origin === 'call_now' && isPreInProgress(input.status);
+}
+
+/**
+ * Rule 7's due instant, or `null` when its guards do not hold: a `call_now` meeting that never
+ * started and whose ring is no longer live. It is the ring's own end when recorded, else the
+ * instant its window elapsed.
+ */
+function noAnswerDueAt(input: TerminalRuleInput): Date | null {
+  if (input.callNow.origin !== 'call_now' || !isPreInProgress(input.status) || ringIsLive(input)) {
+    return null;
+  }
+  const { ring } = input.callNow;
+  return ring?.endedAt ?? ring?.expiresAt ?? input.scheduledStart;
+}
+
+/**
+ * Rule 7 — NO ANSWER (BAL-649). The call-now ring ended and the callee never connected.
+ * Disjoint from every other rule: it owns every pre-`in_progress` `call_now` meeting whose ring
+ * is not live, and {@link ringHoldsMeeting} makes the other six return `false` for exactly those.
+ */
+function noAnswerApplies(input: TerminalRuleInput): boolean {
+  const dueAt = noAnswerDueAt(input);
+  return dueAt !== null && input.now.getTime() >= dueAt.getTime();
+}
+
 /**
  * When an EMPTY room's idle window starts: the LATER of the last leave and the scheduled start.
  *
@@ -440,7 +496,7 @@ function roomEmptyPastWindow(input: TerminalRuleInput): boolean {
 
 /** Rule 1 — IDLE END. The only rule that requires `in_progress`. */
 function idleEndApplies(input: TerminalRuleInput): boolean {
-  return input.status === 'in_progress' && roomEmptyPastWindow(input);
+  return !ringHoldsMeeting(input) && input.status === 'in_progress' && roomEmptyPastWindow(input);
 }
 
 /**
@@ -448,7 +504,7 @@ function idleEndApplies(input: TerminalRuleInput): boolean {
  * Disjoint from rule 1 by `anyOpen` (rule 1 needs an empty room) and from rules 2–5 by status.
  */
 function overrunStopApplies(input: TerminalRuleInput): boolean {
-  if (input.status !== 'in_progress' || !input.presence.anyOpen) {
+  if (ringHoldsMeeting(input) || input.status !== 'in_progress' || !input.presence.anyOpen) {
     return false;
   }
   return input.now.getTime() >= overrunStopDueAt(input).getTime();
@@ -484,6 +540,7 @@ function noShowDue(input: TerminalRuleInput): boolean {
 function noShowDueAt(input: TerminalRuleInput): Date | null {
   const { presence, timers, scheduledStart } = input;
   if (
+    ringHoldsMeeting(input) ||
     input.status !== 'waiting_for_participants' ||
     !presence.expertOpen ||
     presence.clientSideEverPresent
@@ -558,7 +615,7 @@ function missedCallApplies(input: TerminalRuleInput): boolean {
 /** Rule 3's due instant, or `null` when its structural guards do not hold. */
 function missedCallDueAt(input: TerminalRuleInput): Date | null {
   const { presence, timers } = input;
-  if (!isPreInProgress(input.status) || presence.expertEverPresent) {
+  if (ringHoldsMeeting(input) || !isPreInProgress(input.status) || presence.expertEverPresent) {
     return null;
   }
   const anchor = venueAbsenceAnchor(input.scheduledStart, input.venueReadyAt);
@@ -591,7 +648,11 @@ function venueUnavailableApplies(input: TerminalRuleInput): boolean {
 
 /** Rule 5's due instant, or `null` when its structural guards do not hold. */
 function venueUnavailableDueAt(input: TerminalRuleInput): Date | null {
-  if (!isPreInProgress(input.status) || input.presence.expertEverPresent) {
+  if (
+    ringHoldsMeeting(input) ||
+    !isPreInProgress(input.status) ||
+    input.presence.expertEverPresent
+  ) {
     return null;
   }
   if (input.venueReadyAt !== null) {
@@ -635,7 +696,7 @@ function venueUnavailableDueAt(input: TerminalRuleInput): Date | null {
  * widens WHICH meetings reach a terminal state — never what any of them is charged.
  */
 function abandonedWaitApplies(input: TerminalRuleInput): boolean {
-  if (!isPreInProgress(input.status)) {
+  if (ringHoldsMeeting(input) || !isPreInProgress(input.status)) {
     return false;
   }
   if (!input.presence.expertEverPresent) {
@@ -673,7 +734,7 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
 /**
  * ⚠⚠ THE PRECEDENCE TABLE, AND WHY THE ORDER IS ALMOST DECORATION.
  *
- * ADR-1049 names ordering as a build risk. **The six rules are not merely ordered — they are
+ * ADR-1049 names ordering as a build risk. **The seven rules are not merely ordered — they are
  * MUTUALLY EXCLUSIVE BY PRECONDITION**, which is a stronger property than an order:
  *
  *   · #1 vs everything — #1 is the ONLY rule that requires `in_progress`; #2/#3/#4/#5 all
@@ -690,6 +751,11 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  *   · #6 vs everything — #6 requires `in_progress` like #1 but ALSO an OPEN interval, which #1
  *     forbids (*disjoint by presence*); #2–#5 all require a pre-`in_progress` status
  *     (*disjoint by status*).
+ *   · #7 vs everything (BAL-649) — #7 requires a `call_now` meeting that has not started, whose
+ *     ring is no longer live. Every OTHER rule returns `false` while {@link ringHoldsMeeting}
+ *     does, and it holds for exactly that shape (a `call_now` meeting before `in_progress`) as
+ *     well as for any LIVE ring. *Disjoint by origin.* A live ring holds all seven: nothing
+ *     times out a call somebody is still answering.
  *
  * The fixed order below exists so the sweep stays DETERMINISTIC if a future change ever breaks
  * that disjointness, and `lifecycle.test.ts` asserts disjointness directly rather than trusting
@@ -714,6 +780,8 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  *   · `scheduled` / `waiting_for_participants` + empty ⇒ #3 when the expert never came and the
  *     room was ready, #5 when it never was, #4 when the expert came — exhaustive over
  *     `(expertEverPresent × venue ready)`.
+ *   · a `call_now` meeting before `in_progress` ⇒ #7 once its ring is no longer live, whatever the
+ *     room holds: the ring's window always elapses, so the hold it imposes always lifts.
  *
  * ⚠ AND WHAT IS LEFT, NAMED RATHER THAN LEFT AS A GAP: a room somebody is STILL IN matches
  * nothing but #2 until the ceiling. An occupied `in_progress` meeting is bounded by #6 at
@@ -730,7 +798,7 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  * fires when due.
  * `lifecycle.test.ts` executes the invariant over a status × presence-shape matrix.
  *
- * ⚠ THE SEVENTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
+ * ⚠ THE EIGHTH PATH — THE HUMAN END — IS NOT RESOLVABLE HERE AND MUST NOT BE ADDED. It has no
  * presence gate and no wall-clock gate; its only precondition is that a `canEndMeeting` holder
  * pressed a button, which is a fact about a REQUEST, not about a meeting. It lives in
  * `apps/api`'s end service, is CAS-guarded, and if it lands first the meeting is terminal and
@@ -739,6 +807,10 @@ function expertGoneObserverRemainsPastCeiling(input: TerminalRuleInput): boolean
  * @returns the ONE rule that fired, or `null` when the meeting is not (yet) terminable.
  */
 export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDecision | null {
+  const noAnswerAt = noAnswerDueAt(input);
+  if (noAnswerAt !== null && input.now.getTime() >= noAnswerAt.getTime()) {
+    return { rule: 'no_answer', outcome: 'no_answer', arm: null, dueAt: noAnswerAt };
+  }
   if (idleEndApplies(input)) {
     return { rule: 'idle_end', outcome: 'completed', arm: null, dueAt: emptyWindowDueAt(input) };
   }
@@ -779,7 +851,7 @@ export function resolveTerminalRule(input: TerminalRuleInput): MeetingTerminalDe
 /**
  * ⚠ EVERY RULE, AS DATA — for the disjointness proof and for nothing else.
  *
- * `lifecycle.test.ts` evaluates all six predicates against one scenario and asserts AT MOST
+ * `lifecycle.test.ts` evaluates all seven predicates against one scenario and asserts AT MOST
  * ONE holds. Exporting the predicate list is what makes that a real proof rather than a
  * restatement of {@link resolveTerminalRule}'s if-chain.
  */
@@ -793,6 +865,7 @@ export const MEETING_TERMINAL_PREDICATES: ReadonlyArray<{
   { rule: 'venue_unavailable', applies: venueUnavailableApplies },
   { rule: 'abandoned_wait', applies: abandonedWaitApplies },
   { rule: 'overrun_stop', applies: overrunStopApplies },
+  { rule: 'no_answer', applies: noAnswerApplies },
 ];
 
 // ── BACKDATING A LATE TERMINAL WRITE (BAL-584) ────────────────────────────────────────────

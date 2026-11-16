@@ -45,6 +45,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
       registerMeetingVenueRepairSweepCron,
       startMeetingVenueProvisionWorker,
     },
+    { startCallNowRingExpiryWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -77,6 +78,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./project-brief-parse.js'),
     import('./proposal-draft-generate.js'),
     import('./meeting-venue-repair.js'),
+    import('./call-now-ring-expiry.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -174,5 +176,9 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-611: the AI proposal-draft generation worker — event-triggered (no cron), enqueued from
   // `POST /proposal-drafts/generate` right after the web action writes the row.
   startProposalDraftGenerateWorker();
+  // BAL-649 (ADR-1058): the Call now ring expiry — event-triggered (a delayed job per ring), no
+  // cron; the meeting lifecycle sweep is its backstop. ⚠ Its `vi.mock` in `worker.test.ts` must
+  // land in THIS commit.
+  startCallNowRingExpiryWorker();
   logger?.info('BullMQ workers started');
 }

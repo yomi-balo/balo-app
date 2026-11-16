@@ -130,7 +130,7 @@ describe('createRoom — the already-exists fallback (BAL-473: reconcile, then G
       .mockResolvedValueOnce(jsonResponse(404, { error: 'not-found' }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     // The ORIGINAL error, not the reconcile's or the GET's — both are diagnostics, and
@@ -143,7 +143,7 @@ describe('createRoom — the already-exists fallback (BAL-473: reconcile, then G
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(403, { error: 'forbidden' }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     expect(error).toMatchObject({ status: 403 });
@@ -173,7 +173,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
   it('REJECTS a created room the vendor returned as public', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, room(ROOM, 'public'))));
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     // A DailyRoomNotPrivateError IS a DailyApiError (the subclass keeps every existing
     // `instanceof DailyApiError` check holding).
@@ -197,7 +197,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
       .mockResolvedValueOnce(jsonResponse(200, room(ROOM, 'public')));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     // Attributed to the reconcile POST — that is where the offending room was seen.
@@ -215,7 +215,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
       .mockResolvedValueOnce(jsonResponse(200, room(ROOM, 'public')));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     expect(error).toMatchObject({ method: 'GET', path: `/rooms/${ROOM}` });
@@ -244,7 +244,7 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
   it('carries the offending privacy value in the error body, for the SERVER log only', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, room(ROOM, 'public'))));
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyRoomNotPrivateError);
     expect((error as DailyApiError).body).toContain('public');
@@ -273,7 +273,7 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
   it.each(['url', 'name'] as const)('REJECTS a 2xx create response missing `%s`', async (field) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, roomWithout(field))));
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     expect(error).toMatchObject({ method: 'POST', path: '/rooms' });
@@ -300,7 +300,7 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
       .mockResolvedValueOnce(jsonResponse(200, roomWithout('url')));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     // Attributed to the GET — that is the call whose response was unusable.
@@ -325,7 +325,7 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
       vi.fn().mockResolvedValue(jsonResponse(200, roomWithout('url', 'public')))
     );
 
-    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await createRoom(ROOM).catch((error_: unknown) => error_);
 
     expect((error as DailyApiError).body).toContain('public');
   });
@@ -367,7 +367,7 @@ describe('deleteRoom (BAL-134)', () => {
   it('⚠ rethrows a 429 — there is deliberately NO retry loop; the sweep retries next tick', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(429, { error: 'rate-limited' })));
 
-    const error = await deleteRoom(ROOM).catch((caught: unknown) => caught);
+    const error = await deleteRoom(ROOM).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     expect(error).toMatchObject({ status: 429, method: 'DELETE' });
@@ -861,7 +861,7 @@ describe('ejectParticipants (BAL-476)', () => {
    * (`eject_at_token_exp: false`, `exp = scheduled_end + 24h`), so an un-banned eject buys
    * seconds. This is the assertion that fails if somebody "simplifies" it away.
    */
-  it('⚠ always sends ban: true — an eject alone does not revoke the token', async () => {
+  it('⚠ sends ban: true by default — an eject alone does not revoke the token', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -869,6 +869,16 @@ describe('ejectParticipants (BAL-476)', () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body)).ban).toBe(true);
+  });
+
+  it('sends ban: false only when asked (BAL-649: the ejected parties still have a booking in this room)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ejectParticipants(ROOM, [PARTICIPANT], { ban: false });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ user_ids: [PARTICIPANT], ban: false });
   });
 
   it('⚠ maps 404 to `already_gone` — the room may have been reaped, or they may have left', async () => {
@@ -880,7 +890,7 @@ describe('ejectParticipants (BAL-476)', () => {
   it('⚠ rethrows a 429 — there is deliberately NO retry loop; the caller is best-effort', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(429, { error: 'rate-limited' })));
 
-    const error = await ejectParticipants(ROOM, [PARTICIPANT]).catch((caught: unknown) => caught);
+    const error = await ejectParticipants(ROOM, [PARTICIPANT]).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(DailyApiError);
     expect(error).toMatchObject({ status: 429, method: 'POST' });

@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import type { MeetingClocks } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   meetingContexts,
   meetingPresence,
+  meetingRings,
   meetings,
   type MeetingParticipantParty,
 } from '../schema';
 import {
+  caseEngagementFactory,
   engagementFactory,
   expertFactory,
   meetingFactory,
@@ -21,6 +24,7 @@ import {
   InvalidPresenceTimestampError,
   meetingPresenceRepository,
 } from './meeting-presence';
+import { meetingRingsRepository } from './meeting-rings';
 
 const MIN = 60_000;
 /**
@@ -1611,6 +1615,44 @@ describe('meetingPresenceRepository.settlementFacts — Rule A (BAL-474) and D15
     ]);
   });
 
+  it('⚠ BAL-649: two parties back together at 2:01 after a declined 2:00 in-place ring bill nothing before the 3:57 window open', async () => {
+    // START (`at(0)`) is the 4:00 booking; `at(-120)` is 2:00. The ring is declined at 2:00:30, and both
+    // parties rejoin at 2:01 on the ring's token (inside its grace) and stay together until 4:30.
+    const { meeting, caseEngagementId } = await meetingFactory();
+    const expert = await userFactory();
+    const client = await userFactory();
+    if (caseEngagementId === undefined) {
+      throw new Error('meetingFactory seeds a case context by default');
+    }
+    await db.insert(meetingRings).values({
+      meetingId: meeting.id,
+      engagementId: caseEngagementId,
+      callerUserId: client.id,
+      calleeUserId: expert.id,
+      callerSide: 'client',
+      placement: 'in_place',
+      status: 'declined',
+      createdAt: at(-120),
+      expiresAt: at(-119.25),
+      endedAt: at(-119.5),
+    });
+
+    await join(meeting.id, expert.id, 'expert', -119);
+    await join(meeting.id, client.id, 'client', -119);
+    await leave(meeting.id, expert.id, 30);
+    await leave(meeting.id, client.id, 30);
+
+    const { clocks, togetherBeforeStartMs, expertPresentFromStartMs } = await facts(
+      meeting.id,
+      at(60)
+    );
+
+    // Only the join window (3:57–4:00) counts before the start — never the two hours since 2:01.
+    expect(togetherBeforeStartMs).toBe(CASE_JOIN_WINDOW_MINUTES * MIN);
+    expect(clocks.billableMs).toBe(30 * MIN);
+    expect(expertPresentFromStartMs).toBe(30 * MIN);
+  });
+
   it('⚠ D15.3: expert 09:00–09:30 then 10:10–11:00 (client with them both times): the from-start figure is 50, though the clamped clock reads 60', async () => {
     const { meeting } = await meetingFactory();
     const expert = await userFactory();
@@ -2248,5 +2290,111 @@ describe('meetingPresenceRepository.hasOpenAdmittedLinkGuest (BAL-579)', () => {
 
     await guestWithInterval(ADMITTED_LINK);
     expect(await meetingPresenceRepository.hasOpenAdmittedLinkGuest(meeting.id)).toBe(false);
+  });
+});
+
+describe('meetingPresenceRepository.isUserInLiveMeeting (BAL-649)', () => {
+  it('is true for an open row on an `in_progress` or a `waiting_for_participants` meeting', async () => {
+    const { meeting: running } = await meetingFactory({ values: { status: 'in_progress' } });
+    const { meeting: waiting } = await meetingFactory({
+      values: { status: 'waiting_for_participants' },
+    });
+    const inCall = await userFactory();
+    const waitingAlone = await userFactory();
+
+    await join(running.id, inCall.id, 'client', 0);
+    await join(waiting.id, waitingAlone.id, 'expert', 0);
+
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(inCall.id)).toBe(true);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(waitingAlone.id)).toBe(true);
+  });
+
+  it('is false once the row closes, and for another user in the same call', async () => {
+    const { meeting } = await meetingFactory({ values: { status: 'in_progress' } });
+    const member = await userFactory();
+    const colleague = await userFactory();
+
+    await join(meeting.id, member.id, 'client', 0);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(colleague.id)).toBe(false);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(member.id)).toBe(true);
+
+    await leave(meeting.id, member.id, 5);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(member.id)).toBe(false);
+  });
+
+  it.each([
+    ['scheduled', { status: 'scheduled' }],
+    ['ended', { status: 'ended', endedBy: 'expert_host', endedAt: at(30) }],
+    ['cancelled', { status: 'cancelled' }],
+  ] as const)('is false for an open row left on a `%s` meeting', async (_label, values) => {
+    const { meeting } = await meetingFactory({ values });
+    const member = await userFactory();
+    await join(meeting.id, member.id, 'client', 0);
+
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(member.id)).toBe(false);
+  });
+
+  it('is false for an open `observer` row on a live meeting — watching is not being on a call', async () => {
+    const { meeting } = await meetingFactory({ values: { status: 'in_progress' } });
+    const observer = await userFactory();
+    await db
+      .insert(meetingPresence)
+      .values({ meetingId: meeting.id, userId: observer.id, party: 'observer', joinedAt: at(0) });
+
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(observer.id)).toBe(false);
+  });
+
+  it('is true for the caller and the callee of a live ringing ring, and false once it expires or ends', async () => {
+    const expert = await expertFactory();
+    const caller = await userFactory();
+    const bystander = await userFactory();
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+    const now = new Date();
+    const started = await meetingRingsRepository.startWithNewMeeting({
+      engagementId: engagement.id,
+      callerUserId: caller.id,
+      calleeUserId: expert.userId,
+      callerSide: 'client',
+      reachedBy: 'app',
+      expiresAt: new Date(now.getTime() + 45_000),
+      now,
+      scheduledStart: now,
+      scheduledEnd: new Date(now.getTime() + 15 * MIN),
+    });
+
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(caller.id, now)).toBe(true);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(expert.userId, now)).toBe(true);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(bystander.id, now)).toBe(false);
+    expect(
+      await meetingPresenceRepository.isUserInLiveMeeting(caller.id, started.ring.expiresAt)
+    ).toBe(false);
+
+    await meetingRingsRepository.endRing({
+      ringId: started.ring.id,
+      to: 'stopped',
+      now,
+      actorUserId: caller.id,
+    });
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(expert.userId, now)).toBe(false);
+  });
+
+  it('is false for an open row on a soft-deleted meeting, and for a soft-deleted row', async () => {
+    const { meeting: deletedMeeting } = await meetingFactory({
+      values: { status: 'in_progress', deletedAt: new Date() },
+    });
+    const { meeting: live } = await meetingFactory({ values: { status: 'in_progress' } });
+    const onDeletedMeeting = await userFactory();
+    const withDeletedRow = await userFactory();
+
+    await join(deletedMeeting.id, onDeletedMeeting.id, 'client', 0);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(onDeletedMeeting.id)).toBe(false);
+
+    const row = await join(live.id, withDeletedRow.id, 'client', 0);
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(withDeletedRow.id)).toBe(true);
+    await db
+      .update(meetingPresence)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingPresence.id, row.id));
+    expect(await meetingPresenceRepository.isUserInLiveMeeting(withDeletedRow.id)).toBe(false);
   });
 });

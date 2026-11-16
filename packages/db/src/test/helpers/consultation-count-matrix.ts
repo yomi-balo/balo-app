@@ -131,6 +131,18 @@ export const CONSULTATION_COUNT_MATRIX: readonly ConsultationCountCase[] = [
     offsetDays: -2,
     counted: false,
   },
+  // ── BAL-649 — the fifth outcome label ──
+  {
+    // A Call now ring nobody answered: the meeting ended `no_answer` and its projection was
+    // cancelled in the same transaction (`meetingRingsRepository.endRing`). Nothing was delivered.
+    label: 'an ENDED call with outcome=no_answer (a Call now ring nobody answered)',
+    meetingStatus: 'ended',
+    meetingOutcome: 'no_answer',
+    projectionStatus: 'cancelled',
+    softDelete: 'none',
+    offsetDays: -1,
+    counted: false,
+  },
   // ── The pre-existing predicates, still asserted ──
   {
     // `c.status='confirmed'` is retained precisely so this row cannot count even though its
