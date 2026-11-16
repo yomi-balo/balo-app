@@ -29,7 +29,15 @@ export {
   type ExpertPayoutServerEventMap,
 } from './expert-payouts';
 export { AVATAR_EVENTS, type AvatarEventMap } from './avatar';
-export { PHONE_EVENTS, type PhoneEventMap } from './phone';
+export {
+  PHONE_EVENTS,
+  CLIENT_SMS_CONSENT_SURFACES,
+  CLIENT_SMS_CONSENT_METHODS,
+  type PhoneEventMap,
+  type ClientSmsConsentEventSurface,
+  type ClientSmsOptInSurface,
+  type ClientSmsConsentMethod,
+} from './phone';
 export {
   CALENDAR_EVENTS,
   type CalendarEventMap,

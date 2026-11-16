@@ -885,6 +885,9 @@ export const usersRepository = {
    * Mark phone as verified, writing phone + verified timestamp atomically.
    * Both fields are written together so the record never has a verified
    * timestamp pointing to a different phone number than what was verified.
+   *
+   * Leaves `client_sms_opted_in_at` alone: changing the number keeps client SMS consent
+   * (BAL-655), and client SMS then goes to the newly verified number.
    */
   setPhoneVerified: async (userId: string, phone: string, verifiedAt: Date): Promise<User> => {
     const [user] = await db
@@ -893,6 +896,85 @@ export const usersRepository = {
       .where(eq(users.id, userId))
       .returning();
     return user!;
+  },
+
+  /**
+   * BAL-655 — the client-SMS consent read: `phone`, `phoneVerifiedAt` and `clientSmsOptedInAt`,
+   * and nothing else. Excludes soft-deleted users. This returns the raw columns; the caller
+   * decides what counts as opted in (consent AND a verified phone).
+   */
+  findClientSmsConsent: async (
+    userId: string
+  ): Promise<
+    | { phone: string | null; phoneVerifiedAt: Date | null; clientSmsOptedInAt: Date | null }
+    | undefined
+  > => {
+    const [row] = await db
+      .select({
+        phone: users.phone,
+        phoneVerifiedAt: users.phoneVerifiedAt,
+        clientSmsOptedInAt: users.clientSmsOptedInAt,
+      })
+      .from(users)
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-655 — the ONLY writer of `users.client_sms_opted_in_at`. Sets or clears the user's
+   * consent to client-side SMS and records `user.client_sms_opted_in` /
+   * `user.client_sms_opted_out` in the SAME transaction. The row is locked `FOR UPDATE` first,
+   * so two concurrent calls cannot both see "not yet opted in" and write two audit rows.
+   *
+   * - Opting in needs `phone_verified_at` set; otherwise `phone_not_verified`, nothing written.
+   * - A call that matches the stored state is `unchanged` and writes nothing. Re-opting in
+   *   keeps the original consent timestamp.
+   * - Opting out clears ONLY the consent column. `phone` and `phone_verified_at` stay, so the
+   *   expert-side use of the number is unaffected.
+   *
+   * The audit metadata is empty on purpose: no phone number goes into `audit_events`.
+   * Throws when the user row is missing or soft-deleted.
+   */
+  setClientSmsConsent: async (input: {
+    userId: string;
+    optedIn: boolean;
+  }): Promise<{ outcome: 'changed' | 'unchanged' | 'phone_not_verified' }> => {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          phoneVerifiedAt: users.phoneVerifiedAt,
+          clientSmsOptedInAt: users.clientSmsOptedInAt,
+        })
+        .from(users)
+        .where(and(eq(users.id, input.userId), isNull(users.deletedAt)))
+        .for('update');
+      if (current === undefined) throw new Error('setClientSmsConsent: user row not found');
+      if (input.optedIn && current.phoneVerifiedAt === null) {
+        return { outcome: 'phone_not_verified' };
+      }
+      if ((current.clientSmsOptedInAt !== null) === input.optedIn) {
+        return { outcome: 'unchanged' };
+      }
+
+      const now = new Date();
+      await tx
+        .update(users)
+        .set({ clientSmsOptedInAt: input.optedIn ? now : null, updatedAt: now })
+        .where(eq(users.id, input.userId));
+
+      await auditEventsRepository.record(
+        {
+          actorUserId: input.userId,
+          action: input.optedIn ? 'user.client_sms_opted_in' : 'user.client_sms_opted_out',
+          entityType: 'user',
+          entityId: input.userId,
+          metadata: {},
+        },
+        tx
+      );
+      return { outcome: 'changed' };
+    });
   },
 
   /**

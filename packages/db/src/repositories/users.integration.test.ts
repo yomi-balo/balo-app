@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import {
   PLATFORM_CAPABILITIES,
   classifyAccountRefusal,
@@ -1562,5 +1562,207 @@ describe('usersRepository notifications seen cursor (BAL-619)', () => {
     await usersRepository.advanceNotificationsSeenThrough(user.id, T1);
 
     expect(await usersRepository.findNotificationsLastSeenAt(other.id)).toBeNull();
+  });
+});
+
+describe('usersRepository client SMS consent (BAL-655)', () => {
+  const PHONE = '+61412345678';
+  const VERIFIED_AT = new Date('2026-03-01T09:00:00.000Z');
+
+  async function verifiedUser() {
+    return userFactory({ phone: PHONE, phoneVerifiedAt: VERIFIED_AT });
+  }
+
+  async function consentAudits(userId: string) {
+    return db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityId, userId),
+          or(
+            eq(auditEvents.action, 'user.client_sms_opted_in'),
+            eq(auditEvents.action, 'user.client_sms_opted_out')
+          )
+        )
+      );
+  }
+
+  async function storedRow(userId: string) {
+    const [row] = await db
+      .select({
+        phone: users.phone,
+        phoneVerifiedAt: users.phoneVerifiedAt,
+        clientSmsOptedInAt: users.clientSmsOptedInAt,
+      })
+      .from(users)
+      .where(eq(users.id, userId));
+    if (row === undefined) throw new Error('expected a users row');
+    return row;
+  }
+
+  describe('findClientSmsConsent', () => {
+    it('returns exactly phone, phoneVerifiedAt and clientSmsOptedInAt', async () => {
+      const user = await verifiedUser();
+      await usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true });
+
+      const row = await usersRepository.findClientSmsConsent(user.id);
+
+      if (row === undefined) throw new Error('expected a consent row');
+      expect(Object.keys(row).sort((a, b) => a.localeCompare(b))).toEqual([
+        'clientSmsOptedInAt',
+        'phone',
+        'phoneVerifiedAt',
+      ]);
+      expect(row.phone).toBe(PHONE);
+      expect(row.phoneVerifiedAt).toEqual(VERIFIED_AT);
+      expect(row.clientSmsOptedInAt).toBeInstanceOf(Date);
+    });
+
+    it('returns null columns for a user with no phone and no consent', async () => {
+      const user = await userFactory();
+
+      await expect(usersRepository.findClientSmsConsent(user.id)).resolves.toEqual({
+        phone: null,
+        phoneVerifiedAt: null,
+        clientSmsOptedInAt: null,
+      });
+    });
+
+    it('excludes a soft-deleted user', async () => {
+      const user = await verifiedUser();
+      await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+      await expect(usersRepository.findClientSmsConsent(user.id)).resolves.toBeUndefined();
+    });
+
+    it('returns undefined for an unknown id', async () => {
+      await expect(usersRepository.findClientSmsConsent(randomUUID())).resolves.toBeUndefined();
+    });
+  });
+
+  describe('setClientSmsConsent', () => {
+    it('opts a verified user in: changed, sets the column, records one opted_in row', async () => {
+      const user = await verifiedUser();
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true })
+      ).resolves.toEqual({ outcome: 'changed' });
+
+      const row = await storedRow(user.id);
+      expect(row.clientSmsOptedInAt).toBeInstanceOf(Date);
+
+      const audits = await consentAudits(user.id);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        actorUserId: user.id,
+        action: 'user.client_sms_opted_in',
+        entityType: 'user',
+        entityId: user.id,
+      });
+      // No phone number in the audit trail.
+      expect(audits[0]?.metadata).toEqual({});
+    });
+
+    it('a repeat opt-in is unchanged, keeps the original timestamp and records nothing more', async () => {
+      const user = await verifiedUser();
+      await usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true });
+      const first = (await storedRow(user.id)).clientSmsOptedInAt;
+      if (first === null) throw new Error('expected consent to be set');
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true })
+      ).resolves.toEqual({ outcome: 'unchanged' });
+
+      expect((await storedRow(user.id)).clientSmsOptedInAt?.getTime()).toBe(first.getTime());
+      expect(await consentAudits(user.id)).toHaveLength(1);
+    });
+
+    it('refuses to opt in a user without a verified phone and writes nothing', async () => {
+      const user = await userFactory({ phone: PHONE, phoneVerifiedAt: null });
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true })
+      ).resolves.toEqual({ outcome: 'phone_not_verified' });
+
+      expect((await storedRow(user.id)).clientSmsOptedInAt).toBeNull();
+      expect(await consentAudits(user.id)).toHaveLength(0);
+    });
+
+    it('opts out by clearing ONLY the consent column and records one opted_out row', async () => {
+      const user = await verifiedUser();
+      await usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true });
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: false })
+      ).resolves.toEqual({ outcome: 'changed' });
+
+      expect(await storedRow(user.id)).toEqual({
+        phone: PHONE,
+        phoneVerifiedAt: VERIFIED_AT,
+        clientSmsOptedInAt: null,
+      });
+      const optedOut = (await consentAudits(user.id)).filter(
+        (a) => a.action === 'user.client_sms_opted_out'
+      );
+      expect(optedOut).toHaveLength(1);
+      expect(optedOut[0]).toMatchObject({ actorUserId: user.id, entityType: 'user' });
+      expect(optedOut[0]?.metadata).toEqual({});
+    });
+
+    it('an opt-out with no consent on file is unchanged and records nothing', async () => {
+      const user = await verifiedUser();
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: false })
+      ).resolves.toEqual({ outcome: 'unchanged' });
+
+      expect(await consentAudits(user.id)).toHaveLength(0);
+    });
+
+    it('throws for a missing user and records nothing', async () => {
+      const missing = randomUUID();
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: missing, optedIn: true })
+      ).rejects.toThrow('setClientSmsConsent: user row not found');
+      expect(await consentAudits(missing)).toHaveLength(0);
+    });
+
+    it('throws for a soft-deleted user and writes nothing', async () => {
+      const user = await verifiedUser();
+      await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+      await expect(
+        usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true })
+      ).rejects.toThrow('setClientSmsConsent: user row not found');
+      expect((await storedRow(user.id)).clientSmsOptedInAt).toBeNull();
+      expect(await consentAudits(user.id)).toHaveLength(0);
+    });
+
+    it('does not touch another user', async () => {
+      const user = await verifiedUser();
+      const other = await verifiedUser();
+
+      await usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true });
+
+      expect((await storedRow(other.id)).clientSmsOptedInAt).toBeNull();
+    });
+  });
+
+  it('setPhoneVerified with a new number keeps the consent timestamp', async () => {
+    const user = await verifiedUser();
+    await usersRepository.setClientSmsConsent({ userId: user.id, optedIn: true });
+    const consentedAt = (await storedRow(user.id)).clientSmsOptedInAt;
+    if (consentedAt === null) throw new Error('expected consent to be set');
+
+    const newVerifiedAt = new Date('2026-04-01T09:00:00.000Z');
+    await usersRepository.setPhoneVerified(user.id, '+61498765432', newVerifiedAt);
+
+    expect(await storedRow(user.id)).toEqual({
+      phone: '+61498765432',
+      phoneVerifiedAt: newVerifiedAt,
+      clientSmsOptedInAt: consentedAt,
+    });
   });
 });

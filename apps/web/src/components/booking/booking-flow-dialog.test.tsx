@@ -135,6 +135,10 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
 }));
 
 const mockBookConsultationAction = vi.fn<(input: unknown) => Promise<BookConsultationResult>>();
+vi.mock('@/lib/phone/client-sms-consent-actions', () => ({
+  getClientSmsConsentStateAction: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+  setClientSmsConsentAction: vi.fn(),
+}));
 vi.mock('@/lib/booking/actions/book-consultation', () => ({
   bookConsultationAction: (input: unknown) => mockBookConsultationAction(input),
 }));

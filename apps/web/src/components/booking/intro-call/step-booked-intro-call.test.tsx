@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { StepBookedIntroCall } from './step-booked-intro-call';
 import * as ics from '../ics';
+
+const mockGetConsentState = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/phone/client-sms-consent-actions', () => ({
+  getClientSmsConsentStateAction: () => mockGetConsentState(),
+  setClientSmsConsentAction: vi.fn(),
+}));
 
 function renderStep(overrides: Record<string, unknown> = {}) {
   const onDone = vi.fn();
@@ -25,6 +31,27 @@ function renderStep(overrides: Record<string, unknown> = {}) {
 }
 
 describe('StepBookedIntroCall', () => {
+  beforeEach(() => {
+    mockGetConsentState.mockReset();
+    mockGetConsentState.mockReturnValue(new Promise(() => undefined));
+  });
+
+  it('never gates Back to conversation on the SMS opt-in (loading, then offered)', async () => {
+    const user = userEvent.setup();
+    const { onDone } = renderStep();
+    expect(screen.getByText('Loading text alert options')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to conversation' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Back to conversation' }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers the opt-in on the intro-call confirmation', async () => {
+    mockGetConsentState.mockResolvedValue({ status: 'not_opted_in', verifiedPhone: null });
+    renderStep();
+    expect(await screen.findByText('Text me when Priya is ready')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to conversation' })).toBeEnabled();
+  });
+
   it('shows the call-shaped confirmation copy, no case verb, no "View case"', () => {
     renderStep();
     expect(screen.getByText("You're booked!")).toBeInTheDocument();

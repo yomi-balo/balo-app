@@ -23,6 +23,10 @@ vi.mock('@/components/balo/rich-text-editor', () => ({
     <textarea aria-label="What you'd like to discuss" placeholder={placeholder} />
   ),
 }));
+vi.mock('@/lib/phone/client-sms-consent-actions', () => ({
+  getClientSmsConsentStateAction: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+  setClientSmsConsentAction: vi.fn(),
+}));
 vi.mock('@/lib/booking/actions/book-consultation', () => ({ bookConsultationAction: vi.fn() }));
 vi.mock('@/lib/booking/actions/refetch-open-cases', () => ({
   refetchOpenCasesAction: vi.fn().mockResolvedValue({ ok: false }),

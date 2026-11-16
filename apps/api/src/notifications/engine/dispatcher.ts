@@ -69,6 +69,7 @@ async function enqueueDelivery(
     event: context.event,
     data: context.data,
     payload: context.payload,
+    ...(rule.recipientSide === undefined ? {} : { recipientSide: rule.recipientSide }),
   };
 
   // BAL-475 — the delivery payload's MESSAGE CLASS is decided here, once, for both the
@@ -175,9 +176,10 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
       );
       return;
     }
-    for (const recipientId of recipientIds) {
-      await enqueueDelivery(rule, context, recipientId);
-    }
+    // Independent per-recipient enqueues: one failing recipient must not stop the rest.
+    await Promise.all(
+      recipientIds.map((recipientId) => enqueueDelivery(rule, context, recipientId))
+    );
     return;
   }
 

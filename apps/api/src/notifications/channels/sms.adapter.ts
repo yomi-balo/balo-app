@@ -13,6 +13,8 @@ const log = createLogger('notification-sms');
 
 const E164_REGEX = /^\+[1-9]\d{6,14}$/;
 
+export const CLIENT_SMS_NOT_OPTED_IN = 'Client SMS not opted in';
+
 const SMS_RATE_LIMIT: RateLimitConfig = {
   keyPrefix: 'sms:rate',
   maxRequests: 5,
@@ -59,6 +61,19 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
       template: payload.template,
       skip_reason: 'Phone not verified',
+      distinct_id: payload.recipientId,
+    });
+    return;
+  }
+
+  // Client-side SMS needs explicit consent (BAL-655). A missing side counts as 'client', so a job
+  // queued by a build that predates `recipientSide` fails closed.
+  if (payload.recipientSide !== 'expert' && !user.clientSmsOptedInAt) {
+    log.info({ recipientId: payload.recipientId }, 'Client SMS not opted in');
+    await logNotification(payload, 'sms', 'skipped', CLIENT_SMS_NOT_OPTED_IN);
+    trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
+      template: payload.template,
+      skip_reason: CLIENT_SMS_NOT_OPTED_IN,
       distinct_id: payload.recipientId,
     });
     return;
