@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => {
     enqueueProjection: vi.fn(),
     publishInvites: vi.fn(),
     meterCallee: vi.fn(),
+    releaseCallee: vi.fn(),
     warn: vi.fn(),
     info: vi.fn(),
   };
@@ -114,6 +115,7 @@ function start(overrides: Record<string, unknown> = {}) {
     now: NOW,
     log,
     meterCallee: mocks.meterCallee,
+    releaseCallee: mocks.releaseCallee,
     ...overrides,
   });
 }
@@ -123,6 +125,7 @@ beforeEach(() => {
   mocks.authorize.mockResolvedValue({ ok: true, side: 'client', caseRow: CASE_ROW, mayRing: true });
   mocks.loadGates.mockResolvedValue(gates());
   mocks.meterCallee.mockResolvedValue(false);
+  mocks.releaseCallee.mockResolvedValue(undefined);
   mocks.findRingingForEngagement.mockResolvedValue(undefined);
   mocks.startWithNewMeeting.mockResolvedValue({
     ring: ring(),
@@ -413,6 +416,28 @@ describe('startCallNow — new_meeting post-commit', () => {
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
+  it('⚠ a ring stopped for want of a room gives its callee slot back and warns — the caller made no call', async () => {
+    mocks.provision.mockResolvedValue({ provisioned: false, dailyRoomName: null, joinUrl: null });
+
+    await start();
+
+    expect(mocks.releaseCallee).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseCallee).toHaveBeenCalledWith(EXPERT_USER, {
+      kind: 'company',
+      id: COMPANY_ID,
+    });
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ ringId: RING_ID, meetingId: NEW_MEETING_ID }),
+      expect.stringContaining('could not be provisioned')
+    );
+  });
+
+  it('a ring that starts never gives its callee slot back', async () => {
+    await start();
+
+    expect(mocks.releaseCallee).not.toHaveBeenCalled();
+  });
+
   it('uses an injected provisioner', async () => {
     const provision = vi
       .fn()
@@ -475,6 +500,7 @@ describe('startCallNow — expiry job and events', () => {
       userId: CLIENT,
       log,
       meterCallee: mocks.meterCallee,
+      releaseCallee: mocks.releaseCallee,
     });
 
     expect(result.ok).toBe(true);

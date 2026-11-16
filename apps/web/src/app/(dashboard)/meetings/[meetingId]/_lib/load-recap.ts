@@ -405,6 +405,18 @@ async function readClientSideEverPresent(
 }
 
 /**
+ * Whether a meeting has a recap at all: it must be terminal (`ended` or `cancelled`; see the guard
+ * in {@link loadRecap}), and an unanswered Call now ring (`no_answer`) has none either — it was
+ * never a consultation, so it answers the same `null` ⇒ `notFound()` as a missing meeting.
+ */
+function hasRecap(meeting: Pick<Meeting, 'status' | 'outcome'>): boolean {
+  if (meeting.status !== 'ended' && meeting.status !== 'cancelled') {
+    return false;
+  }
+  return meeting.outcome !== 'no_answer';
+}
+
+/**
  * Load the whole recap, or `null`.
  *
  * ⚠ ONE `null` FOR EVERY DENIAL — missing, soft-deleted, unauthorised, declined, ADMIN-ONLY
@@ -431,7 +443,7 @@ export const loadRecap = cache(
     // simply does not exist yet, and it collapses into the SAME single `null` ⇒ `notFound()`
     // every other denial uses. Nothing links here before then: `recap.ready` publishes only
     // after the transcript pipeline runs. `cancelled` DOES render, as the R11 not-held panel.
-    if (meeting.status !== 'ended' && meeting.status !== 'cancelled') {
+    if (!hasRecap(meeting)) {
       return null;
     }
 
@@ -485,15 +497,18 @@ export const loadRecap = cache(
     const alreadyReviewed = existingReview !== undefined;
 
     // ⚠ THE SIBLING SET IS NARROWED **HERE**, not downstream: `dailyRoomName` and `joinUrl`
-    // never leave this function, and the derivation returns two numbers.
+    // never leave this function, and the derivation returns two numbers. A `no_answer` sibling is
+    // dropped, as the case page drops it, so both number the consultations identically.
     const { ordinal } = deriveConsultationOrdinal(
-      siblings.map((row) => ({
-        id: row.id,
-        scheduledStart: row.scheduledStart,
-        startedAt: row.startedAt,
-        status: row.status,
-        outcome: row.outcome,
-      })),
+      siblings
+        .filter((row) => row.outcome !== 'no_answer')
+        .map((row) => ({
+          id: row.id,
+          scheduledStart: row.scheduledStart,
+          startedAt: row.startedAt,
+          status: row.status,
+          outcome: row.outcome,
+        })),
       meetingId
     );
 

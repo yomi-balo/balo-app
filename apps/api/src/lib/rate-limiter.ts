@@ -76,3 +76,25 @@ export async function checkRateLimit(
     ttlSeconds,
   };
 }
+
+/**
+ * Give one slot back to the current window: `DECR` the counter, but only while it is above zero,
+ * so a window that already expired is never recreated as a negative counter with no TTL (which
+ * would hand out extra slots forever). Atomic in one script. For a request that was metered but
+ * then failed for a reason that is not the caller's act.
+ */
+const RELEASE_SLOT_SCRIPT = `
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+if current > 0 then
+  return redis.call('DECR', KEYS[1])
+end
+return 0
+`;
+
+export async function releaseRateLimitSlot(
+  redis: Redis,
+  config: RateLimitConfig,
+  identifier: string
+): Promise<void> {
+  await redis.eval(RELEASE_SLOT_SCRIPT, 1, `${config.keyPrefix}:${identifier}`);
+}

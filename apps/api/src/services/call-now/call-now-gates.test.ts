@@ -333,7 +333,7 @@ describe('loadCallNowGates — the in-place candidate', () => {
     expect(gates.inPlaceCandidate).toBeNull();
   });
 
-  it('is always null for an expert caller, with no meeting read (decision 9)', async () => {
+  it('is always null for an expert caller, with no caller-zone read (decision 9)', async () => {
     mocks.listMeetingsForContext.mockResolvedValue([
       meeting('m-today', '2026-11-18T04:00:00.000Z'),
     ]);
@@ -346,7 +346,7 @@ describe('loadCallNowGates — the in-place candidate', () => {
     const gates = await loadCallNowGates(base({ side: 'expert', userId: EXPERT_USER }));
 
     expect(gates.inPlaceCandidate).toBeNull();
-    expect(mocks.listMeetingsForContext).not.toHaveBeenCalled();
+    expect(mocks.findTimezoneContext).not.toHaveBeenCalled();
   });
 
   it('falls back to UTC when the caller has no saved zone', async () => {
@@ -354,5 +354,87 @@ describe('loadCallNowGates — the in-place candidate', () => {
     mocks.listMeetingsForContext.mockResolvedValue([meeting('m-utc', '2026-11-17T23:30:00.000Z')]);
 
     expect((await loadCallNowGates(base())).inPlaceCandidate?.meetingId).toBe('m-utc');
+  });
+});
+
+describe('loadCallNowGates — a booking in its join window hides Call now (decision 20)', () => {
+  const RING_MEETING_ID = '99999999-9999-4999-8999-999999999999';
+  /** The join window opens 3 minutes before the start. */
+  const WINDOW_MS = 3 * 60_000;
+
+  function caseMeeting(id: string, status: string, startOffsetMs: number) {
+    return {
+      id,
+      status,
+      scheduledStart: new Date(NOW_IN_HOURS.getTime() + startOffsetMs),
+    };
+  }
+
+  it.each<{ side: 'client' | 'expert'; userId: string }>([
+    { side: 'client', userId: CLIENT },
+    { side: 'expert', userId: EXPERT_USER },
+  ])('$side caller: refuses one second after the window opens', async ({ side, userId }) => {
+    mocks.resolveCallee.mockResolvedValue({ ok: true, userId: BOOKER, timeZone: 'UTC' });
+    mocks.listMeetingsForContext.mockResolvedValue([
+      caseMeeting('m-soon', 'scheduled', WINDOW_MS - 1_000),
+    ]);
+
+    const gates = await loadCallNowGates(base({ side, userId }));
+
+    expect(gates.availability).toEqual({
+      canCallNow: false,
+      refusal: 'booking_starting',
+      reason: null,
+    });
+  });
+
+  it('refuses exactly at the instant the window opens', async () => {
+    mocks.listMeetingsForContext.mockResolvedValue([caseMeeting('m-edge', 'scheduled', WINDOW_MS)]);
+
+    expect((await loadCallNowGates(base())).availability).toMatchObject({
+      refusal: 'booking_starting',
+    });
+  });
+
+  it('offers the call one second before the window opens', async () => {
+    mocks.listMeetingsForContext.mockResolvedValue([
+      caseMeeting('m-later', 'scheduled', WINDOW_MS + 1_000),
+    ]);
+
+    expect((await loadCallNowGates(base())).availability).toEqual({ canCallNow: true });
+  });
+
+  it.each(['in_progress', 'waiting_for_participants'])(
+    'refuses while a meeting on the case is %s',
+    async (status) => {
+      mocks.listMeetingsForContext.mockResolvedValue([caseMeeting('m-live', status, -60_000)]);
+
+      expect((await loadCallNowGates(base())).availability).toMatchObject({
+        refusal: 'booking_starting',
+        reason: null,
+      });
+    }
+  );
+
+  it.each(['ended', 'cancelled'])('ignores a %s meeting', async (status) => {
+    mocks.listMeetingsForContext.mockResolvedValue([caseMeeting('m-done', status, -60_000)]);
+
+    expect((await loadCallNowGates(base())).availability).toEqual({ canCallNow: true });
+  });
+
+  it('does not count the ringing ring’s own meeting', async () => {
+    mocks.findRingingForEngagement.mockResolvedValue({
+      meetingId: RING_MEETING_ID,
+      status: 'ringing',
+      placement: 'new_meeting',
+      createdAt: new Date(NOW_IN_HOURS.getTime() - 60_000),
+      expiresAt: new Date(NOW_IN_HOURS.getTime() - 15_000),
+      endedAt: null,
+    });
+    mocks.listMeetingsForContext.mockResolvedValue([
+      caseMeeting(RING_MEETING_ID, 'scheduled', -60_000),
+    ]);
+
+    expect((await loadCallNowGates(base())).availability).toEqual({ canCallNow: true });
   });
 });

@@ -367,6 +367,7 @@ describe('resolveCallNowAvailability', () => {
     calleeRecentlyDeclinedCaller: false,
     calleeInLiveMeeting: false,
     ringLiveOnCase: false,
+    bookingStartingOnCase: false,
     companyHasOtherLiveSession: false,
     calleeOnline: false,
     expertWithinCallHours: true,
@@ -391,6 +392,7 @@ describe('resolveCallNowAvailability', () => {
       facts: { calleeRecentlyDeclinedCaller: true },
     },
     { refusal: 'ring_in_progress', reason: null, facts: { ringLiveOnCase: true } },
+    { refusal: 'booking_starting', reason: null, facts: { bookingStartingOnCase: true } },
     { refusal: 'company_in_call', reason: null, facts: { companyHasOtherLiveSession: true } },
     { refusal: 'callee_busy', reason: 'busy', facts: { calleeInLiveMeeting: true } },
     { refusal: 'outside_hours', reason: 'outside_hours', facts: { expertWithinCallHours: false } },
@@ -415,6 +417,7 @@ describe('resolveCallNowAvailability', () => {
       calleeResolved: false,
       calleeRecentlyDeclinedCaller: true,
       ringLiveOnCase: true,
+      bookingStartingOnCase: true,
       companyHasOtherLiveSession: true,
       calleeInLiveMeeting: true,
       expertWithinCallHours: false,
@@ -429,6 +432,7 @@ describe('resolveCallNowAvailability', () => {
         calleeResolved: true,
         calleeRecentlyDeclinedCaller: false,
         ringLiveOnCase: false,
+        bookingStartingOnCase: false,
         companyHasOtherLiveSession: false,
         calleeInLiveMeeting: false,
         expertWithinCallHours: true,
@@ -436,7 +440,7 @@ describe('resolveCallNowAvailability', () => {
       const key = Object.keys(gate.facts)[0] as keyof CallNowGateFacts;
       facts = { ...facts, [key]: repaired[key] };
     }
-    expect(order).toHaveLength(8);
+    expect(order).toHaveLength(9);
     expect(resolveCallNowAvailability(facts)).toEqual({ canCallNow: true });
   });
 
@@ -451,6 +455,15 @@ describe('resolveCallNowAvailability', () => {
       resolveCallNowAvailability({ ...OPEN, callerSide: 'expert', expertWithinCallHours: false })
     ).toEqual({ canCallNow: true });
   });
+
+  it.each<CallNowGateFacts['callerSide']>(['client', 'expert'])(
+    'booking_starting refuses a %s caller, reason not shown',
+    (callerSide) => {
+      expect(
+        resolveCallNowAvailability({ ...OPEN, callerSide, bookingStartingOnCase: true })
+      ).toEqual({ canCallNow: false, refusal: 'booking_starting', reason: null });
+    }
+  );
 
   it('an online callee is rung outside call hours', () => {
     expect(

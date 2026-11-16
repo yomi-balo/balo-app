@@ -41,6 +41,7 @@
 import {
   creditSessionsRepository,
   meetingContextsRepository,
+  meetingRingsRepository,
   meetingsRepository,
   type MeetingOutcome,
   type OpenToleratedGate,
@@ -288,6 +289,15 @@ function zeroShapeOutcome(
   return settlement.outcome;
 }
 
+/** A ring created this meeting and no ring on it ever connected. */
+async function neverConnectedCallNow(meetingId: string): Promise<boolean> {
+  const rings = await meetingRingsRepository.listForMeeting(meetingId);
+  return (
+    rings.some((ring) => ring.placement === 'new_meeting') &&
+    !rings.some((ring) => ring.status === 'connected')
+  );
+}
+
 /**
  * Open and settle ONE sessionless ended Case meeting — or settle the session it already has, or record
  * why nothing is owed. See the module docblock; the flow is plan §C.6, step for step.
@@ -305,12 +315,18 @@ export async function settleSessionlessCaseMeeting(input: {
   const { meetingId, trigger, actorUserId } = input;
   const now = input.now ?? new Date();
 
-  // 0. THE MEETING, READ FIRST (BAL-649). An unanswered Call now ring ends as `no_answer` and owes
-  //    nothing: no client no-show can ever settle on it, even if a session somehow exists. Checked
-  //    before any session lookup or settlement, so it holds structurally rather than by the absence of
-  //    a session. A missing meeting falls through to the steps below, which handle it as before.
+  // 0. THE MEETING, READ FIRST (BAL-649). An unanswered Call now call owes nothing: no client no-show
+  //    can ever settle on it, even if a session somehow exists. Checked before any session lookup or
+  //    settlement, so it holds structurally rather than by the absence of a session. It is read from
+  //    two facts, either of which is enough: the meeting's `no_answer` outcome, and its ring rows —
+  //    a meeting a ring created (`new_meeting`) on which no ring ever `connected` was never a
+  //    consultation, whatever path ended it. An `in_place` ring never makes a booking unbillable. A
+  //    missing meeting falls through to the steps below, which handle it as before.
   const meeting = await meetingsRepository.findById(meetingId);
-  if (meeting?.outcome === 'no_answer') {
+  if (
+    meeting?.outcome === 'no_answer' ||
+    (meeting !== undefined && (await neverConnectedCallNow(meetingId)))
+  ) {
     log.info({ meetingId, trigger }, 'Sessionless settlement skipped — unanswered call');
     return { kind: 'not_billable', reason: 'no_answer' };
   }

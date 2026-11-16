@@ -12,13 +12,19 @@ const mocks = vi.hoisted(() => ({
   deleteRoom: vi.fn(),
   warn: vi.fn(),
   info: vi.fn(),
+  error: vi.fn(),
   // Anything a connect must NOT touch (the copy sheet: "No message on any channel").
   publishGuestRescheduled: vi.fn(),
   publishInvites: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: mocks.info, warn: mocks.warn, error: vi.fn() }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: mocks.info,
+    warn: mocks.warn,
+    error: mocks.error,
+  }),
 }));
 vi.mock('@balo/db', () => ({
   meetingRingsRepository: {
@@ -62,6 +68,10 @@ const AUDIT_ID = '99999999-9999-4999-8999-999999999999';
 const NOW = new Date('2026-11-16T10:00:30.000Z');
 const BOOKED_START = new Date('2026-11-16T15:00:00.000Z');
 const MEETING = { id: MEETING_ID } as unknown as Meeting;
+const CALENDAR_EVENTS = [
+  { id: 'cal-client', party: 'client', deliveryMode: 'ics', sequence: 2 },
+  { id: 'cal-expert', party: 'expert', deliveryMode: 'provider_event', sequence: 3 },
+];
 
 function connected(placement: 'new_meeting' | 'in_place', expertProfileId: string | null) {
   return {
@@ -100,6 +110,7 @@ beforeEach(() => {
   mocks.enqueueAmend.mockResolvedValue(undefined);
   mocks.publish.mockResolvedValue(undefined);
   mocks.reportAmendFailure.mockResolvedValue(undefined);
+  mocks.publishInvites.mockResolvedValue(undefined);
 });
 
 describe('connectRingIfRinging (AC6)', () => {
@@ -112,13 +123,45 @@ describe('connectRingIfRinging (AC6)', () => {
     expect(mocks.enqueueAmend).toHaveBeenCalledWith(MEETING_ID, EXPERT_PROFILE_ID, AUDIT_ID);
   });
 
-  it('⚠ sends no message: no guest-rescheduled notice, no ICS re-send, no booking.rescheduled', async () => {
+  it('⚠ sends no message: no guest-rescheduled notice, no booking.rescheduled', async () => {
     await connectRingIfRinging({ meeting: MEETING, now: NOW });
 
     expect(mocks.publishGuestRescheduled).not.toHaveBeenCalled();
-    expect(mocks.publishInvites).not.toHaveBeenCalled();
     const events = mocks.publish.mock.calls.map(([event]) => event);
     expect(events).toEqual(['call.connected']);
+  });
+
+  it('in_place: sends the calendar update once, off the rows the connect already bumped', async () => {
+    mocks.connect.mockResolvedValue({
+      ...connected('in_place', EXPERT_PROFILE_ID),
+      calendarEvents: CALENDAR_EVENTS,
+    });
+
+    await connectRingIfRinging({ meeting: MEETING, now: NOW });
+
+    expect(mocks.publishInvites).toHaveBeenCalledTimes(1);
+    expect(mocks.publishInvites).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        rescheduleAuditId: AUDIT_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+        calendarEvents: CALENDAR_EVENTS,
+      },
+      expect.anything()
+    );
+  });
+
+  it('a calendar update failure does not undo the connect', async () => {
+    mocks.publishInvites.mockRejectedValue(new Error('publisher down'));
+
+    const result = await connectRingIfRinging({ meeting: MEETING, now: NOW });
+
+    expect(result).toMatchObject({ connected: true, meeting: { id: MEETING_ID } });
+    expect(mocks.publish).toHaveBeenCalledWith('call.connected', expect.anything());
+    expect(mocks.error).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'publisher down' }),
+      expect.any(String)
+    );
   });
 
   it('publishes call.connected with the ring payload and tracks the connected outcome', async () => {
@@ -147,13 +190,14 @@ describe('connectRingIfRinging (AC6)', () => {
     );
   });
 
-  it('new_meeting: rebuilds availability but amends no calendar (it never had a projection)', async () => {
+  it('new_meeting: rebuilds availability but amends no calendar and sends no calendar update', async () => {
     mocks.connect.mockResolvedValue(connected('new_meeting', EXPERT_PROFILE_ID));
 
     await connectRingIfRinging({ meeting: MEETING, now: NOW });
 
     expect(mocks.enqueueRebuild).toHaveBeenCalled();
     expect(mocks.enqueueAmend).not.toHaveBeenCalled();
+    expect(mocks.publishInvites).not.toHaveBeenCalled();
   });
 
   it('in_place with no resolvable expert: no rebuild, no amend', async () => {

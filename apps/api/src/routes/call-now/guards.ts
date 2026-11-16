@@ -11,8 +11,17 @@
  *
  * The decline cooldown is NOT here: it is a gate read from Postgres (`recently_declined`).
  */
-import type { RateLimitConfig } from '../../lib/rate-limiter.js';
+import { createLogger } from '@balo/shared/logging';
+import { getRedis } from '../../lib/redis.js';
+import {
+  RATE_LIMIT_DEADLINE_MS,
+  releaseRateLimitSlot,
+  type RateLimitConfig,
+} from '../../lib/rate-limiter.js';
+import { withDeadline } from '../../lib/with-deadline.js';
 import type { CallNowCallingParty } from '../../services/call-now/start-call.js';
+
+const log = createLogger('call-now-guards');
 
 const TEN_MINUTES_SECONDS = 600;
 
@@ -51,6 +60,36 @@ export function calleeRateLimitIdentifier(
   callingParty: CallNowCallingParty
 ): string {
   return `${calleeUserId}:${callingParty.kind}:${callingParty.id}`;
+}
+
+/**
+ * Give back the {@link CALL_NOW_CALLEE_RATE_LIMIT} slot a start spent on a ring the callee was
+ * never shown (its room could not be provisioned): that is not a ring the caller made. Best-effort
+ * and never throws — a slot that is not given back only expires with its window.
+ */
+export async function releaseCalleeRateLimitSlot(
+  calleeUserId: string,
+  callingParty: CallNowCallingParty
+): Promise<void> {
+  try {
+    await withDeadline(
+      () =>
+        releaseRateLimitSlot(
+          getRedis(),
+          CALL_NOW_CALLEE_RATE_LIMIT,
+          calleeRateLimitIdentifier(calleeUserId, callingParty)
+        ),
+      { deadlineMs: RATE_LIMIT_DEADLINE_MS, label: 'release call-now callee slot' }
+    );
+  } catch (error) {
+    log.warn(
+      {
+        keyPrefix: CALL_NOW_CALLEE_RATE_LIMIT.keyPrefix,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Call now callee rate-limit slot could not be given back — it expires with its window'
+    );
+  }
 }
 
 /** `GET /cases/:engagementId/call-now`, per user. Generous: the case page reads it on render. */

@@ -46,6 +46,9 @@ export async function enqueueCallNowRingExpiry(
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
       removeOnComplete: true,
+      // The per-minute lifecycle sweep ends any ring past `expires_at`, so a failed job retained
+      // in Redis would serve nothing.
+      removeOnFail: true,
     }
   );
 }

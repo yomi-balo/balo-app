@@ -58,7 +58,7 @@ vi.mock('../../jobs/recording-capture.js', () => ({ enqueueRecordingStop: mocks.
 
 import { CASE_JOIN_WINDOW_MINUTES } from '@balo/shared/engagements';
 import { dailyParticipantIdFor, dailyRoomNameForMeeting } from '@balo/shared/meetings';
-import { endRing, terminateNoAnswerMeeting } from './end-ring.js';
+import { endRing, endRingForHumanEnd, terminateNoAnswerMeeting } from './end-ring.js';
 
 const RING_ID = '88888888-8888-4888-8888-888888888888';
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
@@ -336,13 +336,14 @@ describe('endRing — events and analytics', () => {
     );
   });
 
-  it('`announce: false` suppresses the event but still tracks the ring', async () => {
+  it('⚠ `announce: false` (a ring the callee was never shown) publishes no event and tracks no ring end, but still ends the meeting', async () => {
     mocks.repoEndRing.mockResolvedValue(endedNewMeeting('stopped'));
 
     await endRing({ ringId: RING_ID, to: 'stopped', actorUserId: null, now: NOW, announce: false });
 
     expect(mocks.publish).not.toHaveBeenCalled();
-    expect(mocks.trackServer).toHaveBeenCalledTimes(1);
+    expect(mocks.trackServer).not.toHaveBeenCalledWith('call_now_ring_ended', expect.anything());
+    expect(mocks.deleteRoom).toHaveBeenCalledWith('balo-room');
   });
 
   it.each([
@@ -456,5 +457,71 @@ describe('terminateNoAnswerMeeting', () => {
       false
     );
     expect(mocks.deleteRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('endRingForHumanEnd', () => {
+  const OTHER = '77777777-7777-4777-8777-777777777777';
+
+  it('no ringing ring: nothing is written', async () => {
+    mocks.findRingingForMeeting.mockResolvedValue(undefined);
+
+    await expect(
+      endRingForHumanEnd({ meetingId: MEETING_ID, actorUserId: CALLER, now: NOW })
+    ).resolves.toEqual({ kind: 'no_ring' });
+    expect(mocks.repoEndRing).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { who: 'the caller', actor: CALLER, to: 'stopped' },
+    { who: 'the callee', actor: CALLEE, to: 'declined' },
+    { who: 'another end-authority holder', actor: OTHER, to: 'stopped' },
+  ] as const)('$who ending it records $to, with the actor', async ({ actor, to }) => {
+    mocks.findRingingForMeeting.mockResolvedValue(ring({ status: 'ringing' }));
+    mocks.repoEndRing.mockResolvedValue(endedNewMeeting(to));
+
+    await endRingForHumanEnd({ meetingId: MEETING_ID, actorUserId: actor, now: NOW });
+
+    expect(mocks.repoEndRing).toHaveBeenCalledWith({
+      ringId: RING_ID,
+      to,
+      now: NOW,
+      actorUserId: actor,
+    });
+  });
+
+  it('a new_meeting ring: answers the meeting its end closed as no_answer', async () => {
+    mocks.findRingingForMeeting.mockResolvedValue(ring({ status: 'ringing' }));
+    mocks.repoEndRing.mockResolvedValue(endedNewMeeting('stopped'));
+
+    await expect(
+      endRingForHumanEnd({ meetingId: MEETING_ID, actorUserId: CALLER, now: NOW })
+    ).resolves.toEqual({ kind: 'meeting_ended', meeting: ENDED_MEETING });
+  });
+
+  it('an in_place ring: the ring ends and the booking is left to the ordinary End', async () => {
+    mocks.findRingingForMeeting.mockResolvedValue(
+      ring({ status: 'ringing', placement: 'in_place' })
+    );
+    mocks.repoEndRing.mockResolvedValue({
+      ring: ring({ status: 'stopped', placement: 'in_place' }),
+      endedMeeting: null,
+      expertProfileId: null,
+    });
+    mocks.meetingFindById.mockResolvedValue(undefined);
+
+    await expect(
+      endRingForHumanEnd({ meetingId: MEETING_ID, actorUserId: CALLER, now: NOW })
+    ).resolves.toEqual({ kind: 'ring_ended' });
+  });
+
+  it('a ring that connected or ended first: the End continues as usual', async () => {
+    mocks.findRingingForMeeting.mockResolvedValue(ring({ status: 'ringing' }));
+    mocks.repoEndRing.mockResolvedValue(undefined);
+    mocks.findById.mockResolvedValue(ring({ status: 'connected' }));
+
+    await expect(
+      endRingForHumanEnd({ meetingId: MEETING_ID, actorUserId: CALLER, now: NOW })
+    ).resolves.toEqual({ kind: 'ring_ended' });
   });
 });

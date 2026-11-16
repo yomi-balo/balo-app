@@ -252,6 +252,11 @@ export interface CallNowGateFacts {
   readonly calleeInLiveMeeting: boolean;
   /** A ring is live on this case, for either side. */
   readonly ringLiveOnCase: boolean;
+  /**
+   * A meeting on this case (other than a ringing ring's own) is live, or is `scheduled` and its
+   * join window has opened. Its own Join is the way in, so Call now is not offered beside it.
+   */
+  readonly bookingStartingOnCase: boolean;
   /** Another live session is open for the client company. */
   readonly companyHasOtherLiveSession: boolean;
   readonly calleeOnline: boolean;
@@ -266,6 +271,7 @@ export type CallNowRefusal =
   | 'callee_unavailable'
   | 'recently_declined'
   | 'ring_in_progress'
+  | 'booking_starting'
   | 'company_in_call'
   | 'callee_busy'
   | 'outside_hours';
@@ -299,6 +305,7 @@ export function resolveCallNowAvailability(facts: CallNowGateFacts): CallNowAvai
   if (!facts.calleeResolved) return refused('callee_unavailable', null);
   if (facts.calleeRecentlyDeclinedCaller) return refused('recently_declined', null);
   if (facts.ringLiveOnCase) return refused('ring_in_progress', null);
+  if (facts.bookingStartingOnCase) return refused('booking_starting', null);
   if (facts.companyHasOtherLiveSession) return refused('company_in_call', null);
   if (facts.calleeInLiveMeeting) return refused('callee_busy', 'busy');
   if (callerIsClient && !facts.calleeOnline && !facts.expertWithinCallHours) {

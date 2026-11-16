@@ -14,6 +14,7 @@ const {
   mockEnqueueRecordingStop,
   mockHasOwnClientInterval,
   mockFindMeetingById,
+  mockEndRingForHumanEnd,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockResolveEndAuthority: vi.fn(),
@@ -29,6 +30,10 @@ const {
   // BAL-474 (D6.4, V2-F2) — the presence precondition and the re-read behind it.
   mockHasOwnClientInterval: vi.fn(),
   mockFindMeetingById: vi.fn(),
+  // BAL-649 — no ring is ringing unless a test says so.
+  mockEndRingForHumanEnd: vi.fn(
+    async (): Promise<{ kind: string; meeting?: Record<string, unknown> }> => ({ kind: 'no_ring' })
+  ),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -67,6 +72,7 @@ vi.mock('../credit-session/settle-sessionless-case-meeting.js', () => ({
 vi.mock('../../jobs/recording-capture.js', () => ({
   enqueueRecordingStop: mockEnqueueRecordingStop,
 }));
+vi.mock('../call-now/end-ring.js', () => ({ endRingForHumanEnd: mockEndRingForHumanEnd }));
 // ⚠ `@balo/shared/meetings` is NOT mocked — the real `computeMeetingClocks` is what the
 // analytics numbers below assert, and it is the one definition of both spans.
 
@@ -795,6 +801,116 @@ describe('endMeeting — the presence precondition (BAL-474, D6.4 / D8.7)', () =
       ended_by: 'client_principal',
       distinct_id: USER_ID,
     });
+  });
+});
+
+describe('endMeeting — a Call now ring still ringing (BAL-649)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorizeParticipation.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      meeting: meetingRow({ status: 'scheduled', startedAt: null }),
+      subject: { contextType: 'case', contextId: 'ctx-1' },
+      companyId: 'company-1',
+      expertProfileId: 'expert-1',
+    });
+    mockResolveEndAuthority.mockResolvedValue({
+      canEndMeeting: true,
+      endedBy: 'expert_host',
+      isExpertHost: true,
+      isClientPrincipal: false,
+    });
+    mockEndMeeting.mockResolvedValue({
+      meeting: meetingRow({ status: 'ended', endedAt: NOW, endedBy: 'expert_host' }),
+      closedIntervals: 1,
+    });
+    mockListByMeeting.mockResolvedValue([]);
+    mockSettleSessionlessCaseMeeting.mockResolvedValue({
+      kind: 'not_billable',
+      reason: 'no_answer',
+    });
+  });
+
+  it('ends the ring first, with the acting user and the End instant', async () => {
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockEndRingForHumanEnd).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actorUserId: USER_ID,
+      now: NOW,
+    });
+  });
+
+  it('⚠ a new_meeting ring: the ring end ended the meeting as no_answer — answered with that, nothing else runs', async () => {
+    mockEndRingForHumanEnd.mockResolvedValueOnce({
+      kind: 'meeting_ended',
+      meeting: meetingRow({
+        status: 'ended',
+        endedAt: NOW,
+        endedBy: 'system_idle',
+        outcome: 'no_answer',
+      }),
+    });
+    const teardown = fakeTeardown();
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW })
+    ).resolves.toEqual({ ok: true, status: 'ended', alreadyEnded: false, endedBy: 'system_idle' });
+    expect(mockEndMeeting).not.toHaveBeenCalled();
+    expect(mockSettleSessionlessCaseMeeting).not.toHaveBeenCalled();
+    expect(mockEnqueueRecordingStop).not.toHaveBeenCalled();
+    expect(teardown.calls).toEqual([]);
+  });
+
+  it('an in_place ring: the ring ends, then the ordinary End runs unchanged', async () => {
+    mockEndRingForHumanEnd.mockResolvedValueOnce({ kind: 'ring_ended' });
+    const teardown = fakeTeardown();
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW })
+    ).resolves.toEqual({ ok: true, status: 'ended', alreadyEnded: false, endedBy: 'expert_host' });
+    expect(mockEndMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: MEETING_ID, outcome: null, endedBy: 'expert_host' })
+    );
+    expect(mockSettleSessionlessCaseMeeting).toHaveBeenCalled();
+    expect(teardown.calls).toEqual([ROOM_NAME]);
+  });
+
+  it('no tenancy, no ring end — the ring is never touched for an unauthorized caller', async () => {
+    mockAuthorizeParticipation.mockResolvedValueOnce({ ok: false, code: 'meeting_not_found' });
+
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockEndRingForHumanEnd).not.toHaveBeenCalled();
+  });
+
+  it('no end authority, no ring end', async () => {
+    mockResolveEndAuthority.mockResolvedValueOnce({
+      canEndMeeting: false,
+      endedBy: null,
+      isExpertHost: false,
+      isClientPrincipal: false,
+    });
+
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockEndRingForHumanEnd).not.toHaveBeenCalled();
   });
 });
 

@@ -13,8 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     the case meeting is created in the same transaction, `scheduled_start = now`);
  *   · presence — the Daily webhook's three phases: `resolvePresenceEffect` → `applyPresenceEffect`
  *     → `reconcileMeetingStatus`;
- *   · the terminal write — `endRing` (the service, so the post-commit tail runs too), or the
- *     per-minute `runMeetingLifecycleSweep` when the expiry job was lost;
+ *   · the terminal write — `endRing` (the service, so the post-commit tail runs too), the
+ *     per-minute `runMeetingLifecycleSweep` when the expiry job was lost, or a human End's own
+ *     write (`meetingsRepository.endMeeting`, `outcome: null`) landing while the ring still rang;
  *   · the money paths that could wrongly bill it — `settleSessionlessCaseMeeting`,
  *     `creditSessionsRepository.findSessionlessEndedCaseMeetings` and `runSessionMeterSweep`.
  *
@@ -437,6 +438,36 @@ describe('INVARIANT (end-to-end): an unanswered Call now ring never bills', () =
     await runSessionMeterSweep(plusMinutes(tickAt, 5));
 
     expect(await sessionlessCandidateIds(start, plusMinutes(tickAt, 10))).not.toContain(meetingId);
+    await expectNothingBilled(scenario, meetingId);
+  });
+
+  it('⚠ a human End lands while the ring still rings (outcome NULL, 20 minutes in): the ring rows alone keep it unbillable', async () => {
+    const scenario = await seedScenario();
+    const start = freshRingStart();
+    const { meetingId } = await startUnansweredCandidate(scenario, start);
+    await joined(meetingId, asUser(scenario.expertUserId), start);
+
+    // The End's own write, past the floor, with the ring row still `ringing`: the meeting carries no
+    // `no_answer` outcome, so only the ring facts can say nobody ever answered.
+    const endAt = plusMinutes(start, EXPERT_ALONE_MINUTES);
+    const ended = await meetingsRepository.endMeeting({
+      id: meetingId,
+      outcome: null,
+      endedBy: 'expert_host',
+      endedAt: endAt,
+      actorUserId: scenario.expertUserId,
+    });
+    expect(ended?.meeting).toMatchObject({ status: 'ended', outcome: null });
+
+    const settled = await settleSessionlessCaseMeeting({
+      meetingId,
+      trigger: 'human_end',
+      actorUserId: scenario.expertUserId,
+      now: endAt,
+    });
+    expect(settled).toEqual({ kind: 'not_billable', reason: 'no_answer' });
+
+    await runSessionMeterSweep(plusMinutes(endAt, 30));
     await expectNothingBilled(scenario, meetingId);
   });
 

@@ -14,7 +14,9 @@
  *   7. the repository write (one transaction; the one-ringing partial unique index raises
  *      `MeetingRingAlreadyLiveError` for two racing starts)
  *   8. `new_meeting` only, after commit: availability rebuild, then the Daily room. A room that
- *      cannot be provisioned cannot be answered, so the ring is stopped and the start fails
+ *      cannot be provisioned cannot be answered, so the ring is stopped and the start fails. The
+ *      callee was never shown that ring, so it is not a ring the caller made: it announces
+ *      nothing, emits no `call_now_ring_ended`, and gives its callee slot back (`releaseCallee`)
  *   9. the expiry job (best-effort — the lifecycle sweep is the backstop), then `call.ringing`
  *
  * ⚠⚠ DELIBERATELY NOT HERE: calendar projection, calendar invites, `booking.confirmed`, funding
@@ -91,6 +93,8 @@ export interface StartCallNowInput {
    * Resolves `true` when the ring is refused — and the reply has then already been sent.
    */
   meterCallee: (calleeUserId: string, callingParty: CallNowCallingParty) => Promise<boolean>;
+  /** Gives back the slot `meterCallee` spent, for a ring the callee was never shown. Never throws. */
+  releaseCallee: (calleeUserId: string, callingParty: CallNowCallingParty) => Promise<void>;
   deps?: {
     presence?: CalleePresence;
     provision?: typeof provisionCallNowVenue;
@@ -142,6 +146,8 @@ interface WriteRingInput {
   now: Date;
   log: FastifyBaseLogger;
   provision: typeof provisionCallNowVenue;
+  /** Gives the callee slot back when the ring is stopped before the callee is shown it. */
+  releaseCallee: () => Promise<void>;
 }
 
 /** The ring write, and for a new meeting the room it needs. Every refusal is a typed result. */
@@ -167,6 +173,10 @@ async function writeRing(input: WriteRingInput): Promise<WriteRingResult> {
     await rebuildAvailabilityBestEffort(started.expertProfileId, log);
     const venue = await input.provision(started.meeting, input.log);
     if (!venue.provisioned) {
+      log.warn(
+        { ringId: started.ring.id, meetingId: started.meeting.id },
+        'Call now ring stopped before it was shown — its room could not be provisioned'
+      );
       await endRing({
         ringId: started.ring.id,
         to: 'stopped',
@@ -174,6 +184,7 @@ async function writeRing(input: WriteRingInput): Promise<WriteRingResult> {
         now: new Date(),
         announce: false,
       });
+      await input.releaseCallee();
       return { ok: false, result: { ok: false, code: 'venue_unavailable' } };
     }
     return { ok: true, ring: started.ring, meetingId: started.meeting.id };
@@ -244,6 +255,7 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
   }
 
   const expiresAt = ringExpiresAt(now, 'app', resolveCallNowRingWindows());
+  const callee = gates.callee;
   const written = await writeRing({
     placement,
     ringInput: {
@@ -257,6 +269,7 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
     now,
     log: input.log,
     provision,
+    releaseCallee: () => input.releaseCallee(callee.userId, callingParty),
   });
   if (!written.ok) {
     return written.result;

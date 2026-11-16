@@ -93,8 +93,9 @@ import {
  *  · Presence changes the client's confirm: online ⇒ "Call now" is the filled button; offline ⇒
  *    "Book a time" is, and "Call anyway" is the outline. Copy says "online", never "available".
  *  · Ring window: RING_SECONDS, or RING_SECONDS_OFFLINE when the callee is reached by SMS.
- *  · IN PLACE OF A BOOKING. If the case has a consultation booked for later TODAY, the client
- *    (caller or callee) may use the call in its place: ticked by default. It is a move of that
+ *  · IN PLACE OF A BOOKING. If the case has a consultation booked for later TODAY, a client who
+ *    STARTS the call may use it in its place: ticked by default. A call the expert starts always
+ *    rings as a new meeting and leaves the booking where it is. It is a move of that
  *    same meeting to now — one row, same room, guests and join link, no new funding check — and it
  *    only takes effect when the call CONNECTS;
  *    an unanswered ring leaves the booking exactly where it was. Other days are never offered.

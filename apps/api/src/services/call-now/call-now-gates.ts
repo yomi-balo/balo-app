@@ -15,6 +15,11 @@
  * ⚠ `mayRing: false` (an expert-side holder who is not the delivering expert) resolves no callee,
  * so the action is hidden (`callee_unavailable`, reason null) on the view and refused on `POST`.
  *
+ * ⚠ A BOOKING IN ITS JOIN WINDOW HIDES THE ACTION (`booking_starting`, reason null) for both
+ * sides: any other meeting on the case that is live, or `scheduled` with its join window open
+ * (`withinJoinWindow`, the same instant the case's Join uses), has its own Join, which is the way
+ * in. The ringing ring's own meeting is not counted; a live ring refuses as `ring_in_progress`.
+ *
  * ⚠ THE DECLINE COOLDOWN (`recently_declined`) is read from the ring rows in Postgres, never
  * Redis: a callee who declined this caller is not rung by them again for
  * `CALL_NOW_DECLINE_COOLDOWN_MS`.
@@ -30,6 +35,7 @@ import {
   usersRepository,
   type CaseEngagementRow,
 } from '@balo/db';
+import { withinJoinWindow } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
 import {
   CALL_NOW_DECLINE_COOLDOWN_MS,
@@ -89,30 +95,53 @@ async function companyHasOtherLiveSession(caseRow: CaseEngagementRow): Promise<b
   return walletSession || sessionless || ringingElsewhere;
 }
 
-/** An in-place booking is a CLIENT-only choice (decision 9); an expert caller never has one. */
-async function loadInPlaceCandidate(
-  input: LoadCallNowGatesInput
-): Promise<CallNowGates['inPlaceCandidate']> {
+type CaseMeeting = Awaited<
+  ReturnType<typeof meetingContextsRepository.listMeetingsForContext>
+>[number];
+
+/**
+ * The caller's saved zone, which judges "the same day" for an in-place booking. An in-place
+ * booking is a CLIENT-only choice (decision 9), so an expert caller's zone is never read.
+ */
+async function loadCallerZoneForInPlace(input: LoadCallNowGatesInput): Promise<string | null> {
   if (input.side !== 'client') {
     return null;
   }
-  const [meetingRows, timezoneContext] = await Promise.all([
-    meetingContextsRepository.listMeetingsForContext('case', input.caseRow.id),
-    usersRepository.findTimezoneContext(input.userId, undefined),
-  ]);
-  return selectInPlaceCandidate(meetingRows, input.now, timezoneContext?.savedTimezone ?? 'UTC');
+  const timezoneContext = await usersRepository.findTimezoneContext(input.userId, undefined);
+  return timezoneContext?.savedTimezone ?? 'UTC';
+}
+
+/** Is any meeting on the case, other than `excludeMeetingId`, live or inside its join window? */
+function hasBookingStarting(
+  caseMeetings: readonly CaseMeeting[],
+  now: Date,
+  excludeMeetingId: string | undefined
+): boolean {
+  return caseMeetings.some((meeting) => {
+    if (meeting.id === excludeMeetingId) {
+      return false;
+    }
+    if (meeting.status === 'in_progress' || meeting.status === 'waiting_for_participants') {
+      return true;
+    }
+    return meeting.status === 'scheduled' && withinJoinWindow(now, meeting.scheduledStart);
+  });
 }
 
 export async function loadCallNowGates(input: LoadCallNowGatesInput): Promise<CallNowGates> {
   const { caseRow, side, userId, now } = input;
   const presence = input.presence ?? offlineCalleePresence;
 
-  const [expertSettings, ringingRing, otherLiveSession, inPlaceCandidate] = await Promise.all([
-    expertsRepository.findResolverSettings(caseRow.expertProfileId),
-    meetingRingsRepository.findRingingForEngagement(caseRow.id),
-    companyHasOtherLiveSession(caseRow),
-    loadInPlaceCandidate(input),
-  ]);
+  const [expertSettings, ringingRing, otherLiveSession, caseMeetings, callerZone] =
+    await Promise.all([
+      expertsRepository.findResolverSettings(caseRow.expertProfileId),
+      meetingRingsRepository.findRingingForEngagement(caseRow.id),
+      companyHasOtherLiveSession(caseRow),
+      meetingContextsRepository.listMeetingsForContext('case', caseRow.id),
+      loadCallerZoneForInPlace(input),
+    ]);
+  const inPlaceCandidate =
+    callerZone === null ? null : selectInPlaceCandidate(caseMeetings, now, callerZone);
 
   const calleeResult =
     expertSettings === null || !input.mayRing
@@ -150,6 +179,7 @@ export async function loadCallNowGates(input: LoadCallNowGatesInput): Promise<Ca
     calleeRecentlyDeclinedCaller,
     calleeInLiveMeeting,
     ringLiveOnCase: ringingRing !== undefined && isRingLive(ringingRing, now),
+    bookingStartingOnCase: hasBookingStarting(caseMeetings, now, ringingRing?.meetingId),
     companyHasOtherLiveSession: otherLiveSession,
     calleeOnline,
     expertWithinCallHours,

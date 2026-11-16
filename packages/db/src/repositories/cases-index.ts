@@ -818,6 +818,10 @@ export const casesIndexRepository = {
    * `deriveConsultationOrdinal` uses on the case page, so the two surfaces number a case's
    * consultations identically.
    *
+   * ⚠ A `no_answer` meeting (an unanswered Call now ring) is NEVER on the trail: it was never a
+   * consultation, and the case page drops it too (`withoutNoAnswerMeetings`), so leaving it here
+   * would add a mark and shift every later ordinal against the case page.
+   *
    * ⚠ CALLER OBLIGATION: every id passed in MUST already have come out of {@link listOpenCases}
    * or {@link listResolvedCases}. This method adds NO scope predicate of its own —
    * `meeting_contexts.context_id` has no FK and no RLS, so an unverified id here reads another
@@ -852,7 +856,9 @@ export const casesIndexRepository = {
         and(
           eq(meetingContexts.contextType, 'case'),
           inArray(meetingContexts.contextId, [...new Set(engagementIds)]),
-          isNull(meetingContexts.deletedAt)
+          isNull(meetingContexts.deletedAt),
+          // `IS DISTINCT FROM`, not `<>`, so the NULL outcome of every live or booked meeting stays.
+          sql`${meetings.outcome} IS DISTINCT FROM 'no_answer'`
         )
       )
       .orderBy(

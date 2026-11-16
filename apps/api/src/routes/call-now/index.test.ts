@@ -229,7 +229,12 @@ describe('call-now routes (BAL-649)', () => {
         expiresAt: EXPIRES.toISOString(),
       });
       expect(mocks.startCallNow).toHaveBeenCalledWith(
-        expect.objectContaining({ engagementId: ENGAGEMENT_ID, userId: USER_ID })
+        expect.objectContaining({
+          engagementId: ENGAGEMENT_ID,
+          userId: USER_ID,
+          meterCallee: expect.any(Function),
+          releaseCallee: expect.any(Function),
+        })
       );
     });
 

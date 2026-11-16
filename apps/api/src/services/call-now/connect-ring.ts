@@ -8,20 +8,30 @@
  *   · availability rebuild (the projection moved);
  *   · for an `in_place` ring with an expert, the retrying Apiroc calendar amend, keyed on the
  *     `meeting.rescheduled` audit id;
+ *   · for an `in_place` ring, the ICS update to every live calendar row
+ *     (`publishRescheduleCalendarInvites`, off the rows the connect transaction already bumped),
+ *     so every calendar entry moves to the real start. A `new_meeting` ring has no calendar row
+ *     and sends nothing;
  *   · `call.connected` and `call_now_ring_ended`.
  *
- * ⚠⚠ DELIBERATELY NOT CALLED: `publishGuestRescheduledNotifications`,
- * `publishRescheduleCalendarInvites` and `booking.rescheduled`. The copy sheet says a connect
- * sends "No message on any channel": both parties are already in the room, and guests keep their
- * links. The calendar amend is a quiet convergence of the expert's own calendar, not a message.
+ * ⚠⚠ NEVER CALLED: `publishGuestRescheduledNotifications` and `booking.rescheduled`. A connect
+ * sends "No message on any channel" (copy sheet §4): both parties are already in the room and
+ * guests keep their links. The calendar amend and the ICS update are calendar convergence, not
+ * messages.
  *
  * ⚠ `{ connected: false }` IS A NORMAL OUTCOME: no ring, an expired or ended ring, or a lost
  * race to expiry / decline / stop. The caller falls through to the ordinary presence path.
  */
-import { meetingRingsRepository, type Meeting, type MeetingRing } from '@balo/db';
+import {
+  meetingRingsRepository,
+  type ConnectedRing,
+  type Meeting,
+  type MeetingRing,
+} from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import type { FastifyBaseLogger } from 'fastify';
 import { enqueueMeetingCalendarAmend } from '../../jobs/meeting-calendar-amend.js';
+import { publishRescheduleCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import { reportCalendarAmendEnqueueFailure } from '../meetings/meeting-availability.js';
 import { publishCallEvent, trackRingEnded } from './call-now-events.js';
 import { rebuildAvailabilityBestEffort } from './post-commit.js';
@@ -64,6 +74,30 @@ async function amendCalendarBestEffort(input: {
   }
 }
 
+async function publishCalendarUpdateBestEffort(connected: ConnectedRing): Promise<void> {
+  try {
+    await publishRescheduleCalendarInvites(
+      {
+        meetingId: connected.meeting.id,
+        rescheduleAuditId: connected.rescheduleAuditId,
+        expertProfileId: connected.expertProfileId,
+        calendarEvents: connected.calendarEvents,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: connected.meeting.id,
+        ringId: connected.ring.id,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar invite publish threw despite its never-throws contract — the connect already committed'
+    );
+  }
+}
+
 export async function connectRingIfRinging(input: {
   meeting: Meeting;
   now: Date;
@@ -94,6 +128,9 @@ export async function connectRingIfRinging(input: {
       expertProfileId,
       rescheduleAuditId: connected.rescheduleAuditId,
     });
+  }
+  if (ring.placement === 'in_place') {
+    await publishCalendarUpdateBestEffort(connected);
   }
 
   await publishCallEvent('call.connected', ring);

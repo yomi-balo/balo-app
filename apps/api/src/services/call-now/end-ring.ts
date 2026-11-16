@@ -10,7 +10,8 @@
  *      the booking's own join window has opened, when they are legitimately in the room. The
  *      booked meeting itself is NEVER reconciled here: an unanswered ring leaves it exactly as it
  *      was, `scheduled`, cancellable and reschedulable;
- *   3. the ring's domain event; 4. `call_now_ring_ended` and the log line.
+ *   3. the ring's domain event; 4. `call_now_ring_ended` (both skipped for a ring the callee was
+ *      never shown, `announce: false`) and the log line.
  *
  * ⚠⚠ NEVER `settleSessionlessCaseMeeting`, `enqueueRecordingStop` OR A CREDIT-HOLD RELEASE. An
  * unanswered call opens no session and records nothing, so there is no money to settle and
@@ -86,8 +87,9 @@ export interface EndRingInput {
   actorUserId: string | null;
   now: Date;
   /**
-   * `false` suppresses the ring's domain event. Only the start path passes it, when it stops a
-   * ring it never announced (room provisioning failed before `call.ringing`).
+   * `false` suppresses the ring's domain event AND `call_now_ring_ended`. Only the start path
+   * passes it, when it stops a ring the callee was never shown (room provisioning failed before
+   * `call.ringing`): that was not a call anyone made, so it is neither announced nor measured.
    */
   announce?: boolean;
   log?: CallNowLogger;
@@ -179,8 +181,8 @@ export async function endRing(input: EndRingInput): Promise<EndRingOutcome> {
 
   if (input.announce !== false) {
     await publishCallEvent(EVENT_FOR_END[to], ring);
+    trackRingEnded(ring);
   }
-  trackRingEnded(ring);
   log.info(
     {
       ringId: ring.id,
@@ -193,6 +195,45 @@ export async function endRing(input: EndRingInput): Promise<EndRingOutcome> {
     'Call now ring ended'
   );
   return { ended: true, status: to, ring, endedMeeting };
+}
+
+/** What a human End did to a ring still ringing on its meeting. */
+export type EndRingForHumanEndOutcome =
+  | { kind: 'no_ring' }
+  /** A `new_meeting` ring ended, and its meeting with it as `no_answer`. The End is complete. */
+  | { kind: 'meeting_ended'; meeting: Meeting }
+  /** The ring ended (or lost a race) and the meeting is untouched: the End continues as usual. */
+  | { kind: 'ring_ended' };
+
+/**
+ * A human End on a meeting whose ring is still ringing ends the ring first, so the ring stops
+ * ringing for the callee and its outcome is recorded. The actor's identity names the ending: the
+ * ring's caller `stopped` it, its callee `declined` it, anyone else with end authority `stopped`
+ * it. A `new_meeting` ring's end also ends the meeting as `no_answer` and releases the slot; an
+ * `in_place` ring's end leaves the booked meeting untouched.
+ */
+export async function endRingForHumanEnd(input: {
+  meetingId: string;
+  actorUserId: string;
+  now: Date;
+  log?: CallNowLogger;
+}): Promise<EndRingForHumanEndOutcome> {
+  const { meetingId, actorUserId, now } = input;
+  const ringing = await meetingRingsRepository.findRingingForMeeting(meetingId);
+  if (ringing === undefined) {
+    return { kind: 'no_ring' };
+  }
+  const outcome = await endRing({
+    ringId: ringing.id,
+    to: ringing.calleeUserId === actorUserId ? 'declined' : 'stopped',
+    actorUserId,
+    now,
+    log: input.log,
+  });
+  if (outcome.ended && outcome.endedMeeting !== null) {
+    return { kind: 'meeting_ended', meeting: outcome.endedMeeting };
+  }
+  return { kind: 'ring_ended' };
 }
 
 /**

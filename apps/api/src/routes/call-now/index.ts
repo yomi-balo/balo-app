@@ -36,6 +36,7 @@ import {
   CALL_NOW_START_RATE_LIMIT,
   CALL_NOW_VIEW_RATE_LIMIT,
   calleeRateLimitIdentifier,
+  releaseCalleeRateLimitSlot,
 } from './guards.js';
 import { engagementIdParamsSchema, ringIdParamsSchema, startCallNowBodySchema } from './schema.js';
 
@@ -127,6 +128,7 @@ async function handleStart(request: FastifyRequest, reply: FastifyReply): Promis
           calleeRateLimitIdentifier(calleeUserId, callingParty),
           reply
         ),
+      releaseCallee: releaseCalleeRateLimitSlot,
     });
     if (result.ok) {
       reply.code(201).send({
