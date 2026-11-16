@@ -722,9 +722,14 @@ function Tags({ tags, max }) {
   );
 }
 
-/* One mark per consultation, oldest first: filled = held, ring = booked, dashed = cancelled,
+/* One mark per consultation, oldest first: filled = completed, ring = booked, dashed = cancelled,
    grey = missed. The line behind them reads as the case's timeline. */
-const TRAIL_WORDS = { held: 'held', upcoming: 'booked', cancelled: 'cancelled', missed: 'missed' };
+const TRAIL_WORDS = {
+  held: 'completed',
+  upcoming: 'booked',
+  cancelled: 'cancelled',
+  missed: 'missed',
+};
 
 function markStyle(mark) {
   const base = {
@@ -789,7 +794,7 @@ function Facts({ c }) {
         minWidth: 0,
       }}
     >
-      {c.held > 0 ? <span style={fact}>{c.held} held</span> : null}
+      {c.held > 0 ? <span style={fact}>{c.held} completed</span> : null}
       {c.itemsForYou > 0 ? (
         <span style={fact}>
           <ListChecks size={13} aria-hidden="true" />
@@ -1557,7 +1562,7 @@ function ResolvedSection({ items, lens, mobile, open, setOpen, go }) {
                         {auto
                           ? `Closed automatically on ${c.closedOn}`
                           : `Resolved on ${c.closedOn}`}
-                        , {c.held} held
+                        , {c.held} completed
                       </span>
                     ) : null}
                   </span>
@@ -1569,7 +1574,7 @@ function ResolvedSection({ items, lens, mobile, open, setOpen, go }) {
                           : `Resolved on ${c.closedOn}`}
                       </span>
                       <span style={{ display: 'block', fontSize: 12, color: T.text3 }}>
-                        {c.held} held
+                        {c.held} completed
                       </span>
                     </span>
                   )}
@@ -2646,7 +2651,7 @@ function noteFor(s) {
     );
   }
   parts.push(
-    'Order: the ticket, then other bookings soonest first, then nothing-booked cases by recent activity. Dots are the case’s calls: filled held, ring booked, dashed cancelled, grey missed. No money anywhere.'
+    'Order: the ticket, then other bookings soonest first, then nothing-booked cases by recent activity. Dots are the case’s calls: filled completed, ring booked, dashed cancelled, grey missed. No money anywhere.'
   );
   if (s.navLabel === 'Consultations')
     parts.push(

@@ -416,7 +416,7 @@ export default function App() {
                   >
                     Open
                   </span>
-                  <span>2 held · opened 12 Jun</span>
+                  <span>2 completed · opened 12 Jun</span>
                 </div>
               </div>
               <button

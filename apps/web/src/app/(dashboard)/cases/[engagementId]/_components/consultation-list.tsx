@@ -228,7 +228,7 @@ function stateLabel(
     case 'in_progress':
       return 'Live now';
     case 'held':
-      return 'Held';
+      return 'Completed';
     case 'no_show_client':
       // The CLIENT never arrived: impersonal for the client, explicit for the expert.
       return lens === 'client' ? 'Not joined' : "Client didn't join";

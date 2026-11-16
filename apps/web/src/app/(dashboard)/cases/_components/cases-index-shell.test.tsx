@@ -731,7 +731,7 @@ describe('CasesIndexShell — the Resolved section', () => {
     });
     expect(await screen.findByText('Einstein bot handoff')).toBeInTheDocument();
     expect(screen.getByText('Closed automatically on')).toBeInTheDocument();
-    expect(screen.getByText('1 held')).toBeInTheDocument();
+    expect(screen.getByText('1 completed')).toBeInTheDocument();
 
     await user.click(toggle);
     expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASES_INDEX_RESOLVED_TOGGLED, {

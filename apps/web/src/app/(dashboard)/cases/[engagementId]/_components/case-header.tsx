@@ -107,7 +107,7 @@ export function CaseHeader({
             <Dot />
             <span>
               {header.heldConsultationCount} consultation
-              {header.heldConsultationCount === 1 ? '' : 's'} held
+              {header.heldConsultationCount === 1 ? '' : 's'} completed
             </span>
             <Dot />
             {/* `truncate` sits ON the link (a blockified flex item), so the label ellipsizes

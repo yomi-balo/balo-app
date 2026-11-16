@@ -552,7 +552,7 @@ function menuItems(flags) {
 function pillFor(row, who) {
   switch (row.state) {
     case 'held':
-      return { text: 'Held', tone: 'good' };
+      return { text: 'Completed', tone: 'good' };
     case 'missed_call':
       return who === 'client'
         ? { text: 'Expert didn’t join', tone: 'warn' }
