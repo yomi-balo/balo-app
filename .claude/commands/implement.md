@@ -237,15 +237,30 @@ Findings, CRITICAL included, go into the single fix round after Phase 6. Don't b
 
 ### Phase 5: Security Audit (always runs)
 
-Spawn the security sub-agent:
+Spawn the security sub-agent, and keep its JSON result so you can see which model answered:
 
 ```bash
-claude -p --model claude-opus-5-5 --effort xhigh \
+claude -p --model claude-opus-5-5 --effort xhigh --output-format json \
   --system-prompt "$(cat .claude/commands/secure.md)" \
-  "Audit the staged changes for {LINEAR_ISSUE_ID}. Read workos-auth and drizzle-schema skills first, then .implement/bal-<NNN>-review-brief.md and follow it. Focus: {FEATURE_SPECIFIC_AUTHZ_QUESTIONS}."
+  "Audit the staged changes for {LINEAR_ISSUE_ID}. Read workos-auth and drizzle-schema skills first, then .implement/bal-<NNN>-review-brief.md and follow it. Focus: {FEATURE_SPECIFIC_AUTHZ_QUESTIONS}." \
+  > .implement/bal-<NNN>-secure-result.json
 ```
 
-**Output:** Security verdict.
+**Output:** Security verdict, in the `result` field of that file.
+
+**Model check: run it before you use the verdict.** The `--model` pin doesn't guarantee which model answers. Opus 5.5 screens the prompt and everything the agent reads. If that screening flags the audit as offensive security work, Claude Code hands the rest of the run to Opus 4.8, and the verdict text gives no sign of it.
+
+```bash
+node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log("models:", Object.keys(r.modelUsage ?? {}).join(", ") || "none reported"); console.log(r.result);' \
+  .implement/bal-<NNN>-secure-result.json
+```
+
+- The only Opus or Sonnet model listed should be `claude-opus-5-5`. A Haiku entry is Claude Code's own background calls; ignore it.
+- If another Opus or Sonnet model is listed, or the result is a refusal and not a verdict, the audit didn't run on the pinned model. Discard it and re-run the phase once.
+- If it happens a second time, stop before the fix round and tell the user which model answered. They decide whether to accept that audit or change the brief and retry. Never count it as a pass on your own.
+- If no models are reported, the check couldn't run. Say so in the Phase 8 report; don't assume it passed.
+
+A resumed re-check of this phase gets `--output-format json` and the same check.
 
 Findings, CRITICAL included, go into the single fix round after Phase 6. Don't bounce to Phase 3 before all three verdicts are in.
 
@@ -254,7 +269,7 @@ Findings, CRITICAL included, go into the single fix round after Phase 6. Don't b
 Spawn the reviewer sub-agent:
 
 ```bash
-claude -p --model claude-opus-5-5 --effort xhigh \
+claude -p --model claude-opus-5-5 --effort high \
   --system-prompt "$(cat .claude/commands/review.md)" \
   "Review the staged implementation of {LINEAR_ISSUE_ID} against .implement/bal-<NNN>-plan.md (§ AC map). Read .implement/bal-<NNN>-review-brief.md first and follow it. Read a changed file in full only where the diff is not enough to judge."
 ```
@@ -337,12 +352,12 @@ Each phase spawns a fresh headless `claude -p` process, so both the reasoning ef
 | 3     | build     | `high`   | `sonnet`          |
 | 4     | ux-review | `high`   | `sonnet`          |
 | 5     | secure    | `xhigh`  | `claude-opus-5-5` |
-| 6     | review    | `xhigh`  | `claude-opus-5-5` |
+| 6     | review    | `high`   | `claude-opus-5-5` |
 | 7     | pre-pr    | `medium` | `sonnet`          |
 
-**Effort rationale:** `xhigh` goes to the deep convergent gates that land irreversible design decisions with no human approval step (architect, dba, secure, review); `medium` goes to the run-fix-verify gates (resolver, pre-pr) where the work is checking and repairing, not deciding.
+**Effort rationale:** `xhigh` goes to the deep convergent gates that land irreversible design decisions with no human approval step (architect, dba, secure); `medium` goes to the run-fix-verify gates (resolver, pre-pr) where the work is checking and repairing, not deciding. Review runs at `high`, down from `xhigh`, as a trial from 2026-11. These levels were set on Opus 5, and Anthropic's launch data has Opus 5.5 finding more review bugs at its lowest effort than Opus 5 found at `high`. What review misses still meets the PR review and CI, whereas nothing downstream re-examines the architect's plan. Put review back to `xhigh` if PR review starts catching what Phase 6 should have.
 
-**Model rationale:** effort is the reasoning _budget_; model is the reasoning _capability_ — separate axes. High-reasoning steps are pinned to `claude-opus-5-5` explicitly (not the floating `opus` alias) so the pipeline's convergent gates don't silently shift models on an alias re-point: the convergent architecture gates (architect, dba), the security audit (secure — never run the cyber-weaker model here), the technical review (review), the pre-flight resolver, and design. Resolver runs at `medium` effort but on Opus 5.5 deliberately: its job is spotting where a ticket's premises are out of sync with the code, its misses are invisible false negatives that poison every downstream phase, and it is a light phase so the Opus cost is negligible. Design also moves to Opus 5.5: it's cheap enough at this tier that the extra design judgment on user journeys, edge cases, and interaction patterns is worth it, and errors here flow straight into the architect and builder. Build and ux-review stay on Sonnet — they implement or validate against an already-decided spec rather than originate judgment calls — along with the mechanical pre-pr gate, all at `high`/`medium` effort where Sonnet is cost-efficient.
+**Model rationale:** effort is the reasoning _budget_; model is the reasoning _capability_ — separate axes. High-reasoning steps are pinned to `claude-opus-5-5` explicitly (not the floating `opus` alias) so the pipeline's convergent gates don't silently shift models on an alias re-point: the convergent architecture gates (architect, dba), the security audit (secure — the pin alone doesn't keep it there: a safeguard fallback can move a run to Opus 4.8, which is why Phase 5 checks which model answered), the technical review (review), the pre-flight resolver, and design. Resolver runs at `medium` effort but on Opus 5.5 deliberately: its job is spotting where a ticket's premises are out of sync with the code, its misses are invisible false negatives that poison every downstream phase, and it is a light phase so the Opus cost is negligible. Design also moves to Opus 5.5: it's cheap enough at this tier that the extra design judgment on user journeys, edge cases, and interaction patterns is worth it, and errors here flow straight into the architect and builder. Build and ux-review stay on Sonnet — they implement or validate against an already-decided spec rather than originate judgment calls — along with the mechanical pre-pr gate, all at `high`/`medium` effort where Sonnet is cost-efficient.
 
 **Never set `CLAUDE_CODE_EFFORT_LEVEL` or a global model** — they apply to every spawned process and fight the per-phase flags. Effort and model belong on the individual spawn command, nowhere else.
 
