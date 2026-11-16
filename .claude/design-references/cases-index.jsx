@@ -794,7 +794,11 @@ function Facts({ c }) {
         minWidth: 0,
       }}
     >
-      {c.held > 0 ? <span style={fact}>{c.held} completed</span> : null}
+      {c.held > 0 ? (
+        <span style={fact}>
+          {c.held} {c.held === 1 ? 'consultation' : 'consultations'} completed
+        </span>
+      ) : null}
       {c.itemsForYou > 0 ? (
         <span style={fact}>
           <ListChecks size={13} aria-hidden="true" />
@@ -1562,7 +1566,7 @@ function ResolvedSection({ items, lens, mobile, open, setOpen, go }) {
                         {auto
                           ? `Closed automatically on ${c.closedOn}`
                           : `Resolved on ${c.closedOn}`}
-                        , {c.held} completed
+                        , {c.held} {c.held === 1 ? 'consultation' : 'consultations'} completed
                       </span>
                     ) : null}
                   </span>
@@ -1574,7 +1578,7 @@ function ResolvedSection({ items, lens, mobile, open, setOpen, go }) {
                           : `Resolved on ${c.closedOn}`}
                       </span>
                       <span style={{ display: 'block', fontSize: 12, color: T.text3 }}>
-                        {c.held} completed
+                        {c.held} {c.held === 1 ? 'consultation' : 'consultations'} completed
                       </span>
                     </span>
                   )}
