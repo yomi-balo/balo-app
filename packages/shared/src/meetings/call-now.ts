@@ -10,7 +10,6 @@
  * env-overridable form of the two ring windows lives in `apps/api/src/config/call-now-timers.ts`.
  */
 
-import { MIN_MEETING_MINUTES } from './bounds';
 import type { LifecyclePresenceInterval } from './lifecycle';
 
 /** How long a ring rings when the callee is reached in the app. */
@@ -20,7 +19,7 @@ export const CALL_NOW_RING_MS = 45_000;
 export const CALL_NOW_RING_SMS_MS = 120_000;
 
 /** The created meeting's window: the 15-minute floor, the design's "estimate at the floor". */
-export const CALL_NOW_SCHEDULED_MINUTES = MIN_MEETING_MINUTES;
+export { MIN_MEETING_MINUTES as CALL_NOW_SCHEDULED_MINUTES } from './bounds';
 
 /**
  * The expert's local hours during which a client may ring an offline expert: `[startHour,

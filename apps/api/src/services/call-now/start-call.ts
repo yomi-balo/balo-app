@@ -111,7 +111,7 @@ function choosePlacement(input: {
   if (requestedMeetingId === undefined) {
     return { ok: true, placement: 'new_meeting' };
   }
-  if (candidate === null || candidate.meetingId !== requestedMeetingId) {
+  if (candidate?.meetingId !== requestedMeetingId) {
     return { ok: false, code: 'in_place_not_eligible' };
   }
   return { ok: true, placement: 'in_place', meetingId: candidate.meetingId };

@@ -221,7 +221,7 @@ function ringActionHandler(
 
     try {
       const found = await findRingFor(ringId, userId);
-      if (found === undefined || found.role !== role) {
+      if (found?.role !== role) {
         sendError(reply, 404, 'ring_not_found');
         return;
       }
@@ -234,7 +234,7 @@ function ringActionHandler(
   };
 }
 
-export async function callNowRoutes(fastify: FastifyInstance): Promise<void> {
+export function callNowRoutes(fastify: FastifyInstance): Promise<void> {
   const preHandler = [requireAuth];
   fastify.get('/cases/:engagementId/call-now', { preHandler }, handleView);
   fastify.post('/cases/:engagementId/call-now', { preHandler }, handleStart);
@@ -249,4 +249,5 @@ export async function callNowRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler },
     ringActionHandler('caller', 'stopped')
   );
+  return Promise.resolve();
 }

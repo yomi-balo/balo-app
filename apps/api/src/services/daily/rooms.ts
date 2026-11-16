@@ -681,8 +681,8 @@ function collectSessionHistory(
 
 /** `join_time + duration` (both seconds) as an instant, or `null` when either is missing or non-finite. */
 function recordedLeaveOf(participant: {
-  readonly join_time?: number | undefined;
-  readonly duration?: number | undefined;
+  readonly join_time?: number;
+  readonly duration?: number;
 }): Date | null {
   const { join_time: joinTime, duration } = participant;
   if (

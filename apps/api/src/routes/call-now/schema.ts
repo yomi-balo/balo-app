@@ -2,12 +2,12 @@ import { z } from 'zod';
 
 /** `:engagementId` — the case routes. */
 export const engagementIdParamsSchema = z.object({
-  engagementId: z.string().uuid(),
+  engagementId: z.uuid(),
 });
 
 /** `:ringId` — the three ring routes. */
 export const ringIdParamsSchema = z.object({
-  ringId: z.string().uuid(),
+  ringId: z.uuid(),
 });
 
 /**
@@ -26,7 +26,7 @@ export const ringIdParamsSchema = z.object({
  */
 export const startCallNowBodySchema = z
   .object({
-    inPlaceOfMeetingId: z.string().uuid().optional(),
+    inPlaceOfMeetingId: z.uuid().optional(),
   })
   .strict();
 
