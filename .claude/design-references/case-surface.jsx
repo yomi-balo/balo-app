@@ -617,7 +617,7 @@ export default function App() {
               >
                 <span>Opened 12 Jun</span>
                 <span>·</span>
-                <span>2 consultations held</span>
+                <span>2 consultations completed</span>
                 <span>·</span>
                 <span>{client ? EXPERT.agency : CLIENT.company}</span>
               </div>

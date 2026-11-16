@@ -11,7 +11,7 @@ const HEADER: RecapHeaderView = {
   eyebrow: 'Consultation',
   caseHref: null,
   title: 'Flow interview stuck on a loop',
-  status: { label: 'Not held', tone: 'neutral', icon: 'ban' },
+  status: { label: "Didn't take place", tone: 'neutral', icon: 'ban' },
   closedNote: null,
   occurredAtIso: '2026-07-29T04:00:00.000Z',
   durationMinutes: null,

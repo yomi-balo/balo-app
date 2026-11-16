@@ -386,7 +386,7 @@ describe('CaseCard — the footer facts', () => {
   it('announces the trail as ONE accessible name, never five shapes', () => {
     render(<CaseCard card={card()} side="company" dense={false} clock={CLOCK} onTrack={vi.fn()} />);
     expect(
-      screen.getByRole('img', { name: 'Consultations: 1 held, 1 booked' })
+      screen.getByRole('img', { name: 'Consultations: 1 completed, 1 booked' })
     ).toBeInTheDocument();
   });
 
@@ -400,7 +400,7 @@ describe('CaseCard — the footer facts', () => {
         onTrack={vi.fn()}
       />
     );
-    expect(screen.queryByText(/0 held|0 for you/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 consultations completed|0 for you/)).not.toBeInTheDocument();
     expect(screen.queryByText('New')).not.toBeInTheDocument();
   });
 

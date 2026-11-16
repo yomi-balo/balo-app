@@ -277,7 +277,7 @@ describe('FeaturedCaseCard — the identity half', () => {
 
   it('announces the trail as one accessible name', () => {
     render(<FeaturedCaseCard card={card()} now={NOW} timeZone="UTC" onTrack={vi.fn()} />);
-    expect(screen.getByRole('img', { name: 'Consultations: 1 held' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Consultations: 1 completed' })).toBeInTheDocument();
   });
 
   it('has no axe violations, live or not', async () => {

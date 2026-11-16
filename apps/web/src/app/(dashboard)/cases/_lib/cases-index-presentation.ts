@@ -92,7 +92,7 @@ export function caseTrailMark(state: CaseConsultationStateLabel): CaseTrailMark 
 }
 
 /**
- * The trail's accessible name — "Consultations: 2 held, 1 booked".
+ * The trail's accessible name — "Consultations: 2 completed, 1 booked".
  *
  * ⚠ ORDERED BY `CASE_TRAIL_MARKS`, NEVER BY INSERTION. `Object.keys` order would make the
  * sentence depend on which consultation happened first, so two cases with identical trails could

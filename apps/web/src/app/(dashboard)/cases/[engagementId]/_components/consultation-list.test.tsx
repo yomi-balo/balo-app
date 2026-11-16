@@ -198,7 +198,7 @@ const STATE_CASES: readonly StateCase[] = [
     state: 'held',
     muted: false,
     notes: bothLenses(null),
-    pill: bothPills('Held'),
+    pill: bothPills('Completed'),
     variant: 'success',
   },
   {

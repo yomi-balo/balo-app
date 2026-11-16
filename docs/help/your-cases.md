@@ -36,7 +36,7 @@ Every other open case shows as a card with what's happening next on it:
 - **A booked time** — the day and time of the next consultation.
 - **"Nothing booked"** — the case is open and waiting on a next step. **Book another** opens the
   case, where you can pick a time.
-- **"No consultation booked"** — nothing has been held on this case yet. **Book a time** gets it
+- **"No consultation booked"** — nothing has been scheduled on this case yet. **Book a time** gets it
   started.
 
 Two situations put a coloured band across the top of a card, because both are waiting on you:
@@ -51,21 +51,21 @@ Two situations put a coloured band across the top of a card, because both are wa
 The name on a band is the person who actually did it. If they work through an agency and aren't
 the expert delivering your case, their agency is named after them — "Priya @ CloudPeak".
 
-Each card also shows how many consultations have been held, how many open action items are
+Each card also shows how many consultations are completed, how many open action items are
 assigned to your side, and whether there are messages you haven't read.
 
 The row of dots is the case's consultation history, oldest first:
 
-- **Filled** — held.
+- **Filled** — completed.
 - **Outlined** — booked, still to come.
 - **Dashed** — cancelled.
 - **Solid grey** — missed: the call was due, but one side didn't arrive.
 - **Pale grey** — the call ended, but what happened wasn't recorded.
 
-If you use a screen reader, the row reads as a summary — "Consultations: 2 held, 1 booked".
+If you use a screen reader, the row reads as a summary — "Consultations: 2 completed, 1 booked".
 
 **Resolved** holds closed cases. Each says whether it was resolved or closed automatically after
-30 days with no consultations, bookings or messages, and how many consultations were held.
+30 days with no consultations, bookings or messages, and how many consultations were completed.
 Everything in a resolved case stays readable. **Book again** starts a new case with the same
 expert, as long as they're still listed on Balo — the closed one stays as it is.
 

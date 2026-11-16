@@ -39,7 +39,7 @@ export interface DurationLinePresence {
  * two zero shapes have no number to attach — there is nothing to floor when nobody was charged)
  * and on `billingFloorApplied` second. `no_show_client` is checked ahead of `billingFloorApplied`
  * — that shape now ALWAYS sets the flag (the floor is flatly the whole charge, owner ruling
- * 2026-08-21), but it wants its own "min held" phrasing rather than the generic short-call one,
+ * 2026-08-21), but it wants its own "Room open" phrasing rather than the generic short-call one,
  * so it must be matched first.
  *
  * Quiet fact, never punitive, never scolding, gender-neutral, no absence framing — the same
@@ -78,11 +78,11 @@ export function durationLine(block: SessionMoneyBlock, presence: DurationLinePre
     // F9, UX review round 1 — `actualMinutes`, not `durationMinutes`: `durationMinutes` is the
     // BILLED figure, which on this shape is FLATLY the floor (owner ruling 2026-08-21), so it
     // would state the floor twice while discarding the real time the expert held the room.
-    // "40 min held · billed at the 15-minute minimum" is now a TRUE statement — before R1 the
+    // "Room open 40 min · billed at the 15-minute minimum" is now a TRUE statement — before R1 the
     // client was actually charged 40 while this line claimed 15.
     return block.lens === 'client'
-      ? `${block.actualMinutes} min held · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
-      : `${block.actualMinutes} min held · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
+      ? `Room open ${block.actualMinutes} min · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
+      : `Room open ${block.actualMinutes} min · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
   }
   if (block.billingFloorApplied) {
     return block.lens === 'client'

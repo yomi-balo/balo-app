@@ -99,7 +99,7 @@ describe('caseTrailAriaLabel', () => {
 
   it('counts by mark, in the tuple order, omitting the zeroes', () => {
     expect(caseTrailAriaLabel(trail('held', 'booked', 'held'))).toBe(
-      'Consultations: 2 held, 1 booked'
+      'Consultations: 2 completed, 1 booked'
     );
   });
 

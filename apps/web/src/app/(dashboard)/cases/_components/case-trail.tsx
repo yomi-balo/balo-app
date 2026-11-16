@@ -8,7 +8,7 @@ import type { CaseTrailEntry, CaseTrailMark } from '../_lib/cases-index-view-typ
  *
  * ⚠⚠ THE MARKS ARE `aria-hidden` AND THE WHOLE ROW CARRIES ONE `role="img"` + `aria-label`.
  * Individually they are meaningless shapes; announced one at a time they would be five pieces of
- * noise. The label — "Consultations: 2 held, 1 booked" — is the entire information, and it is
+ * noise. The label — "Consultations: 2 completed, 1 booked" — is the entire information, and it is
  * built by `caseTrailAriaLabel` so the index and any future surface word it identically.
  *
  * ⚠ THE KEY IS THE CONSULTATION'S ORDINAL, NEVER THE ARRAY INDEX (SonarCloud S6479 flags an
