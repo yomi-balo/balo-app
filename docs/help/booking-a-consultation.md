@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-11-03
+updated: 2026-11-16
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -26,6 +26,8 @@ that expert stay together.
    switch to it in one click. Choose **Continue with** your time range when you've found the one you want.
 4. On **Review & confirm**, check the details and choose **Confirm & book**. Choose **Change** to
    go back and pick a different length or time.
+
+After you book, you can choose to get text updates about your consultation. It's optional, and you can turn it off any time under **Account**.
 
 You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.
 

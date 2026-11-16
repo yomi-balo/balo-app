@@ -401,7 +401,7 @@ export function NotificationBell() {
 
 SMS delivery uses **Brevo** (`@getbrevo/brevo`) — the same vendor as email, so no new dependency is needed. Templates are plain-text functions (not React Email).
 
-**Important:** SMS legally requires explicit user consent. Use the `condition` field on `NotificationRule` to gate SMS delivery behind an opt-in check (e.g., `condition: (ctx) => ctx.data.user?.smsOptedIn === true`).
+**Important:** SMS legally requires explicit user consent. A rule `condition` can't gate fan-out recipients one by one, so the gate is per recipient in `sms.adapter.ts`. Every SMS rule declares `recipientSide: 'client' | 'expert'`, the dispatcher copies it into `DeliveryPayload`, and the adapter requires `users.client_sms_opted_in_at` unless the side is `'expert'`. A job with no side counts as `'client'` (fails closed).
 
 ```ts
 // channels/sms.adapter.ts
@@ -581,4 +581,4 @@ Adding a new channel never touches existing adapter code — the dispatcher hand
 4. Create `channels/{channel}-templates.ts` — template renderers for the new channel
 5. Register `start{Channel}Worker()` in `jobs/worker.ts`
 6. Add rules for existing events that should use this channel in `engine/rules.ts`
-7. If the channel requires user consent (e.g., SMS), add a `condition` gate on every rule
+7. If the channel requires user consent (e.g., SMS), declare `recipientSide` on every rule for that channel and enforce the consent check per recipient in the channel adapter

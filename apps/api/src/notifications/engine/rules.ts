@@ -1,7 +1,15 @@
 export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
+export type SmsRecipientSide = 'client' | 'expert';
+
 export interface NotificationRule {
   channel: NotificationChannel;
+  /**
+   * SMS rules only: the side this recipient acts on in this event. `'client'` requires
+   * `users.client_sms_opted_in_at` (enforced in `sms.adapter.ts`). `'expert'` is the expert's own
+   * alert and needs no client consent. Every SMS rule declares it (`rules.test.ts`).
+   */
+  recipientSide?: SmsRecipientSide;
   recipient:
     | 'self'
     | 'expert'
@@ -545,6 +553,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     {
       channel: 'sms',
       recipient: 'meeting_party_participants',
+      recipientSide: 'client',
       template: 'reschedule-proposal-sent-sms',
       timing: 'immediate',
       priority: 'critical',
@@ -1164,6 +1173,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     {
       channel: 'sms',
       recipient: 'self',
+      recipientSide: 'client',
       template: 'session-grace-entered-sms',
       timing: 'immediate',
       priority: 'critical',
@@ -1187,6 +1197,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     {
       channel: 'sms',
       recipient: 'self',
+      recipientSide: 'client',
       template: 'session-near-wrap-sms',
       timing: 'immediate',
       priority: 'critical',

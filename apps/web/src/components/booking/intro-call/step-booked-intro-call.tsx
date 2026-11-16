@@ -3,6 +3,7 @@
 import type { CallKind } from '@balo/shared/notifications';
 import { CalendarPlus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ClientSmsOptIn } from '../client-sms-opt-in';
 import { formatSlotDateTime } from '../format';
 import { downloadIcsEvent } from '../ics';
 
@@ -82,6 +83,7 @@ export function StepBookedIntroCall({
           </p>
         )}
       </div>
+      <ClientSmsOptIn surface="intro_call_confirmation" expertFirstName={expertFirstName} />
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
           <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />

@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { StepBooked, type StepBookedProps } from './step-booked';
 import * as ics from './ics';
 
 const mockPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
+const mockGetConsentState = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/phone/client-sms-consent-actions', () => ({
+  getClientSmsConsentStateAction: () => mockGetConsentState(),
+  setClientSmsConsentAction: vi.fn(),
+}));
 
 function renderStep(over: Partial<StepBookedProps> = {}) {
   const onDone = vi.fn();
@@ -28,6 +34,29 @@ function renderStep(over: Partial<StepBookedProps> = {}) {
 }
 
 describe('StepBooked', () => {
+  beforeEach(() => {
+    mockGetConsentState.mockReset();
+    mockGetConsentState.mockReturnValue(new Promise(() => undefined));
+  });
+
+  it('never gates Done or View case on the SMS opt-in (still loading)', async () => {
+    const user = userEvent.setup();
+    const { onDone } = renderStep();
+    expect(screen.getByText('Loading text alert options')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View case' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Done enabled while the SMS opt-in is on offer', async () => {
+    mockGetConsentState.mockResolvedValue({ status: 'not_opted_in', verifiedPhone: null });
+    renderStep();
+    expect(await screen.findByText('Text me when Amara is ready')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View case' })).toBeEnabled();
+  });
+
   it('renders the NEW-case copy variant', () => {
     renderStep({ isNewCase: true });
     expect(screen.getByText(/This started a new case/)).toBeInTheDocument();

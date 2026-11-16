@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
 import { type UseFormReturn, useFieldArray } from 'react-hook-form';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { parsePhoneNumberFromString } from 'libphonenumber-js/min';
+import { formatPhoneForDisplay } from '@/lib/phone/format';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -43,11 +43,6 @@ type Proficiency = (typeof PROFICIENCIES)[number];
 
 function isProficiency(value: string): value is Proficiency {
   return (PROFICIENCIES as readonly string[]).includes(value);
-}
-
-/** "+61406431059" → "+61 406 431 059"; anything unparseable is shown as stored. */
-function formatPhoneForDisplay(e164: string): string {
-  return parsePhoneNumberFromString(e164)?.formatInternational() ?? e164;
 }
 
 const FIELD_LABEL_CLASS = 'text-foreground text-[13px] font-medium';

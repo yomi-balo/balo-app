@@ -63,6 +63,10 @@ vi.mock('@/components/availability', () => ({
 }));
 
 const mockBookIntroCallAction = vi.fn<(input: unknown) => Promise<BookIntroCallResult>>();
+vi.mock('@/lib/phone/client-sms-consent-actions', () => ({
+  getClientSmsConsentStateAction: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+  setClientSmsConsentAction: vi.fn(),
+}));
 vi.mock('@/lib/booking/actions/book-intro-call', () => ({
   bookIntroCallAction: (input: unknown) => mockBookIntroCallAction(input),
 }));

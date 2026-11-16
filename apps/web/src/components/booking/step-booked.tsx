@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { CalendarPlus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ClientSmsOptIn } from './client-sms-opt-in';
 import { formatSlotDateTime } from './format';
 import { downloadIcsEvent } from './ics';
 
@@ -93,6 +94,7 @@ export function StepBooked({
           </p>
         )}
       </div>
+      <ClientSmsOptIn surface="booking_confirmation" expertFirstName={expertFirstName} />
       <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
         <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
         Add to calendar

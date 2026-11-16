@@ -76,6 +76,11 @@ interface PhoneVerificationFlowProps {
    * entry from a later stage ("Change number") focuses the input either way.
    */
   focusOnMount?: boolean;
+  /**
+   * Who the number serves (default `'expert'`). `'client'` emits no `expert_phone_verified` event
+   * and words the verified state for client SMS.
+   */
+  audience?: 'expert' | 'client';
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -535,6 +540,7 @@ function usePhoneOtp(opts: {
   localNumber: string;
   e164Phone: string;
   mode: 'onboarding' | 'settings';
+  audience: 'expert' | 'client';
   validatePhone: () => boolean;
   getMasked: () => string;
   setPhoneError: (e: string | null) => void;
@@ -563,6 +569,7 @@ function usePhoneOtp(opts: {
     localNumber,
     e164Phone: initialE164,
     mode,
+    audience,
     validatePhone,
     getMasked,
     setPhoneError,
@@ -633,11 +640,13 @@ function usePhoneOtp(opts: {
 
         setStage('verified');
 
-        track(PHONE_EVENTS.PHONE_VERIFIED, {
-          phone_masked: '****' + e164Phone.slice(-4),
-          country_code: selectedCountry.code,
-          source: mode,
-        });
+        if (audience === 'expert') {
+          track(PHONE_EVENTS.PHONE_VERIFIED, {
+            phone_masked: '****' + e164Phone.slice(-4),
+            country_code: selectedCountry.code,
+            source: mode,
+          });
+        }
 
         onVerified(e164Phone);
       } catch {
@@ -645,7 +654,7 @@ function usePhoneOtp(opts: {
         setOtpError('network_error');
       }
     },
-    [e164Phone, selectedCountry, mode, onVerified]
+    [e164Phone, selectedCountry, mode, audience, onVerified]
   );
 
   const handleResend = useCallback((): void => {
@@ -887,13 +896,21 @@ function OtpActiveArea({
 
 interface VerifiedViewProps {
   mode: 'onboarding' | 'settings';
+  audience: 'expert' | 'client';
   initialPhone?: string;
   e164Phone: string;
   onChangeNumber: () => void;
 }
 
+function verifiedBody(isNumberChange: boolean, audience: 'expert' | 'client'): string {
+  if (isNumberChange) return 'Your phone number has been changed and verified.';
+  if (audience === 'client') return 'We’ll text you here when your expert is ready.';
+  return 'You’ll receive booking alerts and reminders at this number.';
+}
+
 function VerifiedView({
   mode,
+  audience,
   initialPhone,
   e164Phone,
   onChangeNumber,
@@ -918,9 +935,7 @@ function VerifiedView({
         {isNumberChange ? 'Number updated' : 'Phone verified'}
       </p>
       <p className="text-muted-foreground mb-3 text-[13px] leading-relaxed">
-        {isNumberChange
-          ? 'Your phone number has been changed and verified.'
-          : 'You\u2019ll receive booking alerts and reminders at this number.'}
+        {verifiedBody(isNumberChange, audience)}
       </p>
       <span className="bg-primary/5 border-primary/20 text-primary inline-block rounded-full border px-3.5 py-1 text-[14px] font-semibold">
         {e164Phone}
@@ -946,6 +961,7 @@ export function PhoneVerificationFlow({
   onVerified,
   onCancel,
   focusOnMount = true,
+  audience = 'expert',
 }: Readonly<PhoneVerificationFlowProps>): React.JSX.Element {
   const [selectedCountry, setSelectedCountry] = useState<Country>(DEFAULT_COUNTRY);
   const [localNumber, setLocalNumber] = useState('');
@@ -963,6 +979,7 @@ export function PhoneVerificationFlow({
     localNumber,
     e164Phone: initialPhone ?? '',
     mode,
+    audience,
     validatePhone,
     getMasked,
     setPhoneError,
@@ -1178,6 +1195,7 @@ export function PhoneVerificationFlow({
             {otp.stage === 'verified' && (
               <VerifiedView
                 mode={mode}
+                audience={audience}
                 initialPhone={initialPhone}
                 e164Phone={otp.e164Phone}
                 onChangeNumber={handleChangeNumber}

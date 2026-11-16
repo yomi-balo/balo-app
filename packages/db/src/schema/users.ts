@@ -63,6 +63,12 @@ export const users = pgTable(
     platformCapabilities: jsonb('platform_capabilities').$type<PlatformCapability[]>(),
     phone: text('phone'),
     phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
+    /**
+     * Consent to client-side SMS (BAL-655). Null means no consent. A verified phone alone is
+     * never consent. The only writer is `usersRepository.setClientSmsConsent`. Read by
+     * `apps/api` `sms.adapter.ts`.
+     */
+    clientSmsOptedInAt: timestamp('client_sms_opted_in_at', { withTimezone: true }),
 
     // Preferences
     activeMode: userModeEnum('active_mode').default('client').notNull(),

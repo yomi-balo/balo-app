@@ -75,6 +75,30 @@ describe('dispatch', () => {
     expect(getQueue).toHaveBeenCalledWith('notification-sms');
   });
 
+  it('copies recipientSide from an sms rule into the job data', async () => {
+    const smsRule: NotificationRule = {
+      ...baseRule,
+      channel: 'sms',
+      template: 'booking-urgent-sms',
+      recipientSide: 'client',
+    };
+
+    await dispatch(smsRule, baseContext);
+
+    expect(mockAdd).toHaveBeenCalledWith(
+      'booking-urgent-sms',
+      expect.objectContaining({ recipientSide: 'client' }),
+      expect.anything()
+    );
+  });
+
+  it('omits the recipientSide key for a rule that declares none', async () => {
+    await dispatch(baseRule, baseContext);
+
+    const [, jobData] = mockAdd.mock.calls[0] as [string, Record<string, unknown>, unknown];
+    expect(jobData).not.toHaveProperty('recipientSide');
+  });
+
   it('routes in-app channel to notification-in-app queue', async () => {
     const inAppRule: NotificationRule = {
       ...baseRule,

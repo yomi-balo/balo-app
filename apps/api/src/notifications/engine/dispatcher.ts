@@ -69,6 +69,7 @@ async function enqueueDelivery(
     event: context.event,
     data: context.data,
     payload: context.payload,
+    ...(rule.recipientSide === undefined ? {} : { recipientSide: rule.recipientSide }),
   };
 
   // BAL-475 — the delivery payload's MESSAGE CLASS is decided here, once, for both the
