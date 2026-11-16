@@ -738,35 +738,35 @@ describe('dispatch — BAL-531 colon-bearing correlationIds no longer throw at q
     } as RuleContext;
   }
 
-  it('one-colon correlationId — zero colons in the emitted jobId, exact string pinned', async () => {
-    await dispatch(rule, contextWith('sess-1:low_balance'));
+  // The two-colon `auto_topup:{wallet}:{entry}` shape already delivered before `buildJobId`
+  // (the raw upstream predicate accepted it); it is still rewritten for uniform escaping, so
+  // that row pins only that it stays colon-free and distinct.
+  it.each([
+    [
+      'one-colon',
+      'sess-1:low_balance',
+      'credit-session-low-balance--user-456--sess-1_clow__balance',
+    ],
+    [
+      'three-colon',
+      'w1:dormancy_reminder:band-a:2026-09-07',
+      'credit-session-low-balance--user-456--w1_cdormancy__reminder_cband-a_c2026-09-07',
+    ],
+    [
+      'two-colon',
+      'auto_topup:wallet-a:entry-1',
+      'credit-session-low-balance--user-456--auto__topup_cwallet-a_centry-1',
+    ],
+  ])(
+    '%s correlationId — zero colons in the emitted jobId, exact string pinned',
+    async (_shape, correlationId, expectedJobId) => {
+      await dispatch(rule, contextWith(correlationId));
 
-    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
-    expect(opts.jobId).not.toContain(':');
-    expect(opts.jobId).toBe('credit-session-low-balance--user-456--sess-1_clow__balance');
-  });
-
-  it('three-colon correlationId — zero colons in the emitted jobId, exact string pinned', async () => {
-    await dispatch(rule, contextWith('w1:dormancy_reminder:band-a:2026-09-07'));
-
-    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
-    expect(opts.jobId).not.toContain(':');
-    expect(opts.jobId).toBe(
-      'credit-session-low-balance--user-456--w1_cdormancy__reminder_cband-a_c2026-09-07'
-    );
-  });
-
-  it('two-colon correlationId — documents the deliberate rewrite of an id that delivers today', async () => {
-    // `auto_topup:{wallet}:{entry}` is a TWO-colon shape, which the raw upstream predicate
-    // (`jobId.includes(':') && jobId.split(':').length !== 3`) already accepted — this id
-    // delivered notifications BEFORE this ticket. `buildJobId` still rewrites it (D1: uniform
-    // escaping), so the ONLY regression this pins is that it stays colon-free and distinct.
-    await dispatch(rule, contextWith('auto_topup:wallet-a:entry-1'));
-
-    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
-    expect(opts.jobId).not.toContain(':');
-    expect(opts.jobId).toBe('credit-session-low-balance--user-456--auto__topup_cwallet-a_centry-1');
-  });
+      const opts = mockAdd.mock.calls[0][2] as { jobId: string };
+      expect(opts.jobId).not.toContain(':');
+      expect(opts.jobId).toBe(expectedJobId);
+    }
+  );
 });
 
 describe('BAL-475 — calendar_invite_recipient', () => {

@@ -661,7 +661,7 @@ function usePhoneOtp(opts: {
     setOtpError(null);
     setAttemptsRemaining(3);
     setResendKey((k) => k + 1);
-    handleSend();
+    void handleSend();
   }, [handleSend]);
 
   const handleChangeNumber = useCallback((): void => {

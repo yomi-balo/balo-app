@@ -176,9 +176,10 @@ export async function dispatch(rule: NotificationRule, context: RuleContext): Pr
       );
       return;
     }
-    for (const recipientId of recipientIds) {
-      await enqueueDelivery(rule, context, recipientId);
-    }
+    // Independent per-recipient enqueues: one failing recipient must not stop the rest.
+    await Promise.all(
+      recipientIds.map((recipientId) => enqueueDelivery(rule, context, recipientId))
+    );
     return;
   }
 
