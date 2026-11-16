@@ -135,9 +135,11 @@ describe('durationLine', () => {
 
   it('renders the no-show line keyed on shape, using actualMinutes not durationMinutes', () => {
     expect(durationLine(CLIENT_NO_SHOW, NOT_READ)).toBe(
-      '18 min call · billed at the 15-minute minimum'
+      'Room open 18 min · billed at the 15-minute minimum'
     );
-    expect(durationLine(EXPERT_NO_SHOW, NOT_READ)).toBe('18 min call · paid the 15-minute minimum');
+    expect(durationLine(EXPERT_NO_SHOW, NOT_READ)).toBe(
+      'Room open 18 min · paid the 15-minute minimum'
+    );
   });
 
   it('renders the missed-call line, per lens', () => {

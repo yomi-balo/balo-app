@@ -135,7 +135,8 @@ export const CASES_INDEX_UNREAD = 'New';
 
 export const casesIndexLastCall = (date: string): string => `Last call ${date}`;
 export const casesIndexOpenedAt = (date: string): string => `Opened ${date}`;
-export const casesIndexHeldCount = (count: number): string => `${count} completed`;
+export const casesIndexHeldCount = (count: number): string =>
+  `${count} ${count === 1 ? 'consultation' : 'consultations'} completed`;
 export const casesIndexItemsForYou = (count: number): string => `${count} for you`;
 export const casesIndexWaitingOn = (party: string): string => `Waiting on ${party}`;
 

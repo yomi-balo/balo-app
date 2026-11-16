@@ -343,14 +343,16 @@ describe('MoneyBlock', () => {
   // real held time the expert waited is silently discarded.
   it('renders the no-show line keyed on shape, using actualMinutes not durationMinutes (client)', () => {
     render(<MoneyBlock block={CLIENT_NO_SHOW} />);
-    expect(screen.getByText('18 min call · billed at the 15-minute minimum')).toBeInTheDocument();
-    expect(screen.queryByText(/^15 min call/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Room open 18 min · billed at the 15-minute minimum')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Room open 15 min/)).not.toBeInTheDocument();
   });
 
   // UX review round 1, F8 — expert lens for the same shape must say "paid", never "billed".
   it('renders the no-show line for the expert lens', () => {
     render(<MoneyBlock block={EXPERT_NO_SHOW} />);
-    expect(screen.getByText('18 min call · paid the 15-minute minimum')).toBeInTheDocument();
+    expect(screen.getByText('Room open 18 min · paid the 15-minute minimum')).toBeInTheDocument();
     expect(screen.queryByText(/billed/)).not.toBeInTheDocument();
   });
 

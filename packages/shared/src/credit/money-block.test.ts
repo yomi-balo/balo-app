@@ -178,7 +178,7 @@ describe('BAL-412 — actualMinutes / billingFloorApplied / billingFloorMinutes 
     // R1 — `no_show_client` bills the floor FLAT (owner ruling, 2026-08-21), so the BILLED figure
     // (15) is BELOW `actualMinutes` (40). The old re-derivation `durationMinutes > actualMinutes`
     // reported `false` here — on the very shape where the floor IS the entire charge. The
-    // snapshot says `true`, and the recap's "40 min call · billed at the 15-minute minimum" is
+    // snapshot says `true`, and the recap's "Room open 40 min · billed at the 15-minute minimum" is
     // now a true statement.
     const block = buildClientMoneyBlock(
       clientInput({

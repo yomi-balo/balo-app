@@ -12,7 +12,7 @@ import type { RecapStatusTone, RecapStatusView } from '@/lib/meetings/recap-view
  * cannot honestly supply. This chip carries the recap's own four labels, reuses the same
  * shipped `Badge` primitive and the same semantic tokens, and adds nothing else.
  *
- * ⚠ THE CHIP NEVER NAMES WHO WAS ABSENT. Both no-show outcomes read "Not held"; who was where
+ * ⚠ THE CHIP NEVER NAMES WHO WAS ABSENT. Both no-show outcomes read "Didn't take place"; who was where
  * is R11's body copy's job, stated exactly once.
  */
 const ICONS: Record<RecapStatusView['icon'], LucideIcon> = {

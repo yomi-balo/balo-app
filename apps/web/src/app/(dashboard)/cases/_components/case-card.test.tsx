@@ -400,7 +400,7 @@ describe('CaseCard — the footer facts', () => {
         onTrack={vi.fn()}
       />
     );
-    expect(screen.queryByText(/0 completed|0 for you/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 consultations completed|0 for you/)).not.toBeInTheDocument();
     expect(screen.queryByText('New')).not.toBeInTheDocument();
   });
 
