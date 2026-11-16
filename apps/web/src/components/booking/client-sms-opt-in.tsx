@@ -153,21 +153,20 @@ export function ClientSmsOptIn({
 
   if (view.kind === 'loading') {
     return (
-      <div
-        role="status"
+      <output
         aria-busy="true"
-        className="bg-muted/50 h-24 w-full max-w-[360px] animate-pulse rounded-2xl"
+        className="bg-muted/50 block h-24 w-full max-w-[360px] animate-pulse rounded-2xl"
       >
         <span className="sr-only">Loading text alert options</span>
-      </div>
+      </output>
     );
   }
 
   if (view.kind === 'done') {
     return (
-      <p role="status" className="text-success text-sm font-medium">
+      <output className="text-success block text-sm font-medium">
         You&apos;re all set — we&apos;ll text {formatPhoneForDisplay(view.phone)}.
-      </p>
+      </output>
     );
   }
 
