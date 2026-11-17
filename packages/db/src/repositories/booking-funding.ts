@@ -53,6 +53,12 @@ export interface BookingFundingSnapshotInput {
   readonly expertProfileId: string;
   /** Bookings whose window ends at or before `now` are no longer "upcoming". */
   readonly now: Date;
+  /**
+   * A meeting left out of the reservable set — the Call now meeting the client is committing to,
+   * which must not reserve against its own check. Reaches BOTH finder reads, so the verdict and the
+   * top-up figure agree. Never passed by the web gate or the card-removal snapshot.
+   */
+  readonly excludeMeetingId?: string;
 }
 
 export interface CardRemovalSnapshotInput {
@@ -75,7 +81,7 @@ async function readTopUpPricing(
   const availableMinor =
     wallet === undefined ? 0 : await creditHoldsRepository.getAvailableForBooking(wallet.id, tx);
   const reservable = await meetingsRepository.listReservableCaseBookings(
-    { companyId: input.companyId, now: input.now },
+    { companyId: input.companyId, now: input.now, excludeMeetingId: input.excludeMeetingId },
     tx
   );
   return {
@@ -127,7 +133,7 @@ export async function readSnapshotInTx(
 
   const availableMinor = await creditHoldsRepository.getAvailableForBooking(wallet.id, tx);
   const reservable = await meetingsRepository.listReservableCaseBookings(
-    { companyId: input.companyId, now: input.now },
+    { companyId: input.companyId, now: input.now, excludeMeetingId: input.excludeMeetingId },
     tx
   );
 

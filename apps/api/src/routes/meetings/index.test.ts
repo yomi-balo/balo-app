@@ -116,6 +116,12 @@ vi.mock('../../services/meetings/authorize-meeting-booking.js', () => ({
 // BAL-474 — the Case funding guard; its own verdict/heal behaviour is `case-booking-funding.test.ts`.
 vi.mock('../../services/meetings/case-booking-funding.js', () => ({
   checkCaseBookingFunding: mockCheckCaseBookingFunding,
+  CASE_BOOKING_FUNDING_STATUS: {
+    account_on_hold: 409,
+    booking_unfunded: 409,
+    booking_reserved: 409,
+    booking_funding_unavailable: 503,
+  },
 }));
 // BAL-591 — owner-liveness guard; its own verdict logic is `expert-booking-eligibility.test.ts`.
 vi.mock('../../services/meetings/expert-booking-eligibility.js', () => ({
@@ -538,11 +544,16 @@ describe('POST /meetings', () => {
       // An unreadable snapshot FAILS CLOSED.
       { code: 'booking_funding_unavailable', status: 503 },
     ] as const)('answers $status $code and books NOTHING', async ({ code, status }) => {
-      mockCheckCaseBookingFunding.mockResolvedValue({ ok: false, code });
+      mockCheckCaseBookingFunding.mockResolvedValue({
+        ok: false,
+        code,
+        suggestedTopUpMinor: 12_300,
+      });
 
       const res = await post(body());
 
       expect(res.statusCode).toBe(status);
+      // The booking route answers the code only — the top-up figure is Call now's, never this route's.
       expect(res.json()).toEqual({ error: code });
       expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
     });

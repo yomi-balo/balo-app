@@ -254,6 +254,37 @@ describe('meeting join routes (BAL-132)', () => {
       expect(mockLogWarn).toHaveBeenCalled();
     });
 
+    it('⚠ BAL-650 — call_answer_required answers 409 { error, ringId } at info, never warn', async () => {
+      mockJoinAsMember.mockResolvedValue({
+        ok: false,
+        code: 'call_answer_required',
+        ringId: 'ring-1',
+      });
+
+      const res = await call({ method: 'POST', url: JOIN_URL, headers: AUTH_HEADERS });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'call_answer_required', ringId: 'ring-1' });
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ code: 'call_answer_required', status: 409 }),
+        expect.stringContaining('Call now ring awaits the commit')
+      );
+      expect(mockLogWarn).not.toHaveBeenCalled();
+    });
+
+    it('⚠ BAL-650 — a body naming answeringRingId cannot lift the hold: the service gets meetingId and userId only', async () => {
+      mockJoinAsMember.mockResolvedValue({ ok: true, grant: grant() });
+
+      await call({
+        method: 'POST',
+        url: JOIN_URL,
+        headers: AUTH_HEADERS,
+        payload: { answeringRingId: 'ring-1' },
+      });
+
+      expect(mockJoinAsMember).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    });
+
     it('answers 400 for a non-uuid meeting id', async () => {
       const res = await call({
         method: 'POST',

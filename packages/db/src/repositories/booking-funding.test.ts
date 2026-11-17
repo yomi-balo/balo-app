@@ -222,6 +222,50 @@ describe('bookingFundingRepository.readSnapshot — one snapshot', () => {
     expect(mockGetAvailableForBooking).not.toHaveBeenCalled();
   });
 
+  describe('excludeMeetingId reaches EVERY reservable-bookings read', () => {
+    const MEETING_ID = '44444444-4444-4444-8444-444444444444';
+    const now = new Date();
+    const input = { companyId: COMPANY_ID, expertProfileId: EXPERT_ID, now } as const;
+
+    it('the no_mandate read', async () => {
+      await bookingFundingRepository.readSnapshot({ ...input, excludeMeetingId: MEETING_ID });
+      expect(mockListReservableCaseBookings).toHaveBeenCalledTimes(1);
+      expect(mockListReservableCaseBookings).toHaveBeenCalledWith(
+        { companyId: COMPANY_ID, now, excludeMeetingId: MEETING_ID },
+        TX
+      );
+    });
+
+    it('the no_wallet top-up pricing read', async () => {
+      mockFindByCompanyId.mockResolvedValue(undefined);
+      await bookingFundingRepository.readSnapshot({ ...input, excludeMeetingId: MEETING_ID });
+      expect(mockListReservableCaseBookings).toHaveBeenCalledWith(
+        { companyId: COMPANY_ID, now, excludeMeetingId: MEETING_ID },
+        TX
+      );
+    });
+
+    it('the on_hold top-up pricing read', async () => {
+      mockReadHoldStatus.mockResolvedValue({
+        ...NOT_ON_HOLD,
+        onHold: true,
+        openReceivableCount: 1,
+        amountToClearMinor: 500,
+      });
+      await bookingFundingRepository.readSnapshot({ ...input, excludeMeetingId: MEETING_ID });
+      expect(mockListReservableCaseBookings).toHaveBeenCalledWith(
+        { companyId: COMPANY_ID, now, excludeMeetingId: MEETING_ID },
+        TX
+      );
+    });
+
+    it('is absent from the read when the caller names no meeting', async () => {
+      await bookingFundingRepository.readSnapshot(input);
+      const [arg] = mockListReservableCaseBookings.mock.calls[0] ?? [];
+      expect(arg.excludeMeetingId).toBeUndefined();
+    });
+  });
+
   it('an unknown expert ⇒ unknown_expert (fail closed), before any balance read', async () => {
     mockFindRateCentsById.mockResolvedValue(undefined);
     const snapshot = await bookingFundingRepository.readSnapshot({
