@@ -246,7 +246,8 @@ export type MeetingOutcomeLabel =
   | 'completed'
   | 'no_show_client'
   | 'missed_call'
-  | 'venue_unavailable';
+  | 'venue_unavailable'
+  | 'no_answer';
 
 /**
  * What a consultation row renders as.
@@ -337,6 +338,9 @@ export function deriveCaseConsultationState(
   if (outcome === 'completed') return 'held';
   if (outcome === 'no_show_client') return 'no_show_client';
   if (outcome === 'venue_unavailable') return 'venue_unavailable';
+  // BAL-649 — an unanswered call-now ring is stored `ended`, but its projection is cancelled and
+  // the surface drops the row; mapped like a cancellation so no recap or charge is implied.
+  if (outcome === 'no_answer') return 'cancelled';
   if (outcome === 'missed_call') {
     return clientSideEverPresent === false ? 'nobody_joined' : 'missed_call';
   }

@@ -5299,6 +5299,19 @@ describe('creditSessionsRepository.findSessionlessEndedCaseMeetings (BAL-474 §D
     expect(found).toEqual(expect.arrayContaining([nullOutcome, completed, noShow]));
   });
 
+  it('BAL-649: excludes a `no_answer` meeting (a Call now ring nobody answered); a `missed_call` one is still selected', async () => {
+    const noAnswer = await endedWith([caseCtx()], {
+      values: { outcome: 'no_answer', endedBy: 'system_idle' },
+    });
+    const missedCall = await endedWith([caseCtx()], {
+      values: { outcome: 'missed_call', endedBy: 'system_idle' },
+    });
+
+    const found = await candidates();
+    expect(found).toContain(missedCall);
+    expect(found).not.toContain(noAnswer);
+  });
+
   it('excludes a meeting with a session, a marked meeting, one inside the grace, a soft-deleted one, and a non-terminal one', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
     const withSession = await endedWith([caseCtx()]);

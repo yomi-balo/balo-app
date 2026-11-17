@@ -4,8 +4,9 @@ import type { DbExecutor } from './db-executor';
 
 /**
  * BAL-409 — THE TX-SCOPED GUEST-EXPIRY WRITER, lifted from
- * `meetingGuestsRepository.extendExpiryForMeeting`'s body so a reschedule can run it on the
- * SAME `tx` as `meetingsRepository.updateSchedule`'s other writes.
+ * `meetingGuestsRepository.extendExpiryForMeeting`'s body so a schedule move can run it on the
+ * SAME `tx` as the move's other writes — `meetingsRepository.updateSchedule`'s and
+ * `meetingRingsRepository.connect`'s (both via `applyScheduleMoveTx`).
  *
  * ⚠ NOT A VERBATIM LIFT — THE PREDICATE WAS NARROWED. The extend-only condition is preserved,
  * but an `admission IN ('admitted','pre_admitted')` filter was ADDED that the original lacked

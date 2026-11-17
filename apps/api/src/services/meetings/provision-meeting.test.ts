@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
+import type { Meeting } from '@balo/db';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
 
 const {
@@ -76,6 +77,7 @@ import { BOOKABLE_CONTEXT_TYPES } from '@balo/shared/meetings';
 import {
   bookAndProvisionMeeting,
   provisionMeeting,
+  provisionCallNowVenue,
   BookingIdempotencyKeyConflictError,
   PROJECTION_ENQUEUE_TIMEOUT_MS,
   type BookAndProvisionInput,
@@ -633,6 +635,42 @@ describe('provisionMeeting — idempotency (D2, AC #6)', () => {
         replayed: false,
       }
     );
+  });
+});
+
+describe('provisionCallNowVenue (BAL-649)', () => {
+  it('provisions the room as a booking-trigger `case` provision and reports provisioned', async () => {
+    const provisioner = fakeProvisioner();
+
+    const venue = await provisionCallNowVenue(unstampedMeeting() as unknown as Meeting, log, {
+      provisioner,
+    });
+
+    expect(venue).toEqual({ provisioned: true, dailyRoomName: ROOM_NAME, joinUrl: JOIN_URL });
+    expect(provisioner.createRoom).toHaveBeenCalledWith(ROOM_NAME);
+    expect(mockSetVenue).toHaveBeenCalledWith(MEETING_ID, {
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_provisioned',
+      expect.objectContaining({
+        meeting_id: MEETING_ID,
+        context_type: 'case',
+        trigger: 'booking',
+        distinct_id: MEETING_ID,
+      })
+    );
+  });
+
+  it('answers provisioned:false, never a throw, when the vendor fails', async () => {
+    const provisioner = throwingProvisioner(new Error('daily down'));
+
+    const venue = await provisionCallNowVenue(unstampedMeeting() as unknown as Meeting, log, {
+      provisioner,
+    });
+
+    expect(venue).toEqual({ provisioned: false, dailyRoomName: null, joinUrl: null });
   });
 });
 

@@ -978,6 +978,46 @@ describe('casesIndexRepository.listCaseTrailMeetings', () => {
     expect(Object.keys(firstRow)).toHaveLength(7);
   });
 
+  it('⚠ leaves out a `no_answer` meeting (an unanswered Call now ring) and keeps every other outcome, NULL included', async () => {
+    const company = await companyFactory();
+    const expert = await expertFactory();
+    const now = Date.now();
+    const engagementId = await seedCase({ companyId: company.id, expertProfileId: expert.id });
+
+    const held = await seedCaseMeeting(engagementId, {
+      scheduledStart: new Date(now - 3 * DAY_MS),
+      status: 'ended',
+      outcome: 'completed',
+      startedAt: new Date(now - 3 * DAY_MS),
+    });
+    await seedCaseMeeting(engagementId, {
+      scheduledStart: new Date(now - 2 * DAY_MS),
+      status: 'ended',
+      outcome: 'no_answer',
+    });
+    const cancelled = await seedCaseMeeting(engagementId, {
+      scheduledStart: new Date(now - DAY_MS),
+      status: 'cancelled',
+    });
+    const endedWithoutOutcome = await seedCaseMeeting(engagementId, {
+      scheduledStart: new Date(now - HOUR_MS),
+      status: 'ended',
+      startedAt: new Date(now - HOUR_MS),
+    });
+    const booked = await seedCaseMeeting(engagementId, { scheduledStart: new Date(now + DAY_MS) });
+
+    const trail = (await casesIndexRepository.listCaseTrailMeetings([engagementId])).get(
+      engagementId
+    );
+
+    expect(trail?.map((row) => row.meetingId)).toEqual([
+      held,
+      cancelled,
+      endedWithoutOutcome,
+      booked,
+    ]);
+  });
+
   it('roomReady agrees with isMeetingVenueReady for a ready, a null and a mismatched room, and no credential key rides along', async () => {
     const company = await companyFactory();
     const expert = await expertFactory();

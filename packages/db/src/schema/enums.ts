@@ -902,12 +902,23 @@ export const meetingStatusEnum = pgEnum('meeting_status', [
  * `venue_unavailable` = the meeting's call room was never ready, so nobody could join (BAL-581's
  * fifth system rule). ⚠ Added by `ALTER TYPE … ADD VALUE` in 0101 — never name it in a CHECK,
  * DEFAULT or index predicate in the same migrate batch.
+ * `no_answer` = a Call now ring that nobody answered, declined or the caller stopped, on a
+ * meeting the ring created (BAL-649's seventh system rule). Nothing was delivered and nothing
+ * bills: the meeting's `consultations` projection is cancelled in the same transaction, so the
+ * expert's slot is released. ⚠ Added by `ALTER TYPE … ADD VALUE` in 0125 — the same prohibition
+ * as `venue_unavailable`.
+ *
+ * Readers that branch on this label: `meetingRingsRepository.endRing` / `endNoAnswerMeeting`
+ * (its only writers), `creditSessionsRepository.findSessionlessEndedCaseMeetings` (excludes it —
+ * a call that never connected has nothing to settle), and `_shared/consultation-count.ts` (counts
+ * `completed` only, so it needs no change).
  */
 export const meetingOutcomeEnum = pgEnum('meeting_outcome', [
   'completed',
   'no_show_client',
   'missed_call',
   'venue_unavailable',
+  'no_answer',
 ]);
 
 /**
@@ -1066,6 +1077,55 @@ export const meetingParticipantPartyEnum = pgEnum('meeting_participant_party', [
   'client',
   'observer',
 ]);
+
+/**
+ * BAL-649 — the lifecycle of ONE Call now ring (`schema/meeting-rings.ts`).
+ *
+ *   ringing    → the callee is being rung. The only non-terminal label, and the only one a
+ *                compare-and-set may move FROM.
+ *   connected  → both parties were present before the ring ended; the meeting started.
+ *   unanswered → the ring window elapsed with nobody answering.
+ *   declined   → the callee declined.
+ *   stopped    → the caller stopped ringing (or the call room could not be provisioned).
+ *
+ * Standalone `CREATE TYPE` in 0125, so every label commits with the type. `'ringing'` is named
+ * in the column default, in CHECK `meeting_ring_ended_iff_not_ringing` and in two partial-index
+ * predicates — all safe in the type's own migration. ⚠ A LATER label arrives by
+ * `ALTER TYPE … ADD VALUE` and may not be named in a CHECK, default or predicate in its own
+ * migrate batch (memory `reference_enum_default_same_tx_migration_hazard`). APPEND-ONLY.
+ */
+export const meetingRingStatusEnum = pgEnum('meeting_ring_status', [
+  'ringing',
+  'connected',
+  'unanswered',
+  'declined',
+  'stopped',
+]);
+
+/**
+ * BAL-649 — WHERE a ring sits. `new_meeting` = the ring created its own `case` meeting starting
+ * now; that row doubles as the meeting's Call now marker (`meetings` carries no column for it).
+ * `in_place` = the ring rides a same-day booked meeting, which an unanswered ring leaves exactly
+ * as it was. Standalone `CREATE TYPE` in 0125. APPEND-ONLY.
+ */
+export const meetingRingPlacementEnum = pgEnum('meeting_ring_placement', [
+  'new_meeting',
+  'in_place',
+]);
+
+/**
+ * BAL-649 — how the callee was reached. `app` = in-app only (the 45-second window). `sms` = an
+ * SMS was sent as well (the longer window). Standalone `CREATE TYPE` in 0125; `'app'` is the
+ * column default, safe in the type's own migration. APPEND-ONLY.
+ */
+export const meetingRingReachEnum = pgEnum('meeting_ring_reach', ['app', 'sms']);
+
+/**
+ * BAL-649 — which side placed a ring. Server-derived from the capability arm that authorized the
+ * caller (membership `participate` → `client`, engagement `host_meetings` → `expert`), never
+ * taken from request input. Standalone `CREATE TYPE` in 0125. APPEND-ONLY.
+ */
+export const meetingRingSideEnum = pgEnum('meeting_ring_side', ['client', 'expert']);
 
 /**
  * BAL-420 / ADR-1047 Decision 4 — the lifecycle of ONE durable "publish this event later"

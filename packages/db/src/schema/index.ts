@@ -46,6 +46,8 @@ export * from './meetings';
 export * from './conversations';
 export * from './meeting-contexts';
 export * from './meeting-presence';
+// BAL-649 — Call now rings. One row per ring; a `new_meeting` ring is its meeting's Call now marker.
+export * from './meeting-rings';
 export * from './meeting-files';
 export * from './meeting-recordings';
 export * from './party-domains';

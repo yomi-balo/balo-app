@@ -808,6 +808,31 @@ describe('loadRecap — resolve prompt, artefacts and status', () => {
     }
   );
 
+  it('⚠ returns null for a `no_answer` meeting opened by URL - an unanswered Call now ring was never a consultation', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ...CASE_ACCESS,
+      meeting: { ...MEETING, status: 'ended', outcome: 'no_answer', startedAt: null },
+    });
+    await expect(loadRecap(MEETING_ID, USER_ID, NOW)).resolves.toBeNull();
+    expect(m.listFiles).not.toHaveBeenCalled();
+    expect(m.findTranscript).not.toHaveBeenCalled();
+  });
+
+  it('numbers the consultation without counting a `no_answer` sibling, as the case page does', async () => {
+    m.listSiblings.mockResolvedValue([
+      {
+        ...MEETING,
+        id: 'unanswered-ring',
+        outcome: 'no_answer',
+        startedAt: null,
+        scheduledStart: new Date('2026-07-28T04:00:00Z'),
+      },
+      MEETING,
+    ]);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.party.ordinalLine).toBe('1st consultation on this case');
+  });
+
   it('never renders a FUTURE date under a Completed chip', async () => {
     mockResolveAccess.mockResolvedValue({
       ...CASE_ACCESS,

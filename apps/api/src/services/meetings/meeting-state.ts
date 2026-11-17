@@ -20,6 +20,7 @@
 import {
   companiesRepository,
   meetingPresenceRepository,
+  meetingRingsRepository,
   meetingsRepository,
   usersRepository,
   type MeetingEndedBy as DbMeetingEndedBy,
@@ -28,6 +29,7 @@ import {
 import { billingBasisMs, caseClosedBeforeStart, caseClosureNames } from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import {
+  callNowFactsFromRings,
   clampIntervalsToStart,
   coPresentMsBefore,
   computeMeetingClocks,
@@ -323,7 +325,11 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
   // inconsistent frame. One read, immediately before the presence read, is the closest this can
   // get without a transaction it does not need.
   const meeting = (await meetingsRepository.findById(meetingId)) ?? authorized.meeting;
-  const rows = await meetingPresenceRepository.listByMeeting(meetingId);
+  const [rows, rings] = await Promise.all([
+    meetingPresenceRepository.listByMeeting(meetingId),
+    meetingRingsRepository.listForMeeting(meetingId),
+  ]);
+  const callNow = callNowFactsFromRings(rings);
   const intervals = rows.map((row) => ({
     party: row.party,
     joinedAt: row.joinedAt,
@@ -386,6 +392,7 @@ export async function getMeetingState(input: GetMeetingStateInput): Promise<GetM
     timers,
     now,
     venueReadyAt,
+    callNow,
   });
 
   return {

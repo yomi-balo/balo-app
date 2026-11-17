@@ -681,8 +681,8 @@ function collectSessionHistory(
 
 /** `join_time + duration` (both seconds) as an instant, or `null` when either is missing or non-finite. */
 function recordedLeaveOf(participant: {
-  readonly join_time?: number | undefined;
-  readonly duration?: number | undefined;
+  readonly join_time?: number;
+  readonly duration?: number;
 }): Date | null {
   const { join_time: joinTime, duration } = participant;
   if (
@@ -735,6 +735,15 @@ export const dailyPresenceReader: PresenceReader = {
 /** Daily's cap on each id list in one eject call (`.claude/skills/daily-co/SKILL.md`). */
 export const DAILY_EJECT_MAX_IDS = 100;
 
+/**
+ * {@link ejectParticipants}'s options. `ban` defaults to `true` (see that function). `ban: false`
+ * is ONLY for a removal that must not outlive the moment — BAL-649's unanswered in-place ring,
+ * whose caller and callee still have a booking in this same room later.
+ */
+export interface EjectOptions {
+  readonly ban?: boolean;
+}
+
 /** What {@link ejectParticipants} answers. Both values are SUCCESS; neither is an error. */
 export type ParticipantEjectOutcome = 'ejected' | 'already_gone';
 
@@ -759,7 +768,8 @@ export type ParticipantEjectOutcome = 'ejected' | 'already_gone';
  */
 export async function ejectParticipants(
   roomName: string,
-  participantIds: readonly string[]
+  participantIds: readonly string[],
+  options: EjectOptions = {}
 ): Promise<ParticipantEjectOutcome> {
   if (participantIds.length === 0) return 'already_gone';
   if (participantIds.length > DAILY_EJECT_MAX_IDS) {
@@ -773,7 +783,7 @@ export async function ejectParticipants(
   try {
     await dailyRequest<unknown>('POST', `/rooms/${encodeURIComponent(roomName)}/eject`, {
       user_ids: [...participantIds],
-      ban: true,
+      ban: options.ban ?? true,
     });
     return 'ejected';
   } catch (error) {
@@ -788,7 +798,8 @@ export async function ejectParticipants(
 export interface ParticipantEjector {
   ejectParticipants(
     roomName: string,
-    participantIds: readonly string[]
+    participantIds: readonly string[],
+    options?: EjectOptions
   ): Promise<ParticipantEjectOutcome>;
 }
 

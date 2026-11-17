@@ -476,6 +476,36 @@ async function provisionVenue(
 }
 
 /**
+ * BAL-649 — provision the Daily room of a meeting a Call now ring just created.
+ *
+ * A one-line delegate to {@link provisionVenue}: the same vendor call, venue stamp, failure
+ * report and `meeting_provisioned` event as a booking, with the `case` context. A failure is a
+ * `provisioned: false` outcome, never a throw — the caller (`startCallNow`) ends the ring as
+ * `stopped` and answers `503 venue_unavailable`, because a ring with no room cannot be answered.
+ *
+ * ⚠ `escalateFailure: true` — a live person is waiting on this room. `distinctId` is the MEETING
+ * id: the caller has no acting human here, the non-user shape the venue repair job also uses.
+ */
+export function provisionCallNowVenue(
+  meeting: Meeting,
+  log: FastifyBaseLogger,
+  deps: ProvisionMeetingDeps = {}
+): Promise<MeetingVenue> {
+  return provisionVenue(
+    meeting,
+    {
+      contextType: 'case',
+      engagementType: 'case',
+      distinctId: meeting.id,
+      trigger: 'booking',
+      escalateFailure: true,
+    },
+    log,
+    deps
+  );
+}
+
+/**
  * BAL-400 (Decision 7) — what identifies "the SAME booking" for an idempotent replay. Both
  * halves are load-bearing: the CONTEXT (which case) and the WINDOW (which time).
  */

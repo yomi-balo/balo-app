@@ -98,6 +98,9 @@ export * from './timers';
 // BAL-134 / ADR-1049 — the lifecycle's pure core: the legal-edge map, the five SYSTEM terminal
 // rules and their disjointness, and the SERVER-computed waiting phase. Reads no clock.
 export * from './lifecycle';
+// BAL-649 / ADR-1058 — Call now's pure core: the ring windows and vocabulary, the facts the
+// lifecycle's seventh rule reads, and the gate chain. Reads no clock.
+export * from './call-now';
 // BAL-134 (D3) — `canEndMeeting`, the SIXTH `JoinGrant` field. ⚠ Read that module's first
 // paragraph before touching either boolean: merging it into `isOwner` mints DAILY OWNER TOKENS
 // FOR CLIENTS.

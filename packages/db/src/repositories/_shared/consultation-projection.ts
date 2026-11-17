@@ -11,6 +11,7 @@ import {
   type ConsultationStatus,
   type Meeting,
   type MeetingContextType,
+  type MeetingOutcome,
   type MeetingStatus,
 } from '../../schema';
 import type { DbExecutor } from './db-executor';
@@ -503,13 +504,18 @@ export async function resolveMeetingExpertTx(
 /**
  * The meeting lifecycle projected onto the two-value availability status.
  *
- * ONLY `cancelled` frees the slot. `ended` maps to `confirmed` DELIBERATELY: a delivered
+ * ONLY `cancelled` frees the slot, plus an `ended` meeting whose outcome is `no_answer` (BAL-649):
+ * an unanswered Call now ring is a call that never happened, so its slot is released and it never
+ * counts in the hero stat. Every other `ended` maps to `confirmed` DELIBERATELY: a delivered
  * consultation is a historical fact the expert's hero stat counts
  * (`_shared/consultation-count.ts` counts `confirmed` rows), and its window is in the past
  * so it can never block a future slot anyway.
  */
-export function consultationStatusForMeeting(status: MeetingStatus): ConsultationStatus {
-  return status === 'cancelled' ? 'cancelled' : 'confirmed';
+export function consultationStatusForMeeting(
+  status: MeetingStatus,
+  outcome: MeetingOutcome | null = null
+): ConsultationStatus {
+  return status === 'cancelled' || outcome === 'no_answer' ? 'cancelled' : 'confirmed';
 }
 
 // ── Writers (transaction-scoped, one per meeting mutation) ─────────────
@@ -828,7 +834,7 @@ async function scanProjectionRows(
         detail: `meeting [${meeting.scheduledStart.toISOString()}, ${meeting.scheduledEnd.toISOString()}) vs projection [${consultation.startAt.toISOString()}, ${consultation.endAt.toISOString()})`,
       });
     }
-    const expected = consultationStatusForMeeting(meeting.status);
+    const expected = consultationStatusForMeeting(meeting.status, meeting.outcome);
     if (consultation.status !== expected) {
       drift.push({
         meetingId: meeting.id,

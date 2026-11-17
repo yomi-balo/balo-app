@@ -19,6 +19,7 @@ const {
   mockLogInfo,
   mockLogWarn,
   mockLogError,
+  mockListRingsForMeeting,
 } = vi.hoisted(() => ({
   mockFindIdByMeetingId: vi.fn(),
   mockMarkSessionless: vi.fn(),
@@ -37,6 +38,10 @@ const {
   mockLogInfo: vi.fn(),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
+  // BAL-649 — no ring touched the meeting unless a test says so.
+  mockListRingsForMeeting: vi.fn(
+    async (): Promise<Array<{ placement: string; status: string }>> => []
+  ),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -54,6 +59,7 @@ vi.mock('@balo/db', () => ({
     openAndSettleFromPresence: mockOpenAndSettle,
   },
   meetingsRepository: { findById: mockMeetingFindById },
+  meetingRingsRepository: { listForMeeting: mockListRingsForMeeting },
   meetingContextsRepository: { listByMeeting: mockListByMeeting },
   meetingPresenceRepository: { clientPartyIdentities: mockClientPartyIdentities },
   expertsRepository: { findUserIdByProfileId: mockFindUserIdByProfileId },
@@ -208,7 +214,87 @@ describe('settleSessionlessCaseMeeting (BAL-474, ADR-1040 Amendment 7 §C.6)', (
         trigger: 'human_end',
       });
       expect(mockOpenAndSettle).not.toHaveBeenCalled();
-      expect(mockMeetingFindById).not.toHaveBeenCalled();
+      expect(mockMeetingFindById).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('BAL-649 — an unanswered Call now ring (`no_answer`) is never billable', () => {
+    it('a `no_answer` meeting with no session is not billable and opens nothing', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_answer' }));
+
+      await expect(settleSessionlessCaseMeeting(INPUT)).resolves.toEqual({
+        kind: 'not_billable',
+        reason: 'no_answer',
+      });
+
+      expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+      expect(mockCompute).not.toHaveBeenCalled();
+      expect(mockOpenAndSettle).not.toHaveBeenCalled();
+      expect(mockMarkSessionless).not.toHaveBeenCalled();
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        { meetingId: MEETING_ID, trigger: 'lifecycle_sweep' },
+        'Sessionless settlement skipped — unanswered call'
+      );
+    });
+
+    it('a `no_answer` meeting WITH a stray session is still not billable — it is never settled', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_answer' }));
+      mockFindIdByMeetingId.mockResolvedValue({ id: 'session-stray' });
+
+      await expect(settleSessionlessCaseMeeting(INPUT)).resolves.toEqual({
+        kind: 'not_billable',
+        reason: 'no_answer',
+      });
+
+      expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+    });
+
+    it('every other outcome is unchanged', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: 'no_show_client' }));
+
+      const result = await settleSessionlessCaseMeeting(INPUT);
+
+      expect(result.kind).toBe('opened_and_settled');
+    });
+
+    it('⚠ a meeting a ring created, on which no ring ever connected, is not billable even with a NULL outcome', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: null }));
+      mockListRingsForMeeting.mockResolvedValueOnce([
+        { placement: 'new_meeting', status: 'stopped' },
+      ]);
+      mockFindIdByMeetingId.mockResolvedValue({ id: 'session-stray' });
+
+      await expect(settleSessionlessCaseMeeting(INPUT)).resolves.toEqual({
+        kind: 'not_billable',
+        reason: 'no_answer',
+      });
+
+      expect(mockListRingsForMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+      expect(mockOpenAndSettle).not.toHaveBeenCalled();
+    });
+
+    it('a meeting a ring created that then CONNECTED settles as usual', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: null }));
+      mockListRingsForMeeting.mockResolvedValueOnce([
+        { placement: 'new_meeting', status: 'stopped' },
+        { placement: 'new_meeting', status: 'connected' },
+      ]);
+
+      const result = await settleSessionlessCaseMeeting(INPUT);
+
+      expect(result.kind).toBe('opened_and_settled');
+    });
+
+    it('⚠ an in_place ring that never connected does NOT make the booking unbillable', async () => {
+      mockMeetingFindById.mockResolvedValue(meeting({ outcome: null }));
+      mockListRingsForMeeting.mockResolvedValueOnce([
+        { placement: 'in_place', status: 'declined' },
+      ]);
+
+      const result = await settleSessionlessCaseMeeting(INPUT);
+
+      expect(result.kind).toBe('opened_and_settled');
     });
   });
 

@@ -4,15 +4,19 @@ import {
   meetingContextsRepository,
   meetingPresenceRepository,
   meetingRecordingsRepository,
+  meetingRingsRepository,
   meetingsRepository,
   resolveMeetingContextOwner,
   type Meeting,
   type MeetingPresence,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
+import { joinWindowOpensAt } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
 import {
+  callNowFactsFromRings,
   clampIntervalsToStart,
+  clipUnansweredRingIntervals,
   computeMeetingClocks,
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
@@ -28,6 +32,7 @@ import {
   strandedReconcileCloseAt,
   summarisePresence,
   venueAbsenceAnchor,
+  type CallNowFacts,
   type MeetingTerminalDecision,
   type MeetingTerminalRuleName,
   type MeetingTimers,
@@ -47,6 +52,7 @@ import {
   scheduleClientAbsentNudge,
   scheduleExpertAbsentAlert,
 } from '../notifications/scheduling/meeting-absence.js';
+import { endRing, terminateNoAnswerMeeting } from '../services/call-now/end-ring.js';
 import { emitMeetingEnded } from '../services/meetings/end-meeting.js';
 import { isReleasedSettlementCode } from '../services/credit-session/released-settlement-codes.js';
 import { settleSessionlessCaseMeeting } from '../services/credit-session/settle-sessionless-case-meeting.js';
@@ -134,6 +140,9 @@ export const MEETING_LIFECYCLE_BATCH_LIMIT = 200;
 /** The stranded arm's batch bound. ⚠ The sweep warns when it fills, same as the in-window one. */
 export const MEETING_STRANDED_BATCH_LIMIT = 50;
 
+/** BAL-649 — how many overdue Call now rings one tick ends; a full batch is logged, never silent. */
+export const CALL_NOW_OVERDUE_RING_BATCH_LIMIT = 50;
+
 /**
  * ⚠ THE RECONCILER'S CLOSE CAP PER TICK. Every close is a dropped `participant.left`, so a tick
  * that wants more than this is itself an anomaly (a vendor misread, not a thousand dropped
@@ -216,15 +225,29 @@ interface CandidateState {
   readonly latestPresenceAt: Date | null;
   /** The intervals with no `leftAt`, in join order — the rows reconciliation may close. */
   readonly openRows: readonly MeetingPresence[];
+  /** BAL-649 — the meeting's Call now history: `call_now` origin and its latest ring. */
+  readonly callNow: CallNowFacts;
 }
 
 async function loadCandidateState(meeting: Meeting, now: Date): Promise<CandidateState> {
-  const rows = await meetingPresenceRepository.listByMeeting(meeting.id);
+  const [rows, rings] = await Promise.all([
+    meetingPresenceRepository.listByMeeting(meeting.id),
+    meetingRingsRepository.listForMeeting(meeting.id),
+  ]);
   const intervals = rows.map((row) => ({
     party: row.party,
     joinedAt: row.joinedAt,
     leftAt: row.leftAt,
   }));
+  // ⚠ BAL-649 — the presence an unanswered IN-PLACE ring left behind is clipped to the booking's join
+  // window, so ring-time presence never reads as attendance at the booking. Settlement applies the same
+  // clip (`meetingPresenceRepository.settlementFacts`); `latestPresenceAt` and `openRows` stay on the raw
+  // rows because they close real intervals, not count them.
+  const ringFiltered = clipUnansweredRingIntervals(
+    intervals,
+    rings,
+    joinWindowOpensAt(meeting.scheduledStart)
+  );
   // The extra read is paid only when an open observer interval belongs to a guest, so a healthy
   // meeting costs no extra query.
   const mayHaveLinkGuest = rows.some(
@@ -235,16 +258,17 @@ async function loadCandidateState(meeting: Meeting, now: Date): Promise<Candidat
   return {
     meeting,
     admittedLinkGuestPresent,
-    facts: summarisePresence(intervals),
+    facts: summarisePresence(ringFiltered),
     latestPresenceAt: latestPresenceInstant(intervals),
     openRows: rows.filter((row) => row.leftAt === null),
+    callNow: callNowFactsFromRings(rings),
     // ⚠ REPORTING ONLY — no terminal rule reads a DURATION. `computeMeetingClocks` is the one
     // definition of the two spans, and this number reaches the `meeting_waiting_abandoned` event
     // and the "Terminal rule fired" log line, never a decision. Rule 4 once compared it against
     // the no-show floor; that comparison was the C2 stranding hole (`lifecycle.ts`).
     // Presence is stored at its true instants (Rule A): the figure is over start-CLAMPED intervals.
     expertPresentMs: computeMeetingClocks(
-      clampIntervalsToStart(intervals, meeting.scheduledStart),
+      clampIntervalsToStart(ringFiltered, meeting.scheduledStart),
       now
     ).expertPresentMs,
   };
@@ -887,11 +911,27 @@ function terminalRuleInputFor(
     now,
     venueReadyAt: meetingVenueReadyAt(state.meeting),
     admittedLinkGuestPresent: state.admittedLinkGuestPresent,
+    callNow: state.callNow,
   };
 }
 
 /**
- * PASS 2 — evaluate the six terminal rules and, on a match, end the meeting.
+ * BAL-649 — the seventh rule, `no_answer`: a Call now meeting nobody answered. The Call now service
+ * owns the whole end (the ring and meeting CAS, the availability release, Daily teardown and
+ * `meeting_ended`), so none of the generic steps below run: no `endMeeting`, no rule analytics, no
+ * settlement (nothing was ever billed), no recording stop.
+ */
+async function terminateNoAnswerDecision(
+  state: CandidateState,
+  decision: MeetingTerminalDecision,
+  now: Date
+): Promise<MeetingTerminalDecision | null> {
+  const ended = await terminateNoAnswerMeeting({ meetingId: state.meeting.id, now });
+  return ended ? decision : null;
+}
+
+/**
+ * PASS 2 — evaluate the terminal rules and, on a match, end the meeting.
  *
  * ⚠ `ended_at` IS `now` FOR AN IN-WINDOW MEETING, AND THE INSTANT THE RULE BECAME DUE FOR A
  * STRANDED ONE ({@link strandedEndedAt}). A meeting that sat past the lookback floor for days
@@ -920,6 +960,9 @@ async function terminateIfDue(
     }
     return null;
   }
+  if (decision.rule === 'no_answer') {
+    return terminateNoAnswerDecision(state, decision, now);
+  }
   let dueAt = decision.dueAt;
 
   if (decision.rule === 'venue_unavailable') {
@@ -942,6 +985,7 @@ async function terminateIfDue(
       now,
       venueReadyAt: meetingVenueReadyAt(fresh),
       admittedLinkGuestPresent: state.admittedLinkGuestPresent,
+      callNow: state.callNow,
     });
     if (confirmed === null || confirmed.rule !== 'venue_unavailable') {
       // The next tick decides from fresh state — a repair landed, or the meeting moved on.
@@ -1167,6 +1211,8 @@ async function armAbsenceReminders(
   timers: MeetingTimers,
   now: Date
 ): Promise<void> {
+  // BAL-649 (AC3) — nobody is "late" for a call that was never scheduled.
+  if (state.callNow.origin === 'call_now') return;
   const { meeting, facts } = state;
   if (now.getTime() < meeting.scheduledStart.getTime()) {
     return;
@@ -1355,6 +1401,39 @@ async function reloadStranded(meetingId: string, now: Date): Promise<CandidateSt
   return fresh === undefined ? null : loadCandidateState(fresh, now);
 }
 
+/** Emits the presence-reconciled event when a known roster read changed anything. */
+function trackPresenceReconciled(
+  meetingId: string,
+  mode: SweepMode,
+  read: RoomRosterRead,
+  closed: number,
+  opened: number
+): void {
+  // An unknown read never changes anything, so `roster_source` is never `unknown`.
+  if (read.source === 'unknown' || closed + opened === 0) {
+    return;
+  }
+  trackServer(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED, {
+    meeting_id: meetingId,
+    intervals_closed: closed,
+    intervals_opened: opened,
+    roster_source: read.source,
+    stranded: mode === 'stranded',
+    distinct_id: meetingId,
+  });
+}
+
+/** The post-reconciliation reload, per sweep mode. */
+function reloadAfterReconciliation(
+  meetingId: string,
+  mode: SweepMode,
+  now: Date
+): Promise<CandidateState | null> {
+  return mode === 'in_window'
+    ? repairStatusAndReload(meetingId, now)
+    : reloadStranded(meetingId, now);
+}
+
 /** One candidate, fully processed. ⚠ EVERY CALL SITE WRAPS THIS IN ITS OWN TRY/CATCH. */
 async function processCandidate(
   meeting: Meeting,
@@ -1371,17 +1450,7 @@ async function processCandidate(
   const { closed, opened, verdict } = await reconcileMeeting(initial, open, rosterRead, mode, ctx);
   const read = rosterRead;
 
-  if (read.source !== 'unknown' && closed + opened > 0) {
-    // An unknown read never changes anything, so `roster_source` is never `unknown`.
-    trackServer(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED, {
-      meeting_id: meeting.id,
-      intervals_closed: closed,
-      intervals_opened: opened,
-      roster_source: read.source,
-      stranded: mode === 'stranded',
-      distinct_id: meeting.id,
-    });
-  }
+  trackPresenceReconciled(meeting.id, mode, read, closed, opened);
 
   if (verdict === 'deferred') {
     // ⚠ A PER-TICK BUDGET OF OUR OWN IS SPENT (close, history read or per-room read): the candidate
@@ -1396,10 +1465,7 @@ async function processCandidate(
   // tick, and would leave a webhook-dropped meeting permanently unterminable (above).
   let state: CandidateState | null = initial;
   if (closed + opened > 0) {
-    state =
-      mode === 'in_window'
-        ? await repairStatusAndReload(meeting.id, now)
-        : await reloadStranded(meeting.id, now);
+    state = await reloadAfterReconciliation(meeting.id, mode, now);
   }
   if (state === null) {
     return { terminated: false, closed, opened, needsRecordingEnsure: false };
@@ -1471,6 +1537,8 @@ export interface MeetingLifecycleSweepResult {
    * enqueue failed" lines for the ones that did not land.
    */
   recordingEnsures: number;
+  /** BAL-649 — overdue Call now rings this tick ended (the expiry job was late or lost). */
+  ringsExpired: number;
 }
 
 /**
@@ -1619,6 +1687,49 @@ function warnIfReconcilerCapsFilled(budget: ReconcileBudget): void {
   }
 }
 
+/**
+ * BAL-649 — END EVERY RING PAST ITS EXPIRY. The BullMQ expiry job is the timely trigger; this is the
+ * backstop for one that was late or lost, so each ring it finds is a `warn`. Each end is
+ * `endRing(unanswered)`, a compare-and-set, so racing the job is harmless. One ring's failure never
+ * aborts the tick. Returns how many it ended.
+ */
+async function expireOverdueRings(now: Date): Promise<number> {
+  const overdue = await meetingRingsRepository.listOverdueRinging({
+    now,
+    limit: CALL_NOW_OVERDUE_RING_BATCH_LIMIT,
+  });
+  if (overdue.length === CALL_NOW_OVERDUE_RING_BATCH_LIMIT) {
+    logger.warn(
+      { limit: CALL_NOW_OVERDUE_RING_BATCH_LIMIT },
+      'Overdue Call now ring batch FILLED — rings were dropped from this tick'
+    );
+  }
+  let expired = 0;
+  for (const ring of overdue) {
+    try {
+      const outcome = await endRing({
+        ringId: ring.id,
+        to: 'unanswered',
+        actorUserId: null,
+        now,
+      });
+      if (outcome.ended) {
+        expired += 1;
+      }
+      logger.warn(
+        { ringId: ring.id, lateMs: now.getTime() - ring.expiresAt.getTime() },
+        'Overdue ring ended by the sweep — expiry job late or lost'
+      );
+    } catch (error) {
+      logger.error(
+        { ringId: ring.id, error: errorMessage(error) },
+        'Overdue ring could not be ended by the sweep'
+      );
+    }
+  }
+  return expired;
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runMeetingLifecycleSweep(
   now: Date,
@@ -1627,6 +1738,8 @@ export async function runMeetingLifecycleSweep(
 ): Promise<MeetingLifecycleSweepResult> {
   const timers = resolveMeetingTimers();
   const floor = new Date(now.getTime() - LIFECYCLE_LOOKBACK_MS);
+  // ⚠ BEFORE THE CANDIDATE READ: a ring ended here is read by the passes below in its terminal state.
+  const ringsExpired = await expireOverdueRings(now);
   const candidates = await meetingsRepository.listLifecycleCandidates({
     statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
     scheduledStartAfter: floor,
@@ -1652,6 +1765,7 @@ export async function runMeetingLifecycleSweep(
     intervalsClosed: 0,
     intervalsOpened: 0,
     recordingEnsures: 0,
+    ringsExpired,
   };
   // ⚠ ONLY WHEN BOTH BATCHES ARE EMPTY — an empty in-window batch must not skip the stranded arm.
   if (result.scanned === 0) {

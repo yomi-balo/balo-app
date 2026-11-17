@@ -52,6 +52,7 @@ import {
   creditSessionsRepository,
   meetingContextsRepository,
   meetingGuestsRepository,
+  meetingRingsRepository,
   meetingsRepository,
   usersRepository,
   type MeetingGuest,
@@ -445,6 +446,23 @@ async function handleOpenSessionFailure(
 }
 
 /**
+ * BAL-649 — an admission while a Call now ring is `ringing` opens NO session: nothing bills until the
+ * ring connects, and `startBillingIfDue` opens the session at that instant on the moved meeting. The join
+ * itself is never refused by this. Throws on a failed read, which each caller's own catch absorbs.
+ */
+async function admissionHeldByRing(meetingId: string): Promise<boolean> {
+  const ring = await meetingRingsRepository.findRingingForMeeting(meetingId);
+  if (ring === undefined) {
+    return false;
+  }
+  log.info(
+    { meetingId, ringId: ring.id },
+    'Admission during a live ring — no session opened; billing opens at connect'
+  );
+  return true;
+}
+
+/**
  * BAL-466 (D1/D2) — OPEN THE CASE CONSULTATION'S CREDIT SESSION AT ADMISSION.
  *
  * ⚠⚠ **THIS FUNCTION MAY NEVER FAIL A JOIN.** It returns `void`, it swallows every outcome
@@ -522,6 +540,7 @@ async function openCaseSessionBestEffort(input: {
   }
 
   try {
+    if (await admissionHeldByRing(meetingId)) return;
     const existing = await creditSessionsRepository.findIdByMeetingId(meetingId);
     if (existing !== undefined) return; // rejoin / second member — the fast path
 
@@ -642,6 +661,9 @@ async function openCaseSessionForGuestBestEffort(input: {
   }
 
   try {
+    if (await admissionHeldByRing(meetingId)) {
+      return;
+    }
     if ((await creditSessionsRepository.findIdByMeetingId(meetingId)) !== undefined) {
       return; // a member (or an earlier guest) already opened it — the fast path
     }
@@ -756,7 +778,9 @@ export async function joinMeetingAsMember(
 
   // 2. LIVENESS — meeting state + engagement lifecycle + the token window. Safe as a
   //    DISTINCT literal only because step 1 already proved this actor belongs here.
-  const liveness = await assertMeetingJoinable(meeting, subject);
+  //    ⚠ ONLY HERE is the joining member passed: a live Call now ring lets ITS caller or callee in
+  //    before the window. The guest, lobby and re-entry paths never pass a user.
+  const liveness = await assertMeetingJoinable(meeting, subject, new Date(), userId);
   if (!liveness.ok) {
     return refuseForLiveness(liveness, 'meeting_not_open_for_join', { meetingId, userId });
   }

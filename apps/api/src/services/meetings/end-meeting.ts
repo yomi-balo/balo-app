@@ -12,6 +12,10 @@
  *     touching the token choice.
  *  3. NO AUTHORITY → **`404 meeting_not_found`**. ⚠ There is no `403` anywhere on `/meetings/*`
  *     and this surface must not become the exception; the denial SHAPE goes to `log.warn`.
+ * 2b. A RING STILL RINGING ON THE MEETING ENDS FIRST (`endRingForHumanEnd`): `stopped` by its
+ *     caller or any other end-authority holder, `declined` by its callee. A `new_meeting` ring's
+ *     end also ends the meeting as `no_answer` and releases the slot, and the End answers with
+ *     that. An `in_place` ring's end leaves the booking untouched and the End continues below.
  * 3b. NOT YET LIVE (`now < scheduled_start`) → **`409 meeting_not_started`**. Ending a meeting
  *     that never opened is a CANCELLATION and has its own route; see the gate's own comment for
  *     why the repository's CAS cannot be relied on to stop it.
@@ -50,6 +54,7 @@ import {
 } from '@balo/shared/meetings';
 import { dailyRoomTeardown, type RoomTeardown } from '../daily/rooms.js';
 import { enqueueRecordingStop } from '../../jobs/recording-capture.js';
+import { endRingForHumanEnd } from '../call-now/end-ring.js';
 import { isReleasedSettlementCode } from '../credit-session/released-settlement-codes.js';
 import { settleSessionlessCaseMeeting } from '../credit-session/settle-sessionless-case-meeting.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
@@ -278,6 +283,21 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
     // 3. ⚠ 404, NOT 403. The shape goes to the log; the wire gets one literal.
     logEndAuthorityDenied(meetingId, userId, authority, side);
     return { ok: false, code: 'meeting_not_found' };
+  }
+
+  // 2b. A RINGING CALL NOW RING ENDS FIRST — see the module docblock.
+  const ringEnd = await endRingForHumanEnd({ meetingId, actorUserId: userId, now });
+  if (ringEnd.kind === 'meeting_ended') {
+    log.info(
+      { meetingId, userId, endedBy: ringEnd.meeting.endedBy },
+      'Meeting ended with its unanswered Call now ring'
+    );
+    return {
+      ok: true,
+      status: 'ended',
+      alreadyEnded: false,
+      endedBy: ringEnd.meeting.endedBy,
+    };
   }
 
   // 3b. ⚠⚠ LIVENESS. **ENDING A MEETING THAT NEVER OPENED IS A CANCELLATION, AND CANCELLATION

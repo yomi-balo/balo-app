@@ -4,6 +4,7 @@ const {
   mockAuthorizeParticipation,
   mockFindById,
   mockListByMeeting,
+  mockListRings,
   mockResolveSubject,
   mockDeliveringUserId,
   mockFindNamesByIds,
@@ -15,6 +16,7 @@ const {
   mockAuthorizeParticipation: vi.fn(),
   mockFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
+  mockListRings: vi.fn(),
   mockResolveSubject: vi.fn(),
   mockDeliveringUserId: vi.fn(),
   mockFindNamesByIds: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockFindById },
+  meetingRingsRepository: { listForMeeting: mockListRings },
   meetingPresenceRepository: {
     listByMeeting: mockListByMeeting,
     omitExpertInvitedGuestRows: mockOmitGuestRows,
@@ -104,6 +107,7 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
     mockAuthorizeParticipation.mockResolvedValue({ ok: true, side: 'expert', meeting: meeting() });
     mockFindById.mockResolvedValue(meeting());
     mockListByMeeting.mockResolvedValue([]);
+    mockListRings.mockResolvedValue([]);
     mockHasOpenAdmittedLinkGuest.mockResolvedValue(false);
     // BAL-474 (R6-C3) — an ACTIVE case by default: nothing was closed.
     mockResolveSubject.mockResolvedValue({
@@ -722,6 +726,23 @@ describe('getMeetingState (BAL-134 §7.1)', () => {
 
       expect(result.ok && Object.keys(result.state.presence)).toEqual(['expertOpen']);
     });
+  });
+
+  it('reads the meeting`s rings and still answers while a Call now ring is live', async () => {
+    mockListRings.mockResolvedValue([
+      {
+        placement: 'new_meeting',
+        status: 'ringing',
+        createdAt: at(-1),
+        expiresAt: at(1),
+        endedAt: null,
+      },
+    ]);
+
+    const result = await stateAt(0);
+
+    expect(mockListRings).toHaveBeenCalledWith(MEETING_ID);
+    expect(result.ok && result.state.status).toBe('waiting_for_participants');
   });
 
   it('falls back to the gate`s meeting row if the re-read finds nothing', async () => {

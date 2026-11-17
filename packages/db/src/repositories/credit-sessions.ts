@@ -3717,8 +3717,9 @@ export const creditSessionsRepository = {
    * threw after `endMeeting` committed would otherwise have no retry path at all.
    *
    * The predicate, term by term:
-   *   · `status = 'ended'`, not soft-deleted — REGARDLESS of `outcome` (a human End and the
-   *     `abandoned_wait` rule both write `outcome` NULL);
+   *   · `status = 'ended'`, not soft-deleted — whatever the `outcome` (a human End and the
+   *     `abandoned_wait` rule both write `outcome` NULL), EXCEPT `no_answer` (BAL-649): a Call now
+   *     ring nobody answered never billed and has nothing to mark;
    *   · `scheduled_start >= windowStart` AND `ended_at >= windowStart` — bounded on BOTH columns
    *     (D7.5); the first rides `meeting_status_scheduled_start_idx`. `ended_at <= endedBefore`
    *     leaves the inline terminal path its grace;
@@ -3753,6 +3754,11 @@ export const creditSessionsRepository = {
         and(
           eq(meetings.status, 'ended'),
           isNull(meetings.deletedAt),
+          // BAL-649 — a Call now ring that never connected has nothing to settle: no session was
+          // opened while it rang, and its projection is cancelled. `IS DISTINCT FROM`, not `<>`,
+          // so the NULL outcome of a human End or an abandoned wait is still selected. An enum
+          // literal at QUERY time is safe — the house restriction is on CHECKs and predicates.
+          sql`${meetings.outcome} IS DISTINCT FROM 'no_answer'`,
           gte(meetings.scheduledStart, input.windowStart),
           gte(meetings.endedAt, input.windowStart),
           lte(meetings.endedAt, input.endedBefore),

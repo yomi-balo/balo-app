@@ -24,7 +24,6 @@ import {
   DAILY_ROOM_NAME_PREFIX,
   isDailyDomainLabel,
   RESCHEDULABLE_MEETING_STATUSES,
-  GUEST_TOKEN_TTL_AFTER_END_MS,
   selectPrimaryMeetingContext,
   type MeetingLifecycleStatus,
   type MeetingContextTypeWithHolder,
@@ -53,24 +52,14 @@ import {
   type NewMeeting,
 } from '../schema';
 import type { EngagementType } from './_shared/engagement-supertype';
-import {
-  projectNewMeetingTx,
-  softDeleteProjectionTx,
-  syncProjectionScheduleTx,
-} from './_shared/consultation-projection';
+import { softDeleteProjectionTx } from './_shared/consultation-projection';
 import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
-import {
-  bumpCalendarSequencesForMeetingTx,
-  type MeetingCalendarSequenceBump,
-} from './_shared/calendar-sequence';
+import { createMeetingTx } from './_shared/create-meeting-tx';
+import { endMeetingTx } from './_shared/end-meeting-tx';
+import { applyScheduleMoveTx } from './_shared/schedule-move-tx';
+import type { MeetingCalendarSequenceBump } from './_shared/calendar-sequence';
 import type { DbExecutor } from './_shared/db-executor';
-import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
-import {
-  recordMeetingAudit,
-  recordMeetingBooked,
-  recordMeetingRescheduled,
-} from './_shared/meeting-audit';
-import { meetingPresenceRepository } from './meeting-presence';
+import { recordMeetingAudit } from './_shared/meeting-audit';
 import { rescheduleProposalsRepository } from './reschedule-proposals';
 import { createLogger } from '@balo/shared/logging';
 
@@ -103,8 +92,11 @@ export const LIVE_MEETING_STATUSES = [
 /** The complement of `endMeeting`'s exclusion CAS (`NOT IN ('ended','cancelled')`). */
 export const END_MEETING_FROM = LIVE_MEETING_STATUSES;
 
-/** Throw unless EVERY declared `from` may legally reach `to`. See the block above. */
-function assertEveryEdgeLegal(
+/**
+ * Throw unless EVERY declared `from` may legally reach `to`. See the block above. Exported for
+ * `meetingRingsRepository`, whose connect and `no_answer` end write the same two edges.
+ */
+export function assertEveryEdgeLegal(
   from: readonly MeetingLifecycleStatus[],
   to: MeetingLifecycleStatus
 ): void {
@@ -402,25 +394,6 @@ export interface EndMeetingResult {
    * a lot of `participant.left` webhooks were dropped.
    */
   closedIntervals: number;
-}
-
-/**
- * Internal control signal — the meeting was ALREADY terminal, so `endMeeting`'s transaction
- * must roll back and the method must answer `undefined`. Never escapes the repository.
- *
- * ⚠ WHY A THROW RATHER THAN AN EARLY RETURN. The presence close runs BEFORE the status
- * compare-and-set (the R5 ordering, preserved), so by the time the CAS reports "already
- * terminal" this transaction may already have closed intervals. Returning at that point would
- * COMMIT those closures on a call that is meant to be a pure no-op (D10: the losing ender gets
- * an idempotent `200` with no second effect, no second audit row, no second teardown).
- * Throwing rolls the whole thing back, so "returned undefined" and "changed nothing" become
- * the same statement — which is the only contract a caller can safely retry against.
- */
-class MeetingAlreadyTerminalSignal extends Error {
-  constructor() {
-    super('meeting already terminal');
-    this.name = 'MeetingAlreadyTerminalSignal';
-  }
 }
 
 /** One context attachment. `contextId` is NULL only for `'admin'` (the DB CHECK enforces it). */
@@ -1198,53 +1171,10 @@ export const meetingsRepository = {
     }
     assertScheduleOrder(input.scheduledStart, input.scheduledEnd);
 
-    return db.transaction(async (tx) => {
-      const [meeting] = await tx
-        .insert(meetings)
-        .values({
-          scheduledStart: input.scheduledStart,
-          scheduledEnd: input.scheduledEnd,
-          dailyRoomName: input.dailyRoomName ?? null,
-          joinUrl: input.joinUrl ?? null,
-          bookingIdempotencyKey: input.bookingIdempotencyKey ?? null,
-        })
-        .returning();
-      if (meeting === undefined) {
-        throw new Error('Failed to insert meeting');
-      }
-
-      const contexts = await tx
-        .insert(meetingContexts)
-        .values(
-          input.contexts.map((context) => ({
-            meetingId: meeting.id,
-            contextType: context.contextType,
-            contextId: context.contextId,
-          }))
-        )
-        .returning();
-      if (contexts.length !== input.contexts.length) {
-        throw new Error(`Failed to attach contexts to meeting: ${meeting.id}`);
-      }
-
-      const expertProfileId = await projectNewMeetingTx(tx, meeting, input.contexts);
-
-      // LAST, and on `tx` — never the base `db`. Written after the projection because
-      // `expertProfileId` (whose calendar this booking blocked) is resolved there and is not
-      // re-derivable later. Passing `db` here would leave an audit row behind after a
-      // rolled-back booking, which is worse than no row: it would attest to a booking that
-      // never existed.
-      await recordMeetingBooked(tx, {
-        meetingId: meeting.id,
-        actorUserId: input.actorUserId ?? null,
-        contexts: input.contexts,
-        scheduledStart: meeting.scheduledStart,
-        scheduledEnd: meeting.scheduledEnd,
-        expertProfileId,
-      });
-
-      return { meeting, contexts, expertProfileId };
-    });
+    // The insert → contexts → projection → `meeting.booked` sequence lives in
+    // `_shared/create-meeting-tx.ts`, shared with the Call now ring that creates its own
+    // meeting (`meetingRingsRepository.startWithNewMeeting`). Change it THERE.
+    return db.transaction((tx) => createMeetingTx(tx, input));
   },
 
   /** ONE live meeting by id. `undefined` when missing or soft-deleted. */
@@ -1542,31 +1472,11 @@ export const meetingsRepository = {
         throw new MeetingNotReschedulableError(id);
       }
 
-      // 3. Move the projection.
-      const expertProfileId = await syncProjectionScheduleTx(tx, meeting);
-
-      // 4. Extend every live guest link — extend-only, so a move EARLIER shortens nothing.
-      const guestLinksExtended = await extendGuestExpiryForMeetingTx(
-        tx,
-        meeting.id,
-        new Date(meeting.scheduledEnd.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS)
-      );
-
-      // 4b. BAL-475 — bump every live calendar row's SEQUENCE on the SAME tx, so the re-sent ICS
-      // and the moved window commit (or roll back) together.
-      const calendarEvents = await bumpCalendarSequencesForMeetingTx(tx, meeting.id);
-
-      // 5. LAST — an audit row left behind by a rolled-back move would attest to a move that
-      // never happened.
-      const rescheduleAuditId = await recordMeetingRescheduled(tx, {
-        meetingId: meeting.id,
-        actorUserId: audit.actorUserId,
-        previous: before,
-        scheduledStart: meeting.scheduledStart,
-        scheduledEnd: meeting.scheduledEnd,
-        expertProfileId,
-        guestLinksExtended,
-      });
+      // 3–5. Projection, guest links, calendar SEQUENCE and the `meeting.rescheduled` audit row
+      // (LAST), on the SAME tx. The sequence lives in `_shared/schedule-move-tx.ts`, shared with
+      // a Call now ring connecting in place (`meetingRingsRepository.connect`). Change it THERE.
+      const { expertProfileId, guestLinksExtended, calendarEvents, rescheduleAuditId } =
+        await applyScheduleMoveTx(tx, meeting, before, { actorUserId: audit.actorUserId });
 
       return {
         meeting,
@@ -2164,7 +2074,7 @@ export const meetingsRepository = {
    *
    * Returns `undefined` when the CAS matches nothing — already `ended`, already `cancelled`,
    * soft-deleted, or gone — **having changed nothing at all** (the transaction rolls back; see
-   * `MeetingAlreadyTerminalSignal`). That is D10: two `canEndMeeting` holders can press End
+   * `MeetingAlreadyTerminalSignal` in `_shared/end-meeting-tx.ts`). That is D10: two `canEndMeeting` holders can press End
    * simultaneously, and the loser gets an idempotent success rather than a `409` surfaced as an
    * error on the one control that must always work.
    *
@@ -2176,66 +2086,10 @@ export const meetingsRepository = {
   async endMeeting(input: EndMeetingInput): Promise<EndMeetingResult | undefined> {
     // ⚠ OUTSIDE THE TRANSACTION — pure, and a writer-bug throw must not open one.
     assertEveryEdgeLegal(END_MEETING_FROM, 'ended');
-    try {
-      return await db.transaction(async (tx) => {
-        const closedIntervals = await meetingPresenceRepository.closeAllOpen(
-          input.id,
-          input.endedAt,
-          tx
-        );
-
-        const [meeting] = await tx
-          .update(meetings)
-          .set({
-            status: 'ended',
-            endedAt: input.endedAt,
-            endedBy: input.endedBy,
-            outcome: input.outcome,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(meetings.id, input.id),
-              // Enum literals at QUERY time are always safe — the house restriction is on
-              // index predicates and CHECKs.
-              notInArray(meetings.status, ['ended', 'cancelled']),
-              isNull(meetings.deletedAt)
-            )
-          )
-          .returning();
-
-        if (meeting === undefined) {
-          throw new MeetingAlreadyTerminalSignal();
-        }
-
-        // LAST, and on `tx` — an audit row left behind by a rolled-back termination would
-        // attest to an end that never happened.
-        await recordMeetingAudit(tx, {
-          actorUserId: input.actorUserId,
-          action: 'meeting.ended',
-          meetingId: meeting.id,
-          metadata: {
-            endedBy: input.endedBy,
-            outcome: input.outcome,
-            closedIntervals,
-            // ⚠ ISO STRING, NOT `Date` — `metadata` is `jsonb`, so a `Date` round-trips as a
-            // string and typing it otherwise would be a lie on the way back out (memory
-            // `reference_jsonb_date_type_lie`). The same conversion `recordMeetingBooked` does.
-            endedAt: input.endedAt.toISOString(),
-            ...(input.terminalRule === undefined
-              ? {}
-              : { terminalRule: input.terminalRule.rule, terminalArm: input.terminalRule.arm }),
-          },
-        });
-
-        return { meeting, closedIntervals };
-      });
-    } catch (error) {
-      if (error instanceof MeetingAlreadyTerminalSignal) {
-        return undefined;
-      }
-      throw error;
-    }
+    // The three steps, the CAS and the roll-back-on-miss live in `_shared/end-meeting-tx.ts`,
+    // shared with the Call now `no_answer` end (`meetingRingsRepository`). Given the base
+    // client, the core opens the ONE transaction itself. Change the sequence THERE.
+    return endMeetingTx(db, input);
   },
 
   /**

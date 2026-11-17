@@ -320,6 +320,12 @@ export {
   type MeetingServerEventMap,
   type MeetingBookingContextType,
 } from './meeting';
+// BAL-649 — SERVER-ONLY: the Call now ring's terminal event. Joins `ServerEvents`, never `AllEvents`.
+export {
+  CALL_NOW_SERVER_EVENTS,
+  type CallNowServerEventMap,
+  type CallNowRingOutcome,
+} from './call-now';
 export {
   GUEST_SERVER_EVENTS,
   type GuestServerEventMap,

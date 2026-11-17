@@ -31,6 +31,13 @@
  * `meeting.booked` audit row's actor (there is no booker column — `schema/meetings.ts`, BAL-129 D12);
  * only the dev seeder writes it NULL. A fallback would attribute ledger rows to someone who never
  * booked.
+ *
+ * ⚠ BAL-649 — A MEETING AN EXPERT CREATED BY CALL NOW HAS NO CLIENT BOOKER. Its `meeting.booked` actor
+ * is the expert who rang (the audit row stays truthful), and billing the client wallet "on behalf of" the
+ * expert would be wrong. For a meeting whose `new_meeting` ring was placed by the EXPERT side, the
+ * fallback is the ring's callee — the client member who was rung — and only while that person is still
+ * a LIVE member of the engagement's company; otherwise `booker_unattributable`. Every other meeting
+ * keeps the `meeting.booked` actor.
  */
 import {
   clientPartyRecipientsRepository,
@@ -38,6 +45,7 @@ import {
   creditWalletsRepository,
   db,
   expertsRepository,
+  meetingRingsRepository,
   meetingsRepository,
   partyMembershipsRepository,
   type OpenSessionInput,
@@ -114,12 +122,27 @@ async function liveCompanyMemberOrUndefined(
 }
 
 /**
+ * The person an on-behalf open falls back to when no present member is attributed: the meeting's
+ * booker — except on a Call now meeting an EXPERT created, whose fallback is the rung client member
+ * (the ring's callee), and only while they are a live member of `companyId`. `null` ⇒ refuse.
+ */
+async function resolveFallbackBooker(meetingId: string, companyId: string): Promise<string | null> {
+  const rings = await meetingRingsRepository.listForMeeting(meetingId);
+  const created = rings.find((ring) => ring.placement === 'new_meeting');
+  if (created?.callerSide === 'expert') {
+    return (await liveCompanyMemberOrUndefined(companyId, created.calleeUserId)) ?? null;
+  }
+  return resolveMeetingBooker(meetingId);
+}
+
+/**
  * Resolve everything an on-behalf open needs, in the plan's order (§C.6 steps 5–8):
  *   1. the billing SUBJECT — coherence only (`requireActive: false`), company and expert from the
  *      engagement's own row;
  *   2. the optional GUARD, after the subject resolves and before any other read (D5.9 — the
  *      guest path's "invited by the delivering expert" check);
- *   3. the BOOKER — refused, never fabricated, when absent;
+ *   3. the BOOKER — refused, never fabricated, when absent (on an expert-created Call now meeting, the
+ *      rung client member, see {@link resolveFallbackBooker});
  *   4. the WALLET — PROVISIONED when missing (D7.5): `ensureForCompany` on `db`, BEFORE the open's
  *      transaction and outside it, because that transaction's first statement is the advisory lock on
  *      a wallet id, so the wallet must already exist. Idempotent under a race.
@@ -188,7 +211,8 @@ export async function resolveOnBehalfOpenInput(input: {
     subject.companyId,
     input.onBehalfOfUserId
   );
-  const bookerUserId = attributedMemberId ?? (await resolveMeetingBooker(meetingId));
+  const bookerUserId =
+    attributedMemberId ?? (await resolveFallbackBooker(meetingId, subject.companyId));
   if (bookerUserId === null) {
     return { ok: false, code: 'booker_unattributable', companyId: subject.companyId };
   }

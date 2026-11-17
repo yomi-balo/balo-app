@@ -127,9 +127,16 @@ describe('MEETING_SERVER_EVENTS', () => {
       outcome: 'venue_unavailable',
     };
 
+    // BAL-649 — the fifth system-written outcome; an unanswered Call now ring.
+    const noAnswerEnd: MeetingServerEventMap['meeting_ended'] = {
+      ...systemEnd,
+      outcome: 'no_answer',
+    };
+
     expect(humanEnd.outcome).toBeNull();
     expect(systemEnd.ended_by).toBe('system_idle');
     expect(venueUnavailableEnd.outcome).toBe('venue_unavailable');
+    expect(noAnswerEnd.outcome).toBe('no_answer');
   });
 
   it('uses snake_case event values', () => {

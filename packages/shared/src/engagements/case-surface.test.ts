@@ -280,6 +280,7 @@ describe('deriveCaseConsultationState', () => {
     'no_show_client',
     'missed_call',
     'venue_unavailable',
+    'no_answer',
   ];
 
   it('is TOTAL — every (status, outcome, proposal, client presence) combination yields a label', () => {
@@ -309,6 +310,7 @@ describe('deriveCaseConsultationState', () => {
     { status: 'ended', outcome: 'no_show_client', expected: 'no_show_client' },
     { status: 'ended', outcome: 'missed_call', expected: 'missed_call' },
     { status: 'ended', outcome: 'venue_unavailable', expected: 'venue_unavailable' },
+    { status: 'ended', outcome: 'no_answer', expected: 'cancelled' },
     { status: 'ended', outcome: null, expected: 'outcome_pending' },
     { status: 'cancelled', outcome: null, expected: 'cancelled' },
   ] as ReadonlyArray<{
@@ -353,6 +355,7 @@ describe('deriveCaseConsultationState', () => {
     { status: 'ended', outcome: 'no_show_client' },
     { status: 'ended', outcome: 'missed_call' },
     { status: 'ended', outcome: 'venue_unavailable' },
+    { status: 'ended', outcome: 'no_answer' },
     { status: 'ended', outcome: null },
     { status: 'cancelled', outcome: null },
   ] as ReadonlyArray<{ status: MeetingStatusLabel; outcome: MeetingOutcomeLabel | null }>)(

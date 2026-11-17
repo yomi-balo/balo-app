@@ -456,6 +456,28 @@ export interface BillingEmailChangedPayload {
   changedByUserId: string;
 }
 
+/**
+ * BAL-649 / ADR-1058 — what every Call now ring event carries. SERVER-ONLY: published from the
+ * API's ring services post-commit, never from apps/web. No rules exist yet (BAL-652/653 add the
+ * recipients and channels), so each publish is logged and dropped by the engine until then.
+ *
+ * ⚠ NO NAMES, NO ADDRESSES — ids and closed enums only. `correlationId` is the ring id: it is
+ * colon-free by construction and unique per ring, and `buildJobId` further scopes it by event.
+ */
+export interface CallRingEventPayload {
+  correlationId: string;
+  ringId: string;
+  meetingId: string;
+  engagementId: string;
+  callerUserId: string;
+  calleeUserId: string;
+  callerSide: 'client' | 'expert';
+  placement: 'new_meeting' | 'in_place';
+  reachedBy: 'app' | 'sms';
+  /** ISO instant at which the ring window closes. */
+  expiresAt: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -659,7 +681,13 @@ export type NotificationEvent =
   // below): published exclusively from apps/api post-commit blocks (booking, guest-add,
   // reschedule) — never from apps/web, so it has no `publishBodySchema` arm; adding one would
   // be a `StraySchemaArm` and fail `tsc`.
-  | 'meeting.calendar_invite';
+  | 'meeting.calendar_invite'
+  // BAL-649: the five Call now ring events — published from `services/call-now/**` post-commit.
+  | 'call.ringing'
+  | 'call.no_answer'
+  | 'call.declined'
+  | 'call.stopped'
+  | 'call.connected';
 
 /**
  * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
@@ -776,7 +804,13 @@ export type ServerOnlyNotificationEvent =
   // BAL-475: published exclusively from apps/api post-commit blocks (booking, guest-add,
   // reschedule) — never from apps/web, so it has NO `publishBodySchema` arm; adding one would
   // be a `StraySchemaArm` and fail `tsc`.
-  | 'meeting.calendar_invite';
+  | 'meeting.calendar_invite'
+  // BAL-649: the Call now ring events, published from `apps/api` only — no `publishBodySchema` arm.
+  | 'call.ringing'
+  | 'call.no_answer'
+  | 'call.declined'
+  | 'call.stopped'
+  | 'call.connected';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -949,4 +983,9 @@ export interface EventPayloadMap {
   'credit.saved_card.detached': CreditSavedCardDetachedPayload;
   'billing.email_changed': BillingEmailChangedPayload;
   'meeting.calendar_invite': MeetingCalendarInvitePayload;
+  'call.ringing': CallRingEventPayload;
+  'call.no_answer': CallRingEventPayload;
+  'call.declined': CallRingEventPayload;
+  'call.stopped': CallRingEventPayload;
+  'call.connected': CallRingEventPayload;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveMeetingSettlement, type MeetingSettlementInput } from '@balo/shared/credit';
 import {
   DEFAULT_MEETING_TIMERS,
+  NO_CALL_NOW_FACTS,
   computeMeetingClocks,
   resolveTerminalRule,
   summarisePresence,
@@ -405,6 +406,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),
         admittedLinkGuestPresent: false,
+        callNow: NO_CALL_NOW_FACTS,
       };
       expect(resolveTerminalRule({ ...base, now: clock('10:14') })).toBeNull();
       expect(resolveTerminalRule({ ...base, now: clock('10:15') })).toMatchObject({
@@ -425,6 +427,7 @@ describe('INVARIANT: before the scheduled start only time together bills; from t
         timers: DEFAULT_MEETING_TIMERS,
         venueReadyAt: clock('09:00'),
         admittedLinkGuestPresent: false,
+        callNow: NO_CALL_NOW_FACTS,
       };
       expect(resolveTerminalRule({ ...base, now: clock('09:59') })).toBeNull();
       expect(resolveTerminalRule({ ...base, now: clock('10:04') })).toBeNull();
