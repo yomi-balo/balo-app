@@ -1,5 +1,5 @@
 {
-  "id": "4ae9a288-6021-4fc2-8ce3-4a30bec78923",
+  "id": "826d6933-dee8-4a0f-9f3c-12b80d512ddc",
   "prevId": "95aaded5-4352-4f6a-93c9-a831fbb07209",
   "version": "7",
   "dialect": "postgresql",
@@ -80,6 +80,12 @@
         },
         "phone_verified_at": {
           "name": "phone_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "client_sms_opted_in_at": {
+          "name": "client_sms_opted_in_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -12502,22 +12508,6 @@
           "method": "btree",
           "with": {}
         },
-        "meeting_presence_open_user_idx": {
-          "name": "meeting_presence_open_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"meeting_presence\".\"user_id\" IS NOT NULL AND \"meeting_presence\".\"left_at\" IS NULL AND \"meeting_presence\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "meeting_presence_one_open_per_user_idx": {
           "name": "meeting_presence_one_open_per_user_idx",
           "columns": [
@@ -12603,240 +12593,6 @@
         "meeting_presence_identity_not_both": {
           "name": "meeting_presence_identity_not_both",
           "value": "NOT (\"meeting_presence\".\"user_id\" IS NOT NULL AND \"meeting_presence\".\"meeting_guest_id\" IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.meeting_rings": {
-      "name": "meeting_rings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "meeting_id": {
-          "name": "meeting_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "engagement_id": {
-          "name": "engagement_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "caller_user_id": {
-          "name": "caller_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "callee_user_id": {
-          "name": "callee_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "caller_side": {
-          "name": "caller_side",
-          "type": "meeting_ring_side",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "placement": {
-          "name": "placement",
-          "type": "meeting_ring_placement",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "meeting_ring_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ringing'"
-        },
-        "reached_by": {
-          "name": "reached_by",
-          "type": "meeting_ring_reach",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'app'"
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ended_at": {
-          "name": "ended_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "meeting_ring_one_ringing_per_engagement_idx": {
-          "name": "meeting_ring_one_ringing_per_engagement_idx",
-          "columns": [
-            {
-              "expression": "engagement_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"meeting_rings\".\"status\" = 'ringing' AND \"meeting_rings\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "meeting_ring_meeting_idx": {
-          "name": "meeting_ring_meeting_idx",
-          "columns": [
-            {
-              "expression": "meeting_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "meeting_ring_ringing_expiry_idx": {
-          "name": "meeting_ring_ringing_expiry_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"meeting_rings\".\"status\" = 'ringing' AND \"meeting_rings\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "meeting_ring_caller_idx": {
-          "name": "meeting_ring_caller_idx",
-          "columns": [
-            {
-              "expression": "caller_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "meeting_ring_callee_idx": {
-          "name": "meeting_ring_callee_idx",
-          "columns": [
-            {
-              "expression": "callee_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "meeting_rings_meeting_id_meetings_id_fk": {
-          "name": "meeting_rings_meeting_id_meetings_id_fk",
-          "tableFrom": "meeting_rings",
-          "tableTo": "meetings",
-          "columnsFrom": ["meeting_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_rings_engagement_id_engagements_id_fk": {
-          "name": "meeting_rings_engagement_id_engagements_id_fk",
-          "tableFrom": "meeting_rings",
-          "tableTo": "engagements",
-          "columnsFrom": ["engagement_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_rings_caller_user_id_users_id_fk": {
-          "name": "meeting_rings_caller_user_id_users_id_fk",
-          "tableFrom": "meeting_rings",
-          "tableTo": "users",
-          "columnsFrom": ["caller_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "meeting_rings_callee_user_id_users_id_fk": {
-          "name": "meeting_rings_callee_user_id_users_id_fk",
-          "tableFrom": "meeting_rings",
-          "tableTo": "users",
-          "columnsFrom": ["callee_user_id"],
-          "columnsTo": ["id"],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "meeting_ring_ended_iff_not_ringing": {
-          "name": "meeting_ring_ended_iff_not_ringing",
-          "value": "(\"meeting_rings\".\"status\" = 'ringing') = (\"meeting_rings\".\"ended_at\" IS NULL)"
-        },
-        "meeting_ring_expires_after_created": {
-          "name": "meeting_ring_expires_after_created",
-          "value": "\"meeting_rings\".\"expires_at\" > \"meeting_rings\".\"created_at\""
-        },
-        "meeting_ring_caller_not_callee": {
-          "name": "meeting_ring_caller_not_callee",
-          "value": "\"meeting_rings\".\"caller_user_id\" <> \"meeting_rings\".\"callee_user_id\""
         }
       },
       "isRLSEnabled": false
@@ -18388,7 +18144,7 @@
     "public.meeting_outcome": {
       "name": "meeting_outcome",
       "schema": "public",
-      "values": ["completed", "no_show_client", "missed_call", "venue_unavailable", "no_answer"]
+      "values": ["completed", "no_show_client", "missed_call", "venue_unavailable"]
     },
     "public.meeting_participant_party": {
       "name": "meeting_participant_party",
@@ -18399,26 +18155,6 @@
       "name": "meeting_participation_role",
       "schema": "public",
       "values": ["guest", "delegate"]
-    },
-    "public.meeting_ring_placement": {
-      "name": "meeting_ring_placement",
-      "schema": "public",
-      "values": ["new_meeting", "in_place"]
-    },
-    "public.meeting_ring_reach": {
-      "name": "meeting_ring_reach",
-      "schema": "public",
-      "values": ["app", "sms"]
-    },
-    "public.meeting_ring_side": {
-      "name": "meeting_ring_side",
-      "schema": "public",
-      "values": ["client", "expert"]
-    },
-    "public.meeting_ring_status": {
-      "name": "meeting_ring_status",
-      "schema": "public",
-      "values": ["ringing", "connected", "unanswered", "declined", "stopped"]
     },
     "public.meeting_status": {
       "name": "meeting_status",

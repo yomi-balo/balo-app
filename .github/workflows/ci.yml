@@ -285,6 +285,10 @@ jobs:
         run: pnpm test:e2e --project=chromium
         env:
           CI: true
+          # The webServer's `next build` worker inherits this. At the default ~2 GB heap it aborted
+          # with "JavaScript heap out of memory" after Sentry's post-compile step, intermittently,
+          # on main and branches alike, before any spec ran.
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Upload Test Results
         uses: actions/upload-artifact@v4

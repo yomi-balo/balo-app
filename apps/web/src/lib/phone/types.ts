@@ -36,3 +36,27 @@ export type SendPhoneOtpResult =
 export type VerifyPhoneOtpResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly code: PhoneOtpFailureCode; readonly attemptsRemaining?: number };
+
+export type {
+  ClientSmsConsentEventSurface as ClientSmsConsentSurface,
+  ClientSmsConsentMethod,
+  ClientSmsOptInSurface,
+} from '@balo/analytics/events';
+
+/**
+ * The signed-in user's client SMS consent (BAL-655), as the opt-in card and account settings read
+ * it. `opted_in` needs consent AND a verified number; a verified number alone is `not_opted_in`
+ * with `verifiedPhone` set, which is what offers the one-click consent. `unavailable` covers an
+ * impersonated session and a failed read: the surface renders nothing.
+ */
+export type ClientSmsConsentState =
+  | { readonly status: 'opted_in'; readonly phone: string }
+  | { readonly status: 'not_opted_in'; readonly verifiedPhone: string | null }
+  | { readonly status: 'unavailable' };
+
+export type ClientSmsConsentResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: 'phone_not_verified' | 'impersonation_refused' | 'request_failed';
+    };

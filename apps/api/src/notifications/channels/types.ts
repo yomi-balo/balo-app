@@ -1,8 +1,14 @@
 import type { EmailAttachmentSpec } from '@balo/shared/notifications';
 import type { CalendarInviteSpec } from '../calendar-invite-spec.js';
+import type { SmsRecipientSide } from '../engine/rules.js';
 
 interface DeliveryPayloadBase {
   recipientId: string;
+  /**
+   * SMS rules only: copied from the rule by the dispatcher. The SMS adapter requires client SMS
+   * consent unless this is `'expert'`; a missing side counts as `'client'` (fails closed).
+   */
+  recipientSide?: SmsRecipientSide;
   /**
    * Literal recipient email, set only for non-user recipients (e.g. the `admin`
    * ops inbox). When present, the email channel uses it directly and bypasses the

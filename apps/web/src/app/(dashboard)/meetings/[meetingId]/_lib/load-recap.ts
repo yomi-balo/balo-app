@@ -152,7 +152,7 @@ function resolveStatus(
     meeting.outcome === 'missed_call' ||
     meeting.outcome === 'venue_unavailable'
   ) {
-    return { label: 'Not held', tone: 'neutral', icon: 'ban' };
+    return { label: "Didn't take place", tone: 'neutral', icon: 'ban' };
   }
   if (artifactsProcessing) {
     return { label: 'Wrapping up', tone: 'warning', icon: 'clock' };

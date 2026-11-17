@@ -1422,7 +1422,7 @@ function DurationScene({ t, n }) {
 
 function CaseScene({ t, n }) {
   const opts = [
-    { title: 'Salesforce CPQ rollout', sub: 'Open case, 2 consultations held', on: true },
+    { title: 'Salesforce CPQ rollout', sub: 'Open case, 2 consultations completed', on: true },
     { title: 'Start a new case', sub: 'A separate thread with Priya', on: false },
   ];
   return (

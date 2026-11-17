@@ -129,14 +129,14 @@ describe('CaseHeader — the record it states', () => {
     stubOverflow(false);
     render(<CaseHeader header={BASE} />);
     expect(screen.getByRole('heading', { name: 'Flow interview loop' })).toBeInTheDocument();
-    expect(screen.getByText(/2 consultations held/)).toBeInTheDocument();
+    expect(screen.getByText(/2 consultations completed/)).toBeInTheDocument();
     expect(screen.getByText('CloudPeak')).toBeInTheDocument();
   });
 
   it('singularises a single held consultation', () => {
     stubOverflow(false);
     render(<CaseHeader header={{ ...BASE, heldConsultationCount: 1 }} />);
-    expect(screen.getByText(/1 consultation held/)).toBeInTheDocument();
+    expect(screen.getByText(/1 consultation completed/)).toBeInTheDocument();
   });
 
   it('renders the sanitised description markup', () => {

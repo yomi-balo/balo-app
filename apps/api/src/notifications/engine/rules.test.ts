@@ -1623,6 +1623,37 @@ describe('notificationRules', () => {
     }
   });
 
+  describe('BAL-655 SMS recipient side', () => {
+    const allRules = Object.values(notificationRules).flat();
+
+    it('every sms rule declares recipientSide', () => {
+      const smsRules = allRules.filter((r) => r.channel === 'sms');
+      expect(smsRules.length).toBeGreaterThan(0);
+      for (const rule of smsRules) {
+        expect(['client', 'expert']).toContain(rule.recipientSide);
+      }
+    });
+
+    it('the three shipped sms rules are client-side', () => {
+      const templates = allRules
+        .filter((r) => r.channel === 'sms')
+        .map((r) => `${r.template}:${r.recipientSide}`)
+        .sort((a, b) => a.localeCompare(b));
+      expect(templates).toEqual([
+        'reschedule-proposal-sent-sms:client',
+        'session-grace-entered-sms:client',
+        'session-near-wrap-sms:client',
+      ]);
+    });
+
+    it('non-sms rules never declare recipientSide', () => {
+      const offenders = allRules.filter(
+        (r) => r.channel !== 'sms' && r.recipientSide !== undefined
+      );
+      expect(offenders).toEqual([]);
+    });
+  });
+
   describe('BAL-411 reschedule proposal events', () => {
     it('reschedule_proposal.sent ships email + in-app + a CONDITIONED, CRITICAL sms arm', () => {
       const rules = notificationRules['reschedule_proposal.sent'] ?? [];

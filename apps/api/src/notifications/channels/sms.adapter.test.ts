@@ -62,7 +62,7 @@ vi.mock('../../lib/rate-limiter.js', () => ({
 }));
 
 // Import after mocks are set up
-import { processSmsJob } from './sms.adapter.js';
+import { processSmsJob, CLIENT_SMS_NOT_OPTED_IN } from './sms.adapter.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,7 @@ describe('processSmsJob', () => {
       // Item 17 — the new structural guard. Every existing happy-path fixture in this file
       // must carry a verified phone or the guard added below skips every one of them.
       phoneVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+      clientSmsOptedInAt: new Date('2026-02-01T00:00:00.000Z'),
     });
     mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
   });
@@ -149,6 +150,87 @@ describe('processSmsJob', () => {
         correlationId: 'corr-1',
         date: 'Mar 25',
       });
+    });
+  });
+
+  // -- Client SMS consent (BAL-655) ----------------------------------------
+
+  describe('client SMS consent gate', () => {
+    const verifiedNoConsent = {
+      id: 'user-1',
+      phone: '+61412345678',
+      phoneVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+      clientSmsOptedInAt: null,
+    };
+
+    it('exports the skip reason as a literal', () => {
+      expect(CLIENT_SMS_NOT_OPTED_IN).toBe('Client SMS not opted in');
+    });
+
+    it('skips a client-side job when the recipient has not opted in', async () => {
+      mockFindById.mockResolvedValue(verifiedNoConsent);
+
+      await processSmsJob(makeJob({ recipientSide: 'client' }));
+
+      expect(mockSendTransacSms).not.toHaveBeenCalled();
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientId: 'user-1' }),
+        'sms',
+        'skipped',
+        'Client SMS not opted in'
+      );
+      expect(mockTrackServer).toHaveBeenCalledWith('notification_sms_skipped', {
+        template: 'booking-confirmed-sms',
+        skip_reason: 'Client SMS not opted in',
+        distinct_id: 'user-1',
+      });
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('treats a job with no recipientSide as client-side (fails closed)', async () => {
+      mockFindById.mockResolvedValue(verifiedNoConsent);
+
+      await processSmsJob(makeJob());
+
+      expect(mockSendTransacSms).not.toHaveBeenCalled();
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientId: 'user-1' }),
+        'sms',
+        'skipped',
+        'Client SMS not opted in'
+      );
+    });
+
+    it('sends an expert-side job without client consent', async () => {
+      mockFindById.mockResolvedValue(verifiedNoConsent);
+
+      await processSmsJob(makeJob({ recipientSide: 'expert' }));
+
+      expect(mockSendTransacSms).toHaveBeenCalledOnce();
+    });
+
+    it('sends a client-side job once the recipient has opted in', async () => {
+      await processSmsJob(makeJob({ recipientSide: 'client' }));
+
+      expect(mockSendTransacSms).toHaveBeenCalledOnce();
+    });
+
+    it('still skips as Phone not verified when consent is set but the phone is unverified', async () => {
+      mockFindById.mockResolvedValue({
+        ...verifiedNoConsent,
+        phoneVerifiedAt: null,
+        clientSmsOptedInAt: new Date('2026-02-01T00:00:00.000Z'),
+      });
+
+      await processSmsJob(makeJob({ recipientSide: 'client' }));
+
+      expect(mockSendTransacSms).not.toHaveBeenCalled();
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientId: 'user-1' }),
+        'sms',
+        'skipped',
+        'Phone not verified'
+      );
     });
   });
 

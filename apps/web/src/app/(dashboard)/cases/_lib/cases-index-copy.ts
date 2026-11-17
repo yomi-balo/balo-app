@@ -135,7 +135,8 @@ export const CASES_INDEX_UNREAD = 'New';
 
 export const casesIndexLastCall = (date: string): string => `Last call ${date}`;
 export const casesIndexOpenedAt = (date: string): string => `Opened ${date}`;
-export const casesIndexHeldCount = (count: number): string => `${count} held`;
+export const casesIndexHeldCount = (count: number): string =>
+  `${count} ${count === 1 ? 'consultation' : 'consultations'} completed`;
 export const casesIndexItemsForYou = (count: number): string => `${count} for you`;
 export const casesIndexWaitingOn = (party: string): string => `Waiting on ${party}`;
 
@@ -168,11 +169,11 @@ export const CASES_INDEX_CLOSED_PREFIX = {
 
 /**
  * ⚠ THE TRAIL IS THE ONLY PURELY GRAPHICAL FACT ON THE CARD, so its `aria-label` is the whole
- * information for a screen-reader user — "Consultations: 2 held, 1 booked". `unrecorded` reads
+ * information for a screen-reader user — "Consultations: 2 completed, 1 booked". `unrecorded` reads
  * as "not recorded", never "missed": the two are different events and only one accuses somebody.
  */
 export const CASE_TRAIL_WORDS: Readonly<Record<CaseTrailMark, string>> = {
-  held: 'held',
+  held: 'completed',
   booked: 'booked',
   cancelled: 'cancelled',
   missed: 'missed',

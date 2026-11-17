@@ -531,6 +531,34 @@ describe('PhoneVerificationFlow', () => {
       });
     });
 
+    it('audience="client" verifies without PHONE_VERIFIED and words the verified state for client SMS', async () => {
+      const onVerified = vi.fn();
+      setupApiResponses([sendOtpSuccess(), verifyOtpSuccess()]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow mode="settings" audience="client" onVerified={onVerified} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Enter 6-digit code')).toBeInTheDocument();
+      });
+
+      const digits = screen.getAllByLabelText(/Digit \d/);
+      for (let i = 0; i < 6; i++) {
+        await user.click(digits[i]!);
+        await user.keyboard(String(i + 1));
+      }
+
+      await waitFor(() => {
+        expect(onVerified).toHaveBeenCalledWith('+61412345678');
+      });
+      expect(
+        screen.getByText('We’ll text you here when your expert is ready.')
+      ).toBeInTheDocument();
+      expect(track).not.toHaveBeenCalledWith(PHONE_EVENTS.PHONE_VERIFIED, expect.anything());
+    });
+
     it('shows "Number updated" text in settings mode with initialPhone', async () => {
       const onVerified = vi.fn();
       setupApiResponses([sendOtpSuccess(), verifyOtpSuccess()]);
