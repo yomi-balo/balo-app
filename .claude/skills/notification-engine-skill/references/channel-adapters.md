@@ -231,7 +231,7 @@ BREVO_SENDER_EMAIL=    # From address, e.g. notifications@balo.expert (optional 
 
 > **Status:** Not yet implemented — see BAL-224 for the full ticket.
 
-Writes to a `user_notifications` table via the repository pattern. The frontend reads via polling (or Ably in future).
+Writes to a `user_notifications` table via the repository pattern. The frontend reads via polling. After the write, the adapter also pings `notifications:{userId}` on Ably (content-free, best-effort — a failed publish never fails the job) and the bell refetches.
 
 ```ts
 // channels/in-app.adapter.ts

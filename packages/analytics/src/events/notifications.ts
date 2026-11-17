@@ -46,10 +46,9 @@ export const NOTIFICATION_EVENTS = {
 } as const;
 
 export interface NotificationEventMap {
-  [NOTIFICATION_EVENTS.TOAST_SHOWN]: {
-    count: number;
-    trigger: 'load' | 'live';
-  };
+  [NOTIFICATION_EVENTS.TOAST_SHOWN]:
+    | { count: number; trigger: 'load' }
+    | { count: number; trigger: 'live'; transport: 'push' | 'poll'; latency_ms: number };
   [NOTIFICATION_EVENTS.TOAST_DISMISSED]: {
     count: number;
     reason: 'close' | 'timeout';

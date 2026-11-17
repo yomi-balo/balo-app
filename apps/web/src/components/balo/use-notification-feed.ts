@@ -11,10 +11,11 @@ import {
 } from '@/lib/meetings/meetings-changed-event';
 import {
   LOAD_TOAST_DELAY_MS,
-  POLL_HIDDEN_MS,
-  POLL_VISIBLE_MS,
+  PUSH_REFETCH_DEBOUNCE_MS,
   ROW_HIGHLIGHT_MS,
+  liveLatencyMs,
   notificationActionPath,
+  pollDelayMs,
   seenThroughNow,
   selectUnseenNotifications,
   type ArrivalSource,
@@ -24,6 +25,7 @@ import {
   type BellNotification,
   type NotificationsResponse,
 } from './notification-arrival';
+import { useNotificationPush } from './use-notification-push';
 
 type FeedStatus = 'loading' | 'error' | 'ready';
 
@@ -45,6 +47,14 @@ export interface NotificationFeed {
 }
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/** What triggered a feed fetch: a realtime ping, or the poll / panel / retry paths. */
+type FetchSource = 'push' | 'poll';
+
+interface LiveToastMeta {
+  transport: FetchSource;
+  latencyMs: number;
+}
 
 function isHidden(): boolean {
   return document.visibilityState === 'hidden';
@@ -86,7 +96,9 @@ function readReadIdsCount(data: unknown): number {
  * Owns the bell's fetch, polling, seen cursor, auto-read and announcement flow. Every announcement
  * decision reads refs, so the callbacks stay stable and the poll loop never restarts on a render.
  */
-export function useNotificationFeed(): NotificationFeed {
+export function useNotificationFeed({
+  realtimeUserId = null,
+}: Readonly<{ realtimeUserId?: string | null }> = {}): NotificationFeed {
   const router = useRouter();
   const pathname = usePathname() ?? '';
 
@@ -113,6 +125,9 @@ export function useNotificationFeed(): NotificationFeed {
   const impersonatingRef = useRef(false);
   const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pushDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pushLiveRef = useRef(false);
+  const rescheduleRef = useRef<(() => void) | null>(null);
 
   const commitList = useCallback((next: BellNotification[]): void => {
     listRef.current = next;
@@ -160,11 +175,20 @@ export function useNotificationFeed(): NotificationFeed {
   );
 
   const showToast = useCallback(
-    (next: Omit<ArrivalToastState, 'key'>): void => {
+    (next: Omit<ArrivalToastState, 'key'>, live?: LiveToastMeta): void => {
       toastKeyRef.current += 1;
       commitToast({ ...next, key: toastKeyRef.current });
       setRingKey((key) => key + 1);
-      track(NOTIFICATION_EVENTS.TOAST_SHOWN, { count: next.count, trigger: next.trigger });
+      if (live === undefined) {
+        track(NOTIFICATION_EVENTS.TOAST_SHOWN, { count: next.count, trigger: 'load' });
+      } else {
+        track(NOTIFICATION_EVENTS.TOAST_SHOWN, {
+          count: next.count,
+          trigger: 'live',
+          transport: live.transport,
+          latency_ms: live.latencyMs,
+        });
+      }
     },
     [commitToast]
   );
@@ -246,7 +270,7 @@ export function useNotificationFeed(): NotificationFeed {
   );
 
   const announceLive = useCallback(
-    (list: BellNotification[], cursor: number | null): void => {
+    (list: BellNotification[], cursor: number | null, source: FetchSource): void => {
       const unseen = selectUnseenNotifications(
         list,
         new Date(cursor ?? 0),
@@ -267,11 +291,14 @@ export function useNotificationFeed(): NotificationFeed {
         setRingKey((key) => key + 1);
       } else {
         const previous = toastRef.current;
-        showToast({
-          ids: [...ids, ...(previous?.ids ?? [])],
-          count: (previous?.count ?? 0) + unseen.length,
-          trigger: 'live',
-        });
+        showToast(
+          {
+            ids: [...ids, ...(previous?.ids ?? [])],
+            count: (previous?.count ?? 0) + unseen.length,
+            trigger: 'live',
+          },
+          { transport: source, latencyMs: liveLatencyMs(unseen, Date.now()) }
+        );
       }
       postSeen(new Date(newest.createdAt));
     },
@@ -279,7 +306,7 @@ export function useNotificationFeed(): NotificationFeed {
   );
 
   const processResponse = useCallback(
-    (data: NotificationsResponse): void => {
+    (data: NotificationsResponse, source: FetchSource): void => {
       impersonatingRef.current = data.impersonating === true;
       if (data.lastSeenAt) advanceCursor(Date.parse(data.lastSeenAt));
       const cursor = cursorRef.current;
@@ -301,33 +328,36 @@ export function useNotificationFeed(): NotificationFeed {
         announceLoad(list, cursor, data.unseenCount ?? 0, excludedCount);
         return;
       }
-      announceLive(list, cursor);
+      announceLive(list, cursor, source);
     },
     [advanceCursor, announceLive, announceLoad, applyAutoRead, commitList]
   );
 
-  const fetchFeed = useCallback(async (): Promise<void> => {
-    fetchSeqRef.current += 1;
-    const seq = fetchSeqRef.current;
-    let data: NotificationsResponse;
-    try {
-      const res = await fetch('/api/notifications?limit=20');
-      if (!res.ok) throw new Error('Failed to fetch');
-      data = (await res.json()) as NotificationsResponse;
-    } catch {
-      if (mountedRef.current && seq === fetchSeqRef.current) {
-        setStatus((current) => (current === 'ready' ? current : 'error'));
+  const fetchFeed = useCallback(
+    async (source: FetchSource = 'poll'): Promise<void> => {
+      fetchSeqRef.current += 1;
+      const seq = fetchSeqRef.current;
+      let data: NotificationsResponse;
+      try {
+        const res = await fetch('/api/notifications?limit=20');
+        if (!res.ok) throw new Error('Failed to fetch');
+        data = (await res.json()) as NotificationsResponse;
+      } catch {
+        if (mountedRef.current && seq === fetchSeqRef.current) {
+          setStatus((current) => (current === 'ready' ? current : 'error'));
+        }
+        return;
       }
-      return;
-    }
-    if (!mountedRef.current || seq !== fetchSeqRef.current) return;
-    try {
-      processResponse(data);
-    } catch (error) {
-      Sentry.captureException(error);
-    }
-    setStatus('ready');
-  }, [processResponse]);
+      if (!mountedRef.current || seq !== fetchSeqRef.current) return;
+      try {
+        processResponse(data, source);
+      } catch (error) {
+        Sentry.captureException(error);
+      }
+      setStatus('ready');
+    },
+    [processResponse]
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -338,11 +368,12 @@ export function useNotificationFeed(): NotificationFeed {
     const scheduleNext = (): void => {
       clearTimeout(pollTimer);
       if (cancelled) return;
-      const delay = isHidden() ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
+      const delay = pollDelayMs({ hidden: isHidden(), pushLive: pushLiveRef.current });
       pollTimer = setTimeout(() => {
         detach(fetchFeed().finally(scheduleNext));
       }, delay);
     };
+    rescheduleRef.current = scheduleNext;
 
     const onVisibilityChange = (): void => {
       if (isHidden()) {
@@ -359,13 +390,36 @@ export function useNotificationFeed(): NotificationFeed {
     return () => {
       cancelled = true;
       mountedRef.current = false;
+      rescheduleRef.current = null;
       clearTimeout(pollTimer);
       clearTimeout(highlightTimerRef.current);
+      clearTimeout(pushDebounceRef.current);
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [fetchFeed]);
+
+  // A ping restarts one trailing timer, so a burst of notifications costs a single refetch.
+  const onPushCreated = useCallback((): void => {
+    clearTimeout(pushDebounceRef.current);
+    pushDebounceRef.current = setTimeout(() => {
+      detach(fetchFeed('push'));
+    }, PUSH_REFETCH_DEBOUNCE_MS);
+  }, [fetchFeed]);
+
+  const { pushLive } = useNotificationPush({ userId: realtimeUserId, onCreated: onPushCreated });
+
+  // The poll cadence follows the connection state, and the timer restarts from NOW on a change so
+  // a stale 120s wait is never sat out after a drop. Ephemeral pings skip Ably's resume, and a row
+  // can land between the mount fetch and the first connect, so every transition to live does one
+  // catch-up fetch first.
+  useEffect(() => {
+    if (pushLiveRef.current === pushLive) return;
+    pushLiveRef.current = pushLive;
+    if (pushLive) detach(fetchFeed('poll'));
+    rescheduleRef.current?.();
+  }, [pushLive, fetchFeed]);
 
   useEffect(() => {
     if (panelOpen) detach(fetchFeed());

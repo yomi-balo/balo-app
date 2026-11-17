@@ -48,6 +48,11 @@ vi.mock('../../lib/redis.js', () => ({
   createRedisConnection: vi.fn(),
 }));
 
+const mockPublishNotificationCreated = vi.fn().mockResolvedValue(undefined);
+vi.mock('./in-app-push.js', () => ({
+  publishNotificationCreated: (...args: unknown[]) => mockPublishNotificationCreated(...args),
+}));
+
 // Import after mocks are set up
 import { processInAppJob } from './in-app.adapter.js';
 
@@ -133,6 +138,55 @@ describe('processInAppJob', () => {
 
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({ body: null, actionUrl: null })
+      );
+    });
+  });
+
+  // -- Realtime ping --------------------------------------------------------
+
+  describe('realtime ping', () => {
+    it('pings the recipient once, after the row and its log are written', async () => {
+      await processInAppJob(makeJob());
+
+      expect(mockPublishNotificationCreated).toHaveBeenCalledTimes(1);
+      expect(mockPublishNotificationCreated).toHaveBeenCalledWith('user-1');
+
+      const [insertOrder] = mockInsert.mock.invocationCallOrder;
+      const [logOrder] = mockLogNotification.mock.invocationCallOrder;
+      const [pingOrder] = mockPublishNotificationCreated.mock.invocationCallOrder;
+      expect(pingOrder).toBeGreaterThan(insertOrder as number);
+      expect(pingOrder).toBeGreaterThan(logOrder as number);
+    });
+
+    it('does not ping when the insert fails, and the job still rethrows', async () => {
+      mockInsert.mockRejectedValueOnce(new Error('Connection refused'));
+
+      await expect(processInAppJob(makeJob())).rejects.toThrow('Connection refused');
+
+      expect(mockPublishNotificationCreated).not.toHaveBeenCalled();
+    });
+
+    it('does not ping when writing the delivery log fails', async () => {
+      mockLogNotification.mockRejectedValueOnce(new Error('log write failed'));
+
+      await expect(processInAppJob(makeJob())).rejects.toThrow('log write failed');
+
+      expect(mockPublishNotificationCreated).not.toHaveBeenCalled();
+    });
+
+    it('never writes a second row or a failed log when the ping rejects', async () => {
+      mockPublishNotificationCreated.mockRejectedValueOnce(new Error('ably down'));
+
+      // The real publisher never rejects; this pins what the adapter does if one ever did:
+      // the row is already durable, so nothing may be written twice.
+      await processInAppJob(makeJob()).catch(() => undefined);
+
+      expect(mockInsert).toHaveBeenCalledTimes(1);
+      expect(mockLogNotification).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'in-app',
+        'failed',
+        expect.anything()
       );
     });
   });
