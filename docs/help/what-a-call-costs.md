@@ -29,14 +29,16 @@ one who is called and you don't answer, no time is billed and no charge appears 
 
 Balo checks that your company can cover the minimum before the call starts.
 
-- **A card on file.** If your company has a card saved for automatic charging, you're ready. Any
-  time beyond your balance settles to the card afterwards.
+- **A card on file.** If your company has a card saved for automatic charging and nothing left
+  unpaid from an earlier call, you're ready. Any time beyond your balance is charged to the card
+  after the call. While an earlier call is left unpaid, a top-up is needed first, even with a card.
 - **Credit.** Otherwise, your company needs enough credit for 15 minutes with your expert, on top
   of what your upcoming booked consultations will need. If it falls short, Balo shows how
-  much to add so you can top up and carry on. See [Buying credit](/help/buying-credit).
+  much to add. See [Buying credit](/help/buying-credit).
 
 If your expert calls you, Balo runs the same check when you answer, so you always know before you
-join.
+join. If you need to top up first, the call stops ringing while you do. Once the credit lands, call
+your expert back from the case.
 
 ## Calling in place of a booking
 

@@ -34,7 +34,10 @@ export type CallNowRingOutcome = 'connected' | 'no_answer' | 'declined' | 'stopp
 /** `call_now_funding_gate_shown.reason`: why the gate stopped the call. */
 export type CallNowFundingGateReason = 'account_on_hold' | 'insufficient' | 'reserved_by_upcoming';
 
-/** `call_now_funding_gate_resolved.via`: how the gate ended. */
+/**
+ * `call_now_funding_gate_resolved.via`: how the gate ended. On an expert's call the ring is left to
+ * lapse while the client tops up, so `top_up` there means "topped up, then called back".
+ */
 export type CallNowFundingGateResolution = 'top_up' | 'booking_in_place' | 'abandoned';
 
 export const CALL_NOW_EVENTS = {
