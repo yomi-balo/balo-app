@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
   loadGates: vi.fn(),
   startCallNow: vi.fn(),
+  answerCallNow: vi.fn(),
+  sendJoinError: vi.fn(),
+  sendMemberJoinGrant: vi.fn(),
   endRing: vi.fn(),
   findById: vi.fn(),
   checkRateLimit: vi.fn(),
@@ -49,6 +52,21 @@ vi.mock('../../services/call-now/authorize-call-now.js', () => ({
 vi.mock('../../services/call-now/call-now-gates.js', () => ({ loadCallNowGates: mocks.loadGates }));
 vi.mock('../../services/call-now/start-call.js', () => ({ startCallNow: mocks.startCallNow }));
 vi.mock('../../services/call-now/end-ring.js', () => ({ endRing: mocks.endRing }));
+vi.mock('../../services/call-now/answer-call.js', () => ({ answerCallNow: mocks.answerCallNow }));
+// The funding guard's own behaviour is `case-booking-funding.test.ts`; the route needs its status map.
+vi.mock('../../services/meetings/case-booking-funding.js', () => ({
+  CASE_BOOKING_FUNDING_STATUS: {
+    account_on_hold: 409,
+    booking_unfunded: 409,
+    booking_reserved: 409,
+    booking_funding_unavailable: 503,
+  },
+}));
+// The join route's senders have their own tests (`routes/meetings/join.test.ts`).
+vi.mock('../meetings/join.js', () => ({
+  sendJoinError: mocks.sendJoinError,
+  sendMemberJoinGrant: mocks.sendMemberJoinGrant,
+}));
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import { callNowRoutes } from './index.js';
@@ -351,6 +369,42 @@ describe('call-now routes (BAL-649)', () => {
       }
     );
 
+    it.each([
+      ['account_on_hold', 4_200],
+      ['booking_unfunded', 12_500],
+      ['booking_reserved', 30_000],
+      ['booking_funding_unavailable', null],
+    ] as const)('⚠ a %s refusal is fee-concealed: its exact key set', async (code, figure) => {
+      mocks.startCallNow.mockResolvedValue({ ok: false, code, suggestedTopUpMinor: figure });
+
+      const res = await post();
+
+      if (code === 'booking_funding_unavailable') {
+        expect(res.statusCode).toBe(503);
+        expect(res.json()).toEqual({ error: code, code });
+        return;
+      }
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: code, code, suggestedTopUpMinor: figure });
+    });
+
+    it('a funding refusal with no meaningful figure carries suggestedTopUpMinor: null', async () => {
+      mocks.startCallNow.mockResolvedValue({
+        ok: false,
+        code: 'account_on_hold',
+        suggestedTopUpMinor: null,
+      });
+
+      const res = await post();
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        error: 'account_on_hold',
+        code: 'account_on_hold',
+        suggestedTopUpMinor: null,
+      });
+    });
+
     it('409 in_place_not_eligible', async () => {
       mocks.startCallNow.mockResolvedValue({ ok: false, code: 'in_place_not_eligible' });
 
@@ -405,6 +459,139 @@ describe('call-now routes (BAL-649)', () => {
       expect(mocks.logError).toHaveBeenCalledWith(
         expect.objectContaining({ engagementId: ENGAGEMENT_ID, error: 'boom' }),
         expect.any(String)
+      );
+    });
+  });
+
+  describe('POST /call-now/rings/:ringId/answer (BAL-650)', () => {
+    const url = `/call-now/rings/${RING_ID}/answer`;
+    const answer = () => app.inject({ method: 'POST', url, headers: AUTH });
+    const JOIN = { grant: { token: 'daily.jwt' } };
+
+    it('401 without auth, 400 for a bad ring id', async () => {
+      expect((await app.inject({ method: 'POST', url })).statusCode).toBe(401);
+      expect(
+        (await app.inject({ method: 'POST', url: '/call-now/rings/x/answer', headers: AUTH }))
+          .statusCode
+      ).toBe(400);
+      expect(mocks.answerCallNow).not.toHaveBeenCalled();
+    });
+
+    it('answers the client commit with the member join grant', async () => {
+      mocks.answerCallNow.mockResolvedValue({ ok: true, join: JOIN });
+      mocks.sendMemberJoinGrant.mockImplementation(
+        (reply: { code: (n: number) => { send: (b: unknown) => void } }) =>
+          reply.code(200).send({ token: 'daily.jwt' })
+      );
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ token: 'daily.jwt' });
+      expect(mocks.answerCallNow).toHaveBeenCalledWith({ ringId: RING_ID, userId: USER_ID });
+      expect(mocks.sendMemberJoinGrant).toHaveBeenCalledWith(expect.anything(), JOIN);
+    });
+
+    it('404 ring_not_found — an expert caller, a stranger and an unknown ring read alike', async () => {
+      mocks.answerCallNow.mockResolvedValue({ ok: false, code: 'ring_not_found' });
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ error: 'ring_not_found', code: 'ring_not_found' });
+    });
+
+    it('409 ring_not_ringing carries the ring’s current status', async () => {
+      mocks.answerCallNow.mockResolvedValue({
+        ok: false,
+        code: 'ring_not_ringing',
+        status: 'connected',
+      });
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        error: 'ring_not_ringing',
+        code: 'ring_not_ringing',
+        status: 'connected',
+      });
+    });
+
+    it.each([
+      ['account_on_hold', 4_200],
+      ['booking_unfunded', 12_500],
+      ['booking_reserved', 30_000],
+    ] as const)(
+      '⚠ 409 %s is fee-concealed: exactly { error, code, suggestedTopUpMinor }',
+      async (code, figure) => {
+        mocks.answerCallNow.mockResolvedValue({ ok: false, code, suggestedTopUpMinor: figure });
+
+        const res = await answer();
+
+        expect(res.statusCode).toBe(409);
+        expect(Object.keys(res.json()).sort((a, b) => a.localeCompare(b))).toEqual([
+          'code',
+          'error',
+          'suggestedTopUpMinor',
+        ]);
+        expect(res.json()).toMatchObject({ error: code, suggestedTopUpMinor: figure });
+      }
+    );
+
+    it('⚠ 503 booking_funding_unavailable carries no figure at all', async () => {
+      mocks.answerCallNow.mockResolvedValue({
+        ok: false,
+        code: 'booking_funding_unavailable',
+        suggestedTopUpMinor: null,
+      });
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({
+        error: 'booking_funding_unavailable',
+        code: 'booking_funding_unavailable',
+      });
+    });
+
+    it('a refused join after a passed check goes through the join route’s error sender', async () => {
+      const failure = { ok: false, code: 'meeting_not_open_for_join' };
+      mocks.answerCallNow.mockResolvedValue({ ok: false, code: 'join_failed', failure });
+      mocks.sendJoinError.mockImplementation(
+        (reply: { code: (n: number) => { send: (b: unknown) => void } }) =>
+          reply.code(409).send({ error: 'meeting_not_open_for_join' })
+      );
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(409);
+      expect(mocks.sendJoinError).toHaveBeenCalledWith(
+        expect.anything(),
+        failure,
+        expect.objectContaining({ ringId: RING_ID, userId: USER_ID })
+      );
+    });
+
+    it('429 on the ring-action bucket, before any service call', async () => {
+      mocks.checkRateLimit.mockResolvedValue({ allowed: false, ttlSeconds: 5 });
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(429);
+      expect(mocks.answerCallNow).not.toHaveBeenCalled();
+    });
+
+    it('500 internal_error with a log.error on an unexpected throw', async () => {
+      mocks.answerCallNow.mockRejectedValue(new Error('boom'));
+
+      const res = await answer();
+
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('boom');
+      expect(mocks.logError).toHaveBeenCalledWith(
+        expect.objectContaining({ ringId: RING_ID, error: 'boom' }),
+        'Call now answer failed'
       );
     });
   });

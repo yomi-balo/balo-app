@@ -2190,12 +2190,16 @@ export const meetingsRepository = {
    * ⚠ IT IS THE RAW, UN-MARKED-UP CONSULTANT RATE: server-side only, for the booking verdict; it
    * must never reach a client payload (the verdict returns figures, never rates).
    *
+   * `excludeMeetingId` leaves ONE meeting out of the set: a Call now's own meeting, which is
+   * `scheduled` and ends in the future while the client commits to it, must not reserve against the
+   * very check that decides whether it may connect.
+   *
    * Rides `engagement_company_idx`, `meeting_context_reverse_idx`, the two primary keys and
    * `credit_sessions_meeting_idx` — no new index. A meeting reached through more than one case
    * context of the company (a data anomaly) is returned ONCE.
    */
   async listReservableCaseBookings(
-    input: { companyId: string; now: Date },
+    input: { companyId: string; now: Date; excludeMeetingId?: string },
     exec: DbExecutor = db
   ): Promise<ReservableCaseBooking[]> {
     const rows = await exec
@@ -2216,7 +2220,8 @@ export const meetingsRepository = {
           eq(engagements.status, 'active'),
           inArray(meetings.status, ['scheduled', 'waiting_for_participants']),
           gt(meetings.scheduledEnd, input.now),
-          noLiveSessionExcept(exec, ['cancelled'])
+          noLiveSessionExcept(exec, ['cancelled']),
+          input.excludeMeetingId === undefined ? undefined : ne(meetings.id, input.excludeMeetingId)
         )
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id));

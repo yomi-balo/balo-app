@@ -13,6 +13,7 @@ import {
   isWithinCallHours,
   resolveCallNowAvailability,
   ringAnalyticsOutcome,
+  ringAwaitsClientCommit,
   selectInPlaceCandidate,
   type CallNowGateFacts,
   type CallRingFacts,
@@ -480,5 +481,24 @@ describe('ringAnalyticsOutcome', () => {
     ['stopped', 'stopped'],
   ])('%s → %s', (status, expected) => {
     expect(ringAnalyticsOutcome(status)).toBe(expected);
+  });
+});
+
+describe('ringAwaitsClientCommit', () => {
+  const AWAITING = { callerSide: 'expert', placement: 'new_meeting', status: 'ringing' } as const;
+
+  it('holds for a ringing expert-started ring that creates a new meeting', () => {
+    expect(ringAwaitsClientCommit(AWAITING)).toBe(true);
+  });
+
+  it.each([
+    ['a client caller', { ...AWAITING, callerSide: 'client' }],
+    ['an in-place ring', { ...AWAITING, placement: 'in_place' }],
+    ['a connected ring', { ...AWAITING, status: 'connected' }],
+    ['an unanswered ring', { ...AWAITING, status: 'unanswered' }],
+    ['a declined ring', { ...AWAITING, status: 'declined' }],
+    ['a stopped ring', { ...AWAITING, status: 'stopped' }],
+  ] as const)('does not hold for %s', (_label, ring) => {
+    expect(ringAwaitsClientCommit(ring)).toBe(false);
   });
 });

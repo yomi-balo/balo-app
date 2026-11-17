@@ -78,6 +78,7 @@ import {
   dailyRoomNameForMeeting,
   isMeetingVenueReady,
   presencePartyForGuest,
+  ringAwaitsClientCommit,
   selectPrimaryMeetingContext,
   type JoinGrant,
   type MemberJoinContext,
@@ -122,13 +123,24 @@ export type JoinErrorCode =
    */
   | typeof MEETING_NOT_OPEN_YET_CODE
   | 'meeting_not_provisioned'
-  | 'meeting_token_unavailable';
+  | 'meeting_token_unavailable'
+  /**
+   * BAL-650 — an expert-started Call now ring awaits the client's commit, and a client-side member is
+   * joining without making it. Not a funding refusal: the join never reads funding. The commit is
+   * `POST /call-now/rings/:ringId/answer`. Reachable only after authorization, so it names a ring
+   * the actor already belongs beside.
+   */
+  | 'call_answer_required';
 
-/** The failure arm every join result shares. `opensAt` rides ONLY on `meeting_not_open_yet`. */
+/**
+ * The failure arm every join result shares. `opensAt` rides ONLY on `meeting_not_open_yet`; `ringId`
+ * ONLY on `call_answer_required`.
+ */
 export interface JoinFailure {
   readonly ok: false;
   readonly code: JoinErrorCode;
   readonly opensAt?: Date;
+  readonly ringId?: string;
 }
 
 /**
@@ -195,6 +207,12 @@ export interface JoinMeetingAsMemberInput {
   readonly userId: string;
   /** ⚠ THE INJECTION POINT. The route passes nothing; tests pass an object literal. */
   readonly minter?: MeetingTokenMinter;
+  /**
+   * BAL-650 — INTERNAL: set only by `answerCallNow`, after the funding check passed. It lifts the
+   * client-commit hold for exactly this ring and only for that ring's callee. The member route never
+   * sets it (it passes `meetingId` and `userId` only), so a request cannot name it.
+   */
+  readonly answeringRingId?: string;
 }
 
 export interface JoinMeetingAsGuestInput {
@@ -460,6 +478,18 @@ async function admissionHeldByRing(meetingId: string): Promise<boolean> {
     'Admission during a live ring — no session opened; billing opens at connect'
   );
   return true;
+}
+
+/**
+ * BAL-650 — the live ring, when it still awaits the client side's commit (an expert-started
+ * `new_meeting` ring). Every other case, and every meeting with no ring, answers `undefined`.
+ * Throws on a failed read: the join fails closed rather than admit a client-side party unchecked.
+ */
+async function findRingAwaitingClientCommit(
+  meetingId: string
+): Promise<{ readonly id: string; readonly calleeUserId: string } | undefined> {
+  const ring = await meetingRingsRepository.findRingingForMeeting(meetingId);
+  return ring !== undefined && ringAwaitsClientCommit(ring) ? ring : undefined;
 }
 
 /**
@@ -785,6 +815,25 @@ export async function joinMeetingAsMember(
     return refuseForLiveness(liveness, 'meeting_not_open_for_join', { meetingId, userId });
   }
 
+  // 2b. ⚠⚠ BAL-650 (ADR-1040 Amendment 8 §B) — A CLIENT-SIDE PARTY IS NOT ADMITTED TO AN EXPERT-STARTED
+  //     CALL NOW RING UNTIL THE CALLEE COMMITS. The funding check runs in `answerCallNow`, which then
+  //     joins with `answeringRingId`; this join reads NO funding (it stays an admission, never a gate)
+  //     and only holds the TOKEN — no token, no Daily presence, no co-presence connect. ZERO reads for
+  //     an expert-side party or a non-case meeting.
+  if (side === 'client' && subject.contextType === 'case') {
+    const ring = await findRingAwaitingClientCommit(meetingId);
+    if (
+      ring !== undefined &&
+      !(input.answeringRingId === ring.id && ring.calleeUserId === userId)
+    ) {
+      log.info(
+        { meetingId, ringId: ring.id, userId },
+        'Join held — an expert-started ring awaits the client commit'
+      );
+      return { ok: false, code: 'call_answer_required', ringId: ring.id };
+    }
+  }
+
   // 3. THE VENUE. A `provisioned: false` meeting is a real `201` outcome of `POST /meetings`.
   //    ⚠ THIS ROUTE DOES NOT PROVISION ON DEMAND — a missing room is healed by
   //    `jobs/meeting-venue-repair.ts` (BAL-581), never by the join path: a polled route must
@@ -970,6 +1019,21 @@ export async function joinMeetingAsGuest(input: JoinMeetingAsGuestInput): Promis
   //     for nobody and fire a false `guest_joined`. See `JoinMeetingAsGuestInput.probe`.
   if (input.probe === true) {
     return { ok: true, state: 'live' };
+  }
+
+  // 3c. ⚠ BAL-650 — a CLIENT-PARTY guest (an email invitee of the client side) is held like a client
+  //     member while an expert-started ring awaits the commit: otherwise the expert could invite a
+  //     client-party guest past the funding check. Held as `waiting`, which writes and mints nothing.
+  //     Experts, expert-side guests and link observers are never held.
+  if (
+    primary.context.contextType === 'case' &&
+    presencePartyForGuest({
+      party: guest.party as MeetingGuestSide,
+      inviteChannel: guest.inviteChannel,
+    }) === 'client' &&
+    (await findRingAwaitingClientCommit(meetingId)) !== undefined
+  ) {
+    return { ok: true, state: 'waiting' };
   }
 
   // 4. ⚠⚠ THE ADMISSION SWITCH — DECISION 2. A `pending` guest gets `waiting` and NOTHING
