@@ -11,6 +11,9 @@
  *   5. placement: a CLIENT caller may opt in to ringing a same-day booking IN PLACE
  *   6. `meterCallee` — the per-(CALLEE, calling party) ring budget, metered only once the ring is
  *      otherwise allowed, so a refused attempt never spends a callee's budget → `rate_limited`
+ *   6b. SMS reach (`resolveCallReach`): whether the callee is also reached by SMS, which sets the
+ *      ring's `reachedBy` and window. The daily cap is consumed last, only when every other check
+ *      passes; a write that then fails gives the slot back (`releaseCallSmsSlot`)
  *   7. the repository write (one transaction; the one-ringing partial unique index raises
  *      `MeetingRingAlreadyLiveError` for two racing starts)
  *   8. `new_meeting` only, after commit: availability rebuild, then the Daily room. A room that
@@ -49,6 +52,7 @@ import { publishCallEvent } from './call-now-events.js';
 import { loadCallNowGates } from './call-now-gates.js';
 import { endRing } from './end-ring.js';
 import { rebuildAvailabilityBestEffort } from './post-commit.js';
+import { releaseCallSmsSlot, resolveCallReach, trackCallSmsSuppressed } from './sms-reach.js';
 
 const log = createLogger('call-now-start');
 
@@ -254,16 +258,23 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
     return { ok: false, code: 'rate_limited' };
   }
 
-  const expiresAt = ringExpiresAt(now, 'app', resolveCallNowRingWindows());
   const callee = gates.callee;
+  const reach = await resolveCallReach({
+    callerUserId: userId,
+    callee,
+    calleeSide: side === 'client' ? 'expert' : 'client',
+    calleeOnline: gates.calleeOnline,
+    now,
+  });
+  const expiresAt = ringExpiresAt(now, reach.reachedBy, resolveCallNowRingWindows());
   const written = await writeRing({
     placement,
     ringInput: {
       engagementId,
       callerUserId: userId,
-      calleeUserId: gates.callee.userId,
+      calleeUserId: callee.userId,
       callerSide: side,
-      reachedBy: 'app',
+      reachedBy: reach.reachedBy,
       expiresAt,
     },
     now,
@@ -272,9 +283,15 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
     releaseCallee: () => input.releaseCallee(callee.userId, callingParty),
   });
   if (!written.ok) {
+    if (reach.reachedBy === 'sms') {
+      await releaseCallSmsSlot(userId, callee.userId);
+    }
     return written.result;
   }
   const { ring, meetingId } = written;
+  if (reach.reachedBy === 'app' && reach.suppressedBy !== null) {
+    trackCallSmsSuppressed(ring, reach.suppressedBy);
+  }
 
   try {
     await enqueueCallNowRingExpiry(ring.id, expiresAt, now);
@@ -296,6 +313,7 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
       engagementId,
       placement: ring.placement,
       callerSide: side,
+      reachedBy: ring.reachedBy,
     },
     'Call now ring started'
   );

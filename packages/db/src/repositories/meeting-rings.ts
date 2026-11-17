@@ -542,6 +542,98 @@ export const meetingRingsRepository = {
   },
 
   /**
+   * What happened between a caller and a callee at or after `since`: the missed-call email's
+   * recheck. Read from Postgres (the ring rows), never Redis.
+   *
+   * - `unansweredCount` / `latestUnanswered`: caller → callee rings that ended `unanswered`; the
+   *   latest carries its own `engagementId` and `callerSide`, which move together.
+   * - `connectedSince`: a ring in EITHER direction that connected, so a call back by the callee
+   *   also settles the miss.
+   * - `calleeDeclinedSince`: a caller → callee ring the callee declined.
+   */
+  async summarizeMissedCallWindow(
+    input: { callerUserId: string; calleeUserId: string; since: Date },
+    exec: DbExecutor = db
+  ): Promise<{
+    unansweredCount: number;
+    latestUnanswered: {
+      engagementId: string;
+      callerSide: MeetingRingSide;
+      createdAt: Date;
+    } | null;
+    connectedSince: boolean;
+    calleeDeclinedSince: boolean;
+  }> {
+    const rows = await exec
+      .select({
+        callerUserId: meetingRings.callerUserId,
+        status: meetingRings.status,
+        engagementId: meetingRings.engagementId,
+        callerSide: meetingRings.callerSide,
+        createdAt: meetingRings.createdAt,
+      })
+      .from(meetingRings)
+      .where(
+        and(
+          or(
+            and(
+              eq(meetingRings.callerUserId, input.callerUserId),
+              eq(meetingRings.calleeUserId, input.calleeUserId)
+            ),
+            and(
+              eq(meetingRings.callerUserId, input.calleeUserId),
+              eq(meetingRings.calleeUserId, input.callerUserId)
+            )
+          ),
+          inArray(meetingRings.status, ['unanswered', 'connected', 'declined']),
+          gte(meetingRings.createdAt, input.since),
+          isNull(meetingRings.deletedAt)
+        )
+      );
+
+    const summary: {
+      unansweredCount: number;
+      latestUnanswered: {
+        engagementId: string;
+        callerSide: MeetingRingSide;
+        createdAt: Date;
+      } | null;
+      connectedSince: boolean;
+      calleeDeclinedSince: boolean;
+    } = {
+      unansweredCount: 0,
+      latestUnanswered: null,
+      connectedSince: false,
+      calleeDeclinedSince: false,
+    };
+    for (const row of rows) {
+      if (row.status === 'connected') {
+        summary.connectedSince = true;
+        continue;
+      }
+      if (row.callerUserId !== input.callerUserId) {
+        continue;
+      }
+      if (row.status === 'declined') {
+        summary.calleeDeclinedSince = true;
+        continue;
+      }
+      summary.unansweredCount += 1;
+      if (
+        summary.latestUnanswered === null ||
+        row.createdAt.getTime() > summary.latestUnanswered.createdAt.getTime()
+      ) {
+        summary.latestUnanswered = {
+          engagementId: row.engagementId,
+          callerSide: row.callerSide,
+          createdAt: row.createdAt,
+        };
+      }
+    }
+    return summary;
+  },
+
+  /**
    * Is any ring `ringing` (expired or not) on ANOTHER live `case` engagement of this company? The
    * `company_in_call` gate: a ringing meeting is still `scheduled`, so the session reads cannot see
    * it, and two members ringing two experts at once would both connect on one wallet.

@@ -65,6 +65,7 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
   return {
     id: RING_ID,
     meetingId: MEETING_ID,
+    engagementId: ENGAGEMENT_ID,
     callerUserId: USER_ID,
     calleeUserId: OTHER_USER,
     status: 'ringing',
@@ -420,6 +421,7 @@ describe('call-now routes (BAL-649)', () => {
       expect(res.json()).toEqual({
         ringId: RING_ID,
         meetingId: MEETING_ID,
+        engagementId: ENGAGEMENT_ID,
         status: 'ringing',
         placement: 'new_meeting',
         expiresAt: EXPIRES.toISOString(),

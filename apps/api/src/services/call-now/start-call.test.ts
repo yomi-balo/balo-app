@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => {
     publishInvites: vi.fn(),
     meterCallee: vi.fn(),
     releaseCallee: vi.fn(),
+    resolveReach: vi.fn(),
+    releaseSmsSlot: vi.fn(),
+    trackSuppressed: vi.fn(),
     warn: vi.fn(),
     info: vi.fn(),
   };
@@ -38,6 +41,11 @@ vi.mock('@balo/db', () => ({
 vi.mock('./authorize-call-now.js', () => ({ authorizeCallNow: mocks.authorize }));
 vi.mock('./call-now-gates.js', () => ({ loadCallNowGates: mocks.loadGates }));
 vi.mock('./end-ring.js', () => ({ endRing: mocks.endRing }));
+vi.mock('./sms-reach.js', () => ({
+  resolveCallReach: mocks.resolveReach,
+  releaseCallSmsSlot: mocks.releaseSmsSlot,
+  trackCallSmsSuppressed: mocks.trackSuppressed,
+}));
 vi.mock('../meetings/provision-meeting.js', () => ({ provisionCallNowVenue: mocks.provision }));
 vi.mock('../../jobs/booking-calendar-projection-job.js', () => ({
   enqueueBookingCalendarProjection: mocks.enqueueProjection,
@@ -56,7 +64,11 @@ vi.mock('../../notifications/publisher.js', () => ({
 }));
 
 import type { FastifyBaseLogger } from 'fastify';
-import { CALL_NOW_RING_MS, CALL_NOW_SCHEDULED_MINUTES } from '@balo/shared/meetings';
+import {
+  CALL_NOW_RING_MS,
+  CALL_NOW_RING_SMS_MS,
+  CALL_NOW_SCHEDULED_MINUTES,
+} from '@balo/shared/meetings';
 import { startCallNow } from './start-call.js';
 
 const ENGAGEMENT_ID = '33333333-3333-4333-8333-333333333333';
@@ -96,6 +108,7 @@ function gates(overrides: Record<string, unknown> = {}): Record<string, unknown>
   return {
     availability: { canCallNow: true },
     callee: { userId: EXPERT_USER, timeZone: 'Australia/Sydney' },
+    calleeOnline: false,
     inPlaceCandidate: null,
     expertProfileId: EXPERT_PROFILE_ID,
     companyId: COMPANY_ID,
@@ -126,6 +139,8 @@ beforeEach(() => {
   mocks.loadGates.mockResolvedValue(gates());
   mocks.meterCallee.mockResolvedValue(false);
   mocks.releaseCallee.mockResolvedValue(undefined);
+  mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: null });
+  mocks.releaseSmsSlot.mockResolvedValue(undefined);
   mocks.findRingingForEngagement.mockResolvedValue(undefined);
   mocks.startWithNewMeeting.mockResolvedValue({
     ring: ring(),
@@ -506,5 +521,132 @@ describe('startCallNow — expiry job and events', () => {
     expect(result.ok).toBe(true);
     const call = mocks.startWithNewMeeting.mock.calls[0]?.[0] as { scheduledStart: Date };
     expect(call.scheduledStart.getTime()).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe('startCallNow — SMS reach (BAL-652)', () => {
+  it('asks for the reach decision with the callee, its side, presence and now', async () => {
+    await start();
+
+    expect(mocks.resolveReach).toHaveBeenCalledWith({
+      callerUserId: CLIENT,
+      callee: { userId: EXPERT_USER, timeZone: 'Australia/Sydney' },
+      calleeSide: 'expert',
+      calleeOnline: false,
+      now: NOW,
+    });
+  });
+
+  it('an expert caller rings a client-side callee and passes the gates’ presence read', async () => {
+    mocks.authorize.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      caseRow: CASE_ROW,
+      mayRing: true,
+    });
+    mocks.loadGates.mockResolvedValue(
+      gates({ callee: { userId: BOOKER, timeZone: 'UTC' }, calleeOnline: true })
+    );
+
+    await start({ userId: EXPERT_USER });
+
+    expect(mocks.resolveReach).toHaveBeenCalledWith(
+      expect.objectContaining({ calleeSide: 'client', calleeOnline: true })
+    );
+  });
+
+  it('an eligible callee → the ring is written as `sms` with the SMS window', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'sms' });
+    mocks.startWithNewMeeting.mockResolvedValue({
+      ring: ring({ reachedBy: 'sms' }),
+      meeting: { id: NEW_MEETING_ID },
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+    const expected = new Date(NOW.getTime() + CALL_NOW_RING_SMS_MS);
+
+    const result = await start();
+
+    expect(result).toMatchObject({ ok: true, expiresAt: expected });
+    expect(mocks.startWithNewMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ reachedBy: 'sms', expiresAt: expected })
+    );
+    expect(mocks.enqueueExpiry).toHaveBeenCalledWith(RING_ID, expected, NOW);
+    expect(mocks.trackSuppressed).not.toHaveBeenCalled();
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reachedBy: 'sms' }),
+      'Call now ring started'
+    );
+  });
+
+  it('a suppressed SMS → `app`, the app window, and the reason tracked once after the write', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: 'outside_hours' });
+
+    await start();
+
+    expect(mocks.startWithNewMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reachedBy: 'app',
+        expiresAt: new Date(NOW.getTime() + CALL_NOW_RING_MS),
+      })
+    );
+    expect(mocks.trackSuppressed).toHaveBeenCalledTimes(1);
+    expect(mocks.trackSuppressed).toHaveBeenCalledWith(expect.anything(), 'outside_hours');
+    expect(mocks.startWithNewMeeting.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.trackSuppressed.mock.invocationCallOrder[0] as number
+    );
+    expect(mocks.releaseSmsSlot).not.toHaveBeenCalled();
+  });
+
+  it('an `app` ring with no suppression reason (a cap-check outage) tracks nothing', async () => {
+    await start();
+
+    expect(mocks.trackSuppressed).not.toHaveBeenCalled();
+  });
+
+  it('a failed write gives the cap slot back and tracks nothing', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'sms' });
+    mocks.startWithNewMeeting.mockRejectedValue(new mocks.RingAlreadyLive('race'));
+
+    await expect(start()).resolves.toMatchObject({ ok: false });
+
+    expect(mocks.releaseSmsSlot).toHaveBeenCalledWith(CLIENT, EXPERT_USER);
+    expect(mocks.trackSuppressed).not.toHaveBeenCalled();
+  });
+
+  it('a failed write on an `app` ring has no slot to give back', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: 'cap' });
+    mocks.startWithNewMeeting.mockRejectedValue(new mocks.RingAlreadyLive('race'));
+
+    await start();
+
+    expect(mocks.releaseSmsSlot).not.toHaveBeenCalled();
+    expect(mocks.trackSuppressed).not.toHaveBeenCalled();
+  });
+
+  it('a room that cannot be provisioned gives the cap slot back', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'sms' });
+    mocks.provision.mockResolvedValue({ provisioned: false, dailyRoomName: null, joinUrl: null });
+
+    await expect(start()).resolves.toEqual({ ok: false, code: 'venue_unavailable' });
+
+    expect(mocks.releaseSmsSlot).toHaveBeenCalledWith(CLIENT, EXPERT_USER);
+  });
+
+  it('a refused gate never reaches the SMS decision', async () => {
+    mocks.loadGates.mockResolvedValue(
+      gates({ availability: { canCallNow: false, refusal: 'callee_busy', reason: 'busy' } })
+    );
+
+    await start();
+
+    expect(mocks.resolveReach).not.toHaveBeenCalled();
+  });
+
+  it('a spent callee budget never reaches the SMS decision', async () => {
+    mocks.meterCallee.mockResolvedValue(true);
+
+    await start();
+
+    expect(mocks.resolveReach).not.toHaveBeenCalled();
   });
 });

@@ -38,3 +38,12 @@ export type {
   ScheduleClientAbsentNudgeInput,
   ScheduleExpertAbsentAlertInput,
 } from './meeting-absence.js';
+
+// BAL-652 — the delayed, collapsed missed-call email and its fire-time guard.
+export {
+  callMissedEmailRecheck,
+  callMissedKey,
+  scheduleMissedCallEmailFromContext,
+  CALL_MISSED_EMAIL_DELAY_MS,
+  CALL_MISSED_EMAIL_RECHECK,
+} from './call-missed.js';

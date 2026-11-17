@@ -6,6 +6,7 @@ import {
   partyMembershipsRepository,
   agenciesRepository,
   engagementsRepository,
+  caseEngagementsRepository,
 } from '@balo/db';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import type { RuleContext } from './rules.js';
@@ -316,6 +317,72 @@ async function hydrateDeliveringAgencyAdmins(
   if (agency !== undefined) data.deliveringAgencyName = agency.name;
 }
 
+/** BAL-652: the Call now events whose templates name the caller, the case and the callee's clock. */
+const CALL_EVENTS: ReadonlySet<string> = new Set([
+  'call.ringing',
+  'call.no_answer',
+  'call.missed_email_due',
+]);
+
+/**
+ * BAL-652: hydrate the display strings the call templates read. ⚠ STRINGS ONLY (BAL-530) — whatever
+ * lands on `data` rides every per-channel BullMQ job, so no repository row is stored; each value is
+ * projected to the one field a template needs.
+ *
+ * · `callCaseTitle` — the case title, 'your case' when the case is unreadable;
+ * · `callerFirstName` — the caller's first name (client-facing copy), 'Your expert' when absent;
+ * · `callerCompanyName` — the client company, read only when a CLIENT is calling (an expert caller
+ *   has no company in this copy), 'Your client' when absent;
+ * · `callerPersonLabel` — "Jordan Lee @ Northwind Industrial", the retrospective expert-facing form;
+ * · `calleeTimeZone` — the zone the callee's local time is shown in: an expert callee's profile
+ *   zone (what the call-hours gate used), else the saved user zone, else 'UTC'.
+ */
+async function hydrateCallContext(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  const { engagementId, callerUserId, calleeUserId, callerSide } = payload;
+  // The only `call.ringing` template that reads these strings is the SMS, sent for `reachedBy: 'sms'`.
+  const ringingWithoutSms = event === 'call.ringing' && payload.reachedBy !== 'sms';
+  if (
+    ringingWithoutSms ||
+    !CALL_EVENTS.has(event) ||
+    typeof engagementId !== 'string' ||
+    typeof callerUserId !== 'string' ||
+    typeof calleeUserId !== 'string'
+  ) {
+    return;
+  }
+  const calleeIsExpert = callerSide === 'client';
+
+  const [caseRow, callerNames] = await Promise.all([
+    caseEngagementsRepository.findByEngagementId(engagementId),
+    usersRepository.findNamesByIds([callerUserId]),
+  ]);
+  data.callCaseTitle = caseRow?.title ?? 'your case';
+
+  const caller = callerNames[0];
+  const firstName = caller?.firstName?.trim() ?? '';
+  const fullName = [caller?.firstName, caller?.lastName].filter(Boolean).join(' ').trim();
+  data.callerFirstName = firstName.length > 0 ? firstName : 'Your expert';
+
+  const company =
+    callerSide === 'client' && caseRow !== undefined
+      ? await companiesRepository.findNameById(caseRow.companyId)
+      : undefined;
+  const companyName = company?.name ?? 'Your client';
+  data.callerCompanyName = companyName;
+  data.callerPersonLabel =
+    fullName.length > 0 ? personWithOrgLabel(fullName, companyName) : companyName;
+
+  const zones = await usersRepository.findTimezoneContext(
+    calleeUserId,
+    calleeIsExpert ? caseRow?.expertProfileId : undefined
+  );
+  data.calleeTimeZone = zones?.expert?.timezone ?? zones?.savedTimezone ?? 'UTC';
+}
+
 export async function resolveContext(
   event: string,
   payload: Record<string, unknown>
@@ -401,6 +468,9 @@ export async function resolveContext(
 
   // BAL-631: delivering-agency admin recipients (extracted — see hydrateDeliveringAgencyAdmins).
   await hydrateDeliveringAgencyAdmins(event, payload, data);
+
+  // BAL-652: Call now display strings (extracted — see hydrateCallContext).
+  await hydrateCallContext(event, payload, data);
 
   // BAL-289: project.proposal_accepted ALSO fans out to the non-selected experts —
   // the OTHER live 'submitted' proposals on the same request, excluding the accepted

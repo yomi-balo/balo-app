@@ -458,8 +458,9 @@ export interface BillingEmailChangedPayload {
 
 /**
  * BAL-649 / ADR-1058 — what every Call now ring event carries. SERVER-ONLY: published from the
- * API's ring services post-commit, never from apps/web. No rules exist yet (BAL-652/653 add the
- * recipients and channels), so each publish is logged and dropped by the engine until then.
+ * API's ring services post-commit, never from apps/web. `call.ringing` (SMS), `call.no_answer`
+ * (bell + the delayed missed-call email) and `call.missed_email_due` have rules; `call.declined`,
+ * `call.stopped` and `call.connected` have none, so the engine logs and drops them.
  *
  * ⚠ NO NAMES, NO ADDRESSES — ids and closed enums only. `correlationId` is the ring id: it is
  * colon-free by construction and unique per ring, and `buildJobId` further scopes it by event.
@@ -476,6 +477,29 @@ export interface CallRingEventPayload {
   reachedBy: 'app' | 'sms';
   /** ISO instant at which the ring window closes. */
   expiresAt: string;
+  /** ISO instant at which the ring started (`ring.createdAt`). */
+  startedAt: string;
+}
+
+/**
+ * BAL-652 — the delayed missed-call email. SERVER-ONLY: scheduled by the `call.no_answer`
+ * follow-up and published by the dispatch tick once `callMissedEmailRecheck` passes.
+ *
+ * ⚠ NO NAMES, NO ADDRESSES — ids, instants and closed enums only; the resolver hydrates the
+ * display strings at fire time.
+ */
+export interface CallMissedEmailDuePayload {
+  /** An occurrence uuid minted per schedule (`conversation-unread.ts` precedent). */
+  correlationId: string;
+  callerUserId: string;
+  calleeUserId: string;
+  callerSide: 'client' | 'expert';
+  /** Rebuilt at fire time to the latest missed ring's case. */
+  engagementId: string;
+  /** Anchor: the scheduling ring's `startedAt`. */
+  firstMissedAtIso: string;
+  lastMissedAtIso: string;
+  missedCount: number;
 }
 
 export type NotificationEvent =
@@ -687,7 +711,9 @@ export type NotificationEvent =
   | 'call.no_answer'
   | 'call.declined'
   | 'call.stopped'
-  | 'call.connected';
+  | 'call.connected'
+  // BAL-652: the delayed missed-call email, published by the scheduled-notification tick.
+  | 'call.missed_email_due';
 
 /**
  * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
@@ -810,7 +836,9 @@ export type ServerOnlyNotificationEvent =
   | 'call.no_answer'
   | 'call.declined'
   | 'call.stopped'
-  | 'call.connected';
+  | 'call.connected'
+  // BAL-652: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
+  | 'call.missed_email_due';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -988,4 +1016,5 @@ export interface EventPayloadMap {
   'call.declined': CallRingEventPayload;
   'call.stopped': CallRingEventPayload;
   'call.connected': CallRingEventPayload;
+  'call.missed_email_due': CallMissedEmailDuePayload;
 }

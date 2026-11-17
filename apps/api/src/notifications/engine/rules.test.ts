@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { notificationRules, type NotificationRule } from './rules.js';
+import { notificationRules, type NotificationRule, type RuleContext } from './rules.js';
+import { getSmsTemplate } from '../channels/templates/sms-templates.js';
+import { getInAppTemplate } from '../channels/templates/in-app-templates.js';
+import { getEmailTemplate } from '../channels/templates/index.js';
 
 /**
  * N13 — SHARED BY `booking.confirmed` AND `booking.rescheduled` (both new-code from BAL-409),
@@ -1634,12 +1637,14 @@ describe('notificationRules', () => {
       }
     });
 
-    it('the three shipped sms rules are client-side', () => {
+    it('the shipped sms rules carry the side their recipient acts on', () => {
       const templates = allRules
         .filter((r) => r.channel === 'sms')
         .map((r) => `${r.template}:${r.recipientSide}`)
         .sort((a, b) => a.localeCompare(b));
       expect(templates).toEqual([
+        'call-ringing-sms-client:client',
+        'call-ringing-sms-expert:expert',
         'reschedule-proposal-sent-sms:client',
         'session-grace-entered-sms:client',
         'session-near-wrap-sms:client',
@@ -1939,6 +1944,143 @@ describe('notificationRules', () => {
         } as unknown as Parameters<typeof condition>[0])
       ).toBe(false);
     });
+  });
+});
+
+describe('Call now rules (BAL-652)', () => {
+  const ctx = (event: string, payload: Record<string, unknown>): RuleContext => ({
+    event,
+    payload,
+    data: {},
+  });
+  const firing = (event: string, payload: Record<string, unknown>): NotificationRule[] =>
+    (notificationRules[event] ?? []).filter(
+      (rule) => rule.condition === undefined || rule.condition(ctx(event, payload))
+    );
+
+  describe('call.ringing', () => {
+    it('SMS to an expert callee when a client calls and the ring reached by sms', () => {
+      const fired = firing('call.ringing', { callerSide: 'client', reachedBy: 'sms' });
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({
+        channel: 'sms',
+        recipient: 'callee',
+        recipientSide: 'expert',
+        template: 'call-ringing-sms-expert',
+        priority: 'critical',
+      });
+    });
+
+    it('SMS to a client callee when an expert calls and the ring reached by sms', () => {
+      const fired = firing('call.ringing', { callerSide: 'expert', reachedBy: 'sms' });
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({
+        channel: 'sms',
+        recipient: 'callee',
+        recipientSide: 'client',
+        template: 'call-ringing-sms-client',
+        priority: 'critical',
+      });
+    });
+
+    it.each(['client', 'expert'])(
+      'sends nothing when the ring reached by app (%s caller)',
+      (side) => {
+        expect(firing('call.ringing', { callerSide: side, reachedBy: 'app' })).toEqual([]);
+      }
+    );
+
+    it('sends nothing when the ring side is missing', () => {
+      expect(firing('call.ringing', { reachedBy: 'sms' })).toEqual([]);
+    });
+  });
+
+  describe('call.no_answer', () => {
+    it('is a bell item to the callee only, chosen by the caller side', () => {
+      const toExpert = firing('call.no_answer', { callerSide: 'client' });
+      const toClient = firing('call.no_answer', { callerSide: 'expert' });
+
+      expect(toExpert).toHaveLength(1);
+      expect(toExpert[0]).toMatchObject({
+        channel: 'in-app',
+        recipient: 'callee',
+        template: 'call-missed-expert',
+      });
+      expect(toClient).toHaveLength(1);
+      expect(toClient[0]).toMatchObject({
+        channel: 'in-app',
+        recipient: 'callee',
+        template: 'call-missed-client',
+      });
+    });
+
+    it('keeps at least one rule, or the worker follow-up would never run', () => {
+      expect((notificationRules['call.no_answer'] ?? []).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('call.missed_email_due', () => {
+    it('is a normal-priority email to the callee, chosen by the caller side', () => {
+      const toExpert = firing('call.missed_email_due', { callerSide: 'client' });
+      const toClient = firing('call.missed_email_due', { callerSide: 'expert' });
+
+      expect(toExpert).toHaveLength(1);
+      expect(toExpert[0]).toMatchObject({
+        channel: 'email',
+        recipient: 'callee',
+        template: 'call-missed-expert',
+        priority: 'normal',
+      });
+      expect(toClient).toHaveLength(1);
+      expect(toClient[0]).toMatchObject({
+        channel: 'email',
+        recipient: 'callee',
+        template: 'call-missed-client',
+      });
+    });
+  });
+
+  it.each(['call.declined', 'call.stopped', 'call.connected'])('%s has no rule', (event) => {
+    expect(notificationRules[event]).toBeUndefined();
+  });
+
+  /**
+   * ⚠ `getInAppTemplate` DEGRADES SILENTLY on an unknown key ("You have a new notification"),
+   * so a template renamed on one side only would ship a blank bell item. Each key a call rule
+   * names must render through ITS OWN channel registry.
+   */
+  describe('every template a call rule names renders through its channel registry', () => {
+    const callRules = ['call.ringing', 'call.no_answer', 'call.missed_email_due'].flatMap(
+      (event) => notificationRules[event] ?? []
+    );
+
+    it.each(callRules.map((rule) => [rule.channel, rule.template] as const))(
+      '%s / %s',
+      (channel, template) => {
+        const data = {
+          ringId: 'ring-1',
+          engagementId: 'eng-1',
+          callCaseTitle: 'Flow migration',
+          callerFirstName: 'Sandy',
+          callerCompanyName: 'Northwind Industrial',
+          callerPersonLabel: 'Jordan Lee @ Northwind Industrial',
+          startedAt: '2026-11-17T00:41:00.000Z',
+          lastMissedAtIso: '2026-11-17T00:41:00.000Z',
+          calleeTimeZone: 'Australia/Melbourne',
+        };
+        if (channel === 'sms') {
+          expect(getSmsTemplate(template, data)).toContain(
+            'is calling you now about "Flow migration"'
+          );
+        } else if (channel === 'in-app') {
+          expect(getInAppTemplate(template, data).title).toMatch(/^Missed call from /);
+        } else {
+          expect(getEmailTemplate(template, data).subject).toMatch(/^You missed a call from /);
+        }
+      }
+    );
   });
 });
 

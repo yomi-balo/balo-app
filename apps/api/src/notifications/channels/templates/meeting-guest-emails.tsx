@@ -109,7 +109,7 @@ function formatMeetingWindowIn(
  * The display zone for a member recipient, or `null` when the email should stay on UTC:
  * nullish or empty, unrecognised, UTC itself, or a zone with no city to name.
  */
-function recipientDisplayZone(
+export function recipientDisplayZone(
   tz: string | null | undefined
 ): { readonly zone: string; readonly city: string } | null {
   if (tz === null || tz === undefined || tz === '') {

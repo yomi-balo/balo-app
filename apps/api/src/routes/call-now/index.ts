@@ -194,6 +194,7 @@ async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Pro
     reply.code(200).send({
       ringId: ring.id,
       meetingId: ring.meetingId,
+      engagementId: ring.engagementId,
       status: ring.status,
       placement: ring.placement,
       expiresAt: ring.expiresAt.toISOString(),

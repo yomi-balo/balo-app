@@ -32,6 +32,12 @@ vi.mock('../scheduling/conversation-unread.js', () => ({
   scheduleConversationUnreadDigest: (...args: unknown[]) => mockScheduleDigest(...args),
 }));
 
+/** Same hazard for the missed-call follow-up: it reaches `scheduleNotification` → `@balo/db`. */
+const mockScheduleMissedCallEmail = vi.fn();
+vi.mock('../scheduling/call-missed.js', () => ({
+  scheduleMissedCallEmailFromContext: (...args: unknown[]) => mockScheduleMissedCallEmail(...args),
+}));
+
 import { processNotificationEvent } from './worker.js';
 
 function makeJob(data: Record<string, unknown>): Job {
@@ -238,6 +244,58 @@ describe('processNotificationEvent', () => {
         })
       );
       expect(mockScheduleDigest).not.toHaveBeenCalled();
+    });
+  });
+  // ── BAL-652: the missed-call email follow-up ────────────────────────
+  describe('missed-call email follow-up', () => {
+    const ringPayload = { correlationId: 'ring-1', callerUserId: 'caller', calleeUserId: 'callee' };
+
+    it('runs the follow-up with the hydrated context after dispatching call.no_answer', async () => {
+      const context = { event: 'call.no_answer', payload: ringPayload, data: {} };
+      mockResolveContext.mockResolvedValue(context);
+      mockScheduleMissedCallEmail.mockResolvedValue(undefined);
+
+      await processNotificationEvent(
+        makeJob({
+          event: 'call.no_answer',
+          payload: ringPayload,
+          publishedAt: '2026-11-17T00:00:00Z',
+        })
+      );
+
+      expect(mockDispatch).toHaveBeenCalled();
+      expect(mockScheduleMissedCallEmail).toHaveBeenCalledWith(context);
+    });
+
+    it('does not run it for call.declined, which has no rule', async () => {
+      await processNotificationEvent(
+        makeJob({
+          event: 'call.declined',
+          payload: ringPayload,
+          publishedAt: '2026-11-17T00:00:00Z',
+        })
+      );
+
+      expect(mockScheduleMissedCallEmail).not.toHaveBeenCalled();
+    });
+
+    it('swallows a throwing follow-up', async () => {
+      mockResolveContext.mockResolvedValue({
+        event: 'call.no_answer',
+        payload: ringPayload,
+        data: {},
+      });
+      mockScheduleMissedCallEmail.mockRejectedValue(new Error('redis down'));
+
+      await expect(
+        processNotificationEvent(
+          makeJob({
+            event: 'call.no_answer',
+            payload: ringPayload,
+            publishedAt: '2026-11-17T00:00:00Z',
+          })
+        )
+      ).resolves.toBeUndefined();
     });
   });
 });

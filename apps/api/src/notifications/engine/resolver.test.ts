@@ -13,6 +13,9 @@ const {
   mockGetAgencySummaryById,
   mockFindDisplayProfileById,
   mockFindEngagementById,
+  mockFindNamesByIds,
+  mockFindTimezoneContext,
+  mockFindCaseByEngagementId,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
@@ -26,13 +29,19 @@ const {
   mockGetAgencySummaryById: vi.fn(),
   mockFindDisplayProfileById: vi.fn(),
   mockFindEngagementById: vi.fn(),
+  mockFindNamesByIds: vi.fn(),
+  mockFindTimezoneContext: vi.fn(),
+  mockFindCaseByEngagementId: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   usersRepository: {
     findById: mockFindById,
     findIdsByPlatformRoles: mockFindIdsByPlatformRoles,
+    findNamesByIds: mockFindNamesByIds,
+    findTimezoneContext: mockFindTimezoneContext,
   },
+  caseEngagementsRepository: { findByEngagementId: mockFindCaseByEngagementId },
   expertsRepository: {
     findUserIdByProfileId: mockFindUserIdByProfileId,
     findUserIdsByProfileIds: mockFindUserIdsByProfileIds,
@@ -1083,6 +1092,104 @@ describe('resolveContext', () => {
       });
 
       expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-3']);
+    });
+  });
+  describe('Call now hydration (BAL-652)', () => {
+    const ringPayload = {
+      correlationId: 'ring-1',
+      ringId: 'ring-1',
+      engagementId: 'eng-1',
+      callerUserId: 'caller-1',
+      calleeUserId: 'callee-1',
+      callerSide: 'client',
+    };
+    const caseRow = {
+      title: 'Flow migration',
+      companyId: 'company-1',
+      expertProfileId: 'profile-1',
+      baloFeeBps: 2500,
+      description: '<p>private</p>',
+    };
+
+    it('hydrates strings only, in the house retrospective format, for a client caller', async () => {
+      mockFindCaseByEngagementId.mockResolvedValue(caseRow);
+      mockFindNamesByIds.mockResolvedValue([
+        { id: 'caller-1', firstName: 'Jordan', lastName: 'Lee' },
+      ]);
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockFindTimezoneContext.mockResolvedValue({
+        savedTimezone: 'Australia/Sydney',
+        expert: { timezone: 'Australia/Melbourne' },
+      });
+
+      const context = await resolveContext('call.no_answer', ringPayload);
+
+      expect(context.data).toEqual({
+        callCaseTitle: 'Flow migration',
+        callerFirstName: 'Jordan',
+        callerCompanyName: 'Northwind Industrial',
+        callerPersonLabel: 'Jordan Lee @ Northwind Industrial',
+        calleeTimeZone: 'Australia/Melbourne',
+      });
+      expect(mockFindTimezoneContext).toHaveBeenCalledWith('callee-1', 'profile-1');
+    });
+
+    it('reads no company and uses the saved zone for an expert caller', async () => {
+      mockFindCaseByEngagementId.mockResolvedValue(caseRow);
+      mockFindNamesByIds.mockResolvedValue([
+        { id: 'caller-1', firstName: 'Sandy', lastName: null },
+      ]);
+      mockFindTimezoneContext.mockResolvedValue({ savedTimezone: 'Australia/Perth', expert: null });
+
+      const context = await resolveContext('call.ringing', {
+        ...ringPayload,
+        callerSide: 'expert',
+        reachedBy: 'sms',
+      });
+
+      expect(mockCompanyFindNameById).not.toHaveBeenCalled();
+      expect(mockFindTimezoneContext).toHaveBeenCalledWith('callee-1', undefined);
+      expect(context.data.callerFirstName).toBe('Sandy');
+      expect(context.data.callerCompanyName).toBe('Your client');
+      expect(context.data.calleeTimeZone).toBe('Australia/Perth');
+    });
+
+    it('falls back when the case, the caller and the zones are all unreadable', async () => {
+      mockFindCaseByEngagementId.mockResolvedValue(undefined);
+      mockFindNamesByIds.mockResolvedValue([]);
+      mockFindTimezoneContext.mockResolvedValue(null);
+
+      const context = await resolveContext('call.missed_email_due', ringPayload);
+
+      expect(context.data).toEqual({
+        callCaseTitle: 'your case',
+        callerFirstName: 'Your expert',
+        callerCompanyName: 'Your client',
+        callerPersonLabel: 'Your client',
+        calleeTimeZone: 'UTC',
+      });
+    });
+
+    it('skips hydration for a call.ringing that does not reach the callee by SMS', async () => {
+      const app = await resolveContext('call.ringing', { ...ringPayload, reachedBy: 'app' });
+      const absent = await resolveContext('call.ringing', ringPayload);
+
+      expect(app.data).toEqual({});
+      expect(absent.data).toEqual({});
+      expect(mockFindCaseByEngagementId).not.toHaveBeenCalled();
+      expect(mockFindNamesByIds).not.toHaveBeenCalled();
+    });
+
+    it('hydrates nothing for a call event with no rule needing it, or a malformed payload', async () => {
+      const declined = await resolveContext('call.declined', ringPayload);
+      const malformed = await resolveContext('call.ringing', {
+        correlationId: 'x',
+        reachedBy: 'sms',
+      });
+
+      expect(declined.data).toEqual({});
+      expect(malformed.data).toEqual({});
+      expect(mockFindCaseByEngagementId).not.toHaveBeenCalled();
     });
   });
 });

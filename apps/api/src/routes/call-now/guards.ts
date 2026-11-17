@@ -41,7 +41,7 @@ export const CALL_NOW_RING_ACTION_RATE_LIMIT: RateLimitConfig = {
 
 /**
  * Rings TO one callee FROM one calling party, keyed by {@link calleeRateLimitIdentifier}. ≤ 6 per
- * 10 minutes: each ring interrupts a person (and becomes an SMS once BAL-652 lands). Keyed per
+ * 10 minutes: each ring interrupts a person (and may also send an SMS, `sms-reach.ts`). Keyed per
  * calling party, not per callee alone, so one company's members cannot exhaust a callee's budget
  * for every other party that may ring them.
  */
