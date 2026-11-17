@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     publishInvites: vi.fn(),
     meterCallee: vi.fn(),
     releaseCallee: vi.fn(),
+    checkFunding: vi.fn(),
     resolveReach: vi.fn(),
     releaseSmsSlot: vi.fn(),
     trackSuppressed: vi.fn(),
@@ -45,6 +46,9 @@ vi.mock('./sms-reach.js', () => ({
   resolveCallReach: mocks.resolveReach,
   releaseCallSmsSlot: mocks.releaseSmsSlot,
   trackCallSmsSuppressed: mocks.trackSuppressed,
+}));
+vi.mock('../meetings/case-booking-funding.js', () => ({
+  checkCaseBookingFunding: mocks.checkFunding,
 }));
 vi.mock('../meetings/provision-meeting.js', () => ({ provisionCallNowVenue: mocks.provision }));
 vi.mock('../../jobs/booking-calendar-projection-job.js', () => ({
@@ -138,6 +142,7 @@ beforeEach(() => {
   mocks.authorize.mockResolvedValue({ ok: true, side: 'client', caseRow: CASE_ROW, mayRing: true });
   mocks.loadGates.mockResolvedValue(gates());
   mocks.meterCallee.mockResolvedValue(false);
+  mocks.checkFunding.mockResolvedValue({ ok: true });
   mocks.releaseCallee.mockResolvedValue(undefined);
   mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: null });
   mocks.releaseSmsSlot.mockResolvedValue(undefined);
@@ -668,5 +673,110 @@ describe('startCallNow — SMS reach (BAL-652)', () => {
     await start();
 
     expect(mocks.resolveReach).not.toHaveBeenCalled();
+  });
+});
+
+describe('startCallNow — the client funding check (BAL-650)', () => {
+  const WINDOW_END = new Date(NOW.getTime() + CALL_NOW_SCHEDULED_MINUTES * 60_000);
+
+  it('a client new_meeting start checks funding over [now, now + 15 min) for the case company and expert', async () => {
+    await expect(start()).resolves.toMatchObject({ ok: true });
+
+    expect(mocks.checkFunding).toHaveBeenCalledTimes(1);
+    expect(mocks.checkFunding).toHaveBeenCalledWith({
+      companyId: COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      scheduledStart: NOW,
+      scheduledEnd: WINDOW_END,
+      now: NOW,
+    });
+  });
+
+  it('⚠ passes NO excludeMeetingId — the meeting does not exist yet when this check runs', async () => {
+    await start();
+    expect(mocks.checkFunding.mock.calls[0]?.[0]).not.toHaveProperty('excludeMeetingId');
+  });
+
+  it.each([
+    ['account_on_hold', 4_200],
+    ['booking_unfunded', 12_500],
+    ['booking_reserved', 30_000],
+    ['booking_funding_unavailable', null],
+  ])(
+    'a %s refusal answers its code and figure, spends no budget and writes nothing',
+    async (code, suggestedTopUpMinor) => {
+      mocks.checkFunding.mockResolvedValue({ ok: false, code, suggestedTopUpMinor });
+
+      await expect(start()).resolves.toEqual({ ok: false, code, suggestedTopUpMinor });
+
+      expect(mocks.meterCallee).not.toHaveBeenCalled();
+      expect(mocks.resolveReach).not.toHaveBeenCalled();
+      expect(mocks.startWithNewMeeting).not.toHaveBeenCalled();
+      expect(mocks.startOnMeeting).not.toHaveBeenCalled();
+      expect(mocks.provision).not.toHaveBeenCalled();
+      expect(mocks.enqueueRebuild).not.toHaveBeenCalled();
+      expect(mocks.publish).not.toHaveBeenCalled();
+      expect(mocks.info).toHaveBeenCalledWith(
+        expect.objectContaining({ code }),
+        'Call now start refused — funding'
+      );
+    }
+  );
+
+  it('an in-place start never calls the guard (the client’s own booking is already reserved)', async () => {
+    mocks.loadGates.mockResolvedValue(gates({ inPlaceCandidate: CANDIDATE }));
+
+    await expect(start({ inPlaceOfMeetingId: BOOKED_MEETING_ID })).resolves.toMatchObject({
+      ok: true,
+      placement: 'in_place',
+    });
+    expect(mocks.checkFunding).not.toHaveBeenCalled();
+  });
+
+  it('an expert caller never reaches the guard — the client commits later, on answer', async () => {
+    mocks.authorize.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      caseRow: CASE_ROW,
+      mayRing: true,
+    });
+    mocks.loadGates.mockResolvedValue(gates({ callee: { userId: BOOKER, timeZone: 'UTC' } }));
+
+    await expect(start({ userId: EXPERT_USER })).resolves.toMatchObject({ ok: true });
+    expect(mocks.checkFunding).not.toHaveBeenCalled();
+  });
+
+  it('a passing check (an active mandate passes as at booking) proceeds to meter and write', async () => {
+    mocks.checkFunding.mockResolvedValue({ ok: true });
+
+    await expect(start()).resolves.toMatchObject({ ok: true });
+    expect(mocks.meterCallee).toHaveBeenCalledTimes(1);
+    expect(mocks.startWithNewMeeting).toHaveBeenCalledTimes(1);
+  });
+
+  it('the order is gates, then placement, then funding, then the callee meter', async () => {
+    await start();
+
+    const order = (fn: { mock: { invocationCallOrder: number[] } }): number => {
+      const [first] = fn.mock.invocationCallOrder;
+      if (first === undefined) {
+        throw new Error('expected the mock to have been called');
+      }
+      return first;
+    };
+    expect(order(mocks.loadGates)).toBeLessThan(order(mocks.checkFunding));
+    expect(order(mocks.checkFunding)).toBeLessThan(order(mocks.meterCallee));
+    expect(order(mocks.meterCallee)).toBeLessThan(order(mocks.startWithNewMeeting));
+  });
+
+  it('a gate refusal or a bad placement never reaches the guard', async () => {
+    mocks.loadGates.mockResolvedValue(
+      gates({ availability: { canCallNow: false, refusal: 'callee_busy', reason: 'busy' } })
+    );
+    await start();
+    mocks.loadGates.mockResolvedValue(gates({ inPlaceCandidate: null }));
+    await start({ inPlaceOfMeetingId: BOOKED_MEETING_ID });
+
+    expect(mocks.checkFunding).not.toHaveBeenCalled();
   });
 });

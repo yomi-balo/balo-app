@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockReadSnapshot,
   mockAssess,
+  mockSuggestTopUp,
   mockHealCoveredHoldNow,
   mockCaptureException,
   mockLogInfo,
@@ -11,6 +12,7 @@ const {
 } = vi.hoisted(() => ({
   mockReadSnapshot: vi.fn(),
   mockAssess: vi.fn(),
+  mockSuggestTopUp: vi.fn(),
   mockHealCoveredHoldNow: vi.fn(),
   mockCaptureException: vi.fn(),
   mockLogInfo: vi.fn(),
@@ -28,10 +30,13 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
 vi.mock('@balo/db', () => ({ bookingFundingRepository: { readSnapshot: mockReadSnapshot } }));
-vi.mock('@balo/shared/credit', () => ({ assessCaseBookingFunding: mockAssess }));
+vi.mock('@balo/shared/credit', () => ({
+  assessCaseBookingFunding: mockAssess,
+  suggestCaseBookingTopUpMinor: mockSuggestTopUp,
+}));
 vi.mock('../credit-session/notify.js', () => ({ healCoveredHoldNow: mockHealCoveredHoldNow }));
 
-import { checkCaseBookingFunding } from './case-booking-funding.js';
+import { CASE_BOOKING_FUNDING_STATUS, checkCaseBookingFunding } from './case-booking-funding.js';
 
 const NOW = new Date('2026-09-25T12:00:00.000Z');
 const START = new Date('2026-09-26T10:00:00.000Z');
@@ -51,6 +56,7 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
     vi.clearAllMocks();
     mockReadSnapshot.mockResolvedValue(SNAPSHOT);
     mockAssess.mockReturnValue({ ok: true, arm: 'balance' });
+    mockSuggestTopUp.mockReturnValue(2_500);
     mockHealCoveredHoldNow.mockResolvedValue({ healed: true });
   });
 
@@ -61,8 +67,18 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       companyId: 'company-1',
       expertProfileId: 'expert-1',
       now: NOW,
+      excludeMeetingId: undefined,
     });
     expect(mockAssess).toHaveBeenCalledWith(SNAPSHOT, { scheduledStart: START, scheduledEnd: END });
+  });
+
+  it('passes excludeMeetingId through to the snapshot read, and on the re-read after a heal', async () => {
+    mockAssess.mockReturnValueOnce(COVERED).mockReturnValueOnce({ ok: true, arm: 'balance' });
+    await checkCaseBookingFunding({ ...INPUT, excludeMeetingId: 'meeting-9' });
+    expect(mockReadSnapshot).toHaveBeenCalledTimes(2);
+    for (const [arg] of mockReadSnapshot.mock.calls) {
+      expect(arg).toMatchObject({ excludeMeetingId: 'meeting-9' });
+    }
   });
 
   it.each([
@@ -82,7 +98,11 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
     [{ ok: false, reason: 'no_mandate_insufficient_balance' }, 'booking_unfunded'],
   ])('maps the verdict %j onto %s', async (verdict, code) => {
     mockAssess.mockReturnValue(verdict);
-    await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({ ok: false, code });
+    await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
+      ok: false,
+      code,
+      suggestedTopUpMinor: 2_500,
+    });
     expect(mockLogInfo).toHaveBeenCalledWith(
       expect.objectContaining({ code }),
       expect.stringContaining('refused before any write')
@@ -95,7 +115,9 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
     await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
       ok: false,
       code: 'booking_funding_unavailable',
+      suggestedTopUpMinor: null,
     });
+    expect(mockSuggestTopUp).not.toHaveBeenCalled();
     expect(mockLogError).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',
@@ -183,6 +205,21 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
         ok: false,
         code: 'booking_reserved',
+        suggestedTopUpMinor: 2_500,
+      });
+    });
+
+    it('the figure is sized from the RE-READ snapshot (the one that produced the final verdict), not the first', async () => {
+      const healed = { kind: 'no_mandate', walletId: 'wallet-1', healed: true };
+      mockReadSnapshot.mockResolvedValueOnce(SNAPSHOT).mockResolvedValueOnce(healed);
+      mockAssess
+        .mockReturnValueOnce(COVERED)
+        .mockReturnValueOnce({ ok: false, reason: 'reserved_by_upcoming' });
+      await checkCaseBookingFunding(INPUT);
+      expect(mockSuggestTopUp).toHaveBeenCalledTimes(1);
+      expect(mockSuggestTopUp).toHaveBeenCalledWith(healed, {
+        scheduledStart: START,
+        scheduledEnd: END,
       });
     });
 
@@ -191,6 +228,7 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
         ok: false,
         code: 'account_on_hold',
+        suggestedTopUpMinor: 2_500,
       });
       expect(mockHealCoveredHoldNow).toHaveBeenCalledTimes(1);
       expect(mockReadSnapshot).toHaveBeenCalledTimes(2);
@@ -211,7 +249,9 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
         ok: false,
         code: 'account_on_hold',
+        suggestedTopUpMinor: null,
       });
+      expect(mockSuggestTopUp).not.toHaveBeenCalled();
 
       expect(mockLogWarn).toHaveBeenCalledWith(
         expect.objectContaining({ walletId: 'wallet-1', error: 'lock timeout' }),
@@ -231,6 +271,7 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
         ok: false,
         code: 'booking_funding_unavailable',
+        suggestedTopUpMinor: null,
       });
       expect(mockLogError).toHaveBeenCalledWith(
         expect.objectContaining({ companyId: 'company-1', error: 'db down' }),
@@ -244,7 +285,17 @@ describe('checkCaseBookingFunding (BAL-474, ADR-1040 Amendment 7 §H, D6.1 / D6.
       await expect(checkCaseBookingFunding(INPUT)).resolves.toEqual({
         ok: false,
         code: 'booking_funding_unavailable',
+        suggestedTopUpMinor: null,
       });
+    });
+  });
+
+  it('CASE_BOOKING_FUNDING_STATUS answers 409 for the three refusals and 503 for an unreadable snapshot', () => {
+    expect(CASE_BOOKING_FUNDING_STATUS).toEqual({
+      account_on_hold: 409,
+      booking_unfunded: 409,
+      booking_reserved: 409,
+      booking_funding_unavailable: 503,
     });
   });
 });

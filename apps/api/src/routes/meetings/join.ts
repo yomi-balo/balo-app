@@ -61,6 +61,7 @@ import {
   joinMeetingAsMember,
   type JoinErrorCode,
   type JoinFailure,
+  type JoinMeetingResult,
 } from '../../services/meetings/join-meeting.js';
 import { requestLobbyReentryLink } from '../../services/meetings/request-lobby-reentry-link.js';
 import {
@@ -89,6 +90,8 @@ const JOIN_ERROR_STATUS: Record<JoinErrorCode, number> = {
   [MEETING_NOT_OPEN_YET_CODE]: 409,
   meeting_not_provisioned: 409,
   meeting_token_unavailable: 503,
+  // BAL-650 — an expert-started Call now ring awaits the client's commit (`POST /call-now/rings/:ringId/answer`).
+  call_answer_required: 409,
 };
 
 /**
@@ -268,13 +271,20 @@ const CLIENT_IP_HEADER = 'x-balo-client-ip';
  * ⚠ THE `log.warn` LIVES HERE, NOT AT THE CALL SITES. ⚠ `context` MUST NEVER CARRY AN EMAIL
  * ADDRESS, A RAW TOKEN OR A DAILY JWT — ids, counts and route labels only.
  */
-function sendJoinError(
+export function sendJoinError(
   reply: FastifyReply,
   failure: JoinFailure,
   context: Record<string, unknown>
 ): void {
   const { code } = failure;
   const status = JOIN_ERROR_STATUS[code];
+  if (code === 'call_answer_required' && failure.ringId !== undefined) {
+    // ⚠ EXPECTED, NOT A DENIAL — the caller belongs here and must commit first. `ringId` is the one
+    // extra field on the wire: it is the ring the client-side caller is beside, and the commit names it.
+    log.info({ ...context, code, status }, 'Meeting join held — a Call now ring awaits the commit');
+    reply.code(status).send({ error: code, ringId: failure.ringId });
+    return;
+  }
   if (code === MEETING_NOT_OPEN_YET_CODE && failure.opensAt !== undefined) {
     // ⚠ AN EXPECTED EARLY CLICK from a stale page — `info`, never `warn`. `opensAt` is the ONE extra field on the
     // wire: the copy needs it, and it is derived from the meeting's own scheduled start.
@@ -284,6 +294,26 @@ function sendJoinError(
   }
   log.warn({ ...context, code, status }, 'Meeting join refused');
   reply.code(status).send({ error: code });
+}
+
+/**
+ * The member arm's `200` body. ⚠ BAL-435 (R6 / R10): the grant's five fields stay at the TOP LEVEL, byte
+ * for byte, and the meeting's context — plus the waiting stage's inputs — ride ALONGSIDE them. `JoinGrant`
+ * itself is unchanged, so an older client that knows nothing about these is unaffected, and the two
+ * PUBLIC guest arms deliberately carry none of them. Shared with `POST /call-now/rings/:ringId/answer`,
+ * whose success IS this join.
+ */
+export function sendMemberJoinGrant(
+  reply: FastifyReply,
+  result: Extract<JoinMeetingResult, { ok: true }>
+): void {
+  reply.code(200).send({
+    ...result.grant,
+    context: result.context,
+    viewerRole: result.viewerRole,
+    counterpartyFirstName: result.counterpartyFirstName,
+    scheduledStart: result.scheduledStart,
+  });
 }
 
 /** Validate `:meetingId` or send `400 invalid_request`. `null` ⇒ the reply is already sent. */
@@ -447,17 +477,7 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
       sendJoinError(reply, result, { route: 'join', meetingId: params.meetingId, userId });
       return;
     }
-    // ⚠ BAL-435 (R6 / R10): the grant's five fields stay at the TOP LEVEL, byte for byte, and
-    // the meeting's context — plus the waiting stage's inputs — ride ALONGSIDE them. `JoinGrant`
-    // itself is unchanged, so an older client that knows nothing about these is unaffected, and
-    // the two PUBLIC guest arms below deliberately carry none of them.
-    reply.code(200).send({
-      ...result.grant,
-      context: result.context,
-      viewerRole: result.viewerRole,
-      counterpartyFirstName: result.counterpartyFirstName,
-      scheduledStart: result.scheduledStart,
-    });
+    sendMemberJoinGrant(reply, result);
   });
 
   /**

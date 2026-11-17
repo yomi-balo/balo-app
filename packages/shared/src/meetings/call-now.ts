@@ -103,6 +103,22 @@ export function isRingLive(ring: CallRingFacts, now: Date): boolean {
   return ring.status === 'ringing' && now.getTime() < ring.expiresAt.getTime();
 }
 
+/**
+ * Does this ring still need the CLIENT side's commit before a client-side party may be admitted?
+ * True only for a ring the expert started that creates a new meeting and is still `ringing`: the
+ * client's funding check runs when they answer (ADR-1040 Amendment 8 §B), so until then a plain
+ * join by a client-side party is held. A ring that is still `ringing` past its window counts — the
+ * presence writer still connects it on co-presence. A client-started ring, an in-place ring and
+ * every terminal ring never await a commit.
+ */
+export function ringAwaitsClientCommit(
+  ring: Pick<CallRingFacts, 'placement' | 'status'> & { readonly callerSide: CallSide }
+): boolean {
+  return (
+    ring.status === 'ringing' && ring.callerSide === 'expert' && ring.placement === 'new_meeting'
+  );
+}
+
 /** The statuses whose ring ended without the callee connecting. */
 const UNCONNECTED_TERMINAL: ReadonlySet<CallRingStatus> = new Set([
   'unanswered',

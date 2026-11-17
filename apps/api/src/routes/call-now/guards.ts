@@ -5,8 +5,9 @@
  *
  * Separate buckets: starting a ring is the expensive, intrusive act (a meeting, a Daily room,
  * a notification) and gets the tighter ceilings — one per CALLER and one per (CALLEE, calling
- * party), so a company's members cannot together ring one person past it; declining and stopping are cheap,
- * idempotent and must stay available to a person who is being rung repeatedly; the read view is
+ * party), so a company's members cannot together ring one person past it; declining, stopping and
+ * answering are the callee's or caller's reply to a ring that already exists and must stay available
+ * to a person who is being rung repeatedly (an answer is a read plus one join); the read view is
  * generous but metered, so it cannot be polled as a "who is on a call right now" probe.
  *
  * The decline cooldown is NOT here: it is a gate read from Postgres (`recently_declined`).
@@ -32,7 +33,7 @@ export const CALL_NOW_START_RATE_LIMIT: RateLimitConfig = {
   windowSeconds: TEN_MINUTES_SECONDS,
 };
 
-/** `POST /call-now/rings/:ringId/decline` and `/stop`, per user. */
+/** `POST /call-now/rings/:ringId/decline`, `/stop` and `/answer`, per user. */
 export const CALL_NOW_RING_ACTION_RATE_LIMIT: RateLimitConfig = {
   keyPrefix: 'ratelimit:call-now-ring',
   maxRequests: 30,

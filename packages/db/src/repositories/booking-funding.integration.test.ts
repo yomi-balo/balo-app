@@ -174,6 +174,49 @@ describe('bookingFundingRepository.readSnapshot — each kind', () => {
     });
   }
 
+  it('excludeMeetingId leaves that meeting out of the no_mandate set, the no_wallet pricing and the on_hold pricing', async () => {
+    const expertProfileId = await expertAt(EXPERT_RATE_700);
+
+    const booker = await company({ balanceMinor: 30_000 });
+    const kept = await bookCase(booker, expertProfileId, 60, 30);
+    const left = await bookCase(booker, expertProfileId, 120, 30);
+    const noMandate = await bookingFundingRepository.readSnapshot({
+      companyId: booker.companyId,
+      expertProfileId,
+      now: new Date(),
+      excludeMeetingId: left.meetingId,
+    });
+    if (noMandate.kind !== 'no_mandate') throw new Error('expected no_mandate');
+    expect(noMandate.reservable.map((row) => row.meetingId)).toEqual([kept.meetingId]);
+
+    const { engagement, companyId } = await caseEngagementFactory({ expertProfileId });
+    const { start, end } = window(120, 30);
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { status: 'scheduled', scheduledStart: start, scheduledEnd: end },
+    });
+    const noWallet = await bookingFundingRepository.readSnapshot({
+      companyId,
+      expertProfileId,
+      now: new Date(),
+      excludeMeetingId: meeting.id,
+    });
+    if (noWallet.kind !== 'no_wallet') throw new Error('expected no_wallet');
+    expect(noWallet.topUpPricing.reservable).toEqual([]);
+
+    const held = await company({ balanceMinor: 30_000 });
+    await openHold(held, expertProfileId, 30_000);
+    const heldBooking = await bookCase(held, expertProfileId, 120, 30);
+    const onHold = await bookingFundingRepository.readSnapshot({
+      companyId: held.companyId,
+      expertProfileId,
+      now: new Date(),
+      excludeMeetingId: heldBooking.meetingId,
+    });
+    if (onHold.kind !== 'on_hold') throw new Error('expected on_hold');
+    expect(onHold.topUpPricing.reservable).toEqual([]);
+  });
+
   it('on_hold — an open receivable, carrying the hold status and the top-up pricing (read BEFORE the mandate)', async () => {
     const booker = await company({
       balanceMinor: 0,

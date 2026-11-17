@@ -118,6 +118,8 @@ export {
   DASHBOARD_UP_NEXT_SURFACES,
   /** BAL-589 — the "Convert a case to a project" AI brief's event constant. */
   CASE_BRIEF_EVENTS,
+  /** BAL-650 — the Call now funding gate's CLIENT event constant. */
+  CALL_NOW_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -248,4 +250,8 @@ export type {
   DashboardUpNextSurface,
   /** BAL-589 — the "Convert a case to a project" AI brief's event payload. */
   CaseBriefEventMap,
+  /** BAL-650 — the Call now funding gate's event payload and its two vocabularies. */
+  CallNowEventMap,
+  CallNowFundingGateReason,
+  CallNowFundingGateResolution,
 } from '@balo/analytics/client';

@@ -7,9 +7,16 @@
  *   GET  /call-now/rings/:ringId              a ring's status, to its caller or callee only
  *   POST /call-now/rings/:ringId/decline      the callee turns a ring down (idempotent)
  *   POST /call-now/rings/:ringId/stop         the caller hangs up a ring (idempotent)
+ *   POST /call-now/rings/:ringId/answer       the client commits to an EXPERT-STARTED ring (BAL-650)
  *
- * Answering is NOT a route: the callee joins `meetingId` through the existing
+ * Answering is a route only for an expert-started ring: the client's booking funding check runs
+ * here, and the admission follows in the same request. Every other join — the expert's, a
+ * client-started ring's callee, and everyone once a ring has connected — is the existing
  * `POST /meetings/:meetingId/join`, and the ring connects on co-presence.
+ *
+ * ⚠ A FUNDING REFUSAL (start and answer) is `409 { error, code, suggestedTopUpMinor }`, or
+ * `503 { error, code }` when the funding snapshot cannot be read. The figure is the client's own
+ * all-in top-up (`null` when none is meaningful); no rate, estimate or balance is on the wire.
  *
  * ⚠ THERE IS NO 403. An unknown or unauthorized case is `404 case_not_found`; a ring the user is
  * neither the caller nor the callee of is `404 ring_not_found` from the same query that would
@@ -25,11 +32,17 @@ import type { CallRingStatus } from '@balo/shared/meetings';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseBodyOr400, parseParamsOr400, resolveUserId } from '../../lib/route-helpers.js';
+import { answerCallNow } from '../../services/call-now/answer-call.js';
 import { authorizeCallNow } from '../../services/call-now/authorize-call-now.js';
 import { loadCallNowGates } from '../../services/call-now/call-now-gates.js';
 import { endRing } from '../../services/call-now/end-ring.js';
 import { startCallNow } from '../../services/call-now/start-call.js';
+import {
+  CASE_BOOKING_FUNDING_STATUS,
+  type CaseBookingFundingCode,
+} from '../../services/meetings/case-booking-funding.js';
 import { enforceBookingRateLimit } from '../meetings/guards.js';
+import { sendJoinError, sendMemberJoinGrant } from '../meetings/join.js';
 import {
   CALL_NOW_CALLEE_RATE_LIMIT,
   CALL_NOW_RING_ACTION_RATE_LIMIT,
@@ -50,6 +63,23 @@ function sendError(
   extra: Record<string, unknown> = {}
 ): void {
   reply.code(status).send({ error: code, code, ...extra });
+}
+
+/**
+ * A funding refusal, fee-concealed: 409 with the client's top-up figure, or 503 with the code alone
+ * when the snapshot was unreadable (no figure exists then).
+ */
+function sendFundingRefusal(
+  reply: FastifyReply,
+  code: CaseBookingFundingCode,
+  suggestedTopUpMinor: number | null
+): void {
+  const status = CASE_BOOKING_FUNDING_STATUS[code];
+  if (status === 503) {
+    sendError(reply, status, code);
+    return;
+  }
+  sendError(reply, status, code, { suggestedTopUpMinor });
 }
 
 function handleUnexpected(
@@ -158,6 +188,12 @@ async function handleStart(request: FastifyRequest, reply: FastifyReply): Promis
       case 'rate_limited':
         // `meterCallee` already answered 429 (or 503 when the limiter is down).
         return;
+      case 'account_on_hold':
+      case 'booking_unfunded':
+      case 'booking_reserved':
+      case 'booking_funding_unavailable':
+        sendFundingRefusal(reply, result.code, result.suggestedTopUpMinor);
+        return;
     }
   } catch (error) {
     handleUnexpected(reply, error, { engagementId, userId }, 'Call now start failed');
@@ -237,6 +273,42 @@ function ringActionHandler(
   };
 }
 
+async function handleAnswer(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const userId = resolveUserId(request, reply);
+  if (userId === null) return;
+  if (await enforceBookingRateLimit(CALL_NOW_RING_ACTION_RATE_LIMIT, userId, reply)) return;
+  const params = parseParamsOr400(ringIdParamsSchema, request, reply);
+  if (params === null) return;
+  const { ringId } = params;
+
+  try {
+    const result = await answerCallNow({ ringId, userId });
+    if (result.ok) {
+      sendMemberJoinGrant(reply, result.join);
+      return;
+    }
+    switch (result.code) {
+      case 'ring_not_found':
+        sendError(reply, 404, result.code);
+        return;
+      case 'ring_not_ringing':
+        sendError(reply, 409, result.code, { status: result.status });
+        return;
+      case 'join_failed':
+        sendJoinError(reply, result.failure, { route: 'call-now-answer', ringId, userId });
+        return;
+      case 'account_on_hold':
+      case 'booking_unfunded':
+      case 'booking_reserved':
+      case 'booking_funding_unavailable':
+        sendFundingRefusal(reply, result.code, result.suggestedTopUpMinor);
+        return;
+    }
+  } catch (error) {
+    handleUnexpected(reply, error, { ringId, userId }, 'Call now answer failed');
+  }
+}
+
 export function callNowRoutes(fastify: FastifyInstance): Promise<void> {
   const preHandler = [requireAuth];
   fastify.get('/cases/:engagementId/call-now', { preHandler }, handleView);
@@ -252,5 +324,6 @@ export function callNowRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler },
     ringActionHandler('caller', 'stopped')
   );
+  fastify.post('/call-now/rings/:ringId/answer', { preHandler }, handleAnswer);
   return Promise.resolve();
 }

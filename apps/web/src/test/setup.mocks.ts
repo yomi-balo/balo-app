@@ -187,6 +187,11 @@ vi.mock('@/lib/analytics', async () => {
     // THIS LINE every test whose module graph reaches `useCaseBriefFlow` throws on an undefined
     // constant (memory `reference_web_analytics_test_mock_export_list`).
     CASE_BRIEF_EVENTS: events.CASE_BRIEF_EVENTS,
+    // BAL-650 — the Call now funding gate's CLIENT event constant. ⚠ WITHOUT THIS LINE every test
+    // whose module graph reaches the gate throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`). ⚠ `CALL_NOW_SERVER_EVENTS` must NEVER join
+    // this list — it is server-only.
+    CALL_NOW_EVENTS: events.CALL_NOW_EVENTS,
     initAnalytics: vi.fn(),
     syncSessionReplayToRoute: vi.fn(),
   };

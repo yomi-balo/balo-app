@@ -45,7 +45,7 @@ import type { RecordingServerEventMap } from './events/recording';
 import type { ReviewServerEventMap, ReviewEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
-import type { CallNowServerEventMap } from './events/call-now';
+import type { CallNowEventMap, CallNowServerEventMap } from './events/call-now';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap, BookingServerEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
@@ -155,7 +155,10 @@ export type AllEvents = AuthEventMap &
   CaseBriefEventMap &
   // BAL-617 — the request-file share dialog + in-app preview CLIENT family.
   // `RequestFileServerEventMap` stays in `ServerEvents` below; the two must never cross.
-  RequestFileEventMap;
+  RequestFileEventMap &
+  // BAL-650 — the Call now funding gate's CLIENT family. `CallNowServerEventMap` stays in
+  // `ServerEvents` below; the two must never cross.
+  CallNowEventMap;
 
 export type EventName = keyof AllEvents;
 
