@@ -613,6 +613,26 @@ describe('startCallNow — SMS reach (BAL-652)', () => {
     expect(mocks.trackSuppressed).not.toHaveBeenCalled();
   });
 
+  it('a THROWING write gives the cap slot back, rethrows the original error and tracks nothing', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'sms' });
+    mocks.startWithNewMeeting.mockRejectedValue(new Error('db down'));
+
+    await expect(start()).rejects.toThrow('db down');
+
+    expect(mocks.releaseSmsSlot).toHaveBeenCalledWith(CLIENT, EXPERT_USER);
+    expect(mocks.trackSuppressed).not.toHaveBeenCalled();
+    expect(mocks.enqueueExpiry).not.toHaveBeenCalled();
+  });
+
+  it('a throwing write on an `app` ring has no slot to give back', async () => {
+    mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: 'cap' });
+    mocks.startWithNewMeeting.mockRejectedValue(new Error('db down'));
+
+    await expect(start()).rejects.toThrow('db down');
+
+    expect(mocks.releaseSmsSlot).not.toHaveBeenCalled();
+  });
+
   it('a failed write on an `app` ring has no slot to give back', async () => {
     mocks.resolveReach.mockResolvedValue({ reachedBy: 'app', suppressedBy: 'cap' });
     mocks.startWithNewMeeting.mockRejectedValue(new mocks.RingAlreadyLive('race'));

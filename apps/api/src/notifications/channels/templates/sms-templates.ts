@@ -37,7 +37,8 @@ const GSM7_KEPT = new Set(
 /**
  * BAL-652 — make a user-supplied value (case title, company, first name) safe to interpolate into
  * the SMS: control characters and line breaks become one space, smart quotes, dashes and the
- * ellipsis become their ASCII twins, `"` becomes `'`, an `http(s)://` scheme is stripped so the
+ * ellipsis become their ASCII twins, a letter GSM-7 lacks loses its accent ('João' → 'Joao'),
+ * `"` becomes `'`, an `http(s)://` scheme is stripped so the
  * value cannot read as a second link, and any character left outside GSM-7 is dropped. One
  * non-GSM character would flip the whole message to UCS-2 and cut the limit from 160 to 70.
  */
@@ -52,8 +53,20 @@ function stripSchemes(value: string): string {
   return current;
 }
 
+/**
+ * Replaces a character GSM-7 lacks with its unaccented base letter ('ã' → 'a', 'ë' → 'e'). A
+ * character GSM-7 already carries ('é', 'ü', 'ñ') is returned untouched, so it keeps its accent.
+ */
+function transliterate(char: string): string {
+  if (GSM7_KEPT.has(char)) {
+    return char;
+  }
+  return char.normalize('NFD').replaceAll(/\p{M}/gu, '');
+}
+
 function sanitizeSmsText(value: string): string {
-  const mapped = value
+  const mapped = Array.from(value.normalize('NFC'), transliterate)
+    .join('')
     .replaceAll(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
     .replaceAll(/[‘-„–—−… ]/g, (char) => ASCII_TWINS[char] ?? ' ')
     .replaceAll('"', "'");

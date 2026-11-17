@@ -204,6 +204,16 @@ describe('getSmsTemplate', () => {
 
       it('keeps GSM-7 accented letters', () => {
         expect(render({ callerFirstName: 'Zoé' })).toContain('Balo: Zoé is calling');
+        expect(render({ callerFirstName: 'Müller' })).toContain('Balo: Müller is calling');
+      });
+
+      it.each([
+        ['João', 'Joao'],
+        ['Zoë', 'Zoe'],
+      ])('transliterates %s to %s instead of dropping the letter', (name, expected) => {
+        const body = render({ callerFirstName: name });
+        expect(body).toContain(`Balo: ${expected} is calling`);
+        expect(body).toMatch(GSM7_SHAPE);
       });
     });
 

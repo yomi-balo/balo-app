@@ -68,6 +68,7 @@ function summary(overrides: Record<string, unknown> = {}): Record<string, unknow
     },
     connectedSince: false,
     calleeDeclinedSince: false,
+    liveRingBetween: false,
     ...overrides,
   };
 }
@@ -167,6 +168,7 @@ describe('callMissedEmailRecheck', () => {
       callerUserId: 'caller-1',
       calleeUserId: 'callee-1',
       since: new Date(STARTED_AT),
+      now: expect.any(Date),
     });
   });
 
@@ -217,6 +219,28 @@ describe('callMissedEmailRecheck', () => {
 
     await expect(callMissedEmailRecheck(row())).resolves.toMatchObject({
       reason: 'connected_before_send',
+    });
+  });
+
+  it('skips while a ring between the pair is live, passing the clock to the read', async () => {
+    mockSummarize.mockResolvedValue(summary({ liveRingBetween: true }));
+
+    await expect(callMissedEmailRecheck(row())).resolves.toEqual({
+      publish: false,
+      reason: 'ring_live',
+    });
+    expect(mockSummarize).toHaveBeenCalledWith(expect.objectContaining({ now: expect.any(Date) }));
+  });
+
+  it('puts a connect and a decline ahead of a live ring', async () => {
+    mockSummarize.mockResolvedValue(summary({ liveRingBetween: true, connectedSince: true }));
+    await expect(callMissedEmailRecheck(row())).resolves.toMatchObject({
+      reason: 'connected_before_send',
+    });
+
+    mockSummarize.mockResolvedValue(summary({ liveRingBetween: true, calleeDeclinedSince: true }));
+    await expect(callMissedEmailRecheck(row())).resolves.toMatchObject({
+      reason: 'declined_before_send',
     });
   });
 

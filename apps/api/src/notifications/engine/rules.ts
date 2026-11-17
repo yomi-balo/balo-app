@@ -190,10 +190,17 @@ const calleeIsClient: NonNullable<NotificationRule['condition']> = (ctx) =>
 /**
  * BAL-652 — the ring SMS fires only for a ring `startCallNow` wrote as `reachedBy: 'sms'`. That
  * decision (number, consent, presence, hours, daily cap) is made once, before the ring row is
- * written, so the rule never re-checks any of it.
+ * written, so the rule never re-checks any of it. A ring whose `expiresAt` is missing or already
+ * past is stale (a delayed or retried job) and sends nothing: an SMS for a call that can no longer
+ * be answered is only noise.
  */
-const ringReachedBySms: NonNullable<NotificationRule['condition']> = (ctx) =>
-  ctx.payload.reachedBy === 'sms';
+const ringReachedBySms: NonNullable<NotificationRule['condition']> = (ctx) => {
+  if (ctx.payload.reachedBy !== 'sms') {
+    return false;
+  }
+  const { expiresAt } = ctx.payload;
+  return typeof expiresAt === 'string' && Date.parse(expiresAt) > Date.now();
+};
 
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [

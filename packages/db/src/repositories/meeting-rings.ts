@@ -4,6 +4,7 @@ import {
   desc,
   eq,
   exists,
+  gt,
   gte,
   inArray,
   isNull,
@@ -550,9 +551,11 @@ export const meetingRingsRepository = {
    * - `connectedSince`: a ring in EITHER direction that connected, so a call back by the callee
    *   also settles the miss.
    * - `calleeDeclinedSince`: a caller → callee ring the callee declined.
+   * - `liveRingBetween`: a ring in EITHER direction still `ringing` with `expiresAt` after `now`,
+   *   whatever its age. `now` is an input so the caller owns the clock.
    */
   async summarizeMissedCallWindow(
-    input: { callerUserId: string; calleeUserId: string; since: Date },
+    input: { callerUserId: string; calleeUserId: string; since: Date; now: Date },
     exec: DbExecutor = db
   ): Promise<{
     unansweredCount: number;
@@ -563,6 +566,7 @@ export const meetingRingsRepository = {
     } | null;
     connectedSince: boolean;
     calleeDeclinedSince: boolean;
+    liveRingBetween: boolean;
   }> {
     const rows = await exec
       .select({
@@ -585,9 +589,14 @@ export const meetingRingsRepository = {
               eq(meetingRings.calleeUserId, input.callerUserId)
             )
           ),
-          inArray(meetingRings.status, ['unanswered', 'connected', 'declined']),
-          gte(meetingRings.createdAt, input.since),
-          isNull(meetingRings.deletedAt)
+          isNull(meetingRings.deletedAt),
+          or(
+            and(
+              inArray(meetingRings.status, ['unanswered', 'connected', 'declined']),
+              gte(meetingRings.createdAt, input.since)
+            ),
+            and(eq(meetingRings.status, 'ringing'), gt(meetingRings.expiresAt, input.now))
+          )
         )
       );
 
@@ -600,13 +609,19 @@ export const meetingRingsRepository = {
       } | null;
       connectedSince: boolean;
       calleeDeclinedSince: boolean;
+      liveRingBetween: boolean;
     } = {
       unansweredCount: 0,
       latestUnanswered: null,
       connectedSince: false,
       calleeDeclinedSince: false,
+      liveRingBetween: false,
     };
     for (const row of rows) {
+      if (row.status === 'ringing') {
+        summary.liveRingBetween = true;
+        continue;
+      }
       if (row.status === 'connected') {
         summary.connectedSince = true;
         continue;

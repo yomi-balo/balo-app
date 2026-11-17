@@ -1953,14 +1953,33 @@ describe('Call now rules (BAL-652)', () => {
     payload,
     data: {},
   });
+  const LIVE_UNTIL = new Date(Date.now() + 120_000).toISOString();
   const firing = (event: string, payload: Record<string, unknown>): NotificationRule[] =>
     (notificationRules[event] ?? []).filter(
       (rule) => rule.condition === undefined || rule.condition(ctx(event, payload))
     );
 
   describe('call.ringing', () => {
+    it('sends nothing for a stale ring whose expiresAt has passed', () => {
+      const past = new Date(Date.now() - 1000).toISOString();
+
+      expect(
+        firing('call.ringing', { callerSide: 'client', reachedBy: 'sms', expiresAt: past })
+      ).toEqual([]);
+    });
+
+    it.each([undefined, 12345, 'not-a-date'])('sends nothing when expiresAt is %s', (expiresAt) => {
+      expect(firing('call.ringing', { callerSide: 'client', reachedBy: 'sms', expiresAt })).toEqual(
+        []
+      );
+    });
+
     it('SMS to an expert callee when a client calls and the ring reached by sms', () => {
-      const fired = firing('call.ringing', { callerSide: 'client', reachedBy: 'sms' });
+      const fired = firing('call.ringing', {
+        callerSide: 'client',
+        reachedBy: 'sms',
+        expiresAt: LIVE_UNTIL,
+      });
 
       expect(fired).toHaveLength(1);
       expect(fired[0]).toMatchObject({
@@ -1973,7 +1992,11 @@ describe('Call now rules (BAL-652)', () => {
     });
 
     it('SMS to a client callee when an expert calls and the ring reached by sms', () => {
-      const fired = firing('call.ringing', { callerSide: 'expert', reachedBy: 'sms' });
+      const fired = firing('call.ringing', {
+        callerSide: 'expert',
+        reachedBy: 'sms',
+        expiresAt: LIVE_UNTIL,
+      });
 
       expect(fired).toHaveLength(1);
       expect(fired[0]).toMatchObject({
@@ -1993,7 +2016,7 @@ describe('Call now rules (BAL-652)', () => {
     );
 
     it('sends nothing when the ring side is missing', () => {
-      expect(firing('call.ringing', { reachedBy: 'sms' })).toEqual([]);
+      expect(firing('call.ringing', { reachedBy: 'sms', expiresAt: LIVE_UNTIL })).toEqual([]);
     });
   });
 

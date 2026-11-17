@@ -1002,6 +1002,7 @@ describe('meetingRingsRepository — reads', () => {
       callerUserId: c.callerUserId,
       calleeUserId: c.calleeUserId,
       since,
+      now: new Date(),
     });
 
     it('counts unanswered rings and returns the latest one, with no connect or decline', async () => {
@@ -1019,6 +1020,7 @@ describe('meetingRingsRepository — reads', () => {
         },
         connectedSince: false,
         calleeDeclinedSince: false,
+        liveRingBetween: false,
       });
     });
 
@@ -1047,6 +1049,7 @@ describe('meetingRingsRepository — reads', () => {
         latestUnanswered: null,
         connectedSince: false,
         calleeDeclinedSince: false,
+        liveRingBetween: false,
       });
     });
 
@@ -1108,6 +1111,7 @@ describe('meetingRingsRepository — reads', () => {
         latestUnanswered: null,
         connectedSince: false,
         calleeDeclinedSince: false,
+        liveRingBetween: false,
       });
     });
 
@@ -1131,6 +1135,94 @@ describe('meetingRingsRepository — reads', () => {
         },
         connectedSince: false,
         calleeDeclinedSince: false,
+        liveRingBetween: false,
+      });
+    });
+    describe('liveRingBetween', () => {
+      /** A ring left `ringing`, with `expires_at` set explicitly. */
+      async function seedLiveRing(c: RingCase, expiresAt: Date, deletedAt?: Date): Promise<void> {
+        const started = await ringNewMeeting(c, { expiresAt });
+        if (deletedAt !== undefined) {
+          await db
+            .update(meetingRings)
+            .set({ deletedAt })
+            .where(eq(meetingRings.id, started.ring.id));
+        }
+      }
+
+      it('is true for an unexpired ringing ring in the caller → callee direction', async () => {
+        const first = await ringCase();
+        const live = await sameParties(first);
+        await seedRing(first, 'unanswered', new Date('2026-06-01T10:00:00.000Z'));
+        await seedLiveRing(live, new Date(Date.now() + HOUR_MS));
+
+        const summary = await meetingRingsRepository.summarizeMissedCallWindow(pair(first));
+
+        expect(summary.liveRingBetween).toBe(true);
+        expect(summary.unansweredCount).toBe(1);
+      });
+
+      it('is true for a live ring in the REVERSE direction', async () => {
+        const c = await ringCase();
+        await seedLiveRing(
+          { ...c, callerUserId: c.calleeUserId, calleeUserId: c.callerUserId },
+          new Date(Date.now() + HOUR_MS)
+        );
+
+        expect(
+          (await meetingRingsRepository.summarizeMissedCallWindow(pair(c))).liveRingBetween
+        ).toBe(true);
+      });
+
+      it('is false once the ring has expired, even if its status is still ringing', async () => {
+        const c = await ringCase();
+        const started = await ringNewMeeting(c);
+        await db
+          .update(meetingRings)
+          .set({
+            createdAt: new Date(Date.now() - 2 * HOUR_MS),
+            expiresAt: new Date(Date.now() - HOUR_MS),
+          })
+          .where(eq(meetingRings.id, started.ring.id));
+
+        expect(
+          (await meetingRingsRepository.summarizeMissedCallWindow(pair(c))).liveRingBetween
+        ).toBe(false);
+      });
+
+      it('uses the supplied clock: a ring is live before its expiry and not at it', async () => {
+        const c = await ringCase();
+        const expiresAt = new Date(Date.now() + HOUR_MS);
+        await seedLiveRing(c, expiresAt);
+
+        expect(
+          (
+            await meetingRingsRepository.summarizeMissedCallWindow({
+              ...pair(c),
+              now: new Date(expiresAt.getTime() - 1),
+            })
+          ).liveRingBetween
+        ).toBe(true);
+        expect(
+          (
+            await meetingRingsRepository.summarizeMissedCallWindow({
+              ...pair(c),
+              now: expiresAt,
+            })
+          ).liveRingBetween
+        ).toBe(false);
+      });
+
+      it('ignores a soft-deleted live ring and a live ring of another pair', async () => {
+        const c = await ringCase();
+        const deleted = await sameParties(c);
+        await seedLiveRing(deleted, new Date(Date.now() + HOUR_MS), new Date());
+        const other = await ringCase();
+        await seedLiveRing(other, new Date(Date.now() + HOUR_MS));
+
+        expect(
+          (await meetingRingsRepository.summarizeMissedCallWindow(pair(c))).liveRingBetween
+        ).toBe(false);
       });
     });
   });

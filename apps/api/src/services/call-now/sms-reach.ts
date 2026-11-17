@@ -13,6 +13,7 @@ import type { MeetingRing } from '@balo/db';
 import { usersRepository } from '@balo/db';
 import { CALL_NOW_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
+import { canonicalTimezone } from '@balo/shared/timezone';
 import {
   isWithinCallHours,
   type CallSide,
@@ -74,6 +75,25 @@ export function smsEligibility(facts: SmsEligibilityFacts): SmsEligibility {
   return { eligible: true };
 }
 
+/** A zone that names no place: any UTC spelling (`GMT`, `Etc/UTC`, `Zulu`…) or an unparseable one. */
+function isUnknownZone(timeZone: string): boolean {
+  const canonical = canonicalTimezone(timeZone);
+  return canonical === null || canonical === 'UTC';
+}
+
+/**
+ * Is the callee inside the hours an SMS may arrive? A CLIENT whose zone reads as UTC is treated as
+ * an unknown zone and never inside hours: `resolve-callee` falls back to `'UTC'` for a client with
+ * no stored timezone, and 12:00 UTC says nothing about where that person is. This is the same
+ * convention `recipientDisplayZone` applies to email. An expert's UTC zone is taken at face value.
+ */
+function isInsideSmsHours(now: Date, timeZone: string, calleeSide: CallSide): boolean {
+  if (calleeSide === 'client' && isUnknownZone(timeZone)) {
+    return false;
+  }
+  return isWithinCallHours(now, timeZone);
+}
+
 function capIdentifier(callerUserId: string, calleeUserId: string): string {
   return `${callerUserId}:${calleeUserId}`;
 }
@@ -105,7 +125,7 @@ export async function resolveCallReach(input: ResolveCallReachInput): Promise<Ca
     calleeSide,
     consent,
     calleeOnline,
-    withinCallHours: isWithinCallHours(now, callee.timeZone),
+    withinCallHours: isInsideSmsHours(now, callee.timeZone, calleeSide),
   });
   if (!eligibility.eligible) {
     return { reachedBy: 'app', suppressedBy: eligibility.reason };

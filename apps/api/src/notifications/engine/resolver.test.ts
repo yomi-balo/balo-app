@@ -1154,6 +1154,20 @@ describe('resolveContext', () => {
       expect(context.data.calleeTimeZone).toBe('Australia/Perth');
     });
 
+    it('a named caller with no company resolves the bare name, never "@ Your client"', async () => {
+      mockFindCaseByEngagementId.mockResolvedValue(caseRow);
+      mockFindNamesByIds.mockResolvedValue([
+        { id: 'caller-1', firstName: 'Jordan', lastName: 'Lee' },
+      ]);
+      mockCompanyFindNameById.mockResolvedValue(undefined);
+      mockFindTimezoneContext.mockResolvedValue(null);
+
+      const context = await resolveContext('call.no_answer', ringPayload);
+
+      expect(context.data.callerPersonLabel).toBe('Jordan Lee');
+      expect(context.data.callerCompanyName).toBe('Your client');
+    });
+
     it('falls back when the case, the caller and the zones are all unreadable', async () => {
       mockFindCaseByEngagementId.mockResolvedValue(undefined);
       mockFindNamesByIds.mockResolvedValue([]);

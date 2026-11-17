@@ -374,7 +374,7 @@ async function hydrateCallContext(
   const companyName = company?.name ?? 'Your client';
   data.callerCompanyName = companyName;
   data.callerPersonLabel =
-    fullName.length > 0 ? personWithOrgLabel(fullName, companyName) : companyName;
+    fullName.length > 0 ? personWithOrgLabel(fullName, company?.name) : companyName;
 
   const zones = await usersRepository.findTimezoneContext(
     calleeUserId,

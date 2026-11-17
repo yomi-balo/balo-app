@@ -13,7 +13,7 @@
  *      otherwise allowed, so a refused attempt never spends a callee's budget → `rate_limited`
  *   6b. SMS reach (`resolveCallReach`): whether the callee is also reached by SMS, which sets the
  *      ring's `reachedBy` and window. The daily cap is consumed last, only when every other check
- *      passes; a write that then fails gives the slot back (`releaseCallSmsSlot`)
+ *      passes; a write that then fails or throws gives the slot back (`releaseCallSmsSlot`)
  *   7. the repository write (one transaction; the one-ringing partial unique index raises
  *      `MeetingRingAlreadyLiveError` for two racing starts)
  *   8. `new_meeting` only, after commit: availability rebuild, then the Daily room. A room that
@@ -267,21 +267,29 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
     now,
   });
   const expiresAt = ringExpiresAt(now, reach.reachedBy, resolveCallNowRingWindows());
-  const written = await writeRing({
-    placement,
-    ringInput: {
-      engagementId,
-      callerUserId: userId,
-      calleeUserId: callee.userId,
-      callerSide: side,
-      reachedBy: reach.reachedBy,
-      expiresAt,
-    },
-    now,
-    log: input.log,
-    provision,
-    releaseCallee: () => input.releaseCallee(callee.userId, callingParty),
-  });
+  let written: WriteRingResult;
+  try {
+    written = await writeRing({
+      placement,
+      ringInput: {
+        engagementId,
+        callerUserId: userId,
+        calleeUserId: callee.userId,
+        callerSide: side,
+        reachedBy: reach.reachedBy,
+        expiresAt,
+      },
+      now,
+      log: input.log,
+      provision,
+      releaseCallee: () => input.releaseCallee(callee.userId, callingParty),
+    });
+  } catch (error) {
+    if (reach.reachedBy === 'sms') {
+      await releaseCallSmsSlot(userId, callee.userId);
+    }
+    throw error;
+  }
   if (!written.ok) {
     if (reach.reachedBy === 'sms') {
       await releaseCallSmsSlot(userId, callee.userId);

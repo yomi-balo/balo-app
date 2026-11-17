@@ -96,8 +96,17 @@ export async function scheduleMissedCallEmailFromContext(ctx: RuleContext): Prom
 
 /**
  * THE FIRE-TIME GUARD. Skips when the call connected in either direction, when the callee chose
- * "Not now", or when no unanswered ring remains in the window; otherwise it publishes with the
- * live count, the latest missed ring's case, caller side and instant.
+ * "Not now", when a ring between the pair is still live, or when no unanswered ring remains in the
+ * window; otherwise it publishes with the live count, the latest missed ring's case, caller side
+ * and instant.
+ *
+ * ⚠ A LIVE RING HANDS THE EMAIL TO THAT RING'S OUTCOME. Mailing "you missed a call" while the
+ * pair is ringing again would be wrong, so the recheck skips (`ring_live`) and the skip frees the
+ * pending slot. If that ring ends unanswered its own `call.no_answer` schedules a fresh email; if
+ * it connects, the drop-on-connect rule above holds; if it is declined, the "Not now" rule holds.
+ * TWO ACCEPTED LOSSES: the fresh email counts misses from the new ring only, and a live ring that
+ * ends `stopped` (the caller hangs up, or the room can't be provisioned) schedules nothing, so the
+ * earlier miss gets no email. Its bell item from `call.no_answer` still records it.
  */
 export const callMissedEmailRecheck: ScheduledRecheck = async (row) => {
   const callerUserId = readString(row.payload, 'callerUserId');
@@ -117,6 +126,7 @@ export const callMissedEmailRecheck: ScheduledRecheck = async (row) => {
     callerUserId,
     calleeUserId,
     since,
+    now: new Date(),
   });
 
   if (summary.connectedSince) {
@@ -124,6 +134,9 @@ export const callMissedEmailRecheck: ScheduledRecheck = async (row) => {
   }
   if (summary.calleeDeclinedSince) {
     return { publish: false, reason: 'declined_before_send' };
+  }
+  if (summary.liveRingBetween) {
+    return { publish: false, reason: 'ring_live' };
   }
   if (summary.unansweredCount === 0 || summary.latestUnanswered === null) {
     return { publish: false, reason: 'no_missed_ring' };

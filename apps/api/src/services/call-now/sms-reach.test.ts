@@ -199,6 +199,44 @@ describe('resolveCallReach', () => {
     });
   });
 
+  describe('a client on a UTC zone', () => {
+    const NOON_UTC = new Date('2026-11-17T12:00:00.000Z');
+
+    it.each(['UTC', 'Etc/UTC', 'GMT', 'Etc/Universal', 'Not/AZone'])(
+      '%s is an unknown zone → outside_hours, cap untouched',
+      async (tz) => {
+        mocks.findConsent.mockResolvedValue(FULL_CONSENT);
+
+        await expect(
+          resolve({ calleeSide: 'client', callee: { userId: CALLEE, timeZone: tz }, now: NOON_UTC })
+        ).resolves.toEqual({ reachedBy: 'app', suppressedBy: 'outside_hours' });
+        expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+      }
+    );
+
+    it('a client on a real zone inside hours is eligible', async () => {
+      mocks.findConsent.mockResolvedValue(FULL_CONSENT);
+
+      await expect(
+        resolve({
+          calleeSide: 'client',
+          callee: { userId: CALLEE, timeZone: 'Australia/Melbourne' },
+          now: IN_HOURS,
+        })
+      ).resolves.toEqual({ reachedBy: 'sms' });
+    });
+
+    it('an expert on UTC at 12:00 UTC is unchanged — reached', async () => {
+      await expect(
+        resolve({
+          calleeSide: 'expert',
+          callee: { userId: CALLEE, timeZone: 'UTC' },
+          now: NOON_UTC,
+        })
+      ).resolves.toEqual({ reachedBy: 'sms' });
+    });
+  });
+
   it('a spent cap → cap', async () => {
     mocks.checkRateLimit.mockResolvedValue({ allowed: false, current: 4, ttlSeconds: 100 });
 
