@@ -5,6 +5,7 @@ import {
   STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS,
 } from './index';
 import * as asciiFold from './ascii-fold';
+import { ADD_TO_CALENDAR_PATH_PREFIX } from '../calendar/add-to-calendar-path';
 
 describe('redactSensitivePath', () => {
   it('redacts the token segment after a sensitive prefix', () => {
@@ -260,6 +261,7 @@ describe('redactSensitivePath', () => {
     it('SENSITIVE_PATH_PREFIXES is unchanged in contents and order — no new entry was added', () => {
       expect([...SENSITIVE_PATH_PREFIXES]).toEqual([
         '/shared/proposals/',
+        '/add-to-calendar/',
         '/review/',
         '/join/m/',
         '/join/',
@@ -770,9 +772,30 @@ describe('redactSensitivePath — BAL-529 fix-round-1 F8 (case-fold, %5f, fragme
   });
 });
 
+describe('the add-to-calendar landing', () => {
+  const TOKEN = 'eyJ2IjoxLCJ0IjoiQ29uc3VsdGF0aW9uIn0.c2lnbmF0dXJl';
+
+  it('redacts the token segment, as a path and inside a full URL', () => {
+    expect(redactSensitivePath(`/add-to-calendar/${TOKEN}`)).toBe('/add-to-calendar/[redacted]');
+    expect(redactSensitivePath(`https://app.balo.expert/add-to-calendar/${TOKEN}?x=1`)).toBe(
+      'https://app.balo.expert/add-to-calendar/[redacted]?x=1'
+    );
+  });
+
+  it('redacts the percent-encoded form stashed as a query value', () => {
+    const out = redactSensitivePath(`/onboarding?from=%2Fadd-to-calendar%2F${TOKEN}`);
+    expect(out).not.toContain(TOKEN);
+  });
+
+  it('matches the shared ADD_TO_CALENDAR_PATH_PREFIX constant', () => {
+    expect(SENSITIVE_PATH_PREFIXES).toContain(ADD_TO_CALENDAR_PATH_PREFIX);
+  });
+});
+
 describe('SENSITIVE_PATH_PREFIXES', () => {
-  it('lists exactly the four registered landings', () => {
+  it('lists exactly the five registered landings', () => {
     expect([...SENSITIVE_PATH_PREFIXES].sort((a, b) => a.localeCompare(b))).toEqual([
+      '/add-to-calendar/',
       '/join/',
       '/join/m/',
       '/review/',

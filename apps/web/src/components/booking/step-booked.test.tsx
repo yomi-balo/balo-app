@@ -3,6 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { StepBooked, type StepBookedProps } from './step-booked';
 import * as ics from './ics';
+import { toast } from 'sonner';
+import { CALENDAR_EVENTS, track } from '@/lib/analytics';
+import { CALENDAR_TAB_BLOCKED_COPY } from './add-to-calendar-actions';
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
+}));
 
 const mockPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
@@ -140,14 +147,14 @@ describe('StepBooked', () => {
     expect(mockPush).toHaveBeenCalledWith('/cases/engagement-1');
   });
 
-  it('builds and downloads the .ics event from "Add to calendar"', () => {
+  it('builds and downloads the .ics event from "Other calendar app"', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
     renderStep({
       expertFirstName: 'Amara',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
     });
-    screen.getByRole('button', { name: /Add to calendar/ }).click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
     expect(spy).toHaveBeenCalledWith({
       summary: 'Consultation with Amara',
       startIso: '2026-06-05T09:00:00.000Z',
@@ -155,5 +162,52 @@ describe('StepBooked', () => {
       filename: 'consultation.ics',
     });
     spy.mockRestore();
+  });
+
+  it('tracks both calendar choices on the booking confirmation surface', () => {
+    const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
+    renderStep();
+    screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
+      option: 'google',
+      surface: 'booking_confirmation',
+    });
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
+      option: 'ics',
+      surface: 'booking_confirmation',
+    });
+    spy.mockRestore();
+    open.mockRestore();
+  });
+
+  it('says so, and stays put, when the browser blocks the new tab', () => {
+    vi.spyOn(globalThis, 'open').mockReturnValue(null);
+    const assign = vi.fn();
+    vi.spyOn(globalThis, 'location', 'get').mockReturnValue({ assign } as unknown as Location);
+    renderStep();
+    screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
+    expect(toast.error).toHaveBeenCalledWith(CALENDAR_TAB_BLOCKED_COPY);
+    expect(assign).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('opens a pre-filled Google event in a new tab, with no provider href in the DOM', () => {
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
+    const { container } = renderStep({
+      expertFirstName: 'Amara',
+      startIso: '2026-06-05T09:00:00.000Z',
+      durationMinutes: 30,
+    });
+    expect(container.innerHTML).not.toContain('calendar.google.com');
+    screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
+    const [url, target] = open.mock.calls[0] ?? [];
+    expect(target).toBe('_blank');
+    const parsed = new URL(String(url));
+    expect(parsed.hostname).toBe('calendar.google.com');
+    expect(parsed.searchParams.get('text')).toBe('Consultation with Amara');
+    expect(parsed.searchParams.get('dates')).toBe('20260605T090000Z/20260605T093000Z');
+    open.mockRestore();
   });
 });

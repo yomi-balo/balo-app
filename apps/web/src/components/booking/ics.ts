@@ -21,18 +21,17 @@
  * (`apps/api/src/services/calendar-invites/build-calendar-invite-ics.ts`) delegates escaping to
  * `ical-generator` and uses the shared function only as a test ORACLE, never at runtime.
  */
-import { escapeIcsText } from '@balo/shared/calendar';
+import { escapeIcsText, toIcsUtcStamp } from '@balo/shared/calendar';
 export interface DownloadIcsEventInput {
   summary: string;
   startIso: string;
   durationMinutes: number;
   /** Defaults derived from `summary` when omitted. */
   filename?: string;
-}
-
-function icsTimestamp(date: Date): string {
-  const [stamp] = date.toISOString().replace(/[-:]/g, '').split('.');
-  return `${stamp ?? ''}Z`;
+  /** Escaped like `summary` — no input can start a new content line. */
+  description?: string;
+  /** Escaped like `summary`. */
+  location?: string;
 }
 
 /** Build and trigger the download of a minimal single-event `.ics` file. */
@@ -41,6 +40,8 @@ export function downloadIcsEvent({
   startIso,
   durationMinutes,
   filename,
+  description,
+  location,
 }: Readonly<DownloadIcsEventInput>): void {
   const start = new Date(startIso);
   const end = new Date(start.getTime() + durationMinutes * 60_000);
@@ -56,10 +57,12 @@ export function downloadIcsEvent({
     // each other. `crypto.randomUUID()` is browser-native and this function only ever runs from
     // a click handler.
     `UID:${crypto.randomUUID()}@balo.expert`,
-    `DTSTAMP:${icsTimestamp(new Date())}`,
-    `DTSTART:${icsTimestamp(start)}`,
-    `DTEND:${icsTimestamp(end)}`,
+    `DTSTAMP:${toIcsUtcStamp(new Date())}`,
+    `DTSTART:${toIcsUtcStamp(start)}`,
+    `DTEND:${toIcsUtcStamp(end)}`,
     `SUMMARY:${escapeIcsText(summary)}`,
+    ...(description === undefined ? [] : [`DESCRIPTION:${escapeIcsText(description)}`]),
+    ...(location === undefined ? [] : [`LOCATION:${escapeIcsText(location)}`]),
     'END:VEVENT',
     'END:VCALENDAR',
   ].join('\r\n');

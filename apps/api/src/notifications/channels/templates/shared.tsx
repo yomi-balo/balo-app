@@ -127,6 +127,18 @@ export const shared = {
     fontSize: '14px',
     padding: '12px 28px',
   } as const,
+  /** Outlined companion to `smallCtaButton` — for the secondary action beside a primary CTA. */
+  smallSecondaryButton: {
+    background: colors.surface,
+    border: `1px solid ${colors.border}`,
+    borderRadius: '10px',
+    color: colors.text,
+    fontWeight: '600',
+    textDecoration: 'none',
+    display: 'inline-block',
+    fontSize: '14px',
+    padding: '11px 24px',
+  } as const,
   statusPillBase: {
     display: 'inline-block',
     padding: '5px 14px',

@@ -55,6 +55,10 @@ jobs:
 
       - name: Type Check
         run: pnpm typecheck
+        env:
+          # Same OOM as the E2E and Build steps below: web's `tsc --noEmit` aborted with
+          # "JavaScript heap out of memory" at the default ~2 GB heap (PR #467, twice on one commit).
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Type Check (e2e)
         run: pnpm typecheck:e2e

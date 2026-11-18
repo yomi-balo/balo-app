@@ -347,7 +347,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "calls"
     },
     "order": 1,
-    "updated": "2026-11-16",
+    "updated": "2026-11-19",
     "related": [
       "your-cases",
       "joining-a-call",
@@ -480,6 +480,18 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 768,
           "height": 876
         }
+      },
+      {
+        "n": 8,
+        "title": "Adding the call to your calendar",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to\nyour calendar. An accepted invite follows any changes, so it moves or comes off your calendar if\nthe call is rescheduled or cancelled.</p>\n<p>If the call doesn't show up in your calendar, choose <strong>Add to calendar</strong> in the invite email and\npick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose\n<strong>Add to Google Calendar</strong> or <strong>Other calendar app</strong>. A call you add this way is your own copy: if\nthe time changes, we email you so you can update it.</p>",
+            "id": "s8-b0"
+          }
+        ],
+        "screenshot": null
       }
     ]
   },

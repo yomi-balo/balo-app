@@ -8,6 +8,10 @@ describe('CALENDAR_EVENTS — the Calendar page family (BAL-498, BAL-512)', () =
     expect(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED).toBe('calendar_edit_availability_clicked');
   });
 
+  it('pins the add-to-calendar choice event value', () => {
+    expect(CALENDAR_EVENTS.ADD_OPTION_CLICKED).toBe('calendar_add_option_clicked');
+  });
+
   it('pins the two BAL-512 event values', () => {
     expect(CALENDAR_EVENTS.CONNECT_CTA_CLICKED).toBe('calendar_connect_cta_clicked');
     expect(CALENDAR_EVENTS.WEEK_NAVIGATED).toBe('calendar_week_navigated');
@@ -21,7 +25,7 @@ describe('CALENDAR_EVENTS — the Calendar page family (BAL-498, BAL-512)', () =
    * which sorts before comparing. The two conventions coexist on purpose (matching
    * `nav.test.ts`'s ordered tuples); do not "make them consistent" by sorting this one.
    */
-  it('is exactly these 18 members, in source order', () => {
+  it('is exactly these 19 members, in source order', () => {
     expect(Object.keys(CALENDAR_EVENTS)).toEqual([
       'CONNECT_INITIATED',
       'DISCONNECT_INITIATED',
@@ -41,6 +45,7 @@ describe('CALENDAR_EVENTS — the Calendar page family (BAL-498, BAL-512)', () =
       'EDIT_AVAILABILITY_CLICKED',
       'CONNECT_CTA_CLICKED',
       'WEEK_NAVIGATED',
+      'ADD_OPTION_CLICKED',
     ]);
   });
 

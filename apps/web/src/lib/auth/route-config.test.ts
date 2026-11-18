@@ -130,7 +130,9 @@ describe('token-in-URL routes are public AND redacted', () => {
     }
   });
 
-  it('registers the three token-bearing landings in both registries', () => {
+  it('registers the token-bearing landings in both registries', () => {
+    expect(SENSITIVE_PATH_PREFIXES).toContain('/add-to-calendar/');
+    expect(PUBLIC_PREFIXES).toContain('/add-to-calendar/');
     expect(SENSITIVE_PATH_PREFIXES).toContain('/shared/proposals/');
     expect(SENSITIVE_PATH_PREFIXES).toContain('/review/');
     expect(SENSITIVE_PATH_PREFIXES).toContain('/join/');
