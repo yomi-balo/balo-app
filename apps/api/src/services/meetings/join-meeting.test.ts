@@ -25,6 +25,7 @@ const {
   mockFindRinging,
   mockLogInfo,
   mockLogWarn,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
@@ -49,6 +50,7 @@ const {
   mockCaptureException: vi.fn(),
   mockLogInfo: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockLogError: vi.fn(),
   /** BAL-548 — the `session.open_refused` raise, additive to the alarm above. */
   mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
   /** BAL-474 — a client-side guest's admission opens the billed session on behalf of the booker. */
@@ -58,7 +60,12 @@ const {
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: mockLogInfo, warn: mockLogWarn, error: vi.fn() }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: mockLogInfo,
+    warn: mockLogWarn,
+    error: mockLogError,
+  }),
 }));
 // ⚠ THE FACTORY MUST NAME EVERY EXPORT THE IMPORT GRAPH TOUCHES — a vitest factory mock
 // throws on any omitted one. `guest-participation.js` is NO LONGER in this suite's import
@@ -2322,17 +2329,31 @@ describe('BAL-649 — an admission during a live ring opens no session (member a
     expect(mockOpenSession).toHaveBeenCalledTimes(1);
   });
 
-  it('member arm: a failed ring read is absorbed by the open`s own catch — the join still succeeds', async () => {
+  it('member arm: a failed ring read fails the join CLOSED — a client-side party is never admitted unchecked', async () => {
     mockFindRinging.mockRejectedValue(new Error('db down'));
+    const minter = createJwtMinter();
 
-    const result = await joinMeetingAsMember({
-      meetingId: MEETING_ID,
-      userId: USER_ID,
-      minter: createJwtMinter(),
-    });
+    await expect(
+      joinMeetingAsMember({ meetingId: MEETING_ID, userId: USER_ID, minter })
+    ).rejects.toThrow('db down');
+
+    expect(minter.requests).toHaveLength(0);
+    expect(mockOpenSession).not.toHaveBeenCalled();
+  });
+
+  it('member arm: the admission-time ring read failing after the hold’s read succeeded is absorbed — the join succeeds, no session opens, the failure is logged', async () => {
+    mockFindRinging.mockResolvedValueOnce(undefined).mockRejectedValue(new Error('db down'));
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsMember({ meetingId: MEETING_ID, userId: USER_ID, minter });
 
     expect(result.ok).toBe(true);
+    expect(minter.requests).toHaveLength(1);
     expect(mockOpenSession).not.toHaveBeenCalled();
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'db down', openedBy: 'client' }),
+      expect.any(String)
+    );
   });
 
   it('guest arm: a ringing ring skips the open on behalf of the booker', async () => {
@@ -2360,5 +2381,171 @@ describe('BAL-649 — an admission during a live ring opens no session (member a
     });
 
     expect(mockOpenOnBehalf).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// BAL-650 — an expert-started Call now ring holds client-side parties until the callee commits
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+describe('BAL-650 — a client-side party is held while an expert-started ring awaits the commit', () => {
+  const RING_ID = 'ring-1';
+  const CALLEE_ID = USER_ID;
+  const AWAITING = {
+    id: RING_ID,
+    status: 'ringing',
+    placement: 'new_meeting',
+    callerSide: 'expert',
+    calleeUserId: CALLEE_ID,
+  };
+
+  function memberJoin(
+    extra: { answeringRingId?: string; userId?: string } = {}
+  ): ReturnType<typeof joinMeetingAsMember> & { minter: ReturnType<typeof createJwtMinter> } {
+    const minter = createJwtMinter();
+    const promise = joinMeetingAsMember({
+      meetingId: MEETING_ID,
+      userId: extra.userId ?? USER_ID,
+      answeringRingId: extra.answeringRingId,
+      minter,
+    });
+    return Object.assign(promise, { minter });
+  }
+
+  it('a client member joining without committing is answered call_answer_required with the ring id — no mint, no session', async () => {
+    mockFindRinging.mockResolvedValue(AWAITING);
+    const join = memberJoin();
+
+    await expect(join).resolves.toEqual({
+      ok: false,
+      code: 'call_answer_required',
+      ringId: RING_ID,
+    });
+
+    expect(join.minter.requests).toHaveLength(0);
+    expect(mockOpenSession).not.toHaveBeenCalled();
+    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, ringId: RING_ID, userId: USER_ID },
+      'Join held — an expert-started ring awaits the client commit'
+    );
+  });
+
+  it('the join reads no funding and no wallet — the hold is a ring-state read only', async () => {
+    mockFindRinging.mockResolvedValue(AWAITING);
+    await memberJoin();
+    expect(mockFindWalletByCompanyId).not.toHaveBeenCalled();
+  });
+
+  it('the matching answeringRingId from the ring callee mints and joins', async () => {
+    mockFindRinging.mockResolvedValue(AWAITING);
+    const join = memberJoin({ answeringRingId: RING_ID });
+
+    await expect(join).resolves.toMatchObject({ ok: true });
+    expect(join.minter.requests).toHaveLength(1);
+  });
+
+  it('a mismatched answeringRingId stays held', async () => {
+    mockFindRinging.mockResolvedValue(AWAITING);
+    const join = memberJoin({ answeringRingId: 'ring-other' });
+
+    await expect(join).resolves.toMatchObject({ ok: false, code: 'call_answer_required' });
+    expect(join.minter.requests).toHaveLength(0);
+  });
+
+  it('⚠ a client member who is NOT the ring callee stays held even with the right ring id', async () => {
+    mockFindRinging.mockResolvedValue({ ...AWAITING, calleeUserId: 'someone-else' });
+    const join = memberJoin({ answeringRingId: RING_ID });
+
+    await expect(join).resolves.toMatchObject({
+      ok: false,
+      code: 'call_answer_required',
+      ringId: RING_ID,
+    });
+    expect(join.minter.requests).toHaveLength(0);
+  });
+
+  it.each([
+    ['an expert-side member', { ...AWAITING }, { side: 'expert' }],
+    ['a client-started ring', { ...AWAITING, callerSide: 'client' }, {}],
+    ['an in-place ring', { ...AWAITING, placement: 'in_place' }, {}],
+    ['a ring that is no longer ringing', { ...AWAITING, status: 'connected' }, {}],
+  ])('never holds %s', async (_label, ring, gate) => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk(gate));
+    mockFindRinging.mockResolvedValue(ring);
+    const join = memberJoin();
+
+    await expect(join).resolves.toMatchObject({ ok: true });
+    expect(join.minter.requests).toHaveLength(1);
+  });
+
+  it('an expert-side member does zero ring reads for the hold', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+    mockFindRinging.mockResolvedValue(AWAITING);
+    await memberJoin();
+    expect(mockFindRinging).not.toHaveBeenCalledWith(MEETING_ID);
+  });
+
+  it('a non-case meeting does zero ring reads', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ subject: { contextType: 'project_discovery', contextId: 'req-1' } })
+    );
+    mockFindRinging.mockResolvedValue(AWAITING);
+    await memberJoin();
+    expect(mockFindRinging).not.toHaveBeenCalledWith(MEETING_ID);
+  });
+
+  describe('guests', () => {
+    async function guestJoin(overrides: Record<string, unknown>): Promise<{
+      result: Awaited<ReturnType<typeof joinMeetingAsGuest>>;
+      minter: ReturnType<typeof createJwtMinter>;
+    }> {
+      mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow(overrides));
+      const minter = createJwtMinter();
+      const result = await joinMeetingAsGuest({
+        meetingId: MEETING_ID,
+        rawGuestToken: RAW_TOKEN,
+        minter,
+      });
+      return { result, minter };
+    }
+
+    it('a client-party email guest is told to wait — nothing minted, nothing opened', async () => {
+      mockFindRinging.mockResolvedValue(AWAITING);
+      const { result, minter } = await guestJoin({ party: 'client', inviteChannel: 'email' });
+
+      expect(result).toEqual({ ok: true, state: 'waiting' });
+      expect(minter.requests).toHaveLength(0);
+      expect(mockOpenOnBehalf).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an expert-party email guest', { party: 'expert', inviteChannel: 'email' }],
+      ['a link-share observer', { party: 'client', inviteChannel: 'link' }],
+    ])('never holds %s', async (_label, overrides) => {
+      mockFindRinging.mockResolvedValue(AWAITING);
+      const { result, minter } = await guestJoin(overrides);
+
+      expect(result).toMatchObject({ ok: true, state: 'admitted' });
+      expect(minter.requests).toHaveLength(1);
+    });
+
+    it('a client-party guest is admitted once no ring awaits the commit', async () => {
+      const { result } = await guestJoin({ party: 'client', inviteChannel: 'email' });
+      expect(result).toMatchObject({ ok: true, state: 'admitted' });
+    });
+
+    it('the probe still answers live for a held client-party guest — it never reads the ring', async () => {
+      mockFindRinging.mockResolvedValue(AWAITING);
+      mockGuestFindLiveByTokenHash.mockResolvedValue(
+        await tokenRow({ party: 'client', inviteChannel: 'email' })
+      );
+      const result = await joinMeetingAsGuest({
+        meetingId: MEETING_ID,
+        rawGuestToken: RAW_TOKEN,
+        probe: true,
+      });
+      expect(result).toEqual({ ok: true, state: 'live' });
+    });
   });
 });

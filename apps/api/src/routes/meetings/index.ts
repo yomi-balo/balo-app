@@ -168,7 +168,7 @@ import {
 import { checkExpertBookingEligibility } from '../../services/meetings/expert-booking-eligibility.js';
 import {
   checkCaseBookingFunding,
-  type CaseBookingFundingCode,
+  CASE_BOOKING_FUNDING_STATUS,
 } from '../../services/meetings/case-booking-funding.js';
 import {
   bookAndProvisionMeeting,
@@ -207,18 +207,6 @@ const GATE_ERROR_STATUS = {
   context_type_mismatch: 400,
   call_cap_reached: 409,
 } as const;
-
-/**
- * BAL-474 — the Case funding guard's outcome → HTTP status. Exhaustive over `CaseBookingFundingCode`
- * BY TYPE (like `END_ERROR_STATUS`), so a new literal is a compile error rather than a silent 500.
- * The three refusals are 409; an unreadable snapshot FAILS CLOSED as 503.
- */
-const CASE_FUNDING_ERROR_STATUS: Record<CaseBookingFundingCode, number> = {
-  account_on_hold: 409,
-  booking_unfunded: 409,
-  booking_reserved: 409,
-  booking_funding_unavailable: 503,
-};
 
 /**
  * A thrown booking error → `{ status, error }`, or `null` for "unhandled, let it 500".
@@ -327,7 +315,7 @@ async function resolveBookingInput(
       })
     );
     if (!funding.ok) {
-      reply.code(CASE_FUNDING_ERROR_STATUS[funding.code]).send({ error: funding.code });
+      reply.code(CASE_BOOKING_FUNDING_STATUS[funding.code]).send({ error: funding.code });
       return null;
     }
   }

@@ -29,7 +29,9 @@ vi.mock('@/lib/auth/actions/switch-workspace', () => ({ switchWorkspaceAction: v
 
 // Mock NotificationBell to avoid fetch calls
 vi.mock('@/components/balo/notification-bell', () => ({
-  NotificationBell: () => <div data-testid="notification-bell" />,
+  NotificationBell: ({ realtimeUserId }: { realtimeUserId?: string | null }) => (
+    <div data-testid="notification-bell" data-realtime-user-id={realtimeUserId ?? ''} />
+  ),
 }));
 
 vi.mock('./call-pill/nav-call-pill', () => ({
@@ -49,6 +51,19 @@ describe('TopNav', () => {
   it('renders the NotificationBell component', () => {
     render(<TopNav />);
     expect(screen.getByTestId('notification-bell')).toBeInTheDocument();
+  });
+
+  it('BAL-620: passes the realtime user id through to the bell', () => {
+    render(<TopNav notificationsRealtimeUserId="user-1" />);
+    expect(screen.getByTestId('notification-bell')).toHaveAttribute(
+      'data-realtime-user-id',
+      'user-1'
+    );
+  });
+
+  it('BAL-620: gives the bell no realtime user id by default', () => {
+    render(<TopNav />);
+    expect(screen.getByTestId('notification-bell')).toHaveAttribute('data-realtime-user-id', '');
   });
 
   it('bare <TopNav /> renders no credits chip at all (D2 — no client-side re-decision)', () => {

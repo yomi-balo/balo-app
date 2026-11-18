@@ -13,6 +13,7 @@ import {
   isWithinCallHours,
   resolveCallNowAvailability,
   ringAnalyticsOutcome,
+  ringAwaitsClientCommit,
   selectInPlaceCandidate,
   type CallNowGateFacts,
   type CallRingFacts,
@@ -289,6 +290,15 @@ describe('isWithinCallHours', () => {
     expect(isWithinCallHours(instant, 'Australia/Sydney')).toBe(false);
   });
 
+  it('applies the window to the zone it is given, a client zone included', () => {
+    // 2026-08-14T01:00Z is 11:00 in Sydney and 21:00 the day before in New York.
+    const instant = new Date('2026-08-14T01:00:00.000Z');
+    expect(isWithinCallHours(instant, 'Australia/Sydney')).toBe(true);
+    expect(isWithinCallHours(instant, 'America/New_York')).toBe(false);
+    // 2026-08-14T14:00Z is 10:00 in New York and midnight-adjacent (00:00) in Sydney.
+    expect(isWithinCallHours(new Date('2026-08-14T14:00:00.000Z'), 'America/New_York')).toBe(true);
+  });
+
   it('treats midnight as hour 0, not 24', () => {
     expect(isWithinCallHours(new Date('2026-08-14T00:00:00.000Z'), 'UTC')).toBe(false);
   });
@@ -480,5 +490,24 @@ describe('ringAnalyticsOutcome', () => {
     ['stopped', 'stopped'],
   ])('%s → %s', (status, expected) => {
     expect(ringAnalyticsOutcome(status)).toBe(expected);
+  });
+});
+
+describe('ringAwaitsClientCommit', () => {
+  const AWAITING = { callerSide: 'expert', placement: 'new_meeting', status: 'ringing' } as const;
+
+  it('holds for a ringing expert-started ring that creates a new meeting', () => {
+    expect(ringAwaitsClientCommit(AWAITING)).toBe(true);
+  });
+
+  it.each([
+    ['a client caller', { ...AWAITING, callerSide: 'client' }],
+    ['an in-place ring', { ...AWAITING, placement: 'in_place' }],
+    ['a connected ring', { ...AWAITING, status: 'connected' }],
+    ['an unanswered ring', { ...AWAITING, status: 'unanswered' }],
+    ['a declined ring', { ...AWAITING, status: 'declined' }],
+    ['a stopped ring', { ...AWAITING, status: 'stopped' }],
+  ] as const)('does not hold for %s', (_label, ring) => {
+    expect(ringAwaitsClientCommit(ring)).toBe(false);
   });
 });

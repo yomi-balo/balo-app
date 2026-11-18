@@ -36,6 +36,11 @@ export type PanelOpenSource =
 
 export const POLL_VISIBLE_MS = 30_000;
 export const POLL_HIDDEN_MS = 60_000;
+/** Safety-net poll cadence while the push connection is live; a ping, not the poll, is the signal. */
+export const POLL_PUSH_VISIBLE_MS = 120_000;
+export const POLL_PUSH_HIDDEN_MS = 300_000;
+/** Trailing window that collapses a burst of pings into one feed refetch. */
+export const PUSH_REFETCH_DEBOUNCE_MS = 500;
 export const LOAD_TOAST_DELAY_MS = 700;
 export const ITEM_TOAST_MS = 8_000;
 export const COLLAPSED_TOAST_MS = 10_000;
@@ -69,6 +74,7 @@ export type NotificationKindIcon =
   | 'UserRound'
   | 'Users'
   | 'Star'
+  | 'Phone'
   | 'Bell';
 
 export type NotificationKindTone = 'primary' | 'info' | 'success' | 'muted';
@@ -98,6 +104,7 @@ const KIND_GROUPS: ReadonlyArray<{ namespaces: readonly string[]; kind: Notifica
   { namespaces: ['expert', 'onboarding', 'user'], kind: { icon: 'UserRound', tone: 'muted' } },
   { namespaces: ['party', 'company', 'agency'], kind: { icon: 'Users', tone: 'muted' } },
   { namespaces: ['review'], kind: { icon: 'Star', tone: 'muted' } },
+  { namespaces: ['call'], kind: { icon: 'Phone', tone: 'primary' } },
 ];
 
 const KIND_BY_NAMESPACE: ReadonlyMap<string, NotificationKind> = new Map(
@@ -186,6 +193,22 @@ export function formatUnreadTabTitle(title: string, unread: number): string {
   const bare = stripUnreadTabTitle(title);
   if (unread <= 0) return bare;
   return `(${unread > 9 ? '9+' : unread}) ${bare}`;
+}
+
+const POLL_DELAY_MS = {
+  poll: { visible: POLL_VISIBLE_MS, hidden: POLL_HIDDEN_MS },
+  push: { visible: POLL_PUSH_VISIBLE_MS, hidden: POLL_PUSH_HIDDEN_MS },
+} as const;
+
+/** The gap before the next feed poll: slower while the push connection is live and carrying pings. */
+export function pollDelayMs({ hidden, pushLive }: { hidden: boolean; pushLive: boolean }): number {
+  return POLL_DELAY_MS[pushLive ? 'push' : 'poll'][hidden ? 'hidden' : 'visible'];
+}
+
+/** Worst-case arrival latency of one toast: now minus the OLDEST newly-arrived `createdAt`, clamped at 0. */
+export function liveLatencyMs(unseen: readonly BellNotification[], nowMs: number): number {
+  const oldest = unseen.reduce((min, n) => Math.min(min, Date.parse(n.createdAt)), Infinity);
+  return Math.max(0, Math.round(nowMs - oldest));
 }
 
 /** Everything cached counts as seen: the later of the newest server `createdAt` and now. */

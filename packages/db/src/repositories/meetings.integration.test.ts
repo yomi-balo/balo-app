@@ -3258,6 +3258,20 @@ describe('meetingsRepository.listReservableCaseBookings (BAL-474, plan §I.2)', 
     });
     expect(row?.expertRateCents).toBe(RATE * 2);
   });
+
+  it('`excludeMeetingId` leaves that one meeting out and keeps the rest; no id leaves the set unchanged', async () => {
+    const owner = await reservableCompany();
+    const kept = await book(owner, { startOffsetMinutes: 60 });
+    const left = await book(owner, { startOffsetMinutes: 120 });
+
+    const without = await meetingsRepository.listReservableCaseBookings({
+      companyId: owner.companyId,
+      now: new Date(),
+      excludeMeetingId: left.meetingId,
+    });
+    expect(without.map((row) => row.meetingId)).toEqual([kept.meetingId]);
+    expect(await reservableIds(owner.companyId)).toEqual([kept.meetingId, left.meetingId]);
+  });
 });
 
 // ── BAL-474 (Rule A, D11.1 / D13) — the two reads billing start and card removal stand on ─────────

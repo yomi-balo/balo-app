@@ -16,8 +16,9 @@ import { CreditsChipSkeleton } from '@/components/layout/credits-chip';
 import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
 import { buildLiveStatusView, type LiveStatusView } from '@/lib/expert/live-status-view';
 import { log } from '@/lib/logging';
+import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
-import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
+import { analyticsIdentifyPropsFor, isImpersonatedSession } from '@/lib/auth/impersonation';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { ViewerTimezoneProvider } from '@/components/balo/date/viewer-timezone-context';
 import { LiveJoinRegistryProvider } from '@/components/balo/meetings/live-join-registry';
@@ -102,6 +103,12 @@ export default async function DashboardLayout({
       </Suspense>
     ) : null;
 
+  // BAL-620 — the bell opts into realtime push only for a signed-in user with a configured key,
+  // and never during a "view as" session (the viewer must not hold the viewed user's push
+  // channel); otherwise it is `null` and the browser never loads the realtime SDK.
+  const notificationsRealtimeUserId =
+    user !== null && !isImpersonatedSession(user) && isRealtimeConfigured() ? user.id : null;
+
   return (
     <SidebarProvider
       activeMode={user?.activeMode ?? 'client'}
@@ -132,7 +139,10 @@ export default async function DashboardLayout({
                   horizontal rail (dashboard Your move) scrolls inside itself instead of widening
                   the page past the viewport. */}
                 <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
-                  <TopNav creditsChip={creditsChip} />
+                  <TopNav
+                    creditsChip={creditsChip}
+                    notificationsRealtimeUserId={notificationsRealtimeUserId}
+                  />
                   <main className="flex-1 p-6 lg:p-8">
                     <div className="mx-auto max-w-7xl">{children}</div>
                   </main>

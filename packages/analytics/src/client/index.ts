@@ -147,6 +147,10 @@ export {
   // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it),
   // not in this one.
   CASE_BRIEF_EVENTS,
+  // BAL-650 — the Call now funding gate's CLIENT event constant. ⚠ THE RE-EXPORT ALLOWLIST.
+  // Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it), not in this
+  // one. ⚠ `CALL_NOW_SERVER_EVENTS` must NEVER join this list — it is server-only.
+  CALL_NOW_EVENTS,
 } from '../events';
 
 export type {
@@ -310,4 +314,8 @@ export type {
   DashboardUpNextSurface,
   // BAL-589 — the "Convert a case to a project" AI brief's event payload.
   CaseBriefEventMap,
+  // BAL-650 — the Call now funding gate's event payload and its two vocabularies.
+  CallNowEventMap,
+  CallNowFundingGateReason,
+  CallNowFundingGateResolution,
 } from '../events';

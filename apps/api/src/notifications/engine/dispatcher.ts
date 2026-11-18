@@ -324,6 +324,11 @@ function resolveRecipient(
       const id = context.payload.requestedByUserId;
       return typeof id === 'string' ? id : undefined;
     }
+    case 'callee': {
+      // BAL-652: the one user a Call now ring is aimed at, a single payload id (NOT a fan-out).
+      const id = context.payload.calleeUserId;
+      return typeof id === 'string' ? id : undefined;
+    }
     case 'admin':
       // Future: resolve admin user IDs from config or DB
       return undefined;

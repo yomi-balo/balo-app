@@ -1,7 +1,9 @@
 /**
  * BAL-474 (ADR-1040 Amendment 7 §H, D6.1, D6.5, D7.7, D8.1) — THE API'S CASE-BOOKING FUNDING GUARD.
  *
- * `POST /meetings` re-checks, for a Case, the SAME funding verdict the web booking gate ran — one
+ * `POST /meetings` re-checks, for a Case, the SAME funding verdict the web booking gate ran — and
+ * Call now runs it too: `startCallNow` for a client-started ring, `answerCallNow` when the client
+ * commits to an expert-started one — one
  * snapshot read (`bookingFundingRepository.readSnapshot`) and one pure verdict
  * (`assessCaseBookingFunding`), shared with the web so the two cannot drift. It is DEFENCE IN DEPTH:
  * the web gate is advisory (unlocked, check-time) and owns the billing-admin fan-out and analytics;
@@ -25,22 +27,47 @@
  */
 import * as Sentry from '@sentry/node';
 import { bookingFundingRepository } from '@balo/db';
-import { assessCaseBookingFunding, type CaseBookingFundingVerdict } from '@balo/shared/credit';
+import {
+  assessCaseBookingFunding,
+  suggestCaseBookingTopUpMinor,
+  type BookingFundingSnapshot,
+  type CaseBookingFundingVerdict,
+} from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { healCoveredHoldNow } from '../credit-session/notify.js';
 
 const log = createLogger('case-booking-funding');
 
-/** The four literals `POST /meetings` answers, BEFORE any write, when a Case booking is refused. */
+/** The four literals a refused Case booking (or Call now commit) answers, BEFORE any write. */
 export type CaseBookingFundingCode =
   | 'account_on_hold'
   | 'booking_unfunded'
   | 'booking_reserved'
   | 'booking_funding_unavailable';
 
+/**
+ * The refusal arm carries the client's all-in top-up figure (`suggestCaseBookingTopUpMinor`, over the
+ * snapshot that produced the final verdict). It is `null` for `booking_funding_unavailable` and for a
+ * covered hold whose heal failed — no figure is better than a wrong one.
+ */
 export type CaseBookingFundingResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly code: CaseBookingFundingCode };
+  | {
+      readonly ok: false;
+      readonly code: CaseBookingFundingCode;
+      readonly suggestedTopUpMinor: number | null;
+    };
+
+/**
+ * HTTP status per refusal code. Exhaustive BY TYPE, so a new literal is a compile error rather than a
+ * silent 500. The three refusals are 409; an unreadable snapshot FAILS CLOSED as 503.
+ */
+export const CASE_BOOKING_FUNDING_STATUS: Record<CaseBookingFundingCode, 409 | 503> = {
+  account_on_hold: 409,
+  booking_unfunded: 409,
+  booking_reserved: 409,
+  booking_funding_unavailable: 503,
+};
 
 export interface CaseBookingFundingInput {
   readonly companyId: string;
@@ -48,26 +75,51 @@ export interface CaseBookingFundingInput {
   readonly scheduledStart: Date;
   readonly scheduledEnd: Date;
   readonly now: Date;
+  /** A meeting left out of the reserved total — a Call now's own meeting (see the repository). */
+  readonly excludeMeetingId?: string;
+}
+
+interface ReadVerdict {
+  readonly snapshot: BookingFundingSnapshot;
+  readonly verdict: CaseBookingFundingVerdict;
 }
 
 /** A verdict that is NOT a covered hold → the wire code (or `ok`). */
-function codeForVerdict(verdict: CaseBookingFundingVerdict): CaseBookingFundingResult {
+function resultForVerdict(
+  { snapshot, verdict }: ReadVerdict,
+  input: CaseBookingFundingInput
+): CaseBookingFundingResult {
   if (verdict.ok) {
     return { ok: true };
   }
+  const code = codeForRefusal(verdict);
+  const suggestedTopUpMinor =
+    code === 'booking_funding_unavailable'
+      ? null
+      : suggestCaseBookingTopUpMinor(snapshot, {
+          scheduledStart: input.scheduledStart,
+          scheduledEnd: input.scheduledEnd,
+        });
+  return { ok: false, code, suggestedTopUpMinor };
+}
+
+/** A refused verdict → the wire code. */
+function codeForRefusal(
+  verdict: Exclude<CaseBookingFundingVerdict, { ok: true }>
+): CaseBookingFundingCode {
   switch (verdict.reason) {
     case 'account_on_hold':
     case 'covered_hold':
       // A covered hold that survived its heal is an open hold — the brake applies to it.
-      return { ok: false, code: 'account_on_hold' };
+      return 'account_on_hold';
     case 'reserved_by_upcoming':
-      return { ok: false, code: 'booking_reserved' };
+      return 'booking_reserved';
     case 'no_wallet':
     case 'no_mandate_insufficient_balance':
-      return { ok: false, code: 'booking_unfunded' };
+      return 'booking_unfunded';
     default:
       // `unknown_expert` — unreachable (the expert is the gate's own engagement row); fail closed.
-      return { ok: false, code: 'booking_funding_unavailable' };
+      return 'booking_funding_unavailable';
   }
 }
 
@@ -105,7 +157,7 @@ function verdictFigures(verdict: CaseBookingFundingVerdict): Record<string, numb
 async function healThenReverdict(
   walletId: string,
   input: CaseBookingFundingInput
-): Promise<CaseBookingFundingVerdict | null> {
+): Promise<ReadVerdict | null> {
   try {
     const healed = await healCoveredHoldNow({
       walletId,
@@ -129,16 +181,18 @@ async function healThenReverdict(
 }
 
 /** One read + one verdict — the same two calls the web gate makes. */
-async function readVerdict(input: CaseBookingFundingInput): Promise<CaseBookingFundingVerdict> {
+async function readVerdict(input: CaseBookingFundingInput): Promise<ReadVerdict> {
   const snapshot = await bookingFundingRepository.readSnapshot({
     companyId: input.companyId,
     expertProfileId: input.expertProfileId,
     now: input.now,
+    excludeMeetingId: input.excludeMeetingId,
   });
-  return assessCaseBookingFunding(snapshot, {
+  const verdict = assessCaseBookingFunding(snapshot, {
     scheduledStart: input.scheduledStart,
     scheduledEnd: input.scheduledEnd,
   });
+  return { snapshot, verdict };
 }
 
 /**
@@ -176,21 +230,21 @@ export async function checkCaseBookingFunding(
   input: CaseBookingFundingInput
 ): Promise<CaseBookingFundingResult> {
   try {
-    let verdict = await readVerdict(input);
-    if (!verdict.ok && verdict.reason === 'covered_hold') {
-      const rerun = await healThenReverdict(verdict.walletId, input);
+    let read = await readVerdict(input);
+    if (!read.verdict.ok && read.verdict.reason === 'covered_hold') {
+      const rerun = await healThenReverdict(read.verdict.walletId, input);
       if (rerun === null) {
         log.info(
           { companyId: input.companyId, expertProfileId: input.expertProfileId },
           'Case booking refused — an open hold the balance covers could not be healed'
         );
-        return { ok: false, code: 'account_on_hold' };
+        return { ok: false, code: 'account_on_hold', suggestedTopUpMinor: null };
       }
-      verdict = rerun;
+      read = rerun;
     }
-    const result = codeForVerdict(verdict);
+    const result = resultForVerdict(read, input);
     if (!result.ok) {
-      logRefusal(input, verdict, result.code);
+      logRefusal(input, read.verdict, result.code);
     }
     return result;
   } catch (error: unknown) {
@@ -203,6 +257,6 @@ export async function checkCaseBookingFunding(
       },
       'Case booking funding snapshot could not be read — failing CLOSED'
     );
-    return { ok: false, code: 'booking_funding_unavailable' };
+    return { ok: false, code: 'booking_funding_unavailable', suggestedTopUpMinor: null };
   }
 }

@@ -5,6 +5,7 @@ import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server'
 import { createRedisConnection } from '../../lib/redis.js';
 import { getInAppTemplate } from './templates/in-app-templates.js';
 import { logNotification } from './log.js';
+import { publishNotificationCreated } from './in-app-push.js';
 import type { DeliveryPayload } from './types.js';
 
 const log = createLogger('notification-in-app');
@@ -71,6 +72,13 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
 
     throw error; // Re-throw so BullMQ retries
   }
+
+  // 5. Ping the recipient's open bell. ⚠ AFTER the try/catch on purpose: the row and its
+  // 'sent' log are durable by now, so a publish problem can never reach the catch above —
+  // which would write a 'failed' log and rethrow into a BullMQ retry that double-inserts.
+  // `publishNotificationCreated` is not expected to reject; the catch keeps the job from ever
+  // retrying a delivery that already succeeded if that ever changes.
+  await publishNotificationCreated(payload.recipientId).catch(() => undefined);
 }
 
 export function startInAppWorker(): Worker<DeliveryPayload> {

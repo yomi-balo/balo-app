@@ -142,6 +142,7 @@ import {
 } from './conversation-unread-digest.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
+import { CallMissedEmail, buildCallMissedCopy, formatCallTimeForRecipient } from './call-missed.js';
 import {
   BookingConfirmedClientEmail,
   BookingConfirmedExpertEmail,
@@ -529,6 +530,36 @@ function readExpertApplicationEditSections(value: unknown): ExpertApplicationEdi
   if (!Array.isArray(value)) return [];
   const known = new Set(value);
   return EXPERT_APPLICATION_EDIT_SECTIONS.filter((section) => known.has(section));
+}
+
+/**
+ * BAL-652 — the missed-call email for either callee side. `lastMissedAtIso` is the LATEST missed
+ * ring's start, so a collapsed burst reads with the most recent attempt's time.
+ */
+function callMissedEmail(
+  calleeSide: 'client' | 'expert',
+  data: Record<string, unknown>
+): TemplateOutput {
+  const text = (key: string, fallback: string): string =>
+    typeof data[key] === 'string' && data[key].length > 0 ? data[key] : fallback;
+  const copy = buildCallMissedCopy({
+    calleeSide,
+    callerFirstName: text('callerFirstName', 'Your expert'),
+    callerCompanyName: text('callerCompanyName', 'Your client'),
+    callerPersonLabel: text('callerPersonLabel', 'Your client'),
+    caseTitle: text('callCaseTitle', 'your case'),
+    time: formatCallTimeForRecipient(text('lastMissedAtIso', ''), text('calleeTimeZone', 'UTC')),
+  });
+  return {
+    component: React.createElement(CallMissedEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      heading: copy.subject,
+      body: copy.body,
+      caseUrl: `${BASE_URL}/cases/${text('engagementId', '')}`,
+      baseUrl: BASE_URL,
+    }),
+    subject: sanitizeSubjectTitle(copy.subject),
+  };
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => TemplateOutput> = {
@@ -2732,6 +2763,11 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: `Your address is no longer ${sanitizeSubjectTitle(copy.companyName)}'s billing contact`,
     };
   },
+
+  // BAL-652 — the delayed, collapsed missed-call email (copy sheet §2). Template names are shared
+  // with the in-app registry and resolved per channel.
+  'call-missed-client': (data) => callMissedEmail('client', data),
+  'call-missed-expert': (data) => callMissedEmail('expert', data),
 };
 
 export function getEmailTemplate(

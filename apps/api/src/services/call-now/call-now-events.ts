@@ -4,9 +4,9 @@
  * ⚠ NEVER THROWS. Both run after the ring's compare-and-set has committed, so a failure here
  * must change no status code and roll back nothing; it is logged at `warn` and swallowed.
  *
- * ⚠ NO RULES EXIST FOR THESE EVENTS YET (BAL-652/653 add them), so the notification engine logs
- * and drops each one. Publishing now is what lets those tickets attach recipients and channels
- * without touching this ticket's call sites.
+ * Rules attach to `call.ringing` (an SMS when the ring was written `reachedBy: 'sms'`) and to
+ * `call.no_answer` (a bell item, plus the delayed missed-call email). `call.declined`,
+ * `call.stopped` and `call.connected` have no rule, so the engine logs and drops them.
  */
 import type { MeetingRing } from '@balo/db';
 import { CALL_NOW_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
@@ -36,6 +36,7 @@ function toPayload(ring: MeetingRing): CallRingEventPayload {
     placement: ring.placement,
     reachedBy: ring.reachedBy,
     expiresAt: ring.expiresAt.toISOString(),
+    startedAt: ring.createdAt.toISOString(),
   };
 }
 

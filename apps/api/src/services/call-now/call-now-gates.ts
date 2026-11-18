@@ -54,6 +54,8 @@ export interface CallNowGates {
   availability: ReturnType<typeof resolveCallNowAvailability>;
   /** `null` when no callee could be resolved. */
   callee: { userId: string; timeZone: string } | null;
+  /** Whether the presence port reports the callee active in the app; `false` with no callee. */
+  calleeOnline: boolean;
   /** The same-day booking a CLIENT caller may ring in place; always `null` for an expert caller. */
   inPlaceCandidate: { meetingId: string; scheduledStart: Date } | null;
   expertProfileId: string;
@@ -188,6 +190,7 @@ export async function loadCallNowGates(input: LoadCallNowGatesInput): Promise<Ca
   return {
     availability,
     callee: callee === null ? null : { userId: callee.userId, timeZone: callee.timeZone },
+    calleeOnline,
     inPlaceCandidate,
     expertProfileId: caseRow.expertProfileId,
     companyId: caseRow.companyId,

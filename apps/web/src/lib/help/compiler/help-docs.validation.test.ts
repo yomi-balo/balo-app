@@ -35,6 +35,7 @@ const EXPECTED_FILES = [
   'turning-a-case-into-a-project.md',
   'understanding-the-hours-on-your-project.md',
   'weekly-schedule.md',
+  'what-a-call-costs.md',
   'what-happens-after-you-apply.md',
   'writing-and-sending-a-proposal.md',
   'your-cases.md',

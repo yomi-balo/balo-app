@@ -32,6 +32,52 @@ vi.mock('motion/react', async () => {
 
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 
+type Listener = () => void;
+
+const { push, MockRealtime } = vi.hoisted(() => {
+  class Emitter {
+    listeners = new Map<string, Listener[]>();
+    on(event: string, listener: Listener): void {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+    }
+    emit(event: string): void {
+      for (const listener of this.listeners.get(event) ?? []) listener();
+    }
+  }
+  class MockChannel extends Emitter {
+    handlers: Listener[] = [];
+    subscribe(_event: string, handler: Listener): Promise<void> {
+      this.handlers.push(handler);
+      return Promise.resolve();
+    }
+  }
+  class MockRealtime {
+    connection = new Emitter();
+    channel = new MockChannel();
+    closed = false;
+    options: {
+      authCallback: (params: object, callback: (error: unknown, token: unknown) => void) => void;
+    };
+    channels = { get: (): MockChannel => this.channel };
+    constructor(options: MockRealtime['options']) {
+      this.options = options;
+      push.instances.push(this);
+    }
+    close(): void {
+      this.closed = true;
+    }
+  }
+  const push = { instances: [] as MockRealtime[] };
+  return { push, MockRealtime };
+});
+
+vi.mock('ably', () => ({ Realtime: MockRealtime }));
+
+const mockTokenAction = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/notifications/actions/create-notifications-realtime-token', () => ({
+  createNotificationsRealtimeTokenAction: mockTokenAction,
+}));
+
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
@@ -140,6 +186,8 @@ describe('NotificationBell', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    push.instances.length = 0;
+    mockTokenAction.mockResolvedValue({ success: false, disabled: true });
     vi.useFakeTimers({ shouldAdvanceTime: true });
     nav.pathname = '/dashboard';
     motionState.reduced = false;
@@ -603,6 +651,8 @@ describe('NotificationBell', () => {
       expect(track).toHaveBeenLastCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, {
         count: 2,
         trigger: 'live',
+        transport: 'poll',
+        latency_ms: expect.any(Number),
       });
     });
 
@@ -657,6 +707,8 @@ describe('NotificationBell', () => {
       expect(track).toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, {
         count: 1,
         trigger: 'live',
+        transport: 'catch_up',
+        latency_ms: expect.any(Number),
       });
     });
 
@@ -1435,6 +1487,243 @@ describe('NotificationBell', () => {
         'data-animated',
         'false'
       );
+    });
+  });
+
+  describe('realtime push', () => {
+    // Real time must not leak into the fake clock here: these tests assert exact timer boundaries.
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers();
+    });
+
+    function client(): InstanceType<typeof MockRealtime> {
+      const [instance] = push.instances;
+      if (instance === undefined) throw new Error('No realtime client was created');
+      return instance;
+    }
+
+    async function renderPush() {
+      const view = render(<NotificationBell realtimeUserId="u1" />);
+      await act(async () => {
+        await vi.waitFor(() => expect(push.instances).toHaveLength(1));
+      });
+      await flush(1500);
+      return view;
+    }
+
+    // Going live fires a catch-up fetch; settle it so a test's `before` count already includes it.
+    async function goLive(): Promise<void> {
+      act(() => {
+        client().connection.emit('connected');
+        client().channel.emit('attached');
+      });
+      await flush(0);
+    }
+
+    function ping(): void {
+      act(() => {
+        for (const handler of client().channel.handlers) handler();
+      });
+    }
+
+    function liveToastCalls() {
+      return vi
+        .mocked(track)
+        .mock.calls.filter(
+          ([event, props]) =>
+            event === NOTIFICATION_EVENTS.TOAST_SHOWN &&
+            (props as { trigger: string }).trigger === 'live'
+        );
+    }
+
+    it('holds no connection and polls every 30s without a realtime user id', async () => {
+      render(<NotificationBell />);
+      await flush(1500);
+
+      expect(push.instances).toHaveLength(0);
+      expect(feedFetches()).toHaveLength(1);
+
+      await flush(30_000);
+      expect(feedFetches()).toHaveLength(2);
+    });
+
+    it('refetches once, 500ms after a ping, and toasts the new notification as push', async () => {
+      await renderPush();
+      await goLive();
+      const before = feedFetches().length;
+      setFeed({
+        notifications: [
+          makeNotification({
+            id: 'p1',
+            title: 'Pinged',
+            createdAt: new Date(Date.now() - 800).toISOString(),
+          }),
+        ],
+        unreadCount: 1,
+        unseenCount: 1,
+      });
+
+      ping();
+      await flush(499);
+      expect(feedFetches()).toHaveLength(before);
+
+      await flush(1);
+      expect(feedFetches()).toHaveLength(before + 1);
+      expect(screen.getByRole('status')).toHaveTextContent('Pinged');
+      expect(track).toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, {
+        count: 1,
+        trigger: 'live',
+        transport: 'push',
+        latency_ms: expect.any(Number),
+      });
+    });
+
+    it('collapses a burst of pings into a single refetch', async () => {
+      await renderPush();
+      await goLive();
+      const before = feedFetches().length;
+
+      for (let i = 0; i < 3; i += 1) {
+        ping();
+        await flush(200);
+      }
+      expect(feedFetches()).toHaveLength(before);
+
+      await flush(500);
+      expect(feedFetches()).toHaveLength(before + 1);
+    });
+
+    it('measures latency from the oldest notification of the arrival', async () => {
+      await renderPush();
+      await goLive();
+      setFeed({
+        notifications: [
+          makeNotification({
+            id: 'new',
+            title: 'Newer',
+            createdAt: new Date(Date.now() - 1000).toISOString(),
+          }),
+          makeNotification({
+            id: 'old',
+            title: 'Older',
+            createdAt: new Date(Date.now() - 4000).toISOString(),
+          }),
+        ],
+        unreadCount: 2,
+        unseenCount: 2,
+      });
+
+      ping();
+      await flush(500);
+
+      const [call] = liveToastCalls();
+      const props = call?.[1] as { count: number; transport: string; latency_ms: number };
+      expect(props.count).toBe(2);
+      expect(props.transport).toBe('push');
+      expect(props.latency_ms).toBeGreaterThanOrEqual(4500);
+      expect(props.latency_ms).toBeLessThan(5500);
+    });
+
+    it('slows the poll to 120s while push is live', async () => {
+      await renderPush();
+      await goLive();
+      const before = feedFetches().length;
+
+      await flush(119_000);
+      expect(feedFetches()).toHaveLength(before);
+
+      await flush(1000);
+      expect(feedFetches()).toHaveLength(before + 1);
+    });
+
+    it('restarts the 30s poll from the moment the connection drops', async () => {
+      await renderPush();
+      await goLive();
+      const before = feedFetches().length;
+      await flush(100_000);
+      expect(feedFetches()).toHaveLength(before);
+
+      act(() => client().connection.emit('disconnected'));
+      await flush(29_999);
+      expect(feedFetches()).toHaveLength(before);
+
+      await flush(1);
+      expect(feedFetches()).toHaveLength(before + 1);
+    });
+
+    it('catches up once on reconnect, then returns to the 120s poll', async () => {
+      await renderPush();
+      await goLive();
+      act(() => client().connection.emit('disconnected'));
+      await flush(10_000);
+      const before = feedFetches().length;
+
+      await goLive();
+      await flush(0);
+      expect(feedFetches()).toHaveLength(before + 1);
+
+      await flush(119_000);
+      expect(feedFetches()).toHaveLength(before + 1);
+
+      await flush(1000);
+      expect(feedFetches()).toHaveLength(before + 2);
+    });
+
+    it('does one catch-up fetch on the first connect too', async () => {
+      await renderPush();
+      const before = feedFetches().length;
+
+      await goLive();
+      await flush(0);
+
+      expect(feedFetches()).toHaveLength(before + 1);
+    });
+
+    it('toasts a row that landed between the mount fetch and the first connect', async () => {
+      await renderPush();
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+      setFeed({
+        notifications: [
+          makeNotification({
+            id: 'gap',
+            title: 'Landed in the gap',
+            createdAt: new Date(Date.now() - 800).toISOString(),
+          }),
+        ],
+        unreadCount: 1,
+        unseenCount: 1,
+      });
+      const before = feedFetches().length;
+
+      await goLive();
+      await flush(0);
+
+      expect(feedFetches()).toHaveLength(before + 1);
+      expect(screen.getByRole('status')).toHaveTextContent('Landed in the gap');
+    });
+
+    it('stays on the 30s poll with no retry when the token endpoint reports disabled', async () => {
+      await renderPush();
+      const callback = vi.fn();
+      client().options.authCallback({}, callback);
+      await flush(1);
+
+      expect(callback).toHaveBeenCalledWith('Realtime disabled', null);
+      expect(client().closed).toBe(true);
+      expect(mockTokenAction).toHaveBeenCalledTimes(1);
+
+      const before = feedFetches().length;
+      await flush(30_000);
+      expect(feedFetches()).toHaveLength(before + 1);
+    });
+
+    it('closes the connection when the bell unmounts', async () => {
+      const { unmount } = await renderPush();
+
+      unmount();
+
+      expect(client().closed).toBe(true);
     });
   });
 });

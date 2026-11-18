@@ -1,5 +1,54 @@
-import { describe, it, expect } from 'vitest';
-import { NOTIFICATION_EVENTS, NOTIFICATION_SERVER_EVENTS } from './notifications';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import {
+  NOTIFICATION_EVENTS,
+  NOTIFICATION_SERVER_EVENTS,
+  type NotificationEventMap,
+} from './notifications';
+
+describe('NotificationEventMap[TOAST_SHOWN]', () => {
+  type ToastShown = NotificationEventMap[typeof NOTIFICATION_EVENTS.TOAST_SHOWN];
+  type LiveToast = Extract<ToastShown, { trigger: 'live' }>;
+
+  it('accepts a load toast with no transport or latency', () => {
+    expectTypeOf<{ count: number; trigger: 'load' }>().toExtend<ToastShown>();
+  });
+
+  it('accepts a live toast carrying its transport and latency', () => {
+    expectTypeOf<{
+      count: number;
+      trigger: 'live';
+      transport: 'push';
+      latency_ms: number;
+    }>().toExtend<ToastShown>();
+    expectTypeOf<{
+      count: number;
+      trigger: 'live';
+      transport: 'poll';
+      latency_ms: number;
+    }>().toExtend<ToastShown>();
+    expectTypeOf<{
+      count: number;
+      trigger: 'live';
+      transport: 'catch_up';
+      latency_ms: number;
+    }>().toExtend<ToastShown>();
+  });
+
+  it('rejects a live toast without a transport and latency', () => {
+    expectTypeOf<{ count: number; trigger: 'live' }>().not.toExtend<ToastShown>();
+  });
+
+  it('declares no transport or latency on the load arm', () => {
+    expectTypeOf<keyof Extract<ToastShown, { trigger: 'load' }>>().toEqualTypeOf<
+      'count' | 'trigger'
+    >();
+  });
+
+  it('types the live arm transport and latency', () => {
+    expectTypeOf<LiveToast['transport']>().toEqualTypeOf<'push' | 'poll' | 'catch_up'>();
+    expectTypeOf<LiveToast['latency_ms']>().toEqualTypeOf<number>();
+  });
+});
 
 describe('NOTIFICATION_EVENTS', () => {
   it('has exactly the expected keys', () => {

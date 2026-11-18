@@ -15,15 +15,18 @@ import type { LifecyclePresenceInterval } from './lifecycle';
 /** How long a ring rings when the callee is reached in the app. */
 export const CALL_NOW_RING_MS = 45_000;
 
-/** How long a ring rings when the callee was also reached by SMS. Wired by BAL-652. */
+/**
+ * How long a ring rings when the callee was also reached by SMS: the longer window gives the
+ * callee time to open the SMS link. `startCallNow` picks it when the ring's `reachedBy` is `sms`.
+ */
 export const CALL_NOW_RING_SMS_MS = 120_000;
 
 /** The created meeting's window: the 15-minute floor, the design's "estimate at the floor". */
 export { MIN_MEETING_MINUTES as CALL_NOW_SCHEDULED_MINUTES } from './bounds';
 
 /**
- * The expert's local hours during which a client may ring an offline expert: `[startHour,
- * endHour)`, 8 am to 8 pm.
+ * The callee's local hours, `[startHour, endHour)`, 8 am to 8 pm in the callee's own zone. It
+ * gates a client ringing an offline expert, and it gates the SMS that every ring may send.
  */
 export const CALL_HOURS = { startHour: 8, endHour: 20 } as const;
 
@@ -41,6 +44,17 @@ export type CallRingStatus = 'ringing' | 'connected' | 'unanswered' | 'declined'
 export type CallRingPlacement = 'new_meeting' | 'in_place';
 export type CallRingReach = 'app' | 'sms';
 export type CallSide = 'client' | 'expert';
+
+/**
+ * Why a ring did not also go out as an SMS, in the order the checks run: the first failing check
+ * is the reason reported.
+ */
+export type CallSmsSuppressReason =
+  | 'no_number'
+  | 'not_opted_in'
+  | 'active_in_app'
+  | 'outside_hours'
+  | 'cap';
 
 /** A ring status that is final: every status except `ringing`. */
 export type CallRingTerminalStatus = Exclude<CallRingStatus, 'ringing'>;
@@ -87,6 +101,22 @@ export function callNowFactsFromRings(rings: readonly CallRingFacts[]): CallNowF
 /** `true` while the ring is still ringing AND its window has not elapsed. */
 export function isRingLive(ring: CallRingFacts, now: Date): boolean {
   return ring.status === 'ringing' && now.getTime() < ring.expiresAt.getTime();
+}
+
+/**
+ * Does this ring still need the CLIENT side's commit before a client-side party may be admitted?
+ * True only for a ring the expert started that creates a new meeting and is still `ringing`: the
+ * client's funding check runs when they answer (ADR-1040 Amendment 8 §B), so until then a plain
+ * join by a client-side party is held. A ring that is still `ringing` past its window counts — the
+ * presence writer still connects it on co-presence. A client-started ring, an in-place ring and
+ * every terminal ring never await a commit.
+ */
+export function ringAwaitsClientCommit(
+  ring: Pick<CallRingFacts, 'placement' | 'status'> & { readonly callerSide: CallSide }
+): boolean {
+  return (
+    ring.status === 'ringing' && ring.callerSide === 'expert' && ring.placement === 'new_meeting'
+  );
 }
 
 /** The statuses whose ring ended without the callee connecting. */

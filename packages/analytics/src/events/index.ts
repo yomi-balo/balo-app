@@ -323,10 +323,15 @@ export {
   type MeetingBookingContextType,
 } from './meeting';
 // BAL-649 — SERVER-ONLY: the Call now ring's terminal event. Joins `ServerEvents`, never `AllEvents`.
+// BAL-650 — `CALL_NOW_EVENTS` is the CLIENT funding-gate family. Joins `AllEvents`, never `ServerEvents`.
 export {
   CALL_NOW_SERVER_EVENTS,
+  CALL_NOW_EVENTS,
   type CallNowServerEventMap,
+  type CallNowEventMap,
   type CallNowRingOutcome,
+  type CallNowFundingGateReason,
+  type CallNowFundingGateResolution,
 } from './call-now';
 export {
   GUEST_SERVER_EVENTS,

@@ -58,6 +58,7 @@ describe('publishCallEvent', () => {
       placement: 'in_place',
       reachedBy: 'sms',
       expiresAt: '2026-11-16T10:02:00.000Z',
+      startedAt: '2026-11-16T10:00:00.000Z',
     });
   });
 

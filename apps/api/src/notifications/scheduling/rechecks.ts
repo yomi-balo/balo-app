@@ -1,5 +1,6 @@
 import type { ScheduledNotification, ScheduledNotificationPayload } from '@balo/db';
 import { CONVERSATION_UNREAD_RECHECK, conversationUnreadRecheck } from './conversation-unread.js';
+import { CALL_MISSED_EMAIL_RECHECK, callMissedEmailRecheck } from './call-missed.js';
 import {
   MEETING_CLIENT_ABSENT_RECHECK,
   MEETING_EXPERT_ABSENT_RECHECK,
@@ -68,6 +69,9 @@ export const SCHEDULED_RECHECKS: Record<string, ScheduledRecheck> = {
   // BAL-411 — "is this reschedule proposal STILL pending, unexpired, unmoved and on a still-
   // reschedulable meeting?" See `reschedule-proposal.ts`.
   [RESCHEDULE_PROPOSAL_UNANSWERED_RECHECK]: rescheduleProposalUnansweredRecheck,
+  // BAL-652 — "did the missed call connect, get declined, or fall out of the window?" See
+  // `call-missed.ts`.
+  [CALL_MISSED_EMAIL_RECHECK]: callMissedEmailRecheck,
 };
 
 /**

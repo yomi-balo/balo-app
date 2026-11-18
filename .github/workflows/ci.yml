@@ -317,6 +317,9 @@ jobs:
         run: pnpm build
         env:
           NEXT_PUBLIC_APP_URL: http://localhost:3000
+          # Same OOM as the E2E step above: `next build`'s TypeScript worker aborted with
+          # "JavaScript heap out of memory" at the default ~2 GB heap.
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Prod-inert smoke — /api/auth/test-login 404s under next start
         run: bash scripts/e2e/test-login-prod-smoke.sh
