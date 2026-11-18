@@ -178,8 +178,8 @@ describe('processInAppJob', () => {
       mockPublishNotificationCreated.mockRejectedValueOnce(new Error('ably down'));
 
       // The real publisher never rejects; this pins what the adapter does if one ever did:
-      // the row is already durable, so nothing may be written twice.
-      await processInAppJob(makeJob()).catch(() => undefined);
+      // the job still resolves and, the row being durable, nothing is written twice.
+      await expect(processInAppJob(makeJob())).resolves.toBeUndefined();
 
       expect(mockInsert).toHaveBeenCalledTimes(1);
       expect(mockLogNotification).not.toHaveBeenCalledWith(

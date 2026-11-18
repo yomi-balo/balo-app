@@ -229,7 +229,7 @@ BREVO_SENDER_EMAIL=    # From address, e.g. notifications@balo.expert (optional 
 
 ## In-App Notification Adapter
 
-> **Status:** Not yet implemented — see BAL-224 for the full ticket.
+> **Status:** Implemented — `apps/api/src/notifications/channels/in-app.adapter.ts` (BAL-224; realtime ping BAL-620).
 
 Writes to a `user_notifications` table via the repository pattern. The frontend reads via polling. After the write, the adapter also pings `notifications:{userId}` on Ably (content-free, best-effort — a failed publish never fails the job) and the bell refetches.
 

@@ -26,6 +26,12 @@ describe('NotificationEventMap[TOAST_SHOWN]', () => {
       transport: 'poll';
       latency_ms: number;
     }>().toExtend<ToastShown>();
+    expectTypeOf<{
+      count: number;
+      trigger: 'live';
+      transport: 'catch_up';
+      latency_ms: number;
+    }>().toExtend<ToastShown>();
   });
 
   it('rejects a live toast without a transport and latency', () => {
@@ -39,7 +45,7 @@ describe('NotificationEventMap[TOAST_SHOWN]', () => {
   });
 
   it('types the live arm transport and latency', () => {
-    expectTypeOf<LiveToast['transport']>().toEqualTypeOf<'push' | 'poll'>();
+    expectTypeOf<LiveToast['transport']>().toEqualTypeOf<'push' | 'poll' | 'catch_up'>();
     expectTypeOf<LiveToast['latency_ms']>().toEqualTypeOf<number>();
   });
 });

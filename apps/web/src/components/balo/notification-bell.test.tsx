@@ -707,7 +707,7 @@ describe('NotificationBell', () => {
       expect(track).toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, {
         count: 1,
         trigger: 'live',
-        transport: 'poll',
+        transport: 'catch_up',
         latency_ms: expect.any(Number),
       });
     });
@@ -1491,6 +1491,12 @@ describe('NotificationBell', () => {
   });
 
   describe('realtime push', () => {
+    // Real time must not leak into the fake clock here: these tests assert exact timer boundaries.
+    beforeEach(() => {
+      vi.useRealTimers();
+      vi.useFakeTimers();
+    });
+
     function client(): InstanceType<typeof MockRealtime> {
       const [instance] = push.instances;
       if (instance === undefined) throw new Error('No realtime client was created');

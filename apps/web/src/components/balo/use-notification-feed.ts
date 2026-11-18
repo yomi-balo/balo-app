@@ -48,8 +48,11 @@ export interface NotificationFeed {
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
-/** What triggered a feed fetch: a realtime ping, or the poll / panel / retry paths. */
-type FetchSource = 'push' | 'poll';
+/**
+ * What triggered a feed fetch: a realtime ping, the poll timer (and the panel / retry paths), or a
+ * catch-up for a gap — a hidden tab becoming visible, or the push connection coming live.
+ */
+type FetchSource = 'push' | 'poll' | 'catch_up';
 
 interface LiveToastMeta {
   transport: FetchSource;
@@ -381,7 +384,7 @@ export function useNotificationFeed({
         return;
       }
       clearTimeout(pollTimer);
-      detach(fetchFeed().finally(scheduleNext));
+      detach(fetchFeed('catch_up').finally(scheduleNext));
     };
 
     detach(fetchFeed().finally(scheduleNext));
@@ -417,7 +420,7 @@ export function useNotificationFeed({
   useEffect(() => {
     if (pushLiveRef.current === pushLive) return;
     pushLiveRef.current = pushLive;
-    if (pushLive) detach(fetchFeed('poll'));
+    if (pushLive) detach(fetchFeed('catch_up'));
     rescheduleRef.current?.();
   }, [pushLive, fetchFeed]);
 

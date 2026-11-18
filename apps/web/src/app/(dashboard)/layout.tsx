@@ -18,7 +18,7 @@ import { buildLiveStatusView, type LiveStatusView } from '@/lib/expert/live-stat
 import { log } from '@/lib/logging';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
-import { analyticsIdentifyPropsFor } from '@/lib/auth/impersonation';
+import { analyticsIdentifyPropsFor, isImpersonatedSession } from '@/lib/auth/impersonation';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { ViewerTimezoneProvider } from '@/components/balo/date/viewer-timezone-context';
 import { LiveJoinRegistryProvider } from '@/components/balo/meetings/live-join-registry';
@@ -103,9 +103,11 @@ export default async function DashboardLayout({
       </Suspense>
     ) : null;
 
-  // BAL-620 — the bell opts into realtime push only for a signed-in user with a configured key;
-  // otherwise it is `null` and the browser never loads the realtime SDK.
-  const notificationsRealtimeUserId = user !== null && isRealtimeConfigured() ? user.id : null;
+  // BAL-620 — the bell opts into realtime push only for a signed-in user with a configured key,
+  // and never during a "view as" session (the viewer must not hold the viewed user's push
+  // channel); otherwise it is `null` and the browser never loads the realtime SDK.
+  const notificationsRealtimeUserId =
+    user !== null && !isImpersonatedSession(user) && isRealtimeConfigured() ? user.id : null;
 
   return (
     <SidebarProvider
