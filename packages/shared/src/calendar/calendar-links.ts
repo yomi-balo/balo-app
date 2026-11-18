@@ -21,10 +21,27 @@ const GOOGLE_CALENDAR_TEMPLATE_URL = 'https://calendar.google.com/calendar/rende
 /** Outlook on the web: `personal` is Outlook.com, `work` is Microsoft 365 (work or school). */
 export type OutlookCalendarKind = 'personal' | 'work';
 
+/**
+ * `deeplink/compose` — the path that opens the compose form on desktop AND mobile web
+ * (`action/compose` is desktop-only in some link libraries). ⚠ Not verifiable in CI: Outlook needs
+ * a sign-in, so a hand test (desktop + phone, signed in and out) is the check.
+ */
 const OUTLOOK_COMPOSE_URL: Record<OutlookCalendarKind, string> = {
-  personal: 'https://outlook.live.com/calendar/0/action/compose',
-  work: 'https://outlook.office.com/calendar/0/action/compose',
+  personal: 'https://outlook.live.com/calendar/0/deeplink/compose',
+  work: 'https://outlook.office.com/calendar/0/deeplink/compose',
 };
+
+/**
+ * `k=v&…` with every value `encodeURIComponent`-encoded — spaces as `%20`, never `+`.
+ * (`URLSearchParams` writes `+`, which Outlook has been seen to show literally after a sign-in
+ * redirect; `%20` is read as a space by both providers.)
+ */
+function toQuery(params: ReadonlyArray<readonly [string, string | undefined]>): string {
+  return params
+    .filter((entry): entry is readonly [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join('&');
+}
 
 /**
  * `2026-11-17T22:00:00.000Z` → `20261117T220000Z` — the RFC 5545 UTC basic format, which is also
@@ -42,28 +59,28 @@ function toOutlookUtcStamp(date: Date): string {
 }
 
 export function buildGoogleCalendarLink(input: Readonly<CalendarLinkInput>): string {
-  const params = new URLSearchParams({
-    action: 'TEMPLATE',
-    text: input.title,
-    dates: `${toIcsUtcStamp(input.start)}/${toIcsUtcStamp(input.end)}`,
-  });
-  if (input.details !== undefined) params.set('details', input.details);
-  if (input.location !== undefined) params.set('location', input.location);
-  return `${GOOGLE_CALENDAR_TEMPLATE_URL}?${params.toString()}`;
+  const query = toQuery([
+    ['action', 'TEMPLATE'],
+    ['text', input.title],
+    ['dates', `${toIcsUtcStamp(input.start)}/${toIcsUtcStamp(input.end)}`],
+    ['details', input.details],
+    ['location', input.location],
+  ]);
+  return `${GOOGLE_CALENDAR_TEMPLATE_URL}?${query}`;
 }
 
 export function buildOutlookCalendarLink(
   input: Readonly<CalendarLinkInput>,
   kind: OutlookCalendarKind
 ): string {
-  const params = new URLSearchParams({
-    path: '/calendar/action/compose',
-    rru: 'addevent',
-    subject: input.title,
-    startdt: toOutlookUtcStamp(input.start),
-    enddt: toOutlookUtcStamp(input.end),
-  });
-  if (input.details !== undefined) params.set('body', input.details);
-  if (input.location !== undefined) params.set('location', input.location);
-  return `${OUTLOOK_COMPOSE_URL[kind]}?${params.toString()}`;
+  const query = toQuery([
+    ['path', '/calendar/action/compose'],
+    ['rru', 'addevent'],
+    ['subject', input.title],
+    ['startdt', toOutlookUtcStamp(input.start)],
+    ['enddt', toOutlookUtcStamp(input.end)],
+    ['body', input.details],
+    ['location', input.location],
+  ]);
+  return `${OUTLOOK_COMPOSE_URL[kind]}?${query}`;
 }

@@ -160,10 +160,9 @@ describe('StepBooked', () => {
 
   it('tracks both calendar choices on the booking confirmation surface', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
     renderStep();
-    const google = screen.getByRole('link', { name: /Add to Google Calendar/ });
-    google.addEventListener('click', (e) => e.preventDefault());
-    google.click();
+    screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
     screen.getByRole('button', { name: /Other calendar app/ }).click();
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
       option: 'google',
@@ -174,20 +173,25 @@ describe('StepBooked', () => {
       surface: 'booking_confirmation',
     });
     spy.mockRestore();
+    open.mockRestore();
   });
 
-  it('links "Add to Google Calendar" to a pre-filled Google event in a new tab', () => {
-    renderStep({
+  it('opens a pre-filled Google event in a new tab, with no provider href in the DOM', () => {
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
+    const { container } = renderStep({
       expertFirstName: 'Amara',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
     });
-    const link = screen.getByRole('link', { name: /Add to Google Calendar/ });
-    expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    const url = new URL(link.getAttribute('href') ?? '');
-    expect(url.hostname).toBe('calendar.google.com');
-    expect(url.searchParams.get('text')).toBe('Consultation with Amara');
-    expect(url.searchParams.get('dates')).toBe('20260605T090000Z/20260605T093000Z');
+    expect(container.innerHTML).not.toContain('calendar.google.com');
+    screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
+    const [url, target, features] = open.mock.calls[0] ?? [];
+    expect(target).toBe('_blank');
+    expect(features).toBe('noopener,noreferrer');
+    const parsed = new URL(String(url));
+    expect(parsed.hostname).toBe('calendar.google.com');
+    expect(parsed.searchParams.get('text')).toBe('Consultation with Amara');
+    expect(parsed.searchParams.get('dates')).toBe('20260605T090000Z/20260605T093000Z');
+    open.mockRestore();
   });
 });

@@ -31,7 +31,7 @@ describe('AddToCalendarPage', () => {
   it('renders the signed event with its calendar options', async () => {
     await renderPage(signAddToCalendarToken(FUTURE, SECRET));
     expect(screen.getByRole('heading', { name: FUTURE.title })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Google Calendar/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Google Calendar/ })).toBeInTheDocument();
     expect(mockWarn).not.toHaveBeenCalled();
   });
 
@@ -59,6 +59,6 @@ describe('AddToCalendarPage', () => {
     };
     await renderPage(signAddToCalendarToken(past, SECRET));
     expect(screen.getByText(/already taken place/)).toBeInTheDocument();
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });

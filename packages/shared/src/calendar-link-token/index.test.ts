@@ -54,6 +54,14 @@ describe('add-to-calendar token', () => {
     expect(verifyAddToCalendarToken(token, SECRET)).toBeNull();
   });
 
+  it.each([
+    ['an over-long title', { ...EVENT, title: 'x'.repeat(301) }],
+    ['a non-https location', { ...EVENT, location: 'http://example.test/call' }],
+    ['an end before the start', { ...EVENT, endIso: EVENT.startIso }],
+  ])('refuses to sign %s (the limits verify enforces)', (_label, event) => {
+    expect(() => signAddToCalendarToken(event, SECRET)).toThrow();
+  });
+
   it('rejects everything when the secret is empty', () => {
     expect(verifyAddToCalendarToken(signAddToCalendarToken(EVENT, SECRET), '')).toBeNull();
     expect(() => signAddToCalendarToken(EVENT, '')).toThrow();

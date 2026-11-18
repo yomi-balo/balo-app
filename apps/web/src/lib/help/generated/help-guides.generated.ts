@@ -347,7 +347,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "calls"
     },
     "order": 1,
-    "updated": "2026-11-16",
+    "updated": "2026-11-19",
     "related": [
       "your-cases",
       "joining-a-call",
@@ -381,11 +381,11 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       },
       {
         "n": 2,
-        "title": "If your balance is low when you book",
+        "title": "Adding the call to your calendar",
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Your company's funding is checked as <strong>Review &amp; confirm</strong> opens, before anything is booked. It\npasses when your company has an active card on file and nothing left unpaid from an earlier call.\nWithout a card, your available balance needs to cover this call plus your company's other booked\ncalls. While an earlier call is left unpaid, a top-up is needed before booking, even with a card on\nfile.</p>\n<p>If it doesn't and you manage billing for the company you're booking for, a top-up appears right\nunder the form, with the smallest amount that covers the call already selected. Pay with a saved\ncard or add a new one, and the call books as soon as the credit lands. Nothing you've entered is\nlost along the way. See <a href=\"/help/buying-credit\">Buying credit</a> for more on topping up.</p>\n<p>When your company has no payment on hold, you'll also see <strong>Pay after the call</strong> beside the top-up. Choose it if you'd rather not top up first. Nothing is charged now,\nand any time beyond your balance is charged to the card after the call. Choosing it switches your\nteam's low-balance setting to <strong>Keep me going</strong>, and you can change that setting any time in\nBilling settings.</p>\n<p>If you can't manage billing yourself, you'll see <strong>Save and finish later</strong> instead. It lets your\ncompany's billing admins know a top-up is needed, and when you were starting a new case it keeps\nyour booking details on this device so you can pick up where you left off. It doesn't hold the\ntime, so the slot is only yours once the call is booked.</p>\n<p>If you manage billing but you're booking for a company other than the one you're viewing, the\nbutton reads <strong>Switch to <em>your company's name</em> and top up</strong>. It switches you to that company so\nyou can top up there.</p>\n<p>If the amount needed is very large, you'll see the full billing window instead. <strong>Top up</strong> takes\nyou to billing to add credit, or <strong>Set up billing</strong> if the company isn't set up to pay yet.\n<strong>I'll do this later</strong> closes the window with nothing booked.</p>",
+            "html": "<p>After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to\nyour calendar. An accepted invite follows any changes, so it moves or comes off your calendar if\nthe call is rescheduled or cancelled.</p>\n<p>If the call doesn't show up in your calendar, choose <strong>Add to calendar</strong> in the invite email and\npick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose\n<strong>Add to Google Calendar</strong> or <strong>Other calendar app</strong>. A call you add this way is your own copy: if\nthe time changes, we email you so you can update it.</p>",
             "id": "s2-b0"
           }
         ],
@@ -393,12 +393,24 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       },
       {
         "n": 3,
+        "title": "If your balance is low when you book",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Your company's funding is checked as <strong>Review &amp; confirm</strong> opens, before anything is booked. It\npasses when your company has an active card on file and nothing left unpaid from an earlier call.\nWithout a card, your available balance needs to cover this call plus your company's other booked\ncalls. While an earlier call is left unpaid, a top-up is needed before booking, even with a card on\nfile.</p>\n<p>If it doesn't and you manage billing for the company you're booking for, a top-up appears right\nunder the form, with the smallest amount that covers the call already selected. Pay with a saved\ncard or add a new one, and the call books as soon as the credit lands. Nothing you've entered is\nlost along the way. See <a href=\"/help/buying-credit\">Buying credit</a> for more on topping up.</p>\n<p>When your company has no payment on hold, you'll also see <strong>Pay after the call</strong> beside the top-up. Choose it if you'd rather not top up first. Nothing is charged now,\nand any time beyond your balance is charged to the card after the call. Choosing it switches your\nteam's low-balance setting to <strong>Keep me going</strong>, and you can change that setting any time in\nBilling settings.</p>\n<p>If you can't manage billing yourself, you'll see <strong>Save and finish later</strong> instead. It lets your\ncompany's billing admins know a top-up is needed, and when you were starting a new case it keeps\nyour booking details on this device so you can pick up where you left off. It doesn't hold the\ntime, so the slot is only yours once the call is booked.</p>\n<p>If you manage billing but you're booking for a company other than the one you're viewing, the\nbutton reads <strong>Switch to <em>your company's name</em> and top up</strong>. It switches you to that company so\nyou can top up there.</p>\n<p>If the amount needed is very large, you'll see the full billing window instead. <strong>Top up</strong> takes\nyou to billing to add credit, or <strong>Set up billing</strong> if the company isn't set up to pay yet.\n<strong>I'll do this later</strong> closes the window with nothing booked.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
         "title": "Choosing which case",
         "blocks": [
           {
             "kind": "html",
             "html": "<p>If you belong to more than one company, first choose which one pays under <strong>Bill this session\nto</strong>. Open cases are listed per company, so the case choice appears once you've picked.</p>\n<p>If you already have an open case with this expert, the confirm step asks which case the call is\nfor. Pick from the list: an existing case, or <strong>Start a new case</strong> for a new issue with that\nexpert. Booking from the expert's profile or the search results starts on <strong>Start a new case</strong>;\nbooking from a case's page starts on that case. If you have no open case with them, there's\nnothing to choose and the call starts a new one.</p>",
-            "id": "s3-b0"
+            "id": "s4-b0"
           }
         ],
         "screenshot": {
@@ -410,13 +422,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         }
       },
       {
-        "n": 4,
+        "n": 5,
         "title": "Moving a consultation",
         "blocks": [
           {
             "kind": "html",
             "html": "<p>Need a different time? Open the case and choose <strong>Reschedule</strong>, either next to the consultation or\nfrom its menu. Pick another open time in <strong>Reschedule consultation</strong>, then choose <strong>Move\nconsultation</strong>. Same length, same link — nothing else about the consultation changes.</p>\n<p>You can move a consultation until the join window opens, 3 minutes before it starts, as long as the\nexpert hasn't already suggested new times for it.</p>",
-            "id": "s4-b0"
+            "id": "s5-b0"
           }
         ],
         "screenshot": {
@@ -428,13 +440,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         }
       },
       {
-        "n": 5,
+        "n": 6,
         "title": "When the expert suggests new times",
         "blocks": [
           {
             "kind": "html",
             "html": "<p>Sometimes the expert needs to move a call and suggests up to 3 new times. You'll see <strong>Pick a new\ntime</strong> on the case, and an amber line on <strong>Cases</strong> that reads <strong>Choose a time</strong>. Choose one of the\ntimes and select <strong>Accept</strong>, or select <strong>Keep my time</strong> to stay with your original booking. If you\nkeep it, your original time stands.</p>\n<p>There's a reply-by date on the suggestion, and no need to do anything before then. If it passes\nwithout a reply, your original time simply stands.</p>",
-            "id": "s5-b0"
+            "id": "s6-b0"
           }
         ],
         "screenshot": {
@@ -446,13 +458,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         }
       },
       {
-        "n": 6,
+        "n": 7,
         "title": "Cancelling a consultation",
         "blocks": [
           {
             "kind": "html",
             "html": "<p>Open the consultation's menu on the case and choose <strong>Cancel consultation</strong>. You can cancel any\ntime before the call starts. If you do cancel, nothing is charged and any credit held for the call\ngoes back to your balance. If the time is the only problem, <strong>Reschedule instead</strong> in the same\nwindow moves the call rather than cancelling it. Choose <strong>Keep it</strong> to leave everything as it is.</p>",
-            "id": "s6-b0"
+            "id": "s7-b0"
           }
         ],
         "screenshot": {
@@ -464,13 +476,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         }
       },
       {
-        "n": 7,
+        "n": 8,
         "title": "If an expert isn't taking on new work",
         "blocks": [
           {
             "kind": "html",
             "html": "<p>Experts can pause new work for a while. When they do, their profile shows \"Not taking on new work\nright now\" instead of open times, and you can't start a new case with them. You can:</p>\n<ul>\n<li><strong>Find a similar expert</strong>, which searches for experts with similar experience who are available.</li>\n<li><strong>Get matched for a project</strong>, and our team introduces a matched expert.</li>\n</ul>\n<p>If you already have an open case with that expert, you can still message them on it and book\nfollow-up consultations. Book from that case's page, using <strong>Book with {name} again</strong> or <strong>Book a\nconsultation</strong>, which opens their calendar right there, already attached to the case. You can\nswitch to another of your open cases with them, but not start a new one.</p>",
-            "id": "s7-b0"
+            "id": "s8-b0"
           }
         ],
         "screenshot": {

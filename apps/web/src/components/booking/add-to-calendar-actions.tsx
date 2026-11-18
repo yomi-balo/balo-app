@@ -6,6 +6,7 @@ import type { CalendarAddSurface } from '@balo/analytics/events';
 import { Button } from '@/components/ui/button';
 import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 import { downloadIcsEvent } from './ics';
+import { openCalendarLink } from './open-calendar-link';
 
 export interface AddToCalendarActionsProps {
   summary: string;
@@ -29,7 +30,11 @@ export function AddToCalendarActions({
 }: Readonly<AddToCalendarActionsProps>): React.JSX.Element {
   const start = new Date(startIso);
   const end = new Date(start.getTime() + durationMinutes * 60_000);
-  const googleCalendarUrl = buildGoogleCalendarLink({ title: summary, start, end });
+
+  function handleGoogle(): void {
+    track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'google', surface });
+    openCalendarLink(buildGoogleCalendarLink({ title: summary, start, end }));
+  }
 
   function handleDownload(): void {
     track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'ics', surface });
@@ -38,16 +43,9 @@ export function AddToCalendarActions({
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-2">
-      <Button variant="outline" size="sm" asChild className="gap-1.5">
-        <a
-          href={googleCalendarUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={() => track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'google', surface })}
-        >
-          <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
-          Add to Google Calendar
-        </a>
+      <Button variant="outline" size="sm" onClick={handleGoogle} className="gap-1.5">
+        <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+        Add to Google Calendar
       </Button>
       <Button variant="ghost" size="sm" onClick={handleDownload} className="gap-1.5">
         <Download className="h-3.5 w-3.5" aria-hidden="true" />

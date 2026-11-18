@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
-import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultNormalizer } from '@testing-library/react';
 import { render, screen } from '@/test/utils';
 import { axe } from '@/test/axe';
@@ -15,52 +14,65 @@ const EVENT = {
   location: 'https://app.balo.expert/meetings/m-1/call',
 };
 
-function hrefOf(name: RegExp): URL {
-  return new URL(screen.getByRole('link', { name }).getAttribute('href') ?? '');
+/** The URL `globalThis.open` was handed when the named option was clicked. */
+function openedUrlFor(name: RegExp): URL {
+  const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
+  screen.getByRole('button', { name }).click();
+  const [url, target, features] = open.mock.calls.at(-1) ?? [];
+  expect(target).toBe('_blank');
+  expect(features).toBe('noopener,noreferrer');
+  return new URL(String(url));
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('AddToCalendarPanel', () => {
-  it('links each web calendar to a pre-filled event carrying the token’s fields', () => {
+  it('opens each web calendar on a pre-filled event carrying the token’s fields', () => {
     render(<AddToCalendarPanel event={EVENT} isPast={false} />);
 
-    const google = hrefOf(/Google Calendar/);
+    const google = openedUrlFor(/Google Calendar/);
     expect(google.hostname).toBe('calendar.google.com');
     expect(google.searchParams.get('text')).toBe(EVENT.title);
     expect(google.searchParams.get('dates')).toBe('20990302T220000Z/20990302T230000Z');
     expect(google.searchParams.get('details')).toBe(EVENT.details);
     expect(google.searchParams.get('location')).toBe(EVENT.location);
 
-    expect(hrefOf(/Outlook\.com/).hostname).toBe('outlook.live.com');
-    expect(hrefOf(/work or school/).hostname).toBe('outlook.office.com');
+    expect(openedUrlFor(/Outlook\.com/).hostname).toBe('outlook.live.com');
+    expect(openedUrlFor(/work or school/).hostname).toBe('outlook.office.com');
   });
 
-  it('opens every calendar in a new tab without a referrer or opener', () => {
-    render(<AddToCalendarPanel event={EVENT} isPast={false} />);
-    for (const link of screen.getAllByRole('link')) {
-      expect(link).toHaveAttribute('target', '_blank');
-      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    }
+  /**
+   * ⚠ The event's contents must not sit in the DOM as an href: PostHog autocapture records an
+   * anchor's href on click (`$external_click_url`, `$elements_chain`), out of reach of
+   * `sanitizeAnalyticsEvent`.
+   */
+  it('puts no link to a calendar provider in the DOM', () => {
+    const { container } = render(<AddToCalendarPanel event={EVENT} isPast={false} />);
+    expect(container.querySelectorAll('a[href]')).toHaveLength(0);
+    expect(container.innerHTML).not.toMatch(/calendar\.google\.com|outlook\.(live|office)\.com/);
   });
 
-  it('downloads an .ics with the title and the call’s length', async () => {
+  it('downloads an .ics with the title, length, description and location', async () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
     render(<AddToCalendarPanel event={EVENT} isPast={false} />);
-    await userEvent.setup().click(screen.getByRole('button', { name: /\.ics/ }));
+    screen.getByRole('button', { name: /\.ics/ }).click();
     expect(spy).toHaveBeenCalledWith({
       summary: EVENT.title,
       startIso: EVENT.startIso,
       durationMinutes: 60,
       filename: 'balo-call.ics',
+      description: EVENT.details,
+      location: EVENT.location,
     });
-    spy.mockRestore();
   });
 
   it('tracks which option was chosen, on the invite page surface', () => {
     vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'open').mockReturnValue(null);
     render(<AddToCalendarPanel event={EVENT} isPast={false} />);
-    const google = screen.getByRole('link', { name: /Google Calendar/ });
-    google.addEventListener('click', (e) => e.preventDefault());
-    google.click();
+    screen.getByRole('button', { name: /Google Calendar/ }).click();
     screen.getByRole('button', { name: /\.ics/ }).click();
     expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
       option: 'google',
@@ -70,13 +82,11 @@ describe('AddToCalendarPanel', () => {
       option: 'ics',
       surface: 'invite_page',
     });
-    vi.restoreAllMocks();
   });
 
   it('a past call shows no calendar actions', () => {
     render(<AddToCalendarPanel event={EVENT} isPast />);
     expect(screen.getByText(/already taken place/)).toBeInTheDocument();
-    expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
@@ -97,9 +107,9 @@ describe('AddToCalendarPanel', () => {
 });
 
 describe('formatCallWindow', () => {
-  it('formats the day and the time range in the given zone', () => {
+  it('formats the day and the time range in the given zone, and names the zone', () => {
     // Intl separates the range with thin / narrow no-break spaces — normalise before comparing.
     const out = formatCallWindow(EVENT.startIso, EVENT.endIso, 'Australia/Melbourne');
-    expect(out.replace(/[\u2009\u202f\u00a0]/g, ' ')).toBe('Tue, Mar 3 · 9:00 – 10:00 AM');
+    expect(out.replace(/[\u2009\u202f\u00a0]/g, ' ')).toBe('Tue, Mar 3 · 9:00 – 10:00 AM GMT+11');
   });
 });

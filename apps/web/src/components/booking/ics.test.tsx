@@ -55,7 +55,10 @@ describe('downloadIcsEvent', () => {
   });
 
   /** Capture the exact text handed to `new Blob([...])`. */
-  function captureIcs(summary: string): string {
+  function captureIcs(
+    summary: string,
+    extra: { description?: string; location?: string } = {}
+  ): string {
     let capturedText = '';
     const OriginalBlob = globalThis.Blob;
     vi.spyOn(globalThis, 'Blob').mockImplementation(function (
@@ -70,6 +73,7 @@ describe('downloadIcsEvent', () => {
       summary,
       startIso: '2026-09-01T04:00:00.000Z',
       durationMinutes: 30,
+      ...extra,
     });
     return capturedText;
   }
@@ -79,6 +83,26 @@ describe('downloadIcsEvent', () => {
     expect(ics).toContain('DTSTART:20260901T040000Z');
     expect(ics).toContain('DTEND:20260901T043000Z');
     expect(ics).toContain('SUMMARY:Intro call');
+  });
+
+  it('carries an escaped DESCRIPTION and LOCATION when given, and neither when not', () => {
+    const ics = captureIcs('Intro call', {
+      description: 'CPQ rollout\n\nJoin: https://app.balo.expert/meetings/m-1/call',
+      location: 'https://app.balo.expert/meetings/m-1/call',
+    });
+    expect(ics).toContain(
+      'DESCRIPTION:CPQ rollout\\n\\nJoin: https://app.balo.expert/meetings/m-1/call\r\n'
+    );
+    expect(ics).toContain('LOCATION:https://app.balo.expert/meetings/m-1/call\r\n');
+    vi.restoreAllMocks();
+    const bare = captureIcs('Intro call');
+    expect(bare).not.toContain('DESCRIPTION:');
+    expect(bare).not.toContain('LOCATION:');
+  });
+
+  it('an injected line break in the description cannot start a new property', () => {
+    const ics = captureIcs('Intro call', { description: 'x\r\nATTENDEE:mailto:a@evil.test' });
+    expect(ics).not.toMatch(/\r\nATTENDEE/);
   });
 
   it('emits the RFC 5545 required properties — PRODID, UID and DTSTAMP', () => {

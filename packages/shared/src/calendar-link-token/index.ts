@@ -65,6 +65,9 @@ export function signAddToCalendarToken(
   };
   if (event.details !== undefined) wire.d = event.details;
   if (event.location !== undefined) wire.l = event.location;
+  // The SAME rules `verify` applies — so an event the page would reject (an over-long title, a
+  // non-https location) fails here, loudly, instead of shipping a dead button.
+  if (toEvent(wire) === null) throw new Error('Event is outside the add-to-calendar token limits');
   const payloadB64 = Buffer.from(JSON.stringify(wire)).toString('base64url');
   return `${payloadB64}.${sign(payloadB64, secret)}`;
 }

@@ -28,6 +28,10 @@ export interface DownloadIcsEventInput {
   durationMinutes: number;
   /** Defaults derived from `summary` when omitted. */
   filename?: string;
+  /** Escaped like `summary` — no input can start a new content line. */
+  description?: string;
+  /** Escaped like `summary`. */
+  location?: string;
 }
 
 /** Build and trigger the download of a minimal single-event `.ics` file. */
@@ -36,6 +40,8 @@ export function downloadIcsEvent({
   startIso,
   durationMinutes,
   filename,
+  description,
+  location,
 }: Readonly<DownloadIcsEventInput>): void {
   const start = new Date(startIso);
   const end = new Date(start.getTime() + durationMinutes * 60_000);
@@ -55,6 +61,8 @@ export function downloadIcsEvent({
     `DTSTART:${toIcsUtcStamp(start)}`,
     `DTEND:${toIcsUtcStamp(end)}`,
     `SUMMARY:${escapeIcsText(summary)}`,
+    ...(description === undefined ? [] : [`DESCRIPTION:${escapeIcsText(description)}`]),
+    ...(location === undefined ? [] : [`LOCATION:${escapeIcsText(location)}`]),
     'END:VEVENT',
     'END:VCALENDAR',
   ].join('\r\n');

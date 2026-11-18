@@ -6,7 +6,7 @@ category:
   client: calls
 order: 1
 published: true
-updated: 2026-11-16
+updated: 2026-11-19
 related: [your-cases, joining-a-call, buying-credit]
 ---
 
@@ -35,6 +35,17 @@ You can also book from an open case's page with **Book with {name} again**. Thei
 right there, with that case already chosen.
 
 ![The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.](01)
+
+## Adding the call to your calendar
+
+After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to
+your calendar. An accepted invite follows any changes, so it moves or comes off your calendar if
+the call is rescheduled or cancelled.
+
+If the call doesn't show up in your calendar, choose **Add to calendar** in the invite email and
+pick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose
+**Add to Google Calendar** or **Other calendar app**. A call you add this way is your own copy: if
+the time changes, we email you so you can update it.
 
 ## If your balance is low when you book
 

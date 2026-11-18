@@ -303,6 +303,26 @@ describe('deliverCalendarInvite — happy path (user recipient)', () => {
     vi.unstubAllEnvs();
   });
 
+  it('sends without an "Add to calendar" link when the event is outside the token limits', async () => {
+    vi.stubEnv('INTERNAL_API_SECRET', 'test-secret');
+    mockResolveFacts.mockResolvedValue({ ...FACTS, summary: 'x'.repeat(301) });
+    const job = makeJob({
+      recipientId: 'user-1',
+      template: 'meeting-calendar-invite',
+      event: 'meeting.calendar_invite',
+      data: {},
+      payload: { correlationId: 'corr-1' },
+      calendarInvite: USER_SPEC,
+    });
+
+    await deliverCalendarInvite(job, FAKE_TRANSPORT);
+
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, Record<string, unknown>];
+    expect(data.addToCalendarUrl).toBeUndefined();
+    expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
+  });
+
   it('sends without an "Add to calendar" link when INTERNAL_API_SECRET is unset', async () => {
     vi.stubEnv('INTERNAL_API_SECRET', '');
     const job = makeJob({

@@ -37,10 +37,21 @@ describe('buildGoogleCalendarLink', () => {
   });
 });
 
+describe('space encoding', () => {
+  it.each([
+    ['google', buildGoogleCalendarLink(FULL)],
+    ['outlook', buildOutlookCalendarLink(FULL, 'personal')],
+  ])('%s encodes spaces as %%20, never +', (_name, link) => {
+    const query = link.slice(link.indexOf('?') + 1);
+    expect(query).toContain('Consultation%20with');
+    expect(query).not.toContain('+');
+  });
+});
+
 describe('buildOutlookCalendarLink', () => {
   it.each([
-    ['personal', 'https://outlook.live.com/calendar/0/action/compose'],
-    ['work', 'https://outlook.office.com/calendar/0/action/compose'],
+    ['personal', 'https://outlook.live.com/calendar/0/deeplink/compose'],
+    ['work', 'https://outlook.office.com/calendar/0/deeplink/compose'],
   ] as const)('%s targets %s', (kind, base) => {
     const url = new URL(buildOutlookCalendarLink(FULL, kind));
     expect(`${url.origin}${url.pathname}`).toBe(base);

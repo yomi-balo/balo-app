@@ -8,6 +8,7 @@ import type { CalendarAddOption } from '@balo/analytics/events';
 import { BaloCard } from '@/components/balo/card/balo-card';
 import { Button } from '@/components/ui/button';
 import { downloadIcsEvent } from '@/components/booking/ics';
+import { openCalendarLink } from '@/components/booking/open-calendar-link';
 import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 
 export interface AddToCalendarPanelProps {
@@ -16,7 +17,10 @@ export interface AddToCalendarPanelProps {
   isPast: boolean;
 }
 
-/** "Tue, Nov 17 · 9:00 – 10:00 AM" in `timeZone`. */
+/**
+ * "Tue, Nov 17 · 9:00 – 10:00 AM GMT+11" in `timeZone`. The zone is named because the invite
+ * email shows the same call in UTC — the reader needs to be able to reconcile the two.
+ */
 export function formatCallWindow(startIso: string, endIso: string, timeZone: string): string {
   const start = new Date(startIso);
   const end = new Date(endIso);
@@ -29,6 +33,7 @@ export function formatCallWindow(startIso: string, endIso: string, timeZone: str
   const range = new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
+    timeZoneName: 'short',
     timeZone,
   }).formatRange(start, end);
   return `${day} · ${range}`;
@@ -59,19 +64,24 @@ export function AddToCalendarPanel({
     ...(event.details === undefined ? {} : { details: event.details }),
     ...(event.location === undefined ? {} : { location: event.location }),
   };
-  const options: { option: CalendarAddOption; label: string; href: string }[] = [
-    { option: 'google', label: 'Google Calendar', href: buildGoogleCalendarLink(linkInput) },
+  const options: { option: CalendarAddOption; label: string; build: () => string }[] = [
+    { option: 'google', label: 'Google Calendar', build: () => buildGoogleCalendarLink(linkInput) },
     {
       option: 'outlook_personal',
       label: 'Outlook.com',
-      href: buildOutlookCalendarLink(linkInput, 'personal'),
+      build: () => buildOutlookCalendarLink(linkInput, 'personal'),
     },
     {
       option: 'outlook_work',
       label: 'Outlook for work or school',
-      href: buildOutlookCalendarLink(linkInput, 'work'),
+      build: () => buildOutlookCalendarLink(linkInput, 'work'),
     },
   ];
+
+  function handleOpen(option: (typeof options)[number]): void {
+    track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: option.option, surface: 'invite_page' });
+    openCalendarLink(option.build());
+  }
 
   function handleDownload(): void {
     track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'ics', surface: 'invite_page' });
@@ -80,6 +90,8 @@ export function AddToCalendarPanel({
       startIso: event.startIso,
       durationMinutes: Math.round((Date.parse(event.endIso) - Date.parse(event.startIso)) / 60_000),
       filename: 'balo-call.ics',
+      ...(event.details === undefined ? {} : { description: event.details }),
+      ...(event.location === undefined ? {} : { location: event.location }),
     });
   }
 
@@ -113,23 +125,11 @@ export function AddToCalendarPanel({
               <Button
                 key={option.label}
                 variant="outline"
-                asChild
+                onClick={() => handleOpen(option)}
                 className="w-full justify-between"
               >
-                <a
-                  href={option.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() =>
-                    track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
-                      option: option.option,
-                      surface: 'invite_page',
-                    })
-                  }
-                >
-                  {option.label}
-                  <ExternalLink className="text-muted-foreground h-4 w-4" aria-hidden="true" />
-                </a>
+                {option.label}
+                <ExternalLink className="text-muted-foreground h-4 w-4" aria-hidden="true" />
               </Button>
             ))}
             <Button variant="ghost" onClick={handleDownload} className="w-full justify-between">
