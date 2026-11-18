@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { StepBooked, type StepBookedProps } from './step-booked';
 import * as ics from './ics';
+import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 
 const mockPush = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
@@ -140,19 +141,37 @@ describe('StepBooked', () => {
     expect(mockPush).toHaveBeenCalledWith('/cases/engagement-1');
   });
 
-  it('builds and downloads the .ics event from "Download .ics"', () => {
+  it('builds and downloads the .ics event from "Other calendar app"', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
     renderStep({
       expertFirstName: 'Amara',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
     });
-    screen.getByRole('button', { name: /Download \.ics/ }).click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
     expect(spy).toHaveBeenCalledWith({
       summary: 'Consultation with Amara',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
       filename: 'consultation.ics',
+    });
+    spy.mockRestore();
+  });
+
+  it('tracks both calendar choices on the booking confirmation surface', () => {
+    const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    renderStep();
+    const google = screen.getByRole('link', { name: /Add to Google Calendar/ });
+    google.addEventListener('click', (e) => e.preventDefault());
+    google.click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
+      option: 'google',
+      surface: 'booking_confirmation',
+    });
+    expect(track).toHaveBeenCalledWith(CALENDAR_EVENTS.ADD_OPTION_CLICKED, {
+      option: 'ics',
+      surface: 'booking_confirmation',
     });
     spy.mockRestore();
   });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Job } from 'bullmq';
+import { verifyAddToCalendarToken } from '@balo/shared/calendar-link-token';
 
 const {
   mockFindByIdUser,
@@ -242,7 +243,9 @@ describe('deliverCalendarInvite — happy path (user recipient)', () => {
     );
   });
 
-  it('hands the template a Google Calendar link built from the same facts and window as the ICS', async () => {
+  it('hands the template an "Add to calendar" link signing the same facts and window as the ICS', async () => {
+    vi.stubEnv('INTERNAL_API_SECRET', 'test-secret');
+    vi.stubEnv('APP_URL', 'https://app.balo.test');
     const job = makeJob({
       recipientId: 'user-1',
       template: 'meeting-calendar-invite',
@@ -254,13 +257,69 @@ describe('deliverCalendarInvite — happy path (user recipient)', () => {
 
     await deliverCalendarInvite(job, FAKE_TRANSPORT);
 
-    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, { googleCalendarUrl: string }];
-    const url = new URL(data.googleCalendarUrl);
-    expect(url.hostname).toBe('calendar.google.com');
-    expect(url.searchParams.get('text')).toBe(FACTS.summary);
-    expect(url.searchParams.get('dates')).toBe('20260901T040000Z/20260901T043000Z');
-    expect(url.searchParams.get('details')).toBe(FACTS.description);
-    expect(url.searchParams.get('location')).toBe(FACTS.location);
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, { addToCalendarUrl: string }];
+    const prefix = 'https://app.balo.test/add-to-calendar/';
+    expect(data.addToCalendarUrl.startsWith(prefix)).toBe(true);
+    expect(
+      verifyAddToCalendarToken(data.addToCalendarUrl.slice(prefix.length), 'test-secret')
+    ).toEqual({
+      title: FACTS.summary,
+      startIso: '2026-09-01T04:00:00.000Z',
+      endIso: '2026-09-01T04:30:00.000Z',
+      details: FACTS.description,
+      location: FACTS.location,
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it('guest arm: the "Add to calendar" token carries no location and no call URL', async () => {
+    vi.stubEnv('INTERNAL_API_SECRET', 'test-secret');
+    vi.stubEnv('APP_URL', 'https://app.balo.test');
+    // The guest shape `resolveCalendarInviteFacts` returns (U4): no location, no join line.
+    mockResolveFacts.mockResolvedValue({
+      ...FACTS,
+      description: 'CPQ rollout\n\nJoin from the invitation email Balo sent you.',
+      location: undefined,
+      memberJoinUrl: undefined,
+    });
+    const job = makeJob({
+      recipientId: 'guest-1',
+      template: 'meeting-calendar-invite',
+      event: 'meeting.calendar_invite',
+      data: {},
+      payload: { correlationId: 'corr-1' },
+      calendarInvite: GUEST_SPEC,
+    });
+
+    await deliverCalendarInvite(job, FAKE_TRANSPORT);
+
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, { addToCalendarUrl: string }];
+    const token = data.addToCalendarUrl.slice('https://app.balo.test/add-to-calendar/'.length);
+    const event = verifyAddToCalendarToken(token, 'test-secret');
+    expect(event).not.toBeNull();
+    expect(event).not.toHaveProperty('location');
+    expect(event?.details).not.toContain('/meetings/');
+    expect(event?.details).not.toContain('/join/');
+    vi.unstubAllEnvs();
+  });
+
+  it('sends without an "Add to calendar" link when INTERNAL_API_SECRET is unset', async () => {
+    vi.stubEnv('INTERNAL_API_SECRET', '');
+    const job = makeJob({
+      recipientId: 'user-1',
+      template: 'meeting-calendar-invite',
+      event: 'meeting.calendar_invite',
+      data: {},
+      payload: { correlationId: 'corr-1' },
+      calendarInvite: USER_SPEC,
+    });
+
+    await deliverCalendarInvite(job, FAKE_TRANSPORT);
+
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, Record<string, unknown>];
+    expect(data.addToCalendarUrl).toBeUndefined();
+    expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
   });
 
   it('F5 (fix round 1, R4) — the "sent" outcome line carries a non-null contextType (from facts, resolved at step 6)', async () => {

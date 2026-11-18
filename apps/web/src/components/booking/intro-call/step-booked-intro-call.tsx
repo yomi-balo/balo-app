@@ -80,6 +80,7 @@ export function StepBookedIntroCall({
         startIso={startIso}
         durationMinutes={durationMinutes}
         filename={isCall ? 'call.ics' : 'intro-call.ics'}
+        surface="intro_call_confirmation"
       />
       {/* No "View case" — there is no case. This closes the dialog; the client is already on
           the conversation page, so it is just `onDone` (design §Step 3). */}

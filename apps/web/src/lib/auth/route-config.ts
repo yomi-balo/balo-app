@@ -69,6 +69,9 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   '/blog/',
   // BAL-386 — public, no-auth, email-bound magic-link proposal view.
   '/shared/proposals/',
+  // The calendar invite email's "Add to calendar" page — reached from an email by members and
+  // guests alike, so no session. Paired with `SENSITIVE_PATH_PREFIXES` (`@balo/shared/redaction`).
+  '/add-to-calendar/',
   // BAL-390 — public, no-auth, token-authenticated star-rating landing
   // (`/review/{token}`). The token NAMES the reviewer; it is not authorization — the
   // submit Server Action still evaluates PARTICIPATE on the engagement's company.

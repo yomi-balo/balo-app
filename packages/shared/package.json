@@ -23,6 +23,7 @@
     "./workspaces": "./src/workspaces/index.ts",
     "./availability": "./src/availability/index.ts",
     "./calendar": "./src/calendar/index.ts",
+    "./calendar-link-token": "./src/calendar-link-token/index.ts",
     "./experts": "./src/experts/index.ts",
     "./platform-settings": "./src/platform-settings/index.ts",
     "./redaction": "./src/redaction/index.ts",

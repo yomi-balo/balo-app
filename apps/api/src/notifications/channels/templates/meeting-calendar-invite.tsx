@@ -46,11 +46,11 @@ interface MeetingCalendarInviteEmailBaseProps {
   readonly transition: CalendarInviteEmailTransition;
   readonly baseUrl: string;
   /**
-   * Google Calendar "create event" link carrying the same title, window, description and location
-   * as the attached `.ics`. Offered as a secondary button because Google Calendar may not add an
-   * emailed invite on its own (its "Add invitations to my calendar" setting). Absent → no button.
+   * Balo's "Add to calendar" page for this call (`/add-to-calendar/{token}`) — one click into the
+   * web calendars, plus a `.ics` download. Offered as a secondary button because a calendar may
+   * not add the emailed invite on its own (e.g. a "known senders only" setting). Absent → no button.
    */
-  readonly googleCalendarUrl?: string;
+  readonly addToCalendarUrl?: string;
 }
 
 /**
@@ -76,6 +76,11 @@ const ISSUE_ICS_NOTE =
 const WITHDRAWAL_ICS_NOTE =
   'This short email carries the calendar file (.ics) attached below, so this call comes off ' +
   "your own calendar app — it isn't a duplicate of anything else Balo has sent you.";
+
+/** Draft copy, pending MJ approval. Provider-neutral by rule (ADR-1021 Scan B). */
+export const ADD_TO_CALENDAR_LEAD_IN =
+  'Not seeing this call in your calendar? Accept the invite in your email app so the entry ' +
+  'follows any changes — or add it yourself:';
 
 const invitePillStyle = {
   ...shared.statusPillBase,
@@ -123,19 +128,19 @@ export const TRANSITION_CHROME: Record<
   rescheduled: {
     heading: 'Your calendar invite has been updated',
     pill: '🕐 Time changed',
-    note: 'This call has moved — your calendar entry updates to the new time.',
+    note: 'This call has moved — an entry from an earlier invite updates to the new time. If you added the call to your calendar yourself, move that entry.',
     previewPrefix: 'Updated calendar invite',
   },
   cancelled: {
     heading: 'This call has been cancelled',
     pill: '🗓️ Cancelled',
-    note: 'This call is no longer happening — your calendar entry is being removed.',
+    note: 'This call is no longer happening — an entry from an earlier invite comes off your calendar. If you added the call yourself, remove that entry.',
     previewPrefix: 'Cancelled',
   },
   guest_removed: {
     heading: 'Your invitation has been withdrawn',
     pill: '🗓️ Invitation withdrawn',
-    note: 'You are no longer on this call — your calendar entry is being removed, and the invite link no longer works.',
+    note: 'You are no longer on this call, and the invite link no longer works. An entry from an earlier invite comes off your calendar; if you added the call yourself, remove that entry.',
     previewPrefix: 'Invitation withdrawn',
   },
 };
@@ -149,7 +154,7 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
     transition,
     baseUrl,
     audience,
-    googleCalendarUrl,
+    addToCalendarUrl,
   } = props;
   const window = formatMeetingWindowUtc(startIso, endIso);
   const chrome = TRANSITION_CHROME[transition];
@@ -198,10 +203,19 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
               audience={audience}
               memberJoinUrl={audience === 'member' ? props.memberJoinUrl : undefined}
             />
-            {googleCalendarUrl === undefined ? null : (
+            {addToCalendarUrl === undefined ? null : (
               <Section style={{ ...shared.ctaWrapper, margin: '0 0 20px' }}>
-                <Button style={shared.smallSecondaryButton} href={googleCalendarUrl}>
-                  📅 Add to Google Calendar
+                {/*
+                 * Accepting is the better path, said first: an accepted invite keeps Balo's UID,
+                 * so later reschedules and cancellations reach it, and the reader's calendar then
+                 * treats Balo as a known sender. The button is the fallback, and its entry is the
+                 * reader's own copy.
+                 */}
+                <Text style={{ ...shared.bodyText, fontSize: '13px', color: colors.textSecondary }}>
+                  {ADD_TO_CALENDAR_LEAD_IN}
+                </Text>
+                <Button style={shared.smallSecondaryButton} href={addToCalendarUrl}>
+                  📅 Add to calendar
                 </Button>
               </Section>
             )}

@@ -40,6 +40,8 @@ export {
 } from './phone';
 export {
   CALENDAR_EVENTS,
+  type CalendarAddOption,
+  type CalendarAddSurface,
   type CalendarEventMap,
   CALENDAR_SERVER_EVENTS,
   type CalendarServerEventMap,

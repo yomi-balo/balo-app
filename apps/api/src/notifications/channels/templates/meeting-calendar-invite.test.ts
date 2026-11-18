@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@react-email/render';
 import {
+  ADD_TO_CALENDAR_LEAD_IN,
   MeetingCalendarInviteEmail,
   TRANSITION_CHROME,
   type CalendarInviteEmailTransition,
@@ -298,41 +299,58 @@ describe('MeetingCalendarInviteEmail — the withdrawal body (BAL-476)', () => {
   );
 });
 
-describe('MeetingCalendarInviteEmail — "Add to Google Calendar" button', () => {
-  const GCAL =
-    'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Consultation&dates=20260901T100000Z%2F20260901T110000Z';
+describe('MeetingCalendarInviteEmail — "Add to calendar" button', () => {
+  const ADD_URL = `${SITE}/add-to-calendar/eyJ2IjoxfQ.c2ln`;
   const ISSUING = ['booked', 'guest_added', 'rescheduled'] as const;
   const WITHDRAWALS = ['cancelled', 'guest_removed'] as const;
 
   it.each(ISSUING)('%s, member audience: renders the button with the given href', async (t) => {
     const html = await render(
-      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), googleCalendarUrl: GCAL })
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), addToCalendarUrl: ADD_URL })
     );
-    expect(html).toContain('Add to Google Calendar');
-    expect(hrefsIn(html)).toContain(GCAL.replaceAll('&', '&amp;'));
+    expect(html).toContain('Add to calendar');
+    expect(hrefsIn(html)).toContain(ADD_URL);
   });
 
   it('guest audience: renders the button too (guests get the .ics as well)', async () => {
     const html = await render(
-      MeetingCalendarInviteEmail({ ...guestProps(), googleCalendarUrl: GCAL })
+      MeetingCalendarInviteEmail({ ...guestProps(), addToCalendarUrl: ADD_URL })
     );
-    expect(html).toContain('Add to Google Calendar');
+    expect(hrefsIn(html)).toContain(ADD_URL);
   });
 
-  it('no googleCalendarUrl: no button', async () => {
+  it('leads with accepting the invite, and names no calendar provider', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps(), addToCalendarUrl: ADD_URL })
+    );
+    expect(html).toContain('Accept the invite in your email app');
+    expect(ADD_TO_CALENDAR_LEAD_IN.toLowerCase()).not.toMatch(/google|microsoft|outlook|apple/);
+  });
+
+  it.each(['rescheduled', 'cancelled'] as const)(
+    '%s: the note stays true for someone who added the call themselves',
+    async (t) => {
+      const html = await render(MeetingCalendarInviteEmail(memberProps({ transition: t })));
+      expect(html).toContain('If you added the call');
+      expect(html).not.toContain('your calendar entry is being removed');
+      expect(html).not.toContain('your calendar entry updates to the new time');
+    }
+  );
+
+  it('no addToCalendarUrl: no button', async () => {
     const html = await render(MeetingCalendarInviteEmail(memberProps()));
-    expect(html).not.toContain('Add to Google Calendar');
+    expect(html).not.toContain('Add to calendar');
   });
 
   it.each(WITHDRAWALS)('⚠ %s: never offers to ADD a withdrawn call', async (t) => {
     const html = await render(
-      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), googleCalendarUrl: GCAL })
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), addToCalendarUrl: ADD_URL })
     );
-    expect(html).not.toContain('Add to Google Calendar');
-    expect(hrefsIn(html).some((href) => href.includes('calendar.google.com'))).toBe(false);
+    expect(html).not.toContain('Add to calendar');
+    expect(hrefsIn(html)).not.toContain(ADD_URL);
   });
 
-  it('getEmailTemplate passes data.googleCalendarUrl through to the body', async () => {
+  it('getEmailTemplate passes data.addToCalendarUrl through to the body', async () => {
     const { component } = getEmailTemplate('meeting-calendar-invite', {
       summary: 'Consultation',
       startIso: START,
@@ -340,8 +358,8 @@ describe('MeetingCalendarInviteEmail — "Add to Google Calendar" button', () =>
       transition: 'booked',
       audience: 'member',
       memberJoinUrl: `${SITE}/meetings/meeting-1/call`,
-      googleCalendarUrl: GCAL,
+      addToCalendarUrl: ADD_URL,
     });
-    expect(await render(component)).toContain('Add to Google Calendar');
+    expect(hrefsIn(await render(component))).toContain(ADD_URL);
   });
 });

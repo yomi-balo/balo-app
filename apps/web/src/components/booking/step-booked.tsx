@@ -91,6 +91,7 @@ export function StepBooked({
         startIso={startIso}
         durationMinutes={durationMinutes}
         filename="consultation.ics"
+        surface="booking_confirmation"
       />
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button variant="outline" onClick={onDone}>

@@ -85,14 +85,14 @@ describe('StepBookedIntroCall', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it('builds and downloads the .ics event from "Download .ics"', () => {
+  it('builds and downloads the .ics event from "Other calendar app"', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
     renderStep({
       expertFirstName: 'Priya',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
     });
-    screen.getByRole('button', { name: /Download \.ics/ }).click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
     expect(spy).toHaveBeenCalledWith({
       summary: 'Intro call with Priya',
       startIso: '2026-06-05T09:00:00.000Z',
@@ -107,7 +107,7 @@ describe('StepBookedIntroCall', () => {
     renderStep({ callKind: 'call' });
     expect(screen.getByText(/· Call with Priya\./)).toBeInTheDocument();
     expect(screen.queryByText(/intro/i)).not.toBeInTheDocument();
-    screen.getByRole('button', { name: /Download \.ics/ }).click();
+    screen.getByRole('button', { name: /Other calendar app/ }).click();
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({ summary: 'Call with Priya', filename: 'call.ics' })
     );

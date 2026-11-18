@@ -11,7 +11,6 @@ import {
   type MeetingCalendarEvent,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { buildGoogleCalendarLink } from '@balo/shared/calendar';
 import { guestIsAdmittedForRead, sanitizeSelfDeclaredName } from '@balo/shared/meetings';
 import type { SendMailOptions } from 'nodemailer';
 import { readCalendarInviteSpec, type CalendarInviteSpec } from '../calendar-invite-spec.js';
@@ -24,6 +23,7 @@ import {
   type CalendarInviteAudience,
   type CalendarInviteFacts,
 } from '../../services/calendar-invites/resolve-calendar-invite-facts.js';
+import { buildAddToCalendarUrl } from './calendar-invite-add-link.js';
 import { buildCalendarInviteMailOptions } from './calendar-invite-message.js';
 import { logNotification } from './log.js';
 import { getEmailTemplate } from './templates/index.js';
@@ -600,10 +600,10 @@ export async function deliverCalendarInvite(
     memberJoinUrl: facts.memberJoinUrl,
     // Same title/window/description/location as the ICS above. The template drops it on a
     // withdrawal, so building it unconditionally is harmless.
-    googleCalendarUrl: buildGoogleCalendarLink({
+    addToCalendarUrl: buildAddToCalendarUrl({
       title: facts.summary,
-      start: meeting.scheduledStart,
-      end: meeting.scheduledEnd,
+      startIso: meeting.scheduledStart.toISOString(),
+      endIso: meeting.scheduledEnd.toISOString(),
       details: facts.description,
       ...(facts.location === undefined ? {} : { location: facts.location }),
     }),

@@ -2,7 +2,9 @@
 
 import { CalendarPlus, Download } from 'lucide-react';
 import { buildGoogleCalendarLink } from '@balo/shared/calendar';
+import type { CalendarAddSurface } from '@balo/analytics/events';
 import { Button } from '@/components/ui/button';
+import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 import { downloadIcsEvent } from './ics';
 
 export interface AddToCalendarActionsProps {
@@ -10,6 +12,7 @@ export interface AddToCalendarActionsProps {
   startIso: string;
   durationMinutes: number;
   filename: string;
+  surface: Extract<CalendarAddSurface, 'booking_confirmation' | 'intro_call_confirmation'>;
 }
 
 /**
@@ -22,26 +25,33 @@ export function AddToCalendarActions({
   startIso,
   durationMinutes,
   filename,
+  surface,
 }: Readonly<AddToCalendarActionsProps>): React.JSX.Element {
   const start = new Date(startIso);
   const end = new Date(start.getTime() + durationMinutes * 60_000);
   const googleCalendarUrl = buildGoogleCalendarLink({ title: summary, start, end });
 
   function handleDownload(): void {
+    track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'ics', surface });
     downloadIcsEvent({ summary, startIso, durationMinutes, filename });
   }
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-2">
       <Button variant="outline" size="sm" asChild className="gap-1.5">
-        <a href={googleCalendarUrl} target="_blank" rel="noopener noreferrer">
+        <a
+          href={googleCalendarUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'google', surface })}
+        >
           <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
           Add to Google Calendar
         </a>
       </Button>
       <Button variant="ghost" size="sm" onClick={handleDownload} className="gap-1.5">
         <Download className="h-3.5 w-3.5" aria-hidden="true" />
-        Download .ics
+        Other calendar app
       </Button>
     </div>
   );
