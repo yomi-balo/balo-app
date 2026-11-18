@@ -36,7 +36,7 @@ right there, with that case already chosen.
 
 ![The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.](01)
 
-## Adding the call to your calendar
+### Adding the call to your calendar
 
 After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to
 your calendar. An accepted invite follows any changes, so it moves or comes off your calendar if

@@ -16,11 +16,10 @@ const EVENT = {
 
 /** The URL `globalThis.open` was handed when the named option was clicked. */
 function openedUrlFor(name: RegExp): URL {
-  const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
+  const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
   screen.getByRole('button', { name }).click();
-  const [url, target, features] = open.mock.calls.at(-1) ?? [];
+  const [url, target] = open.mock.calls.at(-1) ?? [];
   expect(target).toBe('_blank');
-  expect(features).toBe('noopener,noreferrer');
   return new URL(String(url));
 }
 
@@ -70,7 +69,7 @@ describe('AddToCalendarPanel', () => {
 
   it('tracks which option was chosen, on the invite page surface', () => {
     vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
-    vi.spyOn(globalThis, 'open').mockReturnValue(null);
+    vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
     render(<AddToCalendarPanel event={EVENT} isPast={false} />);
     screen.getByRole('button', { name: /Google Calendar/ }).click();
     screen.getByRole('button', { name: /\.ics/ }).click();

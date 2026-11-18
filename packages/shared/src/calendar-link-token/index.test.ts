@@ -62,6 +62,13 @@ describe('add-to-calendar token', () => {
     expect(() => signAddToCalendarToken(event, SECRET)).toThrow();
   });
 
+  it('refuses to sign an event whose encoded token would exceed the cap verify enforces', () => {
+    // 1,500 characters passes the per-field details limit, but at 3 UTF-8 bytes each it encodes
+    // past the 4,096-character token cap.
+    const wide = { ...EVENT, details: '日'.repeat(1500) };
+    expect(() => signAddToCalendarToken(wide, SECRET)).toThrow(/longer than/);
+  });
+
   it('rejects everything when the secret is empty', () => {
     expect(verifyAddToCalendarToken(signAddToCalendarToken(EVENT, SECRET), '')).toBeNull();
     expect(() => signAddToCalendarToken(EVENT, '')).toThrow();

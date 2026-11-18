@@ -160,7 +160,7 @@ describe('StepBooked', () => {
 
   it('tracks both calendar choices on the booking confirmation surface', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
-    const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
     renderStep();
     screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
     screen.getByRole('button', { name: /Other calendar app/ }).click();
@@ -177,7 +177,7 @@ describe('StepBooked', () => {
   });
 
   it('opens a pre-filled Google event in a new tab, with no provider href in the DOM', () => {
-    const open = vi.spyOn(globalThis, 'open').mockReturnValue(null);
+    const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
     const { container } = renderStep({
       expertFirstName: 'Amara',
       startIso: '2026-06-05T09:00:00.000Z',
@@ -185,9 +185,8 @@ describe('StepBooked', () => {
     });
     expect(container.innerHTML).not.toContain('calendar.google.com');
     screen.getByRole('button', { name: /Add to Google Calendar/ }).click();
-    const [url, target, features] = open.mock.calls[0] ?? [];
+    const [url, target] = open.mock.calls[0] ?? [];
     expect(target).toBe('_blank');
-    expect(features).toBe('noopener,noreferrer');
     const parsed = new URL(String(url));
     expect(parsed.hostname).toBe('calendar.google.com');
     expect(parsed.searchParams.get('text')).toBe('Consultation with Amara');

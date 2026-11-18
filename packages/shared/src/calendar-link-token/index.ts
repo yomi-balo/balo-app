@@ -69,7 +69,13 @@ export function signAddToCalendarToken(
   // non-https location) fails here, loudly, instead of shipping a dead button.
   if (toEvent(wire) === null) throw new Error('Event is outside the add-to-calendar token limits');
   const payloadB64 = Buffer.from(JSON.stringify(wire)).toString('base64url');
-  return `${payloadB64}.${sign(payloadB64, secret)}`;
+  const token = `${payloadB64}.${sign(payloadB64, secret)}`;
+  // The per-field limits count characters; the token cap counts encoded bytes — non-ASCII text
+  // can pass the first and still overflow the second, which `verify` would then reject.
+  if (token.length > MAX_TOKEN_LENGTH) {
+    throw new Error('Event encodes to a token longer than the add-to-calendar limit');
+  }
+  return token;
 }
 
 function isIsoInstant(value: unknown): value is string {

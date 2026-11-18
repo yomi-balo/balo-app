@@ -94,6 +94,28 @@ describe('docs/help', () => {
     expect(validateHelpDocs(docs, publicImageExists)).toEqual([]);
   });
 
+  /**
+   * The screenshot runner (`e2e/help-screenshots/guide.ts` `assertSpecMatchesDoc`) refuses to load
+   * unless every `](NN)` image ref sits in `## ` section NN — and CI only typechecks that runner, so
+   * a new `## ` section without an image silently renumbers every later ref and breaks capture for
+   * EVERY guide. Same split as the runner (`^## `; `### ` subsections don't count). No help doc
+   * uses fenced code blocks, which the runner strips first.
+   */
+  it('keeps every image ref ](NN) in ## section NN, so the screenshot runner still loads', () => {
+    const offenders: string[] = [];
+    for (const { filename, source } of docs) {
+      const [, ...sections] = source.split(/^## /m);
+      sections.forEach((body, index) => {
+        for (const [, ref] of body.matchAll(/!\[[^\]]*\]\((\d{2})\)/g)) {
+          if (Number(ref) !== index + 1) {
+            offenders.push(`${filename}: ](${ref ?? ''}) is in section ${index + 1}`);
+          }
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('gives every screenshot a light and dark file of identical pixel size', () => {
     for (const doc of docs) {
       const slug = doc.filename.replace(/\.md$/, '');
