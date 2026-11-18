@@ -74,6 +74,7 @@ export type NotificationKindIcon =
   | 'UserRound'
   | 'Users'
   | 'Star'
+  | 'Phone'
   | 'Bell';
 
 export type NotificationKindTone = 'primary' | 'info' | 'success' | 'muted';
@@ -103,6 +104,7 @@ const KIND_GROUPS: ReadonlyArray<{ namespaces: readonly string[]; kind: Notifica
   { namespaces: ['expert', 'onboarding', 'user'], kind: { icon: 'UserRound', tone: 'muted' } },
   { namespaces: ['party', 'company', 'agency'], kind: { icon: 'Users', tone: 'muted' } },
   { namespaces: ['review'], kind: { icon: 'Star', tone: 'muted' } },
+  { namespaces: ['call'], kind: { icon: 'Phone', tone: 'primary' } },
 ];
 
 const KIND_BY_NAMESPACE: ReadonlyMap<string, NotificationKind> = new Map(

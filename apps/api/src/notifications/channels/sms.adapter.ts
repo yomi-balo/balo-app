@@ -1,7 +1,11 @@
 import { Worker, type Job } from 'bullmq';
 import { usersRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { trackServer, NOTIFICATION_SERVER_EVENTS } from '@balo/analytics/server';
+import {
+  trackServer,
+  CALL_NOW_SERVER_EVENTS,
+  NOTIFICATION_SERVER_EVENTS,
+} from '@balo/analytics/server';
 import { createRedisConnection, getRedis } from '../../lib/redis.js';
 import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js';
 import { maskPhone, getBrevoClient } from '../../lib/brevo.js';
@@ -20,6 +24,35 @@ const SMS_RATE_LIMIT: RateLimitConfig = {
   maxRequests: 5,
   windowSeconds: 3600,
 };
+
+/**
+ * BAL-652 — `call_sms_sent`, once Brevo has accepted a `call.ringing` SMS. `distinct_id` is the
+ * CALLER, matching `call_sms_suppressed`; the SMS's own recipient is the callee.
+ *
+ * ⚠ NEVER THROWS. It runs after the send succeeded, and a throw would reach the delivery catch
+ * below, which re-throws for a BullMQ retry and would send the SMS twice.
+ */
+function trackCallSmsSent(payload: DeliveryPayload): void {
+  if (payload.event !== 'call.ringing') {
+    return;
+  }
+  const { ringId, callerUserId } = payload.payload;
+  if (typeof ringId !== 'string' || typeof callerUserId !== 'string') {
+    return;
+  }
+  try {
+    trackServer(CALL_NOW_SERVER_EVENTS.SMS_SENT, {
+      audience: payload.recipientSide ?? 'client',
+      ring_id: ringId,
+      distinct_id: callerUserId,
+    });
+  } catch (error) {
+    log.warn(
+      { ringId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to track call_sms_sent'
+    );
+  }
+}
 
 /** Exported for testability — called by the BullMQ worker. */
 export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
@@ -138,6 +171,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
       recipient_phone_masked: maskPhone(user.phone),
       distinct_id: payload.recipientId,
     });
+    trackCallSmsSent(payload);
     log.info({ template: payload.template, messageId }, 'SMS sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

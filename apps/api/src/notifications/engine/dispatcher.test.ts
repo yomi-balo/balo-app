@@ -251,6 +251,45 @@ describe('dispatch', () => {
     expect(mockAdd.mock.calls[0][1].recipientId).toBe('req-1');
   });
 
+  describe('callee recipient (BAL-652)', () => {
+    const calleeRule: NotificationRule = {
+      ...baseRule,
+      channel: 'sms',
+      recipient: 'callee',
+      recipientSide: 'expert',
+      template: 'call-ringing-sms-expert',
+    };
+
+    it('resolves payload.calleeUserId through the single-recipient path, keyed on the ring', async () => {
+      const context: RuleContext = {
+        event: 'call.ringing',
+        payload: { correlationId: 'ring-1', calleeUserId: 'callee-1', callerUserId: 'caller-1' },
+        data: {},
+      };
+
+      await dispatch(calleeRule, context);
+
+      expect(mockAdd).toHaveBeenCalledOnce();
+      const [name, deliveryPayload, options] = mockAdd.mock.calls[0];
+      expect(name).toBe('call-ringing-sms-expert');
+      expect(deliveryPayload.recipientId).toBe('callee-1');
+      expect(deliveryPayload.recipientSide).toBe('expert');
+      expect(options.jobId).toBe('call-ringing-sms-expert--callee-1--ring-1');
+    });
+
+    it('skips when payload.calleeUserId is absent or not a string', async () => {
+      for (const calleeUserId of [undefined, 42]) {
+        await dispatch(calleeRule, {
+          event: 'call.ringing',
+          payload: { correlationId: 'ring-1', calleeUserId },
+          data: {},
+        });
+      }
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
+  });
+
   it('skips billing_creator dispatch when payload.creatorUserId is absent', async () => {
     const creatorRule: NotificationRule = {
       ...baseRule,

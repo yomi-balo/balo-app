@@ -25,6 +25,7 @@ import { readMilestoneTitles } from './engagement-review-decision-emails.js';
 import { personWithOrgLabel } from '@balo/shared/parties';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
 import { timeEntryChangedSentence } from './engagement-time-entry-changed.js';
+import { formatCallTimeForRecipient } from './call-missed.js';
 
 interface InAppOutput {
   title: string;
@@ -349,6 +350,45 @@ function fileShareBody(party: string, data: Record<string, unknown>): string {
   if (!noteExcerpt) return `${party} shared a file on this request.`;
   const fileName = (data.fileName as string | undefined) ?? 'a file';
   return `${party} shared ${fileName}: “${noteExcerpt}”`;
+}
+
+/** BAL-652 — a string field off the merged template data, or `fallback`. */
+function callText(data: Record<string, unknown>, key: string, fallback: string): string {
+  const value = data[key];
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+/**
+ * BAL-652 — the bell item for a missed Call now ring, for either callee side. The title and the
+ * opening of the body differ by side (copy sheet §2); the time is the ring's start in the
+ * callee's own zone, and the action opens the case.
+ */
+function missedCallItem(
+  calleeSide: 'client' | 'expert',
+  data: Record<string, unknown>
+): InAppOutput {
+  const caseTitle = callText(data, 'callCaseTitle', 'your case');
+  const time = formatCallTimeForRecipient(
+    callText(data, 'startedAt', ''),
+    callText(data, 'calleeTimeZone', 'UTC')
+  );
+  const when = time.length > 0 ? ` at ${time}` : '';
+  const engagementId = data.engagementId as string | undefined;
+  const actionUrl = engagementId ? `/cases/${engagementId}` : undefined;
+
+  if (calleeSide === 'client') {
+    const caller = callText(data, 'callerFirstName', 'Your expert');
+    return {
+      title: `Missed call from ${caller}`,
+      body: `${caller} tried to reach you${when} about ${caseTitle}.`,
+      actionUrl,
+    };
+  }
+  return {
+    title: `Missed call from ${callText(data, 'callerPersonLabel', 'Your client')}`,
+    body: `They tried to reach you${when} about ${caseTitle}.`,
+    actionUrl,
+  };
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
@@ -1910,6 +1950,11 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
+
+  // BAL-652 — a missed Call now ring (copy sheet §2). One bell item per missed ring; the toast's
+  // grouping is BAL-653's.
+  'call-missed-client': (data) => missedCallItem('client', data),
+  'call-missed-expert': (data) => missedCallItem('expert', data),
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

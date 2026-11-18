@@ -5,6 +5,7 @@ import { notificationRules, type RuleContext } from './rules.js';
 import { resolveContext } from './resolver.js';
 import { dispatch } from './dispatcher.js';
 import { scheduleConversationUnreadDigest } from '../scheduling/conversation-unread.js';
+import { scheduleMissedCallEmailFromContext } from '../scheduling/call-missed.js';
 
 const log = createLogger('notification-engine');
 
@@ -120,6 +121,9 @@ async function scheduleConversationUnreadDigestFromContext(ctx: RuleContext): Pr
 const EVENT_FOLLOW_UPS: Partial<Record<string, (ctx: RuleContext) => Promise<void>>> = {
   'conversation.message_posted': scheduleConversationUnreadDigestFromContext,
   'conversation.file_shared': scheduleConversationUnreadDigestFromContext,
+  // BAL-652 — the bell item is immediate; the email is held 10 minutes and collapsed per
+  // (caller, callee).
+  'call.no_answer': scheduleMissedCallEmailFromContext,
 };
 
 /** Exported for testability — called by the BullMQ worker. */

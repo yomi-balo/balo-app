@@ -44,6 +44,7 @@ vi.mock('./templates/sms-templates.js', () => ({
 const mockTrackServer = vi.fn();
 vi.mock('@balo/analytics/server', () => ({
   trackServer: (...args: unknown[]) => mockTrackServer(...args),
+  CALL_NOW_SERVER_EVENTS: { SMS_SENT: 'call_sms_sent' },
   NOTIFICATION_SERVER_EVENTS: {
     SMS_SENT: 'notification_sms_sent',
     SMS_FAILED: 'notification_sms_failed',
@@ -444,6 +445,88 @@ describe('processSmsJob', () => {
         error_type: 'Unknown error',
         distinct_id: 'user-1',
       });
+    });
+  });
+  // -- BAL-652: Call now ring SMS ------------------------------------------
+
+  describe('call.ringing SMS', () => {
+    function ringJob(overrides: Partial<DeliveryPayload> = {}): Job<DeliveryPayload> {
+      return makeJob({
+        template: 'call-ringing-sms-expert',
+        event: 'call.ringing',
+        recipientSide: 'expert',
+        payload: { correlationId: 'ring-1', ringId: 'ring-1', callerUserId: 'caller-1' },
+        ...overrides,
+      });
+    }
+
+    it('emits call_sms_sent for the caller, with the callee side as the audience', async () => {
+      await processSmsJob(ringJob());
+
+      expect(mockTrackServer).toHaveBeenCalledWith('call_sms_sent', {
+        audience: 'expert',
+        ring_id: 'ring-1',
+        distinct_id: 'caller-1',
+      });
+    });
+
+    it('audience is the client side for a client-side rule', async () => {
+      await processSmsJob(
+        ringJob({ template: 'call-ringing-sms-client', recipientSide: 'client' })
+      );
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'call_sms_sent',
+        expect.objectContaining({ audience: 'client' })
+      );
+    });
+
+    it('emits nothing for a non-call SMS', async () => {
+      await processSmsJob(makeJob());
+
+      expect(mockTrackServer).not.toHaveBeenCalledWith('call_sms_sent', expect.anything());
+    });
+
+    it.each(['ringId', 'callerUserId'])('skips the emit when %s is not a string', async (key) => {
+      await processSmsJob(
+        ringJob({
+          payload: {
+            correlationId: 'ring-1',
+            ringId: 'ring-1',
+            callerUserId: 'caller-1',
+            [key]: 7,
+          },
+        })
+      );
+
+      expect(mockTrackServer).not.toHaveBeenCalledWith('call_sms_sent', expect.anything());
+    });
+
+    it('emits nothing when the SMS is skipped', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', phone: null });
+
+      await processSmsJob(ringJob());
+
+      expect(mockTrackServer).not.toHaveBeenCalledWith('call_sms_sent', expect.anything());
+    });
+
+    it('never re-queues the send when the tracker throws', async () => {
+      mockTrackServer.mockImplementation((event: string) => {
+        if (event === 'call_sms_sent') throw new Error('posthog down');
+      });
+
+      await expect(processSmsJob(ringJob())).resolves.toBeUndefined();
+      expect(mockSendTransacSms).toHaveBeenCalledOnce();
+      mockTrackServer.mockReset();
+    });
+
+    it('does not touch the call-now SMS cap — it is consumed once, in startCallNow', async () => {
+      await processSmsJob(ringJob());
+
+      const prefixes = mockCheckRateLimit.mock.calls.map(
+        (call) => (call[1] as { keyPrefix: string }).keyPrefix
+      );
+      expect(prefixes).not.toContain('ratelimit:call-now-sms');
     });
   });
 });

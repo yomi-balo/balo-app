@@ -26,9 +26,9 @@
  * `500 internal_error`, never an error message.
  */
 import type { MeetingRing } from '@balo/db';
-import { meetingRingsRepository } from '@balo/db';
+import { meetingRingsRepository, meetingsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import type { CallRingStatus } from '@balo/shared/meetings';
+import { ringAwaitsClientCommit, type CallRingStatus } from '@balo/shared/meetings';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseBodyOr400, parseParamsOr400, resolveUserId } from '../../lib/route-helpers.js';
@@ -213,6 +213,15 @@ async function findRingFor(
   return { ring, role: ring.callerUserId === userId ? 'caller' : 'callee' };
 }
 
+/**
+ * Whether the ring's meeting is over, so an old link stops opening its room: ended, cancelled, or
+ * no longer readable (soft-deleted), since a room with no meeting cannot be joined either.
+ */
+async function meetingHasEnded(meetingId: string): Promise<boolean> {
+  const meeting = await meetingsRepository.findById(meetingId);
+  return meeting === undefined || meeting.status === 'ended' || meeting.status === 'cancelled';
+}
+
 async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const userId = resolveUserId(request, reply);
   if (userId === null) return;
@@ -227,13 +236,24 @@ async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Pro
       return;
     }
     const { ring, role } = found;
+    const awaitsAnswer =
+      role === 'callee' &&
+      ringAwaitsClientCommit({
+        status: ring.status,
+        placement: ring.placement,
+        callerSide: ring.callerSide,
+      });
+    const meetingEnded = ring.status === 'connected' && (await meetingHasEnded(ring.meetingId));
     reply.code(200).send({
       ringId: ring.id,
       meetingId: ring.meetingId,
+      engagementId: ring.engagementId,
       status: ring.status,
       placement: ring.placement,
       expiresAt: ring.expiresAt.toISOString(),
       role,
+      awaitsAnswer,
+      meetingEnded,
     });
   } catch (error) {
     handleUnexpected(reply, error, { ringId, userId }, 'Call now ring read failed');

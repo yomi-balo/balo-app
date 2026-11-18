@@ -1773,4 +1773,47 @@ describe('getInAppTemplate', () => {
       });
     });
   });
+  describe('call-missed (BAL-652)', () => {
+    const data = {
+      engagementId: 'eng-1',
+      callCaseTitle: 'Flow migration',
+      callerFirstName: 'Sandy',
+      callerPersonLabel: 'Jordan Lee @ Northwind Industrial',
+      startedAt: '2026-11-17T00:41:00.000Z',
+      calleeTimeZone: 'Australia/Melbourne',
+    };
+
+    it('tells a client who called, when and about what, and opens the case', () => {
+      expect(getInAppTemplate('call-missed-client', data)).toEqual({
+        title: 'Missed call from Sandy',
+        body: 'Sandy tried to reach you at 11:41 (Melbourne time) about Flow migration.',
+        actionUrl: '/cases/eng-1',
+      });
+    });
+
+    it('tells an expert the person with their company, with a neutral body', () => {
+      expect(getInAppTemplate('call-missed-expert', data)).toEqual({
+        title: 'Missed call from Jordan Lee @ Northwind Industrial',
+        body: 'They tried to reach you at 11:41 (Melbourne time) about Flow migration.',
+        actionUrl: '/cases/eng-1',
+      });
+    });
+
+    it('shows the time in UTC when the callee zone is missing', () => {
+      const body = getInAppTemplate('call-missed-client', {
+        ...data,
+        calleeTimeZone: undefined,
+      }).body;
+      expect(body).toContain('00:41 (UTC)');
+    });
+
+    it('falls back to neutral names and drops the time and action it cannot give', () => {
+      expect(getInAppTemplate('call-missed-client', {})).toEqual({
+        title: 'Missed call from Your expert',
+        body: 'Your expert tried to reach you about your case.',
+        actionUrl: undefined,
+      });
+      expect(getInAppTemplate('call-missed-expert', {}).title).toBe('Missed call from Your client');
+    });
+  });
 });

@@ -5,6 +5,7 @@ import {
   FolderKanban,
   Link2,
   MessageSquare,
+  Phone,
   Sparkles,
   Star,
   UserRound,
@@ -32,6 +33,7 @@ const ICONS: Record<NotificationKindIcon, LucideIcon> = {
   UserRound,
   Users,
   Star,
+  Phone,
   Bell,
 };
 

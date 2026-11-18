@@ -100,6 +100,25 @@ describe('loadCallNowGates — each fact feeds the shared predicate', () => {
     expect(gates.callee).toEqual({ userId: EXPERT_USER, timeZone: 'Australia/Sydney' });
     expect(gates.expertProfileId).toBe(EXPERT_PROFILE_ID);
     expect(gates.companyId).toBe(COMPANY_ID);
+    expect(gates.calleeOnline).toBe(false);
+  });
+
+  it('returns the presence read the SMS decision reuses', async () => {
+    const online: CalleePresence = { isOnline: vi.fn().mockResolvedValue(true) };
+
+    const gates = await loadCallNowGates(base({ presence: online }));
+
+    expect(gates.calleeOnline).toBe(true);
+  });
+
+  it('calleeOnline is false, and presence unread, when no callee resolves', async () => {
+    mocks.resolveCallee.mockResolvedValue({ ok: false, reason: 'self' });
+    const online: CalleePresence = { isOnline: vi.fn().mockResolvedValue(true) };
+
+    const gates = await loadCallNowGates(base({ presence: online }));
+
+    expect(gates.calleeOnline).toBe(false);
+    expect(online.isOnline).not.toHaveBeenCalled();
   });
 
   it('caseOpen ← closedAt', async () => {

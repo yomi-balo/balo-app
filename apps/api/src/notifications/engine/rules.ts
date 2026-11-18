@@ -44,7 +44,12 @@ export interface NotificationRule {
     // BAL-631 — the delivering expert's agency owners/admins (`data.deliveringAgencyAdminUserIds`),
     // hydrated by the resolver from the payload's `expertProfileId`; the delivering expert and the
     // actor are already excluded from the list.
-    | 'delivering_agency_admins';
+    | 'delivering_agency_admins'
+    // BAL-652 — the one user a Call now ring is aimed at (`payload.calleeUserId`). A single
+    // publisher-resolved id like `requester`, so it flows the single-recipient path and stays out
+    // of the fan-out kinds. The callee's side flips with `payload.callerSide`, which is why the
+    // call rules below are paired per side.
+    | 'callee';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -171,6 +176,31 @@ const passedAfterClientSawTrack: NonNullable<NotificationRule['condition']> = (c
  */
 const closeReasonIsAutoInactive: NonNullable<NotificationRule['condition']> = (ctx) =>
   ctx.payload.closeReason === 'auto_inactive';
+
+/**
+ * BAL-652 — Call now rules key on the CALLER's side, because the callee is the opposite one: a
+ * client calling reaches an expert, an expert calling reaches a client. Payload-only.
+ */
+const calleeIsExpert: NonNullable<NotificationRule['condition']> = (ctx) =>
+  ctx.payload.callerSide === 'client';
+
+const calleeIsClient: NonNullable<NotificationRule['condition']> = (ctx) =>
+  ctx.payload.callerSide === 'expert';
+
+/**
+ * BAL-652 — the ring SMS fires only for a ring `startCallNow` wrote as `reachedBy: 'sms'`. That
+ * decision (number, consent, presence, hours, daily cap) is made once, before the ring row is
+ * written, so the rule never re-checks any of it. A ring whose `expiresAt` is missing or already
+ * past is stale (a delayed or retried job) and sends nothing: an SMS for a call that can no longer
+ * be answered is only noise.
+ */
+const ringReachedBySms: NonNullable<NotificationRule['condition']> = (ctx) => {
+  if (ctx.payload.reachedBy !== 'sms') {
+    return false;
+  }
+  const { expiresAt } = ctx.payload;
+  return typeof expiresAt === 'string' && Date.parse(expiresAt) > Date.now();
+};
 
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
@@ -1473,6 +1503,77 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       recipient: 'expert',
       template: 'expert-searchability-restored',
       timing: 'immediate',
+    },
+  ],
+
+  // ── BAL-652 — Call now notifications (copy sheet §1–2) ───────────────────────────────────
+  //
+  // `call.declined`, `call.stopped` and `call.connected` HAVE NO RULE, on purpose: the caller is
+  // watching the call room (§3), a replaced booking sends nothing (§4), and "Not now" must not
+  // produce a missed-call message.
+  //
+  // RING SMS — one rule per callee side, because the side flips with `callerSide` while
+  // `recipientSide` is fixed per rule. `critical`: a ring lives for seconds.
+  'call.ringing': [
+    {
+      channel: 'sms',
+      recipient: 'callee',
+      recipientSide: 'expert',
+      template: 'call-ringing-sms-expert',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: (ctx) => ringReachedBySms(ctx) && calleeIsExpert(ctx),
+    },
+    {
+      channel: 'sms',
+      recipient: 'callee',
+      recipientSide: 'client',
+      template: 'call-ringing-sms-client',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: (ctx) => ringReachedBySms(ctx) && calleeIsClient(ctx),
+    },
+  ],
+
+  // MISSED CALL, BELL — one item per missed ring. ⚠ KEEP AT LEAST ONE RULE: the delayed email
+  // is scheduled by the worker's follow-up (`scheduleMissedCallEmailFromContext`), and an event
+  // with no rules returns before follow-ups run.
+  'call.no_answer': [
+    {
+      channel: 'in-app',
+      recipient: 'callee',
+      template: 'call-missed-expert',
+      timing: 'immediate',
+      condition: calleeIsExpert,
+    },
+    {
+      channel: 'in-app',
+      recipient: 'callee',
+      template: 'call-missed-client',
+      timing: 'immediate',
+      condition: calleeIsClient,
+    },
+  ],
+
+  // MISSED CALL, EMAIL — held 10 minutes per (caller, callee) and re-checked at fire time
+  // (`scheduling/call-missed.ts`). The template names are shared with the in-app rules above and
+  // resolved per channel, so BOTH registries carry them.
+  'call.missed_email_due': [
+    {
+      channel: 'email',
+      recipient: 'callee',
+      template: 'call-missed-expert',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: calleeIsExpert,
+    },
+    {
+      channel: 'email',
+      recipient: 'callee',
+      template: 'call-missed-client',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: calleeIsClient,
     },
   ],
 };

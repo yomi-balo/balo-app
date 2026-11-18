@@ -290,6 +290,15 @@ describe('isWithinCallHours', () => {
     expect(isWithinCallHours(instant, 'Australia/Sydney')).toBe(false);
   });
 
+  it('applies the window to the zone it is given, a client zone included', () => {
+    // 2026-08-14T01:00Z is 11:00 in Sydney and 21:00 the day before in New York.
+    const instant = new Date('2026-08-14T01:00:00.000Z');
+    expect(isWithinCallHours(instant, 'Australia/Sydney')).toBe(true);
+    expect(isWithinCallHours(instant, 'America/New_York')).toBe(false);
+    // 2026-08-14T14:00Z is 10:00 in New York and midnight-adjacent (00:00) in Sydney.
+    expect(isWithinCallHours(new Date('2026-08-14T14:00:00.000Z'), 'America/New_York')).toBe(true);
+  });
+
   it('treats midnight as hour 0, not 24', () => {
     expect(isWithinCallHours(new Date('2026-08-14T00:00:00.000Z'), 'UTC')).toBe(false);
   });

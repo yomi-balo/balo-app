@@ -98,6 +98,8 @@ describe('notificationKindOf', () => {
     ['company.joined', 'Users', 'muted'],
     ['agency.joined', 'Users', 'muted'],
     ['review.received', 'Star', 'muted'],
+    ['call.no_answer', 'Phone', 'primary'],
+    ['call.ringing', 'Phone', 'primary'],
   ])('%s → %s / %s', (event, icon, tone) => {
     expect(notificationKindOf(event)).toEqual({ icon, tone });
   });
