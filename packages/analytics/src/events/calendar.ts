@@ -24,7 +24,16 @@ export const CALENDAR_EVENTS = {
   // precedes it) and its week-navigation behaviour.
   CONNECT_CTA_CLICKED: 'calendar_connect_cta_clicked',
   WEEK_NAVIGATED: 'calendar_week_navigated',
+  // A client or guest chose a way to put a booked call in their OWN calendar — the invite email's
+  // "Add to calendar" page or a booking confirmation. Whether this is used at all is the point.
+  ADD_OPTION_CLICKED: 'calendar_add_option_clicked',
 } as const;
+
+/** The ways to add a booked call to one's own calendar. */
+export type CalendarAddOption = 'google' | 'outlook_personal' | 'outlook_work' | 'ics';
+
+/** Where the add-to-calendar choice was made. */
+export type CalendarAddSurface = 'invite_page' | 'booking_confirmation' | 'intro_call_confirmation';
 
 export interface CalendarEventMap {
   [CALENDAR_EVENTS.VIEWED]: {
@@ -142,6 +151,10 @@ export interface CalendarEventMap {
   };
   [CALENDAR_EVENTS.CONNECTING_TIMEOUT]: {
     provider: 'google' | 'microsoft';
+  };
+  [CALENDAR_EVENTS.ADD_OPTION_CLICKED]: {
+    option: CalendarAddOption;
+    surface: CalendarAddSurface;
   };
 }
 

@@ -23,6 +23,7 @@ import {
   type CalendarInviteAudience,
   type CalendarInviteFacts,
 } from '../../services/calendar-invites/resolve-calendar-invite-facts.js';
+import { buildAddToCalendarUrl } from './calendar-invite-add-link.js';
 import { buildCalendarInviteMailOptions } from './calendar-invite-message.js';
 import { logNotification } from './log.js';
 import { getEmailTemplate } from './templates/index.js';
@@ -597,6 +598,15 @@ export async function deliverCalendarInvite(
     transition: spec.transition,
     audience,
     memberJoinUrl: facts.memberJoinUrl,
+    // Same title/window/description/location as the ICS above. The template drops it on a
+    // withdrawal, so building it unconditionally is harmless.
+    addToCalendarUrl: buildAddToCalendarUrl({
+      title: facts.summary,
+      startIso: meeting.scheduledStart.toISOString(),
+      endIso: meeting.scheduledEnd.toISOString(),
+      details: facts.description,
+      ...(facts.location === undefined ? {} : { location: facts.location }),
+    }),
   });
   const html = await render(component);
   const text = await render(component, { plainText: true });

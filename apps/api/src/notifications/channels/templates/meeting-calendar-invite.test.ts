@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@react-email/render';
 import {
+  ADD_TO_CALENDAR_LEAD_IN,
   MeetingCalendarInviteEmail,
   TRANSITION_CHROME,
   type CalendarInviteEmailTransition,
@@ -296,4 +297,69 @@ describe('MeetingCalendarInviteEmail — the withdrawal body (BAL-476)', () => {
       expect(html).toContain('Rescheduling and cancelling happen in Balo');
     }
   );
+});
+
+describe('MeetingCalendarInviteEmail — "Add to calendar" button', () => {
+  const ADD_URL = `${SITE}/add-to-calendar/eyJ2IjoxfQ.c2ln`;
+  const ISSUING = ['booked', 'guest_added', 'rescheduled'] as const;
+  const WITHDRAWALS = ['cancelled', 'guest_removed'] as const;
+
+  it.each(ISSUING)('%s, member audience: renders the button with the given href', async (t) => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), addToCalendarUrl: ADD_URL })
+    );
+    expect(html).toContain('Add to calendar');
+    expect(hrefsIn(html)).toContain(ADD_URL);
+  });
+
+  it('guest audience: renders the button too (guests get the .ics as well)', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...guestProps(), addToCalendarUrl: ADD_URL })
+    );
+    expect(hrefsIn(html)).toContain(ADD_URL);
+  });
+
+  it('leads with accepting the invite, and names no calendar provider', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps(), addToCalendarUrl: ADD_URL })
+    );
+    expect(html).toContain('Accept the invite in your email app');
+    expect(ADD_TO_CALENDAR_LEAD_IN.toLowerCase()).not.toMatch(/google|microsoft|outlook|apple/);
+  });
+
+  it.each(['rescheduled', 'cancelled'] as const)(
+    '%s: the note stays true for someone who added the call themselves',
+    async (t) => {
+      const html = await render(MeetingCalendarInviteEmail(memberProps({ transition: t })));
+      expect(html).toContain('If you added the call');
+      expect(html).not.toContain('your calendar entry is being removed');
+      expect(html).not.toContain('your calendar entry updates to the new time');
+    }
+  );
+
+  it('no addToCalendarUrl: no button', async () => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps()));
+    expect(html).not.toContain('Add to calendar');
+  });
+
+  it.each(WITHDRAWALS)('⚠ %s: never offers to ADD a withdrawn call', async (t) => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), addToCalendarUrl: ADD_URL })
+    );
+    expect(html).not.toContain('Add to calendar');
+    expect(hrefsIn(html)).not.toContain(ADD_URL);
+  });
+
+  it('getEmailTemplate passes data.addToCalendarUrl through to the body', async () => {
+    const { component } = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation',
+      startIso: START,
+      endIso: END,
+      transition: 'booked',
+      audience: 'member',
+      memberJoinUrl: `${SITE}/meetings/meeting-1/call`,
+      addToCalendarUrl: ADD_URL,
+    });
+    expect(hrefsIn(await render(component))).toContain(ADD_URL);
+  });
 });

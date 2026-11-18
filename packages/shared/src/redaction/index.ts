@@ -64,6 +64,7 @@
  * `%5f`-encoded param-name form, and (path-independent Stripe pass only) adds `#` as a lead.
  */
 
+import { ADD_TO_CALENDAR_PATH_PREFIX } from '../calendar/add-to-calendar-path';
 import { toAsciiLowerCase } from './ascii-fold';
 
 /**
@@ -91,6 +92,11 @@ const LOBBY_MEETING_PREFIX = '/join/m/';
 export const SENSITIVE_PATH_PREFIXES: readonly string[] = [
   // BAL-386 — the email-bound magic-link proposal view.
   '/shared/proposals/',
+  // The calendar invite email's "Add to calendar" page, `/add-to-calendar/{token}`
+  // (`ADD_TO_CALENDAR_PATH_PREFIX`, `@balo/shared/calendar`). NOT A CREDENTIAL — the token is a
+  // signed copy of the event — but it carries the counterparty's name and, for a member, the call
+  // URL, so it stays out of every log line and analytics URL, like the lobby entry below.
+  ADD_TO_CALENDAR_PATH_PREFIX,
   // BAL-390 — the star-rating landing, `/review/{token}?r={1..5}`. Only the token
   // SEGMENT is replaced, so the `?r=3` prefill survives redaction — which is what
   // keeps the emailed-star funnel legible without ever logging the token.
