@@ -369,11 +369,6 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "kind": "html",
             "html": "<ol>\n<li>Open the expert's profile and choose <strong>Book a consultation</strong>, or choose <strong>Book a call</strong> on\ntheir card in the search results.</li>\n<li>On <strong>Choose a time</strong>, answer <strong>How long do you need?</strong> first: choose 15, 30, 45 or 60 minutes.\n60 minutes is preselected when the expert has room for it, otherwise the longest length that\nfits. You can change it at any point.</li>\n<li>Pick a day, then a time. Times show as ranges at that length, in your device's timezone. If an\nearlier slot only fits a shorter call, it's offered under <strong>Need it sooner?</strong>, and you can\nswitch to it in one click. Choose <strong>Continue with</strong> your time range when you've found the one you want.</li>\n<li>On <strong>Review &amp; confirm</strong>, check the details and choose <strong>Confirm &amp; book</strong>. Choose <strong>Change</strong> to\ngo back and pick a different length or time.</li>\n</ol>\n<p>After you book, you can choose to get text updates about your consultation. It's optional, and you can turn it off any time under <strong>Account</strong>.</p>\n<p>You pay for the minutes you use, not the length you pick. There's a 15-minute minimum.</p>\n<p>You can also book from an open case's page with <strong>Book with {name} again</strong>. Their calendar opens\nright there, with that case already chosen.</p>",
             "id": "s1-b0"
-          },
-          {
-            "kind": "html",
-            "html": "<h3>Adding the call to your calendar</h3>\n<p>After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to\nyour calendar. An accepted invite follows any changes, so it moves or comes off your calendar if\nthe call is rescheduled or cancelled.</p>\n<p>If the call doesn't show up in your calendar, choose <strong>Add to calendar</strong> in the invite email and\npick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose\n<strong>Add to Google Calendar</strong> or <strong>Other calendar app</strong>. A call you add this way is your own copy: if\nthe time changes, we email you so you can update it.</p>",
-            "id": "s1-b1"
           }
         ],
         "screenshot": {
@@ -485,6 +480,18 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "width": 768,
           "height": 876
         }
+      },
+      {
+        "n": 8,
+        "title": "Adding the call to your calendar",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to\nyour calendar. An accepted invite follows any changes, so it moves or comes off your calendar if\nthe call is rescheduled or cancelled.</p>\n<p>If the call doesn't show up in your calendar, choose <strong>Add to calendar</strong> in the invite email and\npick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose\n<strong>Add to Google Calendar</strong> or <strong>Other calendar app</strong>. A call you add this way is your own copy: if\nthe time changes, we email you so you can update it.</p>",
+            "id": "s8-b0"
+          }
+        ],
+        "screenshot": null
       }
     ]
   },

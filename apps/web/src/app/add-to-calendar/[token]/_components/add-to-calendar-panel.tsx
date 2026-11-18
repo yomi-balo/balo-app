@@ -8,7 +8,7 @@ import type { CalendarAddOption } from '@balo/analytics/events';
 import { BaloCard } from '@/components/balo/card/balo-card';
 import { Button } from '@/components/ui/button';
 import { downloadIcsEvent } from '@/components/booking/ics';
-import { openCalendarLink } from '@/components/booking/open-calendar-link';
+import { navigateToCalendarLink } from '@/components/booking/open-calendar-link';
 import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 
 export interface AddToCalendarPanelProps {
@@ -80,7 +80,7 @@ export function AddToCalendarPanel({
 
   function handleOpen(option: (typeof options)[number]): void {
     track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: option.option, surface: 'invite_page' });
-    openCalendarLink(option.build());
+    navigateToCalendarLink(option.build());
   }
 
   function handleDownload(): void {

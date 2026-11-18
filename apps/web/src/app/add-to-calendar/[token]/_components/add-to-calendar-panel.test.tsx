@@ -14,13 +14,20 @@ const EVENT = {
   location: 'https://app.balo.expert/meetings/m-1/call',
 };
 
-/** The URL `globalThis.open` was handed when the named option was clicked. */
+/** Stubs `location.assign`, so a click records where this tab would have navigated. */
+function stubNavigation(): ReturnType<typeof vi.fn> {
+  const assign = vi.fn();
+  vi.spyOn(globalThis, 'location', 'get').mockReturnValue({ assign } as unknown as Location);
+  return assign;
+}
+
+/** The URL this tab navigates to when the named option is clicked — never a popup. */
 function openedUrlFor(name: RegExp): URL {
-  const open = vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
+  const open = vi.spyOn(globalThis, 'open');
+  const assign = stubNavigation();
   screen.getByRole('button', { name }).click();
-  const [url, target] = open.mock.calls.at(-1) ?? [];
-  expect(target).toBe('_blank');
-  return new URL(String(url));
+  expect(open).not.toHaveBeenCalled();
+  return new URL(String(assign.mock.calls.at(-1)?.[0]));
 }
 
 afterEach(() => {
@@ -69,7 +76,7 @@ describe('AddToCalendarPanel', () => {
 
   it('tracks which option was chosen, on the invite page surface', () => {
     vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
-    vi.spyOn(globalThis, 'open').mockReturnValue({} as Window);
+    stubNavigation();
     render(<AddToCalendarPanel event={EVENT} isPast={false} />);
     screen.getByRole('button', { name: /Google Calendar/ }).click();
     screen.getByRole('button', { name: /\.ics/ }).click();

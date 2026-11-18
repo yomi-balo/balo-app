@@ -36,17 +36,6 @@ right there, with that case already chosen.
 
 ![The Choose a time step, with the How long do you need? options and the billing note highlighted above the calendar.](01)
 
-### Adding the call to your calendar
-
-After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to
-your calendar. An accepted invite follows any changes, so it moves or comes off your calendar if
-the call is rescheduled or cancelled.
-
-If the call doesn't show up in your calendar, choose **Add to calendar** in the invite email and
-pick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose
-**Add to Google Calendar** or **Other calendar app**. A call you add this way is your own copy: if
-the time changes, we email you so you can update it.
-
 ## If your balance is low when you book
 
 Your company's funding is checked as **Review & confirm** opens, before anything is booked. It
@@ -137,3 +126,14 @@ consultation**, which opens their calendar right there, already attached to the 
 switch to another of your open cases with them, but not start a new one.
 
 ![An expert's profile while they're paused, with the card saying they aren't taking on new work highlighted.](07)
+
+## Adding the call to your calendar
+
+After you book, Balo emails you a calendar invite. Accept it in your email app to add the call to
+your calendar. An accepted invite follows any changes, so it moves or comes off your calendar if
+the call is rescheduled or cancelled.
+
+If the call doesn't show up in your calendar, choose **Add to calendar** in the invite email and
+pick Google Calendar, Outlook or another calendar app. Right after you book, you can also choose
+**Add to Google Calendar** or **Other calendar app**. A call you add this way is your own copy: if
+the time changes, we email you so you can update it.

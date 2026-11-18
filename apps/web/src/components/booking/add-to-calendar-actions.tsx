@@ -1,12 +1,17 @@
 'use client';
 
 import { CalendarPlus, Download } from 'lucide-react';
+import { toast } from 'sonner';
 import { buildGoogleCalendarLink } from '@balo/shared/calendar';
 import type { CalendarAddSurface } from '@balo/analytics/events';
 import { Button } from '@/components/ui/button';
 import { CALENDAR_EVENTS, track } from '@/lib/analytics';
 import { downloadIcsEvent } from './ics';
-import { openCalendarLink } from './open-calendar-link';
+import { openCalendarLinkInNewTab } from './open-calendar-link';
+
+/** Draft copy, pending MJ approval. */
+export const CALENDAR_TAB_BLOCKED_COPY =
+  'Your browser blocked the new tab — allow pop-ups for Balo, or choose Other calendar app.';
 
 export interface AddToCalendarActionsProps {
   summary: string;
@@ -33,7 +38,9 @@ export function AddToCalendarActions({
 
   function handleGoogle(): void {
     track(CALENDAR_EVENTS.ADD_OPTION_CLICKED, { option: 'google', surface });
-    openCalendarLink(buildGoogleCalendarLink({ title: summary, start, end }));
+    if (!openCalendarLinkInNewTab(buildGoogleCalendarLink({ title: summary, start, end }))) {
+      toast.error(CALENDAR_TAB_BLOCKED_COPY);
+    }
   }
 
   function handleDownload(): void {
