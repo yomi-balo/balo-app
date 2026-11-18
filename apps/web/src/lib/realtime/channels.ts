@@ -1,15 +1,17 @@
 /**
  * Realtime channel naming + event names (BAL-271 / A4; extended by BAL-437).
  *
- * THREE NAMESPACES — see `meetingChannelName` below for the conversation/meeting grain split and
+ * FOUR NAMESPACES — see `meetingChannelName` below for the conversation/meeting grain split and
  * for why chat deliberately does NOT ride the meeting channel, and `typingChannelName` for why
  * the "someone is typing" signal lives in a namespace of its own rather than on either. The
- * SERVER publishes on all three; client tokens are subscribe-only everywhere.
+ * fourth, `notifications:{userId}` (BAL-620), is defined in `@balo/shared/realtime` because
+ * `apps/api` publishes it and re-exported here for the web subscriber. The SERVER publishes on
+ * all four; client tokens are subscribe-only everywhere.
  *
  * Shared between the SERVER publisher (`ably-server.ts`) and the CLIENT
  * subscriber hook (`use-conversation-realtime.ts`) — deliberately NO
- * `server-only` and no imports, so both bundles can use it without dragging
- * anything heavy across the boundary.
+ * `server-only`, and the only import is the pure, dependency-free `@balo/shared/realtime`, so
+ * both bundles can use it without dragging anything heavy across the boundary.
  *
  * ⚠ CHANNELS KEY ON `conversations.id` (BAL-424), NOT on the relationship. The
  * conversation id is the thread identity across EVERY anchor: a Case has no
@@ -20,6 +22,8 @@
  * `request_expert_relationships.id` because that was then the only anchor.) The
  * conversation UUID is globally unique, so no prefix is needed.
  */
+
+export { notificationsChannelName, NOTIFICATIONS_EVENT_CREATED } from '@balo/shared/realtime';
 
 /** `conversation:{conversationId}` — one private channel per thread. */
 export function conversationChannelName(conversationId: string): string {

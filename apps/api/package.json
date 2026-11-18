@@ -29,6 +29,7 @@
     "@react-email/render": "^2.0.4",
     "@sentry/node": "^10.36.0",
     "@types/react": "19.2.2",
+    "ably": "^2",
     "ai": "^7.0.31",
     "bullmq": "^5.70.4",
     "date-fns": "^4.4.0",

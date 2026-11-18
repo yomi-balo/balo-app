@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+  POLL_HIDDEN_MS,
+  POLL_PUSH_HIDDEN_MS,
+  POLL_PUSH_VISIBLE_MS,
+  POLL_VISIBLE_MS,
   formatRelativeTime,
   formatUnreadTabTitle,
+  liveLatencyMs,
   notificationActionLabel,
   notificationActionPath,
   notificationKindOf,
+  pollDelayMs,
   seenThroughNow,
   selectUnseenNotifications,
   stripUnreadTabTitle,
@@ -233,5 +239,46 @@ describe('formatRelativeTime', () => {
     vi.setSystemTime(new Date('2026-01-20T12:00:00.000Z'));
     const iso = '2026-01-01T12:00:00.000Z';
     expect(formatRelativeTime(iso)).toBe(new Date(iso).toLocaleDateString());
+  });
+});
+
+describe('pollDelayMs', () => {
+  it.each([
+    { hidden: false, pushLive: false, expected: POLL_VISIBLE_MS },
+    { hidden: true, pushLive: false, expected: POLL_HIDDEN_MS },
+    { hidden: false, pushLive: true, expected: POLL_PUSH_VISIBLE_MS },
+    { hidden: true, pushLive: true, expected: POLL_PUSH_HIDDEN_MS },
+  ])('hidden=$hidden pushLive=$pushLive → $expected ms', ({ hidden, pushLive, expected }) => {
+    expect(pollDelayMs({ hidden, pushLive })).toBe(expected);
+  });
+
+  it('pins the cadence values', () => {
+    expect([POLL_VISIBLE_MS, POLL_HIDDEN_MS, POLL_PUSH_VISIBLE_MS, POLL_PUSH_HIDDEN_MS]).toEqual([
+      30_000, 60_000, 120_000, 300_000,
+    ]);
+  });
+});
+
+describe('liveLatencyMs', () => {
+  const now = Date.parse('2026-01-01T00:00:10.000Z');
+
+  it('measures from the oldest notification in the arrival', () => {
+    const unseen = [
+      make('new', '2026-01-01T00:00:09.000Z'),
+      make('old', '2026-01-01T00:00:04.000Z'),
+    ];
+    expect(liveLatencyMs(unseen, now)).toBe(6000);
+  });
+
+  it('clamps to zero when the client clock is behind the server', () => {
+    expect(liveLatencyMs([make('ahead', '2026-01-01T00:00:12.000Z')], now)).toBe(0);
+  });
+
+  it('rounds to whole milliseconds', () => {
+    expect(liveLatencyMs([make('a', '2026-01-01T00:00:09.000Z')], now + 0.4)).toBe(1000);
+  });
+
+  it('is zero for an empty arrival', () => {
+    expect(liveLatencyMs([], now)).toBe(0);
   });
 });

@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
+  NOTIFICATIONS_EVENT_CREATED as SHARED_NOTIFICATIONS_EVENT_CREATED,
+  notificationsChannelName as sharedNotificationsChannelName,
+} from '@balo/shared/realtime';
+import {
   conversationChannelName,
   CONVERSATION_EVENT_MESSAGE,
   CONVERSATION_EVENT_FILE,
   CONVERSATION_EVENT_FILE_SHARED,
   isTypingChannelName,
+  NOTIFICATIONS_EVENT_CREATED,
+  notificationsChannelName,
   typingChannelName,
   TYPING_EVENT_STARTED,
   TYPING_EVENT_STOPPED,
@@ -85,5 +91,17 @@ describe('typing realtime channel', () => {
     for (const other of ['message', 'file', 'typing', 'started', '', undefined, null, 1]) {
       expect(typingSignalFromEventName(other)).toBeNull();
     }
+  });
+});
+
+describe('notifications realtime channel', () => {
+  it('re-exports the shared channel builder and event name, not a second definition', () => {
+    expect(notificationsChannelName).toBe(sharedNotificationsChannelName);
+    expect(NOTIFICATIONS_EVENT_CREATED).toBe(SHARED_NOTIFICATIONS_EVENT_CREATED);
+  });
+
+  it('names the channel notifications:{userId} and the event notification.created', () => {
+    expect(notificationsChannelName('u1')).toBe('notifications:u1');
+    expect(NOTIFICATIONS_EVENT_CREATED).toBe('notification.created');
   });
 });

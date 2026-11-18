@@ -15,9 +15,18 @@ interface TopNavProps {
    * carries a chip node to hydrate (D2).
    */
   readonly creditsChip?: ReactNode;
+  /**
+   * BAL-620 — the signed-in user's id when the shell wants the bell on realtime push, resolved in
+   * `(dashboard)/layout.tsx` (null when no session or realtime is unconfigured). Passed straight
+   * through; the bell holds the connection only when this is set.
+   */
+  readonly notificationsRealtimeUserId?: string | null;
 }
 
-export function TopNav({ creditsChip = null }: Readonly<TopNavProps>): React.JSX.Element {
+export function TopNav({
+  creditsChip = null,
+  notificationsRealtimeUserId = null,
+}: Readonly<TopNavProps>): React.JSX.Element {
   return (
     <header className="border-border bg-background/95 supports-[backdrop-filter]:bg-background/60 sticky top-0 z-40 w-full border-b backdrop-blur">
       <div className="flex h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
@@ -34,7 +43,7 @@ export function TopNav({ creditsChip = null }: Readonly<TopNavProps>): React.JSX
             ... sm:inline-flex`), leaving a stray gap before the bell. Rendering `creditsChip`
             directly means an absent/erroring/hidden chip contributes no flex item at all. */}
         {creditsChip}
-        <NotificationBell />
+        <NotificationBell realtimeUserId={notificationsRealtimeUserId} />
       </div>
     </header>
   );

@@ -96,7 +96,17 @@ function PanelSkeleton(): React.JSX.Element {
   );
 }
 
-export function NotificationBell(): React.JSX.Element {
+interface NotificationBellProps {
+  /**
+   * The signed-in user's id, set only by the app shell when realtime is configured. Absent or
+   * `null` keeps the bell on polling alone and never loads the realtime SDK.
+   */
+  realtimeUserId?: string | null;
+}
+
+export function NotificationBell({
+  realtimeUserId = null,
+}: Readonly<NotificationBellProps>): React.JSX.Element {
   const {
     notifications,
     unreadCount,
@@ -112,7 +122,7 @@ export function NotificationBell(): React.JSX.Element {
     openNotification,
     markAllRead,
     retry,
-  } = useNotificationFeed();
+  } = useNotificationFeed({ realtimeUserId });
   useUnreadTabTitle(unreadCount);
   const shouldReduceMotion = useReducedMotion();
   const triggerRef = useRef<HTMLButtonElement>(null);
