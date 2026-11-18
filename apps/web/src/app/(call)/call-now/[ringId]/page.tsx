@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
-import { resolveRingLandingPath } from '@/lib/call-now/resolve-ring-landing';
+import { isRingId, resolveRingLandingPath } from '@/lib/call-now/resolve-ring-landing';
 
 /**
  * The landing for the "call now" SMS link: `/call-now/{ringId}`. It renders nothing and redirects
@@ -10,7 +10,8 @@ import { resolveRingLandingPath } from '@/lib/call-now/resolve-ring-landing';
  * Middleware requires the session and returns the viewer here after sign-in. A drifted session is
  * sent through session-sync and back here first (`(call)/layout.tsx` does not run the gate, and
  * the ring read forwards the session's Bearer). The api's
- * party-scoped ring read is the authorization, so a stranger's link resolves to `/cases`.
+ * party-scoped ring read is the authorization, so a stranger's link resolves to `/cases`. A
+ * `ringId` that is not a UUID goes to `/cases` before either step.
  *
  * `params` is a Promise in Next 16 and must be awaited.
  */
@@ -23,6 +24,7 @@ export default async function CallNowLandingPage({
   params,
 }: Readonly<{ params: Promise<{ ringId: string }> }>): Promise<never> {
   const { ringId } = await params;
+  if (!isRingId(ringId)) redirect('/cases');
 
   const drift = await checkSessionDrift();
   if (drift.action === 'sync-needed') {

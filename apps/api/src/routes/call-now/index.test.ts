@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   sendMemberJoinGrant: vi.fn(),
   endRing: vi.fn(),
   findById: vi.fn(),
+  findMeeting: vi.fn(),
   checkRateLimit: vi.fn(),
   logError: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock('@balo/shared/logging', () => ({
 // `findByIdForParty` filters on identity IN THE QUERY; the stand-in applies the same WHERE to
 // the row `findById` hands it, so a stranger's read is a miss exactly as in Postgres.
 vi.mock('@balo/db', () => ({
+  meetingsRepository: { findById: mocks.findMeeting },
   meetingRingsRepository: {
     findByIdForParty: async (ringId: string, userId: string) => {
       const row = (await mocks.findById(ringId, userId)) as
@@ -88,6 +90,7 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     calleeUserId: OTHER_USER,
     status: 'ringing',
     placement: 'new_meeting',
+    callerSide: 'client',
     expiresAt: EXPIRES,
     ...overrides,
   };
@@ -613,6 +616,8 @@ describe('call-now routes (BAL-649)', () => {
         placement: 'new_meeting',
         expiresAt: EXPIRES.toISOString(),
         role: 'caller',
+        awaitsAnswer: false,
+        meetingEnded: false,
       });
     });
 
@@ -623,6 +628,61 @@ describe('call-now routes (BAL-649)', () => {
 
       expect(res.json()).toMatchObject({ role: 'callee' });
     });
+
+    it.each([
+      ['an expert-started new_meeting ring the callee has not answered', 'callee', {}, true],
+      ['the caller of that ring', 'caller', {}, false],
+      ['an in_place ring', 'callee', { placement: 'in_place' }, false],
+      ['a client-started ring', 'callee', { callerSide: 'client' }, false],
+      ['a connected expert-started ring', 'callee', { status: 'connected' }, false],
+    ] as const)('awaitsAnswer for %s', async (_label, role, overrides, expected) => {
+      const parties =
+        role === 'callee'
+          ? { callerUserId: OTHER_USER, calleeUserId: USER_ID }
+          : { callerUserId: USER_ID, calleeUserId: OTHER_USER };
+      mocks.findMeeting.mockResolvedValue({ status: 'in_progress' });
+      mocks.findById.mockResolvedValue(ring({ callerSide: 'expert', ...parties, ...overrides }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ awaitsAnswer: expected });
+    });
+
+    it.each([
+      ['ended', true],
+      ['cancelled', true],
+      ['in_progress', false],
+      ['scheduled', false],
+    ])('meetingEnded is %s→%s for a connected ring', async (status, expected) => {
+      mocks.findMeeting.mockResolvedValue({ status });
+      mocks.findById.mockResolvedValue(ring({ status: 'connected' }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(mocks.findMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(res.json()).toMatchObject({ meetingEnded: expected });
+    });
+
+    it('meetingEnded is true for a connected ring whose meeting is gone', async () => {
+      mocks.findMeeting.mockResolvedValue(undefined);
+      mocks.findById.mockResolvedValue(ring({ status: 'connected' }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ meetingEnded: true });
+    });
+
+    it.each(['ringing', 'unanswered', 'declined', 'stopped'])(
+      'does not read the meeting for a %s ring',
+      async (status) => {
+        mocks.findById.mockResolvedValue(ring({ status }));
+
+        const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+        expect(mocks.findMeeting).not.toHaveBeenCalled();
+        expect(res.json()).toMatchObject({ meetingEnded: false });
+      }
+    );
 
     it('404 ring_not_found for a stranger and for an unknown ring alike', async () => {
       mocks.findById.mockResolvedValueOnce(

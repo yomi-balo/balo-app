@@ -6,8 +6,20 @@ const NOW = new Date('2026-11-17T10:00:00.000Z');
 const MEETING_ID = '11111111-1111-4111-8111-111111111111';
 const ENGAGEMENT_ID = '22222222-2222-4222-8222-222222222222';
 
-function ring(status: CallRingStatus, expiresAt: string): RingLandingFacts {
-  return { status, meetingId: MEETING_ID, engagementId: ENGAGEMENT_ID, expiresAt };
+function ring(
+  status: CallRingStatus,
+  expiresAt: string,
+  overrides: Partial<RingLandingFacts> = {}
+): RingLandingFacts {
+  return {
+    status,
+    meetingId: MEETING_ID,
+    engagementId: ENGAGEMENT_ID,
+    expiresAt,
+    awaitsAnswer: false,
+    meetingEnded: false,
+    ...overrides,
+  };
 }
 
 const CALL_ROOM = `/meetings/${MEETING_ID}/call`;
@@ -36,4 +48,26 @@ describe('ringLandingPath', () => {
       expect(ringLandingPath(ring(status, '2026-11-17T10:01:00.000Z'), NOW)).toBe(CASE);
     }
   );
+
+  it('opens the call room for an expert callee on a live client-started ring', () => {
+    expect(ringLandingPath(ring('ringing', '2026-11-17T10:01:00.000Z'), NOW)).toBe(CALL_ROOM);
+  });
+
+  it('opens the case, not the call room, for a client callee who must answer first', () => {
+    expect(
+      ringLandingPath(ring('ringing', '2026-11-17T10:01:00.000Z', { awaitsAnswer: true }), NOW)
+    ).toBe(CASE);
+  });
+
+  it('opens the call room for a client callee on an in-place ring', () => {
+    expect(
+      ringLandingPath(ring('ringing', '2026-11-17T10:01:00.000Z', { awaitsAnswer: false }), NOW)
+    ).toBe(CALL_ROOM);
+  });
+
+  it('opens the case for a connected ring whose meeting has ended', () => {
+    expect(
+      ringLandingPath(ring('connected', '2026-11-17T09:00:00.000Z', { meetingEnded: true }), NOW)
+    ).toBe(CASE);
+  });
 });

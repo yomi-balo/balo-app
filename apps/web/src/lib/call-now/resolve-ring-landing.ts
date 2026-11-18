@@ -4,11 +4,16 @@ import { z } from 'zod';
 import type { CallRingStatus } from '@balo/shared/meetings';
 import { callSessionApi } from '@/lib/credit/api-client';
 import { log } from '@/lib/logging';
-import { ringLandingPath } from './ring-landing-path';
+import { ringLandingPath, type RingLandingFacts } from './ring-landing-path';
 
 const FALLBACK_PATH = '/cases';
 
 const ringIdSchema = z.uuid();
+
+/** Whether a path segment is a well-formed ring id, the only shape the api path may carry. */
+export function isRingId(value: string): boolean {
+  return ringIdSchema.safeParse(value).success;
+}
 
 const RING_STATUSES: ReadonlySet<string> = new Set<CallRingStatus>([
   'ringing',
@@ -18,12 +23,7 @@ const RING_STATUSES: ReadonlySet<string> = new Set<CallRingStatus>([
   'stopped',
 ]);
 
-interface RingReadBody {
-  readonly status: CallRingStatus;
-  readonly meetingId: string;
-  readonly engagementId: string;
-  readonly expiresAt: string;
-}
+type RingReadBody = RingLandingFacts;
 
 function isRingStatus(value: unknown): value is CallRingStatus {
   return typeof value === 'string' && RING_STATUSES.has(value);
@@ -31,16 +31,21 @@ function isRingStatus(value: unknown): value is CallRingStatus {
 
 function readRing(body: unknown): RingReadBody | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
-  const { status, meetingId, engagementId, expiresAt } = body as Record<string, unknown>;
+  const { status, meetingId, engagementId, expiresAt, awaitsAnswer, meetingEnded } = body as Record<
+    string,
+    unknown
+  >;
   if (
     !isRingStatus(status) ||
     typeof meetingId !== 'string' ||
     typeof engagementId !== 'string' ||
-    typeof expiresAt !== 'string'
+    typeof expiresAt !== 'string' ||
+    typeof awaitsAnswer !== 'boolean' ||
+    typeof meetingEnded !== 'boolean'
   ) {
     return undefined;
   }
-  return { status, meetingId, engagementId, expiresAt };
+  return { status, meetingId, engagementId, expiresAt, awaitsAnswer, meetingEnded };
 }
 
 /**
@@ -50,7 +55,7 @@ function readRing(body: unknown): RingReadBody | undefined {
  * text message and a dead end there helps nobody.
  */
 export async function resolveRingLandingPath(ringId: string): Promise<string> {
-  if (!ringIdSchema.safeParse(ringId).success) return FALLBACK_PATH;
+  if (!isRingId(ringId)) return FALLBACK_PATH;
 
   const result = await callSessionApi<unknown>(`/call-now/rings/${ringId}`, 'GET');
 

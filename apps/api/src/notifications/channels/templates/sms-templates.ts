@@ -3,6 +3,9 @@ import { resolveAppUrl } from '../../../lib/app-url.js';
 /** One SMS is 160 GSM-7 characters; past that it splits and bills as several. */
 const SMS_MAX_LENGTH = 160;
 
+/** The longest caller label (company or first name) kept before the body is fitted. */
+const MAX_CALLER_LENGTH = 40;
+
 /** The least of a case title worth keeping when the rest of the body already fills the SMS. */
 const MIN_CASE_TITLE_LENGTH = 10;
 
@@ -82,6 +85,14 @@ function sanitizedOr(value: unknown, fallback: string): string {
   return clean.length > 0 ? clean : fallback;
 }
 
+/** Caps a sanitised caller label at {@link MAX_CALLER_LENGTH} with an ASCII `...`. */
+function capCaller(caller: string): string {
+  if (caller.length <= MAX_CALLER_LENGTH) {
+    return caller;
+  }
+  return `${caller.slice(0, MAX_CALLER_LENGTH - 3).trimEnd()}...`;
+}
+
 /**
  * BAL-652 — shorten `{case}` so the whole body fits one SMS. ASCII `...`, never `…`: a single
  * non-GSM character flips the whole message to UCS-2 and cuts the limit to 70. A title that
@@ -110,7 +121,7 @@ function incomingCallSms(
   callerFallback: string,
   data: Record<string, unknown>
 ): string {
-  const caller = sanitizedOr(rawCaller, callerFallback);
+  const caller = capCaller(sanitizedOr(rawCaller, callerFallback));
   const title = sanitizedOr(data.callCaseTitle, 'your case');
   const link = callNowLink(data.ringId);
   const frame = (caseTitle: string): string =>
