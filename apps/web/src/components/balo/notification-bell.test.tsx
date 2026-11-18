@@ -1506,11 +1506,13 @@ describe('NotificationBell', () => {
       return view;
     }
 
-    function goLive(): void {
+    // Going live fires a catch-up fetch; settle it so a test's `before` count already includes it.
+    async function goLive(): Promise<void> {
       act(() => {
         client().connection.emit('connected');
         client().channel.emit('attached');
       });
+      await flush(0);
     }
 
     function ping(): void {
@@ -1542,7 +1544,7 @@ describe('NotificationBell', () => {
 
     it('refetches once, 500ms after a ping, and toasts the new notification as push', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       const before = feedFetches().length;
       setFeed({
         notifications: [
@@ -1573,7 +1575,7 @@ describe('NotificationBell', () => {
 
     it('collapses a burst of pings into a single refetch', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       const before = feedFetches().length;
 
       for (let i = 0; i < 3; i += 1) {
@@ -1588,7 +1590,7 @@ describe('NotificationBell', () => {
 
     it('measures latency from the oldest notification of the arrival', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       setFeed({
         notifications: [
           makeNotification({
@@ -1619,7 +1621,7 @@ describe('NotificationBell', () => {
 
     it('slows the poll to 120s while push is live', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       const before = feedFetches().length;
 
       await flush(119_000);
@@ -1631,7 +1633,7 @@ describe('NotificationBell', () => {
 
     it('restarts the 30s poll from the moment the connection drops', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       const before = feedFetches().length;
       await flush(100_000);
       expect(feedFetches()).toHaveLength(before);
@@ -1646,12 +1648,12 @@ describe('NotificationBell', () => {
 
     it('catches up once on reconnect, then returns to the 120s poll', async () => {
       await renderPush();
-      goLive();
+      await goLive();
       act(() => client().connection.emit('disconnected'));
       await flush(10_000);
       const before = feedFetches().length;
 
-      goLive();
+      await goLive();
       await flush(0);
       expect(feedFetches()).toHaveLength(before + 1);
 
@@ -1666,7 +1668,7 @@ describe('NotificationBell', () => {
       await renderPush();
       const before = feedFetches().length;
 
-      goLive();
+      await goLive();
       await flush(0);
 
       expect(feedFetches()).toHaveLength(before + 1);
@@ -1688,7 +1690,7 @@ describe('NotificationBell', () => {
       });
       const before = feedFetches().length;
 
-      goLive();
+      await goLive();
       await flush(0);
 
       expect(feedFetches()).toHaveLength(before + 1);
