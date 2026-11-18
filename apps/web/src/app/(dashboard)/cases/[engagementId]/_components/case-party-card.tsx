@@ -15,10 +15,12 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { cn } from '@/lib/utils';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
+import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import type { BookingFlowExpert } from '@/components/booking';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { CaseEarningsBlock } from './case-earnings-block';
 import { CaseSlotQuickPick, type FollowUpRequest } from './case-slot-quick-pick';
+import { CallNowEntry } from './call-now-entry';
 
 /**
  * BAL-421 — the rail's counterparty card. ONE component for both lenses, because the two
@@ -69,6 +71,13 @@ interface CasePartyCardProps {
   onBookFollowUp?: () => void;
   /** Raised by `onBookFollowUp`'s owner; forwarded to `CaseSlotQuickPick`. */
   followUpRequest?: FollowUpRequest;
+  /**
+   * BAL-651 — the loader's Call now read, or `null`/absent when the entry must not render (the
+   * api said no, the hop failed, or the session is impersonated). Rendered from this alone.
+   */
+  callNow?: CaseCallNowView | null;
+  /** Opens the Call now confirm. */
+  onCallNow?: () => void;
 }
 
 export function CasePartyCard({
@@ -86,6 +95,8 @@ export function CasePartyCard({
   productsTaxonomy,
   onBookFollowUp,
   followUpRequest,
+  callNow = null,
+  onCallNow,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
@@ -143,6 +154,12 @@ export function CasePartyCard({
               <InlineRating average={party.ratingAverage} count={party.ratingCount} />
             </p>
           )}
+          {callNow?.onlineBadge === true && (
+            <p className="text-success mt-1 inline-flex items-center gap-1.5 text-xs">
+              <span aria-hidden="true" className="bg-success size-[7px] rounded-full" />
+              Online
+            </p>
+          )}
         </div>
       </div>
 
@@ -194,6 +211,10 @@ export function CasePartyCard({
           productsTaxonomy={productsTaxonomy}
           openRequest={followUpRequest}
         />
+      )}
+
+      {callNow !== null && onCallNow !== undefined && (
+        <CallNowEntry callNow={callNow} lens={lens} onCallNow={onCallNow} />
       )}
 
       {earnings !== undefined && <CaseEarningsBlock earnings={earnings} />}

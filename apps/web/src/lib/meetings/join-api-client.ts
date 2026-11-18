@@ -2,6 +2,7 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 import { MEETING_NOT_OPEN_YET_CODE } from '@balo/shared/engagements';
+import { CALL_ANSWER_REQUIRED_CODE } from './member-join-failure';
 import type {
   GuestJoinState,
   LobbyClaimState,
@@ -90,6 +91,11 @@ export type JoinApiResult<T> =
        * body carried a string; every other failure omits it.
        */
       readonly opensAt?: string;
+      /**
+       * BAL-651 — the ring an expert-started Call now is waiting on. ⚠ Present ONLY on
+       * `409 call_answer_required`, and only when the body carried a string.
+       */
+      readonly ringId?: string;
     };
 
 /**
@@ -103,6 +109,18 @@ export function notOpenYetFrom(
 ): { opensAt: string } | undefined {
   return result.code === MEETING_NOT_OPEN_YET_CODE && result.opensAt !== undefined
     ? { opensAt: result.opensAt }
+    : undefined;
+}
+
+/**
+ * BAL-651 — THE ONE CHECK for "this failure is the Call now answer hold, with a usable `ringId`":
+ * an expert-started ring whose client side must commit before the join is granted.
+ */
+export function answerRequiredFrom(
+  result: Extract<JoinApiResult<unknown>, { ok: false }>
+): { ringId: string } | undefined {
+  return result.code === CALL_ANSWER_REQUIRED_CODE && result.ringId !== undefined
+    ? { ringId: result.ringId }
     : undefined;
 }
 
@@ -272,12 +290,15 @@ async function failureFrom(
   const code = refusal ?? readString(parsed, 'error') ?? 'request_failed';
   // D16 — `opensAt` rides ONLY on the early-join refusal.
   const opensAt = code === MEETING_NOT_OPEN_YET_CODE ? readString(parsed, 'opensAt') : undefined;
+  // BAL-651 — `ringId` rides ONLY on the answer-required hold.
+  const ringId = code === CALL_ANSWER_REQUIRED_CODE ? readString(parsed, 'ringId') : undefined;
   return {
     ok: false,
     status: response.status,
     code,
     ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
     ...(opensAt === undefined ? {} : { opensAt }),
+    ...(ringId === undefined ? {} : { ringId }),
   };
 }
 

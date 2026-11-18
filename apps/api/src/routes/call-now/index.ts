@@ -120,9 +120,15 @@ async function handleView(request: FastifyRequest, reply: FastifyReply): Promise
       mayRing: authorized.mayRing,
       now: new Date(),
     });
+    const reason = gates.availability.canCallNow ? null : gates.availability.reason;
+    // ⚠ A client's presence is never shown to an expert: the signal exists for the client caller
+    // deciding whether to ring an expert, and is `false` whenever the callee is the client.
+    const calleeOnline = authorized.side === 'client' && gates.calleeOnline;
     reply.code(200).send({
       canCallNow: gates.availability.canCallNow,
-      reason: gates.availability.canCallNow ? null : gates.availability.reason,
+      reason,
+      calleeOnline,
+      calleeTimeZone: reason === 'outside_hours' ? (gates.callee?.timeZone ?? null) : null,
       inPlaceCandidate:
         gates.inPlaceCandidate === null
           ? null
@@ -252,6 +258,7 @@ async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Pro
       placement: ring.placement,
       expiresAt: ring.expiresAt.toISOString(),
       role,
+      reachedBy: ring.reachedBy,
       awaitsAnswer,
       meetingEnded,
     });

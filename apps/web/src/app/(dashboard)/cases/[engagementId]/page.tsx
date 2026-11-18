@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { extractEmailDomain } from '@balo/shared/domains';
 import { getCurrentUser } from '@/lib/auth/session';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
+import { loadCaseCallNow, readCallNowView } from '@/lib/call-now/load-case-call-now';
 import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import type { CaseSurfaceState } from '@/lib/analytics/server';
@@ -87,6 +89,11 @@ export default async function CasePage({
   // (below). It is cached, and degrades to an empty taxonomy rather than throwing.
   const productsTaxonomyRead = loadSearchTaxonomyCached();
 
+  // BAL-651 — the api's own answer to "can this viewer call now", started beside `loadCase` for
+  // the same reason. Skipped under impersonation: Call now commits real money and a real ring,
+  // and an impersonated session holds no API credential. `readCallNowView` never rejects.
+  const callNowRead = isImpersonatedSession(user) ? null : readCallNowView(engagementId);
+
   let view: Awaited<ReturnType<typeof loadCase>>;
   try {
     view = await loadCase(engagementId, user.id);
@@ -125,6 +132,7 @@ export default async function CasePage({
     view.lens === 'client' && view.header.isOpen && view.party.availableForWork
       ? await productsTaxonomyRead
       : EMPTY_TAXONOMY;
+  const callNow = callNowRead === null ? null : await loadCaseCallNow({ view, read: callNowRead });
 
   return (
     <>
@@ -135,6 +143,7 @@ export default async function CasePage({
         view={view}
         viewerEmailDomain={viewerEmailDomain}
         productsTaxonomy={productsTaxonomy}
+        callNow={callNow}
       />
     </>
   );

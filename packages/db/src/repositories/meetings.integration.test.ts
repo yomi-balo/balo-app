@@ -44,6 +44,7 @@ import { findProjectionForMeeting } from './_shared/consultation-projection';
 import { creditSessionsRepository } from './credit-sessions';
 import { meetingCalendarEventsRepository } from './meeting-calendar-events';
 import { InvalidPresenceTimestampError, meetingPresenceRepository } from './meeting-presence';
+import { meetingRingsRepository } from './meeting-rings';
 import {
   meetingsRepository,
   MeetingContextRequiredError,
@@ -2792,6 +2793,37 @@ describe('meetingsRepository.listCalendarForExpert', () => {
     expect(caseRow?.contextType).toBe('case');
     expect(caseRow?.engagementType).toBe('case');
     expect(caseRow?.counterpartyCompanyName).toBe('Acme Co');
+  });
+
+  it('BAL-651: a Call now meeting that ended no_answer is absent from the calendar, while a live ring’s meeting is listed', async () => {
+    const { engagement: unansweredCase, expertProfileId } = await caseEngagementFactory();
+    const { engagement: ringingCase } = await caseEngagementFactory({ expertProfileId });
+    const caller = await userFactory();
+    const callee = await userFactory();
+    const now = Date.now();
+    const ringOn = (engagementId: string) =>
+      meetingRingsRepository.startWithNewMeeting({
+        engagementId,
+        callerUserId: caller.id,
+        calleeUserId: callee.id,
+        callerSide: 'client',
+        reachedBy: 'app',
+        expiresAt: new Date(now + 45_000),
+        scheduledStart: new Date(now),
+        scheduledEnd: new Date(now + 15 * 60_000),
+      });
+    const unanswered = await ringOn(unansweredCase.id);
+    await meetingRingsRepository.endRing({
+      ringId: unanswered.ring.id,
+      to: 'declined',
+      now: new Date(now + 20_000),
+      actorUserId: callee.id,
+    });
+    const ringing = await ringOn(ringingCase.id);
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result.map((row) => row.meetingId)).toEqual([ringing.meeting.id]);
   });
 
   it('tenant isolation — expert A never sees expert B’s meetings', async () => {

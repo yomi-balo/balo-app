@@ -330,6 +330,7 @@ export {
   type CallNowRingOutcome,
   type CallNowFundingGateReason,
   type CallNowFundingGateResolution,
+  type CallNowPresence,
 } from './call-now';
 export {
   GUEST_SERVER_EVENTS,

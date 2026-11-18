@@ -78,6 +78,9 @@ describe('CALL_NOW_SERVER_EVENTS', () => {
 describe('CALL_NOW_EVENTS', () => {
   it('exposes exactly the BAL-650 funding-gate client events', () => {
     expect(Object.keys(CALL_NOW_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'ATTEMPT_ABANDONED',
+      'DIALOG_CONFIRMED',
+      'ENTRY_CLICKED',
       'FUNDING_GATE_RESOLVED',
       'FUNDING_GATE_SHOWN',
     ]);
@@ -86,6 +89,9 @@ describe('CALL_NOW_EVENTS', () => {
   it('maps each constant to its exact snake_case event name', () => {
     expect(CALL_NOW_EVENTS.FUNDING_GATE_SHOWN).toBe('call_now_funding_gate_shown');
     expect(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED).toBe('call_now_funding_gate_resolved');
+    expect(CALL_NOW_EVENTS.ENTRY_CLICKED).toBe('call_now_entry_clicked');
+    expect(CALL_NOW_EVENTS.DIALOG_CONFIRMED).toBe('call_now_dialog_confirmed');
+    expect(CALL_NOW_EVENTS.ATTEMPT_ABANDONED).toBe('call_now_attempt_abandoned');
   });
 
   it('uses snake_case event values with the feature prefix', () => {

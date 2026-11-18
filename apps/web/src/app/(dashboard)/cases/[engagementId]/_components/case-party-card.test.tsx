@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { track, EXPERT_PROFILE_EVENTS, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
+import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import { CasePartyCard } from './case-party-card';
 
 // BAL-400 — CasePartyCard now mounts `CaseSlotQuickPick` (which calls the real availability
@@ -73,6 +74,56 @@ const NEW_CASE_NOTE = 'Starts a new case — this one stays as it is.';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+/**
+ * BAL-651 — the Call now entry and the "Online" word render from the loader's `CaseCallNowView`
+ * alone; the card derives nothing about availability.
+ */
+describe('CasePartyCard — Call now', () => {
+  const BUTTON_VIEW: CaseCallNowView = {
+    entry: 'button',
+    calleeLabel: 'Amara',
+    onlineBadge: true,
+    calleeTimeZone: null,
+    confirm: { kind: 'expert_notice', engagementId: 'engagement-1' },
+  };
+
+  it('renders the entry and the Online word, and opens the confirm on click', async () => {
+    const user = userEvent.setup();
+    const onCallNow = vi.fn();
+    renderCard({ callNow: BUTTON_VIEW, onCallNow });
+
+    expect(screen.getByText('Online')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    expect(onCallNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders neither the entry nor the Online word when there is no view', () => {
+    renderCard({ callNow: null, onCallNow: vi.fn() });
+    expect(screen.queryByRole('button', { name: /^Call .* now$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+  });
+
+  it('shows the quiet line instead of a button when the callee is busy', () => {
+    renderCard({
+      callNow: { ...BUTTON_VIEW, entry: 'busy', onlineBadge: false, confirm: null },
+      onCallNow: vi.fn(),
+    });
+    expect(screen.getByText('Amara is in another call')).toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Call Amara now' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the entry when the expert is not publicly listed (no quick-pick, no booking CTA)', () => {
+    renderCard({
+      party: { ...PARTY, profileHref: null },
+      callNow: BUTTON_VIEW,
+      onCallNow: vi.fn(),
+    });
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Call Amara now' })).toBeInTheDocument();
+  });
 });
 
 /**

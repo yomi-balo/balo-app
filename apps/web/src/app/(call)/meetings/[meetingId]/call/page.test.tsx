@@ -35,8 +35,11 @@ const {
   mockGetSessionDrawdownState,
   mockAuthorizeMeetingParticipation,
   mockAnalyticsIdentify,
+  mockLoadCallNowCallerView,
   dbSpies,
 } = vi.hoisted(() => ({
+  /** BAL-651 — the caller's-ring loader; the page only decides WHETHER to call it. */
+  mockLoadCallNowCallerView: vi.fn(),
   mockCheckSessionDrift: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   mockRedirect: vi.fn(),
@@ -66,6 +69,13 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/auth/session-sync', () => ({ checkSessionDrift: mockCheckSessionDrift }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+vi.mock('@/lib/call-now/load-call-now-caller-view', () => ({
+  loadCallNowCallerView: mockLoadCallNowCallerView,
+}));
+vi.mock('@/lib/call-now/resolve-ring-landing', () => ({
+  isRingId: (value: string): boolean =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value),
+}));
 vi.mock('@/lib/credit/actions/get-drawdown-state', () => ({
   getSessionDrawdownState: mockGetSessionDrawdownState,
 }));
@@ -103,7 +113,9 @@ vi.mock('./_components/call-client', () => ({
     chatChannelName,
     typingChannelName,
     hasBalance,
+    callNowCaller,
   }: {
+    callNowCaller?: { ringId: string } | null;
     meetingId: string;
     viewerName: string | null;
     hasChat: boolean;
@@ -122,6 +134,7 @@ vi.mock('./_components/call-client', () => ({
       // ⚠ `String`, not `?? ''`: `null` renders "null", so an `undefined` or empty name fails.
       data-typing-channel={String(typingChannelName)}
       data-has-balance={String(hasBalance)}
+      data-call-now-ring={callNowCaller?.ringId ?? ''}
     />
   ),
 }));
@@ -133,8 +146,11 @@ const USER_ID = '11111111-2222-4333-8444-555555555555';
 const CONVERSATION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 /** ⚠ `params` is a PROMISE in Next 16 — the page must await it. */
-async function renderPage(): Promise<HTMLElement> {
-  const element = await MeetingCallPage({ params: Promise.resolve({ meetingId: MEETING_ID }) });
+async function renderPage(ring?: string | string[]): Promise<HTMLElement> {
+  const element = await MeetingCallPage({
+    params: Promise.resolve({ meetingId: MEETING_ID }),
+    searchParams: Promise.resolve(ring === undefined ? {} : { ring }),
+  });
   return render(element).container;
 }
 
@@ -149,6 +165,7 @@ beforeEach(() => {
     anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
   });
   mockIsRealtimeConfigured.mockReturnValue(true);
+  mockLoadCallNowCallerView.mockResolvedValue(null);
   // ⚠ BAL-403 — `undefined` (no row) IS THE FIXTURE DEFAULT here, so every existing test in this
   // file that does not care about Balance still exercises the inert path. (BAL-466's join seam
   // DOES open a credit session for an admitted case client in production — this default is a
@@ -473,5 +490,60 @@ describe('MeetingCallPage — BAL-403, the BALANCE slot resolves server-side', (
       'data-has-balance',
       'false'
     );
+  });
+});
+
+describe('MeetingCallPage — the caller Call now ring (BAL-651)', () => {
+  const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+
+  it('verifies a well-formed ?ring= server-side and hands the caller view to the client', async () => {
+    mockLoadCallNowCallerView.mockResolvedValue({ ringId: RING_ID });
+
+    const container = await renderPage(RING_ID);
+
+    expect(mockLoadCallNowCallerView).toHaveBeenCalledWith({
+      ringId: RING_ID,
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+    });
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-call-now-ring',
+      RING_ID
+    );
+  });
+
+  it('never calls the loader when there is no ring in the query', async () => {
+    const container = await renderPage();
+
+    expect(mockLoadCallNowCallerView).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
+      'data-call-now-ring',
+      ''
+    );
+  });
+
+  it.each([
+    ['a malformed id', 'not-a-uuid'],
+    ['a repeated key', [RING_ID, RING_ID]],
+  ])('⚠ never lets %s reach the api', async (_label, ring) => {
+    await renderPage(ring);
+
+    expect(mockLoadCallNowCallerView).not.toHaveBeenCalled();
+  });
+
+  it('⚠ skips the hop under an impersonated session', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, isImpersonating: true });
+
+    await renderPage(RING_ID);
+
+    expect(mockLoadCallNowCallerView).not.toHaveBeenCalled();
+  });
+
+  it('skips the hop when there is no session user', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
+
+    await renderPage(RING_ID);
+
+    expect(mockLoadCallNowCallerView).not.toHaveBeenCalled();
   });
 });

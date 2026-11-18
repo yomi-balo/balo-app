@@ -65,7 +65,22 @@ export const CALL_NOW_EVENTS = {
   FUNDING_GATE_SHOWN: 'call_now_funding_gate_shown',
   /** The funding gate ended: the client topped up, switched to calling in place, or left. */
   FUNDING_GATE_RESOLVED: 'call_now_funding_gate_resolved',
+  /** The caller pressed "Call now" on the case's party card, before any confirmation. */
+  ENTRY_CLICKED: 'call_now_entry_clicked',
+  /** The caller confirmed and the ring was started. */
+  DIALOG_CONFIRMED: 'call_now_dialog_confirmed',
+  /** The caller left an attempt before it connected: at the confirm, the funding gate or the ring. */
+  ATTEMPT_ABANDONED: 'call_now_attempt_abandoned',
 } as const;
+
+/**
+ * Whether the callee was online when the caller looked, from the call-now read view. `unknown` is
+ * the expert arm: a client's presence is never exposed to an expert.
+ */
+export type CallNowPresence = 'online' | 'offline' | 'unknown';
+
+/** Where an abandoned attempt stopped. */
+export type CallNowAbandonStep = 'confirm' | 'funding' | 'calling';
 
 export interface CallNowEventMap {
   [CALL_NOW_EVENTS.FUNDING_GATE_SHOWN]: {
@@ -75,6 +90,20 @@ export interface CallNowEventMap {
   };
   [CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED]: {
     via: CallNowFundingGateResolution;
+  };
+  [CALL_NOW_EVENTS.ENTRY_CLICKED]: {
+    lens: CallSide;
+    presence: CallNowPresence;
+    /** A consultation is already booked today, so "in place of" is on offer. */
+    has_booking_today: boolean;
+  };
+  [CALL_NOW_EVENTS.DIALOG_CONFIRMED]: {
+    lens: CallSide;
+    presence: CallNowPresence;
+    in_place_of_booking: boolean;
+  };
+  [CALL_NOW_EVENTS.ATTEMPT_ABANDONED]: {
+    step: CallNowAbandonStep;
   };
 }
 

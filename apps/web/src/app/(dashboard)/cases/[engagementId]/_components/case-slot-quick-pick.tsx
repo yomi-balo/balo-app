@@ -32,7 +32,7 @@ function formatPill(iso: string): string {
 export interface FollowUpRequest {
   /** Bumped per ask; `0` means nothing has been requested. */
   seq: number;
-  source: Extract<BookingSource, 'book_again' | 'case_nudge'>;
+  source: Extract<BookingSource, 'book_again' | 'case_nudge' | 'call_now'>;
 }
 
 export interface CaseSlotQuickPickProps {

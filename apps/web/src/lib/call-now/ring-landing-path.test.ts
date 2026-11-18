@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CallRingStatus } from '@balo/shared/meetings';
-import { ringLandingPath, type RingLandingFacts } from './ring-landing-path';
+import { callNowCallerPath, ringLandingPath, type RingLandingFacts } from './ring-landing-path';
 
 const NOW = new Date('2026-11-17T10:00:00.000Z');
 const MEETING_ID = '11111111-1111-4111-8111-111111111111';
@@ -69,5 +69,13 @@ describe('ringLandingPath', () => {
     expect(
       ringLandingPath(ring('connected', '2026-11-17T09:00:00.000Z', { meetingEnded: true }), NOW)
     ).toBe(CASE);
+  });
+});
+
+describe('callNowCallerPath', () => {
+  it('is the member call route carrying the ring as a query', () => {
+    expect(callNowCallerPath(MEETING_ID, 'ring-1')).toBe(
+      `/meetings/${MEETING_ID}/call?ring=ring-1`
+    );
   });
 });

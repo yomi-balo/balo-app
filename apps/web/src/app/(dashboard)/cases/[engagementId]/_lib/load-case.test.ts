@@ -69,6 +69,8 @@ const m = {
   countsLiveByMeetingIds: vi.fn(),
   listPartyDomains: vi.fn(),
   factsByMeetingIds: vi.fn(),
+  ringFactsForMeetings: vi.fn(),
+  inPlaceBookedStarts: vi.fn(),
   listProductIds: vi.fn(),
   findNewWorkEligibility: vi.fn(),
 };
@@ -102,6 +104,10 @@ vi.mock('@balo/db', () => ({
   },
   meetingPresenceRepository: {
     factsByMeetingIds: (...a: unknown[]) => m.factsByMeetingIds(...a),
+  },
+  meetingRingsRepository: {
+    listFactsForMeetings: (...a: unknown[]) => m.ringFactsForMeetings(...a),
+    listInPlaceBookedStarts: (...a: unknown[]) => m.inPlaceBookedStarts(...a),
   },
   partyDomainsRepository: { listByParty: (...a: unknown[]) => m.listPartyDomains(...a) },
   rescheduleProposalsRepository: {
@@ -290,6 +296,8 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.countsLiveByMeetingIds.mockResolvedValue([]);
   m.listPartyDomains.mockResolvedValue([]);
   m.factsByMeetingIds.mockResolvedValue(new Map());
+  m.ringFactsForMeetings.mockResolvedValue([]);
+  m.inPlaceBookedStarts.mockResolvedValue([]);
   m.listProductIds.mockResolvedValue([]);
   m.findNewWorkEligibility.mockResolvedValue({ eligible: true });
   mockReadRatingCard.mockResolvedValue(null);
@@ -607,6 +615,7 @@ describe('loadCase — no meeting secret and no rate crosses the projection boun
     expect([...Object.keys(row)].sort()).toEqual(
       [
         'actionItemCount',
+        'callNowNote',
         'canCancel',
         'canInvite',
         'canProposeReschedule',
@@ -1452,6 +1461,85 @@ function convFile(id: string, uploadedByUserId: string, iso: string): Record<str
     createdAt: new Date(iso),
   };
 }
+
+/**
+ * BAL-651 — a Call now meeting still ringing is left out of the consultation ROWS only. The nudge
+ * keeps it, so the callee's Join works; a finished Call now row carries its note.
+ */
+describe('loadCase — Call now rows (BAL-651)', () => {
+  const ringing = (meetingId: string): Record<string, unknown> => ({
+    meetingId,
+    placement: 'new_meeting',
+    status: 'ringing',
+    createdAt: new Date('2026-08-12T11:59:00Z'),
+    expiresAt: new Date('2026-08-12T12:01:00Z'),
+    endedAt: null,
+  });
+  const connected = (meetingId: string, placement: string): Record<string, unknown> => ({
+    meetingId,
+    placement,
+    status: 'connected',
+    createdAt: new Date('2026-08-12T11:00:00Z'),
+    expiresAt: new Date('2026-08-12T11:02:00Z'),
+    endedAt: new Date('2026-08-12T11:01:00Z'),
+  });
+  const upcomingCall = (id: string): Record<string, unknown> =>
+    meeting(id, {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: new Date('2026-08-12T12:00:00Z'),
+      scheduledEnd: new Date('2026-08-12T12:15:00Z'),
+    });
+
+  it('reads both ring facts for the loaded meeting ids, once each', async () => {
+    m.listMeetings.mockResolvedValue([meeting('m1'), meeting('m2')]);
+    await loadOrThrow();
+    expect(m.ringFactsForMeetings).toHaveBeenCalledTimes(1);
+    expect(m.ringFactsForMeetings).toHaveBeenCalledWith(['m1', 'm2']);
+    expect(m.inPlaceBookedStarts).toHaveBeenCalledWith(['m1', 'm2']);
+  });
+
+  it('leaves a RINGING call_now meeting out of the rows but keeps it for the nudge', async () => {
+    m.listMeetings.mockResolvedValue([upcomingCall('m-ring')]);
+    m.ringFactsForMeetings.mockResolvedValue([ringing('m-ring')]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations).toEqual([]);
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-ring' });
+  });
+
+  it('keeps a call_now meeting in the rows once its ring has connected, noted "unscheduled"', async () => {
+    m.listMeetings.mockResolvedValue([upcomingCall('m-call')]);
+    m.ringFactsForMeetings.mockResolvedValue([connected('m-call', 'new_meeting')]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations.map((row) => row.meetingId)).toEqual(['m-call']);
+    expect(view.consultations[0]?.callNowNote).toEqual({ kind: 'unscheduled' });
+  });
+
+  it("notes an in-place call as moved, from the audit row's booked start", async () => {
+    m.listMeetings.mockResolvedValue([upcomingCall('m-moved')]);
+    m.ringFactsForMeetings.mockResolvedValue([connected('m-moved', 'in_place')]);
+    m.inPlaceBookedStarts.mockResolvedValue([
+      { meetingId: 'm-moved', bookedStart: new Date('2026-08-12T15:00:00Z') },
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]?.callNowNote).toEqual({
+      kind: 'moved',
+      bookedForIso: '2026-08-12T15:00:00.000Z',
+    });
+  });
+
+  it('gives a booked consultation no note', async () => {
+    const view = await loadOrThrow();
+    expect(view.consultations[0]?.callNowNote).toBeNull();
+  });
+});
 
 describe('loadCase — per-consultation counts and the transcript indicator', () => {
   it('gives a no_answer meeting NO row and no count (an unanswered Call now is not a consultation)', async () => {

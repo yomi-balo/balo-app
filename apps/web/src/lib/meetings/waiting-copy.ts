@@ -1,3 +1,6 @@
+import type { CallRingReach, CallSide } from '@balo/shared/meetings';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
+
 /**
  * BAL-435 — THE WAITING-STAGE COPY, AS DATA. **One module, a handful of strings, zero JSX literals.**
  *
@@ -475,4 +478,42 @@ export function waitingIconKindFor(
   if (applicableCaseClosure(absentParty, phase, facts) !== null) return 'caseClosed';
   if (absentParty === null || phase !== 'settled') return 'spinner';
   return absentParty === 'expert' ? 'missed_call' : 'no_show';
+}
+
+/**
+ * BAL-651 — THE CALLING VARIANT: the caller waits in the room while the other side is rung.
+ *
+ * ⚠ IT IS NOT A PHASE. The four phases above are about a SCHEDULED start and the server's clock;
+ * a Call now ring has no scheduled start and no waiting clock (the timer starts once both are in),
+ * so "Calling" is its own view, supplied by the call route only while the ring is `ringing`.
+ * Everything in it is a fact about the ring: who is being called, how they were reached, how long
+ * the ring has left, and the one thing the caller can do.
+ *
+ * `remainingSeconds` is `null` once the ring's window has passed but the status has not flipped:
+ * the line is hidden rather than counting below zero.
+ */
+export interface WaitingCallingView {
+  /** Whose side the caller is on: the client copy names the charge, the expert copy does not. */
+  readonly copyArm: CallSide;
+  /** The other side's short name: the expert's first name, or the client company. */
+  readonly calleeLabel: string;
+  /** How the other side was reached; `sms` means they were texted rather than told in the app. */
+  readonly reachedBy: CallRingReach;
+  readonly remainingSeconds: number | null;
+  readonly onStop: () => void;
+  readonly stopping: boolean;
+}
+
+/** The title and body for the calling stage. Copy only; the countdown line is rendered apart. */
+export function callingCopy(
+  view: Pick<WaitingCallingView, 'copyArm' | 'calleeLabel' | 'reachedBy'>
+): WaitingCopy {
+  const { copyArm, calleeLabel, reachedBy } = view;
+  return {
+    title: CALL_NOW_COPY.callingTitle(calleeLabel),
+    body:
+      copyArm === 'client'
+        ? CALL_NOW_COPY.callingClient(calleeLabel, reachedBy === 'sms')
+        : CALL_NOW_COPY.callingExpert(calleeLabel),
+  };
 }

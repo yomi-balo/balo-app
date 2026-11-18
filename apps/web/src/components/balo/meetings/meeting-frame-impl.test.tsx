@@ -18,6 +18,7 @@ import {
   NEUTRAL_WAITING_COPY,
   UNKNOWN_WAITING_FACTS,
   waitingCopyFor,
+  type WaitingCallingView,
 } from '@/lib/meetings/waiting-copy';
 import {
   dailySpies,
@@ -234,6 +235,8 @@ interface RouteOptions {
    * test that drives End must supply it.
    */
   readonly endMeeting?: (() => Promise<EndMeetingResult>) | null;
+  /** BAL-651 — the caller's "Calling" view, supplied by the call route while their ring is out. */
+  readonly calling?: WaitingCallingView | null;
 }
 
 /**
@@ -255,6 +258,7 @@ function renderMember(options: RouteOptions = {}, canEndMeeting = false): HTMLEl
       onExit={options.onExit}
       panels={options.panels ?? null}
       endMeeting={options.endMeeting ?? null}
+      calling={options.calling ?? null}
     >
       <MeetingFrame grant={grantFor({ canEndMeeting })} />
     </MeetingRouteContextProvider>
@@ -431,6 +435,30 @@ describe('MeetingFrame — ⚠⚠ the waiting stage names the right party (R10)'
     expect(screen.getByText(expected.body)).toBeInTheDocument();
     expect(container.textContent ?? '').not.toContain(CLIENT_WAITING_BODY);
     expect(container.textContent ?? '').not.toMatch(/you won.?t be charged/i);
+  });
+
+  it('BAL-651 — a caller whose Call now ring is out sees "Calling" and Stop, not the scheduled copy', async () => {
+    const onStop = vi.fn();
+    const container = renderMember({
+      waiting: {
+        absentParty: 'expert',
+        counterpartyFirstName: 'Dana',
+        scheduledStartLabel: '10:00 am',
+      },
+      calling: {
+        copyArm: 'client',
+        calleeLabel: 'Dana',
+        reachedBy: 'app',
+        remainingSeconds: 40,
+        onStop,
+        stopping: false,
+      },
+    });
+    await join();
+
+    expect(screen.getByRole('heading', { name: 'Calling Dana' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop calling' })).toBeInTheDocument();
+    expect(container.textContent ?? '').not.toContain(CLIENT_WAITING_BODY);
   });
 
   it('⚠⚠ a GUEST gets party-neutral copy — no clock, no placeholder literals', async () => {

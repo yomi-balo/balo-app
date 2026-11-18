@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { GUEST_TOKEN_TTL_AFTER_END_MS } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
@@ -1304,6 +1304,167 @@ describe('meetingRingsRepository — reads', () => {
     expect(rings.map((ring) => ring.id)).toEqual([second.ring.id, first.ring.id]);
     expect(rings.map((ring) => ring.status)).toEqual(['ringing', 'stopped']);
     expect(await meetingRingsRepository.listForMeeting(randomUUID())).toEqual([]);
+  });
+
+  it('listFactsForMeetings batches every live ring across meetings, tagged with its meeting, and skips soft-deleted rings', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const inPlace = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (inPlace === undefined) throw new Error('ring did not start');
+    const other = await ringCase();
+    const fresh = await ringNewMeeting(other);
+    const deletedCase = await ringCase();
+    const deleted = await ringNewMeeting(deletedCase);
+    await db
+      .update(meetingRings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingRings.id, deleted.ring.id));
+
+    const facts = await meetingRingsRepository.listFactsForMeetings([
+      booked.id,
+      fresh.meeting.id,
+      deleted.meeting.id,
+    ]);
+
+    expect(facts).toHaveLength(2);
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        {
+          meetingId: booked.id,
+          placement: 'in_place',
+          status: 'ringing',
+          createdAt: inPlace.ring.createdAt,
+          expiresAt: inPlace.ring.expiresAt,
+          endedAt: null,
+        },
+        expect.objectContaining({ meetingId: fresh.meeting.id, placement: 'new_meeting' }),
+      ])
+    );
+  });
+
+  it('listFactsForMeetings answers [] for an empty input and for meetings with no ring', async () => {
+    expect(await meetingRingsRepository.listFactsForMeetings([])).toEqual([]);
+    expect(await meetingRingsRepository.listFactsForMeetings([randomUUID()])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts returns the booked start of an in-place ring that connected', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+
+    const result = await meetingRingsRepository.listInPlaceBookedStarts([booked.id, randomUUID()]);
+
+    expect(result).toEqual([{ meetingId: booked.id, bookedStart: booked.scheduledStart }]);
+  });
+
+  it('listInPlaceBookedStarts omits a ring that is still ringing, ended unconnected, or on a new meeting', async () => {
+    const ringingCase = await ringCase();
+    const ringingBooked = await bookLaterToday(ringingCase);
+    await meetingRingsRepository.startOnMeeting({
+      ...startInput(ringingCase),
+      meetingId: ringingBooked.id,
+    });
+
+    const stoppedCase = await ringCase();
+    const stoppedBooked = await bookLaterToday(stoppedCase);
+    const stopped = await meetingRingsRepository.startOnMeeting({
+      ...startInput(stoppedCase),
+      meetingId: stoppedBooked.id,
+    });
+    if (stopped === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.endRing({
+      ringId: stopped.ring.id,
+      to: 'stopped',
+      now: new Date(),
+      actorUserId: stoppedCase.callerUserId,
+    });
+
+    const newCase = await ringCase();
+    const fresh = await ringNewMeeting(newCase);
+    await meetingRingsRepository.connect({
+      ringId: fresh.ring.id,
+      startedAt: new Date(fresh.meeting.scheduledStart.getTime() + 5 * SECOND_MS),
+    });
+
+    const result = await meetingRingsRepository.listInPlaceBookedStarts([
+      ringingBooked.id,
+      stoppedBooked.id,
+      fresh.meeting.id,
+    ]);
+
+    expect(result).toEqual([]);
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts skips an audit row whose previous start does not parse', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+    await db
+      .update(auditEvents)
+      .set({
+        metadata: sql`jsonb_set(${auditEvents.metadata}, '{previousScheduledStart}', '"not-a-date"')`,
+      })
+      .where(
+        and(eq(auditEvents.entityId, booked.id), eq(auditEvents.action, 'meeting.rescheduled'))
+      );
+
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([booked.id])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts takes the newest call_now_connected row for the meeting, and ignores other reschedule reasons', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+    const newer = new Date(booked.scheduledStart.getTime() + 2 * HOUR_MS);
+    await db.insert(auditEvents).values([
+      {
+        action: 'meeting.rescheduled',
+        entityType: 'meeting',
+        entityId: booked.id,
+        metadata: { reason: 'call_now_connected', previousScheduledStart: newer.toISOString() },
+      },
+      {
+        action: 'meeting.rescheduled',
+        entityType: 'meeting',
+        entityId: booked.id,
+        metadata: {
+          reason: 'party_reschedule',
+          previousScheduledStart: new Date(0).toISOString(),
+        },
+      },
+    ]);
+
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([booked.id])).toEqual([
+      { meetingId: booked.id, bookedStart: newer },
+    ]);
   });
 
   it('listOverdueRinging returns ringing rings past `expires_at`, soonest-expired first, within `limit`', async () => {

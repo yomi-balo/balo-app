@@ -12,6 +12,7 @@ import {
   meetingContextsRepository,
   meetingGuestsRepository,
   meetingPresenceRepository,
+  meetingRingsRepository,
   partyDomainsRepository,
   rescheduleProposalsRepository,
   transcriptsRepository,
@@ -24,10 +25,12 @@ import {
 } from '@balo/db';
 import { CAPABILITIES, ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import {
+  callNowFactsFromRings,
   isMeetingVenueReady,
   MIN_MEETING_MINUTES,
   rescheduleProposalIsLive,
   resolveCancelRefusal,
+  type CallRingFacts,
 } from '@balo/shared/meetings';
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import { expertCounterpartyLabels } from '@/lib/meetings/expert-counterparty';
@@ -66,7 +69,7 @@ import type {
   CaseRescheduleProposalView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
-import { mapCaseConsultations } from './map-case-consultations';
+import { mapCaseConsultations, type CaseCallNowFacts } from './map-case-consultations';
 import { loadCaseFiles, type CaseFileMeetingRef } from './load-case-files';
 import { loadCasePeople } from './load-case-people';
 
@@ -234,6 +237,52 @@ async function resolveRescheduleProposalForNudge(
  */
 function withoutNoAnswerMeetings(meetings: readonly Meeting[]): readonly Meeting[] {
   return meetings.filter((meeting) => meeting.outcome !== 'no_answer');
+}
+
+/**
+ * BAL-651 — group the batched ring reads per meeting and reduce each group with
+ * `callNowFactsFromRings`. A meeting no ring touched is absent, so it is a booked consultation.
+ */
+function buildCallNowByMeetingId(
+  ringFacts: ReadonlyArray<CallRingFacts & { meetingId: string }>,
+  inPlaceBookedStarts: ReadonlyArray<{ meetingId: string; bookedStart: Date }>
+): ReadonlyMap<string, CaseCallNowFacts> {
+  const ringsByMeeting = new Map<string, CallRingFacts[]>();
+  for (const { meetingId, ...ring } of ringFacts) {
+    const rings = ringsByMeeting.get(meetingId);
+    if (rings === undefined) {
+      ringsByMeeting.set(meetingId, [ring]);
+    } else {
+      rings.push(ring);
+    }
+  }
+  const bookedStartByMeeting = new Map(
+    inPlaceBookedStarts.map((entry) => [entry.meetingId, entry.bookedStart])
+  );
+  return new Map(
+    [...ringsByMeeting].map(([meetingId, rings]) => [
+      meetingId,
+      {
+        facts: callNowFactsFromRings(rings),
+        bookedStart: bookedStartByMeeting.get(meetingId) ?? null,
+      },
+    ])
+  );
+}
+
+/**
+ * BAL-651 — a Call now meeting whose latest ring is still `ringing` is not a consultation yet:
+ * it is left out of the consultation ROWS only. The nudge, the ordinals and the files keep it, so
+ * the callee's Join works. ⚠ Only the rows read this; do not widen it.
+ */
+function withoutRingingCallNowMeetings(
+  meetings: readonly Meeting[],
+  callNowByMeetingId: ReadonlyMap<string, CaseCallNowFacts>
+): readonly Meeting[] {
+  return meetings.filter((meeting) => {
+    const entry = callNowByMeetingId.get(meeting.id);
+    return !(entry?.facts.origin === 'call_now' && entry.facts.ring?.status === 'ringing');
+  });
 }
 
 /**
@@ -726,6 +775,8 @@ export const loadCase = cache(
       transcriptMeetingIds,
       liveProposals,
       clientSideEverPresentByMeetingId,
+      ringFacts,
+      inPlaceBookedStarts,
     ] = await Promise.all([
       resolveCounterparty(lens, profile, caseRow.deliveringAgencyId, clientCompanyName),
       loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
@@ -735,7 +786,13 @@ export const loadCase = cache(
         meetings.map((meeting) => meeting.id)
       ),
       readClientSideEverPresent(meetings),
+      // BAL-651 — both ride the meeting ids, so the SECOND wave. Batched twins: one query each.
+      meetingRingsRepository.listFactsForMeetings(meetings.map((meeting) => meeting.id)),
+      meetingRingsRepository.listInPlaceBookedStarts(meetings.map((meeting) => meeting.id)),
     ]);
+
+    const callNowByMeetingId = buildCallNowByMeetingId(ringFacts, inPlaceBookedStarts);
+    const rowMeetings = withoutRingingCallNowMeetings(meetings, callNowByMeetingId);
 
     // ⚠ LIVENESS (expiry) IS DECIDED HERE, ONCE, via `rescheduleProposalIsLive` — the read
     // itself filters `status = 'pending'` only (never soft-deleted), never expiry. Both the
@@ -918,7 +975,7 @@ export const loadCase = cache(
     });
 
     const consultations = mapCaseConsultations(
-      meetings,
+      rowMeetings,
       {
         actionItemCountByMeetingId,
         fileCountByMeetingId,
@@ -926,6 +983,7 @@ export const loadCase = cache(
         meetingIdsWithLiveProposal,
         guestCountByMeetingId,
         clientSideEverPresentByMeetingId,
+        callNowByMeetingId,
       },
       now,
       {

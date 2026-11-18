@@ -64,6 +64,58 @@ describe('useMeetingRoute — with NO provider at all (the defensive fallback, N
   });
 });
 
+describe('MeetingRouteContextProvider — the caller’s calling view (BAL-651)', () => {
+  function CallingProbe(): React.JSX.Element {
+    const { calling } = useMeetingRoute();
+    return <div data-testid="calling" data-label={calling?.calleeLabel ?? 'none'} />;
+  }
+
+  it('⚠ is null with no provider and by the provider’s own default — both guest mounts keep the shipped copy', () => {
+    const { unmount } = render(<CallingProbe />);
+    expect(screen.getByTestId('calling')).toHaveAttribute('data-label', 'none');
+    unmount();
+
+    render(
+      <MeetingRouteContextProvider
+        meetingId={null}
+        viewerName={null}
+        title={null}
+        backTo={null}
+        contextNoun="call"
+        waiting={null}
+      >
+        <CallingProbe />
+      </MeetingRouteContextProvider>
+    );
+    expect(screen.getByTestId('calling')).toHaveAttribute('data-label', 'none');
+  });
+
+  it('carries the calling view the member route supplies', () => {
+    render(
+      <MeetingRouteContextProvider
+        meetingId="m-1"
+        viewerName={null}
+        title={null}
+        backTo={null}
+        contextNoun="case"
+        waiting={null}
+        calling={{
+          copyArm: 'client',
+          calleeLabel: 'Dana',
+          reachedBy: 'app',
+          remainingSeconds: 12,
+          onStop: vi.fn(),
+          stopping: false,
+        }}
+      >
+        <CallingProbe />
+      </MeetingRouteContextProvider>
+    );
+
+    expect(screen.getByTestId('calling')).toHaveAttribute('data-label', 'Dana');
+  });
+});
+
 describe('MeetingRouteContextProvider — the MEMBER mount', () => {
   it('supplies every field, including the R10 waiting subject', () => {
     render(

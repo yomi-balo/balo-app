@@ -91,6 +91,7 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     status: 'ringing',
     placement: 'new_meeting',
     callerSide: 'client',
+    reachedBy: 'app',
     expiresAt: EXPIRES,
     ...overrides,
   };
@@ -119,6 +120,8 @@ describe('call-now routes (BAL-649)', () => {
     });
     mocks.loadGates.mockResolvedValue({
       availability: { canCallNow: true },
+      callee: { userId: OTHER_USER, timeZone: 'Australia/Sydney' },
+      calleeOnline: false,
       inPlaceCandidate: null,
     });
     mocks.findById.mockResolvedValue(ring());
@@ -153,6 +156,8 @@ describe('call-now routes (BAL-649)', () => {
     it('200 canCallNow with a null reason and ISO candidate', async () => {
       mocks.loadGates.mockResolvedValue({
         availability: { canCallNow: true },
+        callee: { userId: OTHER_USER, timeZone: 'Australia/Sydney' },
+        calleeOnline: true,
         inPlaceCandidate: {
           meetingId: MEETING_ID,
           scheduledStart: new Date('2026-11-16T15:00:00.000Z'),
@@ -165,20 +170,95 @@ describe('call-now routes (BAL-649)', () => {
       expect(res.json()).toEqual({
         canCallNow: true,
         reason: null,
+        calleeOnline: true,
+        calleeTimeZone: null,
         inPlaceCandidate: { meetingId: MEETING_ID, scheduledStart: '2026-11-16T15:00:00.000Z' },
       });
+    });
+
+    it('⚠ calleeOnline is real only when the caller is the client (the callee is the expert)', async () => {
+      mocks.loadGates.mockResolvedValue({
+        availability: { canCallNow: true },
+        callee: { userId: OTHER_USER, timeZone: 'Australia/Sydney' },
+        calleeOnline: true,
+        inPlaceCandidate: null,
+      });
+
+      mocks.authorize.mockResolvedValue({
+        ok: true,
+        side: 'client',
+        caseRow: { id: ENGAGEMENT_ID },
+        mayRing: true,
+      });
+      const clientRes = await app.inject({ method: 'GET', url, headers: AUTH });
+      expect(clientRes.json()).toMatchObject({ calleeOnline: true });
+
+      mocks.authorize.mockResolvedValue({
+        ok: true,
+        side: 'expert',
+        caseRow: { id: ENGAGEMENT_ID },
+        mayRing: true,
+      });
+      const expertRes = await app.inject({ method: 'GET', url, headers: AUTH });
+      expect(expertRes.json()).toMatchObject({ calleeOnline: false });
     });
 
     it('200 with the display reason, and never the internal refusal', async () => {
       mocks.loadGates.mockResolvedValue({
         availability: { canCallNow: false, refusal: 'callee_busy', reason: 'busy' },
+        callee: { userId: OTHER_USER, timeZone: 'Australia/Sydney' },
+        calleeOnline: false,
         inPlaceCandidate: null,
       });
 
       const res = await app.inject({ method: 'GET', url, headers: AUTH });
 
-      expect(res.json()).toEqual({ canCallNow: false, reason: 'busy', inPlaceCandidate: null });
+      expect(res.json()).toEqual({
+        canCallNow: false,
+        reason: 'busy',
+        calleeOnline: false,
+        calleeTimeZone: null,
+        inPlaceCandidate: null,
+      });
       expect(res.body).not.toContain('callee_busy');
+    });
+
+    it('carries the callee zone only for an outside_hours refusal', async () => {
+      mocks.loadGates.mockResolvedValue({
+        availability: {
+          canCallNow: false,
+          refusal: 'expert_outside_hours',
+          reason: 'outside_hours',
+        },
+        callee: { userId: OTHER_USER, timeZone: 'Australia/Sydney' },
+        calleeOnline: false,
+        inPlaceCandidate: null,
+      });
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({
+        reason: 'outside_hours',
+        calleeTimeZone: 'Australia/Sydney',
+      });
+      expect(res.body).not.toContain('expert_outside_hours');
+    });
+
+    it('calleeTimeZone is null for outside_hours when no callee resolved', async () => {
+      mocks.loadGates.mockResolvedValue({
+        availability: {
+          canCallNow: false,
+          refusal: 'expert_outside_hours',
+          reason: 'outside_hours',
+        },
+        callee: null,
+        calleeOnline: false,
+        inPlaceCandidate: null,
+      });
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ reason: 'outside_hours', calleeTimeZone: null });
     });
 
     it('passes `mayRing` from the authorization into the gates', async () => {
@@ -616,9 +696,18 @@ describe('call-now routes (BAL-649)', () => {
         placement: 'new_meeting',
         expiresAt: EXPIRES.toISOString(),
         role: 'caller',
+        reachedBy: 'app',
         awaitsAnswer: false,
         meetingEnded: false,
       });
+    });
+
+    it('carries how the callee was reached', async () => {
+      mocks.findById.mockResolvedValue(ring({ reachedBy: 'sms' }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ reachedBy: 'sms' });
     });
 
     it('200 to the callee with role `callee`', async () => {

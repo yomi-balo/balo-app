@@ -36,6 +36,7 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
   meetingIdsWithLiveProposal: new Set(),
   guestCountByMeetingId: new Map(),
   clientSideEverPresentByMeetingId: new Map(),
+  callNowByMeetingId: new Map(),
 };
 
 /** A `now` well before every fixture's default `scheduledStart` — irrelevant to the tests that
@@ -121,6 +122,7 @@ describe('mapCaseConsultations — the SECRET-LEAK boundary', () => {
     const [row] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
     expect(row === undefined ? [] : Object.keys(row).sort()).toEqual([
       'actionItemCount',
+      'callNowNote',
       'canCancel',
       'canInvite',
       'canProposeReschedule',
@@ -473,6 +475,7 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
         meetingIdsWithLiveProposal: new Set(),
         guestCountByMeetingId: new Map(),
         clientSideEverPresentByMeetingId: new Map(),
+        callNowByMeetingId: new Map(),
       },
       NOW,
       NO_ACTION
@@ -834,5 +837,65 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
     expect(row?.canCancel).toBe(false);
     expect(row?.canReschedule).toBe(false);
     expect(row?.canProposeReschedule).toBe(false);
+  });
+});
+
+describe('mapCaseConsultations — the Call now note (BAL-651)', () => {
+  const facts = (origin: 'booked' | 'call_now') => ({ origin, ring: null });
+
+  it('is null for a booked consultation, with or without a ring history', () => {
+    const [plain] = mapCaseConsultations([held('m1')], EMPTY_COUNTS, NOW, NO_ACTION);
+    const [booked] = mapCaseConsultations(
+      [held('m1')],
+      {
+        ...EMPTY_COUNTS,
+        callNowByMeetingId: new Map([['m1', { facts: facts('booked'), bookedStart: null }]]),
+      },
+      NOW,
+      NO_ACTION
+    );
+    expect(plain?.callNowNote).toBeNull();
+    expect(booked?.callNowNote).toBeNull();
+  });
+
+  it('is "unscheduled" for a call_now origin with no displaced booking', () => {
+    const [row] = mapCaseConsultations(
+      [held('m1')],
+      {
+        ...EMPTY_COUNTS,
+        callNowByMeetingId: new Map([['m1', { facts: facts('call_now'), bookedStart: null }]]),
+      },
+      NOW,
+      NO_ACTION
+    );
+    expect(row?.callNowNote).toEqual({ kind: 'unscheduled' });
+  });
+
+  it('is "moved" with the booked start ISO when an in-place call displaced a booking', () => {
+    const [row] = mapCaseConsultations(
+      [held('m1')],
+      {
+        ...EMPTY_COUNTS,
+        callNowByMeetingId: new Map([
+          ['m1', { facts: facts('booked'), bookedStart: new Date('2026-07-01T15:00:00Z') }],
+        ]),
+      },
+      NOW,
+      NO_ACTION
+    );
+    expect(row?.callNowNote).toEqual({ kind: 'moved', bookedForIso: '2026-07-01T15:00:00.000Z' });
+  });
+
+  it('carries no money in the note', () => {
+    const [row] = mapCaseConsultations(
+      [held('m1')],
+      {
+        ...EMPTY_COUNTS,
+        callNowByMeetingId: new Map([['m1', { facts: facts('call_now'), bookedStart: null }]]),
+      },
+      NOW,
+      NO_ACTION
+    );
+    expect(JSON.stringify(row?.callNowNote)).not.toMatch(/A\$|\/min/);
   });
 });

@@ -18,7 +18,11 @@ export type MemberJoinFailureReason =
   | 'not_open_yet' // 409 meeting_not_open_yet — the join window has not opened (D16, NON-terminal: try again from opensAt)
   | 'outage' // transport (0) or any 5xx, or an unreadable account row (retry)
   | 'account_refused' // suspended/deleted account (BAL-568) → session-sync
+  | 'answer_required' // 409 call_answer_required — an expert-started Call now ring awaits this client's commit (BAL-651)
   | 'unavailable'; // 404, plain 401, synthetic `unauthenticated`, invalid request, anything else
+
+/** BAL-651 — the api's literal for an expert-started Call now ring that awaits the client's commit. */
+export const CALL_ANSWER_REQUIRED_CODE = 'call_answer_required';
 
 /**
  * THE ALLOWLIST. Only facts the api may disclose post-authorization are distinguished; everything
@@ -30,6 +34,7 @@ export function memberJoinFailureReasonFor(status: number, code: string): Member
   if (status === 409 && code === 'meeting_not_provisioned') return 'not_provisioned';
   if (status === 409 && code === 'meeting_not_open_for_join') return 'not_open';
   if (status === 409 && code === MEETING_NOT_OPEN_YET_CODE) return 'not_open_yet';
+  if (status === 409 && code === CALL_ANSWER_REQUIRED_CODE) return 'answer_required';
   if (status === 401 && isAccountRefusalCode(code)) return 'account_refused';
   return 'unavailable';
 }

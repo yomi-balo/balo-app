@@ -126,6 +126,13 @@ export interface CaseConsultationRowView {
   /** BAL-581 — `isMeetingVenueReady` for an UPCOMING row; `false` on every other row (it is read
    *  only beside `live`). A boolean only — never the room name or join url. */
   roomReady: boolean;
+  /**
+   * BAL-651 — the one extra line a Call now row carries under its state note, or `null` for a
+   * booked consultation. `unscheduled`: the call was never booked. `moved`: it connected in place
+   * of a booking, and `bookedForIso` is the start that booking was held for. ⚠ NO MONEY AND NO
+   * ring status here — the row states what the call was, never what it cost or how it rang.
+   */
+  callNowNote: { kind: 'unscheduled' } | { kind: 'moved'; bookedForIso: string } | null;
 }
 
 // ── files (the D4 merge) ─────────────────────────────────────────────────────────────────

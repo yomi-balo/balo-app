@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@/test/utils';
+import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import userEvent from '@testing-library/user-event';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
@@ -16,7 +17,10 @@ const trackMock = vi.mocked(track);
 
 // N8 — a shared, hoisted spy so tests can assert `router.refresh()` fired, which a fresh
 // `vi.fn()` returned from inside the factory on every `useRouter()` call could not do.
-const { mockRouterRefresh } = vi.hoisted(() => ({ mockRouterRefresh: vi.fn() }));
+const { mockRouterRefresh, mockRouterReplace } = vi.hoisted(() => ({
+  mockRouterRefresh: vi.fn(),
+  mockRouterReplace: vi.fn(),
+}));
 
 /**
  * BAL-421 — the desktop composition, tested for the ONE thing composition can get wrong: which
@@ -47,7 +51,32 @@ vi.mock('motion/react', () => ({
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: mockRouterRefresh, push: vi.fn() }),
+  useRouter: () => ({ refresh: mockRouterRefresh, push: vi.fn(), replace: mockRouterReplace }),
+}));
+
+// BAL-651 — the real dialog reads `window.matchMedia` (absent in jsdom) and has its own suite
+// (`call-now-dialog.test.tsx`). This stand-in proves only what the surface hands it.
+vi.mock('./call-now-dialog', () => ({
+  CallNowDialog: (
+    props: Readonly<{
+      open: boolean;
+      calleeLabel: string;
+      onOpenChange: (open: boolean) => void;
+      onBookTime: (() => void) | null;
+    }>
+  ) =>
+    props.open ? (
+      <div data-testid="call-now-dialog-stub">
+        <span>callee: {props.calleeLabel}</span>
+        <span>book: {props.onBookTime === null ? 'none' : 'available'}</span>
+        <button type="button" onClick={() => props.onOpenChange(false)}>
+          stub close
+        </button>
+        <button type="button" onClick={() => props.onBookTime?.()}>
+          stub book
+        </button>
+      </div>
+    ) : null,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -394,6 +423,7 @@ const HELD_CONSULTATION: CaseConsultationRowView = {
   scheduledMinutes: 30,
   live: false,
   roomReady: false,
+  callNowNote: null,
 };
 
 /**
@@ -442,6 +472,7 @@ function upcomingRow(over: Partial<CaseConsultationRowView> = {}): CaseConsultat
     scheduledMinutes: 45,
     live: false,
     roomReady: false,
+    callNowNote: null,
     ...over,
   };
 }
@@ -1697,5 +1728,101 @@ describe('CaseSurface — follow-ups book in-page on an open case', () => {
     );
     expect(screen.getByRole('link', { name: 'Book with Amara again' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Book a consultation' })).toBeInTheDocument();
+  });
+});
+
+describe('CaseSurface — Call now (BAL-651)', () => {
+  const CALL_NOW: CaseCallNowView = {
+    entry: 'button',
+    calleeLabel: 'Amara',
+    onlineBadge: true,
+    calleeTimeZone: null,
+    confirm: {
+      kind: 'client_terms',
+      engagementId: ENGAGEMENT_ID,
+      expertProfileId: 'expert-1',
+      calleeOnline: true,
+      rateLine: null,
+      inPlaceCandidate: null,
+      bookInPage: true,
+    },
+  };
+
+  const originalUrl = globalThis.location.href;
+
+  beforeEach(() => {
+    mockRouterReplace.mockClear();
+  });
+
+  afterEach(() => {
+    globalThis.history.replaceState({}, '', originalUrl);
+  });
+
+  it('renders no entry and no dialog without a call-now view', () => {
+    render(<CaseSurface view={clientView()} />);
+    expect(screen.queryByRole('button', { name: 'Call Amara now' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+  });
+
+  it('opens the confirm from the entry and closes it again', async () => {
+    const user = userEvent.setup();
+    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+
+    await user.click(screen.getByRole('button', { name: 'stub close' }));
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+  });
+
+  it('the confirm’s Book a time asks the quick-pick for the call_now follow-up', async () => {
+    const user = userEvent.setup();
+    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    await user.click(screen.getByRole('button', { name: 'stub book' }));
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 1 source: call_now');
+  });
+
+  it('offers the confirm no booking when the expert is not publicly listed', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface
+        view={clientView({ party: { ...BASE.party, profileHref: null } })}
+        callNow={CALL_NOW}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('book: none');
+  });
+
+  it('opens the follow-up once for ?book=1 and drops the param', () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?book=1&x=1`);
+    render(<CaseSurface view={clientView()} />);
+
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 1 source: call_now');
+    expect(globalThis.location.pathname + globalThis.location.search).toBe(
+      `/cases/${ENGAGEMENT_ID}?x=1`
+    );
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+  });
+
+  it('drops ?book=1 but opens nothing when in-page booking is not on offer', () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?book=1`);
+    render(<CaseSurface view={clientView({ party: { ...BASE.party, profileHref: null } })} />);
+
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+    expect(globalThis.location.pathname + globalThis.location.search).toBe(
+      `/cases/${ENGAGEMENT_ID}`
+    );
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+  });
+
+  it('does nothing without the param', () => {
+    const replaceState = vi.spyOn(globalThis.history, 'replaceState');
+    render(<CaseSurface view={clientView()} />);
+    expect(replaceState).not.toHaveBeenCalled();
+    replaceState.mockRestore();
+    expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 0');
   });
 });

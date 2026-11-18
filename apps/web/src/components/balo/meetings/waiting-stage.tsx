@@ -2,9 +2,13 @@
 
 import { CircleCheck, CircleSlash, Loader2, Users } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
+import { Button } from '@/components/ui/button';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import {
+  callingCopy,
   resolveWaitingCopy,
   waitingIconKindFor,
+  type WaitingCallingView,
   type WaitingFacts,
   type WaitingPhase,
   type WaitingSubject,
@@ -57,6 +61,11 @@ export interface WaitingStageProps {
    */
   readonly facts: WaitingFacts;
   readonly headingRef?: React.Ref<HTMLHeadingElement>;
+  /**
+   * BAL-651 — a Call now ring is out and this viewer placed it. Non-null replaces the scheduled
+   * waiting copy with the "Calling" view and its one action; `null` or absent changes nothing.
+   */
+  readonly calling?: WaitingCallingView | null;
 }
 
 export function WaitingStage({
@@ -64,8 +73,18 @@ export function WaitingStage({
   subject,
   facts,
   headingRef,
+  calling = null,
 }: Readonly<WaitingStageProps>): React.JSX.Element {
   const reduceMotion = useReducedMotion();
+  if (calling !== null) {
+    return (
+      <CallingStage
+        calling={calling}
+        reduceMotion={reduceMotion === true}
+        headingRef={headingRef}
+      />
+    );
+  }
   const { title, body } = resolveWaitingCopy(phase, subject, facts);
   const iconKind = waitingIconKindFor(subject?.absentParty ?? null, phase, facts);
 
@@ -119,6 +138,70 @@ export function WaitingStage({
           {body}
         </output>
       </div>
+    </div>
+  );
+}
+
+/**
+ * BAL-651 — the caller's "Calling" stage: the callee's avatar with a spinner, one title, one body,
+ * the seconds the ring has left and a way out.
+ *
+ * ⚠ THE SECONDS LINE IS OUTSIDE THE LIVE REGION. A number that changes every second announced to a
+ * screen reader is a denial of service; the title and body are the whole announcement, and they
+ * change only when the ring does. The line is absent once the ring's window has passed.
+ */
+function CallingStage({
+  calling,
+  reduceMotion,
+  headingRef,
+}: Readonly<{
+  calling: WaitingCallingView;
+  reduceMotion: boolean;
+  headingRef: React.Ref<HTMLHeadingElement> | undefined;
+}>): React.JSX.Element {
+  const { title, body } = callingCopy(calling);
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-5 px-6 text-center">
+      <div className="relative">
+        <MeetingAvatar name={calling.calleeLabel} size={72} />
+        <span className="bg-card absolute -right-1 -bottom-1 flex h-[26px] w-[26px] items-center justify-center rounded-full">
+          <WaitingGlyph kind="spinner" reduceMotion={reduceMotion} />
+        </span>
+      </div>
+
+      <div>
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-foreground text-lg font-semibold outline-none"
+        >
+          {title}
+        </h1>
+        <output
+          aria-live="polite"
+          className="text-muted-foreground mx-auto mt-1 block max-w-[360px] text-sm leading-relaxed"
+        >
+          {body}
+        </output>
+        {calling.remainingSeconds === null ? null : (
+          <p className="text-muted-foreground mt-2 text-xs">
+            {CALL_NOW_COPY.ringRemaining(calling.remainingSeconds)}
+          </p>
+        )}
+      </div>
+
+      <Button
+        type="button"
+        variant="outline"
+        className="min-h-11 w-full sm:w-auto"
+        disabled={calling.stopping}
+        onClick={calling.onStop}
+      >
+        {calling.stopping && (
+          <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+        )}
+        {CALL_NOW_COPY.stop}
+      </Button>
     </div>
   );
 }

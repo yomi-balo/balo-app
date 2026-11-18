@@ -11,6 +11,7 @@ import {
   isMeetingVenueReady,
   resolveCancelRefusal,
   resolveRescheduleRefusal,
+  type CallNowFacts,
 } from '@balo/shared/meetings';
 import { log } from '@/lib/logging';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
@@ -82,6 +83,19 @@ export interface CaseConsultationCounts {
    * read failed, keeps the `missed_call` label.
    */
   clientSideEverPresentByMeetingId: ReadonlyMap<string, boolean>;
+  /**
+   * BAL-651 — per meeting, what the Call now history says about it: `facts` from
+   * `callNowFactsFromRings`, and the start an in-place call displaced (`bookedStart`, from the
+   * `meeting.rescheduled` audit row). Absent ⇒ a booked consultation with no note.
+   */
+  callNowByMeetingId: ReadonlyMap<string, CaseCallNowFacts>;
+}
+
+/** One meeting's Call now history, as the loader reduced it. */
+export interface CaseCallNowFacts {
+  readonly facts: CallNowFacts;
+  /** The start an in-place call displaced; `null` when the call displaced no booking. */
+  readonly bookedStart: Date | null;
 }
 
 export interface CaseConsultationActionContext {
@@ -126,6 +140,19 @@ const STATES_WITH_RECAP: ReadonlySet<CaseConsultationStateLabel> = new Set([
 function recapHrefOf(meeting: Meeting, state: CaseConsultationStateLabel): string | null {
   if (!STATES_WITH_RECAP.has(state)) return null;
   return '/meetings/' + meeting.id + '?from=case_surface';
+}
+
+/** The row's Call now note: `moved` beats `unscheduled`; a booked consultation has none. */
+function callNowNoteOf(
+  meetingId: string,
+  counts: CaseConsultationCounts
+): CaseConsultationRowView['callNowNote'] {
+  const facts = counts.callNowByMeetingId.get(meetingId);
+  if (facts === undefined) return null;
+  if (facts.bookedStart !== null) {
+    return { kind: 'moved', bookedForIso: facts.bookedStart.toISOString() };
+  }
+  return facts.facts.origin === 'call_now' ? { kind: 'unscheduled' } : null;
 }
 
 export function mapCaseConsultations(
@@ -213,6 +240,7 @@ export function mapCaseConsultations(
       // BAL-581 — Balo's own venue predicate; reduced here, at the projection boundary, like
       // `status`. `false` on every non-upcoming row — never read beside anything but `live`.
       roomReady: upcoming && isMeetingVenueReady(meeting),
+      callNowNote: callNowNoteOf(meeting.id, counts),
     };
   });
 

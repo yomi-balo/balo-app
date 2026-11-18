@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import {
   CASE_CLOSED_ENDED_TITLE,
+  callingCopy,
   CASE_CLOSED_WAITING_TITLE,
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
@@ -363,7 +365,10 @@ describe('waitingIconKindFor', () => {
  */
 describe('waitingIconKindFor — the case-closed glyph (R6F-12)', () => {
   const CLOSURE: CaseClosureFacts = { closedByFirstName: 'Maya', companyName: 'Northwind' };
-  const CLOSED_TITLES: readonly string[] = [CASE_CLOSED_WAITING_TITLE, CASE_CLOSED_ENDED_TITLE];
+  const CLOSED_TITLES: ReadonlySet<string> = new Set([
+    CASE_CLOSED_WAITING_TITLE,
+    CASE_CLOSED_ENDED_TITLE,
+  ]);
   const OUTCOMES = [null, 'no_show_client', 'missed_call', 'completed'] as const;
 
   it('⚠⚠ is caseClosed on every unsettled phase and on a settled no_show_client, for the client-absent party', () => {
@@ -382,7 +387,7 @@ describe('waitingIconKindFor — the case-closed glyph (R6F-12)', () => {
       for (const phase of PHASES) {
         for (const outcome of OUTCOMES) {
           const facts = { ...FACTS, caseClosure: CLOSURE, outcome };
-          const closedCopy = CLOSED_TITLES.includes(copy(absentParty, phase, facts).title);
+          const closedCopy = CLOSED_TITLES.has(copy(absentParty, phase, facts).title);
           expect(
             waitingIconKindFor(absentParty, phase, facts) === 'caseClosed',
             `${absentParty} / ${phase} / ${String(outcome)}`
@@ -590,5 +595,31 @@ describe('waitingCopyFor — the case was closed before the start (R6-C3)', () =
     const { body } = copy('client', 'near', withClosure(CLOSURE));
     expect(body).not.toContain('Still counting');
     expect(body.toLowerCase()).not.toContain('paid');
+  });
+});
+
+describe('callingCopy (BAL-651)', () => {
+  it('titles the stage with the callee and says the app reached them', () => {
+    expect(callingCopy({ copyArm: 'client', calleeLabel: 'Dana', reachedBy: 'app' })).toEqual({
+      title: 'Calling Dana',
+      body: CALL_NOW_COPY.callingClient('Dana', false),
+    });
+  });
+
+  it('says "texted" for an SMS reach, on the client arm only', () => {
+    expect(callingCopy({ copyArm: 'client', calleeLabel: 'Dana', reachedBy: 'sms' }).body).toBe(
+      CALL_NOW_COPY.callingClient('Dana', true)
+    );
+    expect(
+      callingCopy({ copyArm: 'expert', calleeLabel: 'Northwind', reachedBy: 'sms' }).body
+    ).toBe(CALL_NOW_COPY.callingExpert('Northwind'));
+  });
+
+  it('⚠ the expert body names no charge, and neither body names a rate', () => {
+    const expert = callingCopy({ copyArm: 'expert', calleeLabel: 'Northwind', reachedBy: 'app' });
+    const client = callingCopy({ copyArm: 'client', calleeLabel: 'Dana', reachedBy: 'app' });
+
+    expect(expert.body).not.toMatch(/charged/i);
+    expect(`${expert.body} ${client.body}`).not.toMatch(/A\$|\/min/);
   });
 });

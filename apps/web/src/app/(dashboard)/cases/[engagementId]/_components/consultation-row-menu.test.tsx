@@ -25,6 +25,7 @@ function makeRow(over: Partial<CaseConsultationRowView> = {}): CaseConsultationR
     scheduledMinutes: 30,
     live: false,
     roomReady: false,
+    callNowNote: null,
     ...over,
   };
 }

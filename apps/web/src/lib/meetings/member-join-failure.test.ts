@@ -6,6 +6,8 @@ describe('memberJoinFailureReasonFor — the allowlist', () => {
     [404, 'meeting_not_found', 'unavailable'],
     [409, 'meeting_not_open_for_join', 'not_open'],
     [409, 'meeting_not_open_yet', 'not_open_yet'],
+    [409, 'call_answer_required', 'answer_required'],
+    [404, 'call_answer_required', 'unavailable'],
     [409, 'meeting_not_provisioned', 'not_provisioned'],
     [503, 'meeting_token_unavailable', 'outage'],
     [500, 'Internal Server Error', 'outage'],

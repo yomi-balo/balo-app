@@ -36,9 +36,10 @@ Balo checks that your company can cover the minimum before the call starts.
   of what your upcoming booked consultations will need. If it falls short, Balo shows how
   much to add. See [Buying credit](/help/buying-credit).
 
-If your expert calls you, Balo runs the same check when you answer, so you always know before you
-join. If you need to top up first, the call stops ringing while you do. Once the credit lands, call
-your expert back from the case.
+If your expert calls you, Balo runs the same check when you choose **Answer** on the call page, so you
+always know before you join. If you need to top up first, the call keeps ringing while you do. If it
+is still ringing once the credit lands, the call goes ahead. If it has stopped by then, nothing is
+charged and you can call your expert back from the case.
 
 ## Calling in place of a booking
 

@@ -3,12 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Loader2, PhoneCall } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import { CallNoticeWell } from '@/components/balo/meetings/call-notice-well';
-import { JoinNotOpenYetNotice, JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
+import {
+  JoinNoticeCard,
+  JoinNotOpenYetNotice,
+  JoinRetryNotice,
+} from '@/components/balo/meetings/join-notice-card';
 import { MemberJoinNotice } from '@/components/balo/meetings/member-join-notice';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
+import { CallNowEndedCard } from '@/components/balo/meetings/call-now-ended-card';
+import { CallNowFundingStep } from '@/components/balo/call-now/call-now-funding-step';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
 import {
@@ -28,6 +36,14 @@ import { useMeetingStatePoll } from '@/lib/meetings/use-meeting-state-poll';
 import { pollIntervalFor } from '@/lib/meetings/use-admission-poll';
 import { resolveTopBarClock } from '@/lib/meetings/top-bar-clock';
 import { joinAsMemberAction } from '@/app/join/_actions/join-as-member';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
+import { useCallNowCallerRoom } from '@/lib/call-now/use-call-now-caller-room';
+import {
+  ANSWER_CALLER_LABEL,
+  useCallNowAnswer,
+  type AnswerFundingState,
+} from '@/lib/call-now/use-call-now-answer';
+import type { CallNowCallerView } from '@/lib/call-now/call-now-types';
 import { UNKNOWN_WAITING_FACTS, type WaitingFacts } from '@/lib/meetings/waiting-copy';
 import {
   MEETING_STATE_RETRY_LABEL,
@@ -82,6 +98,8 @@ type Phase =
   | 'setting_up'
   | 'not_open'
   | 'not_open_yet'
+  | 'answer_required'
+  | 'answer_funding'
   | 'unavailable';
 
 /**
@@ -159,6 +177,121 @@ export interface CallClientProps {
    * post-join re-resolve effect for the member whose OWN join creates that row.
    */
   readonly hasBalance: boolean;
+  /**
+   * BAL-651 — the ring this viewer placed, verified server-side from `?ring=`, or `null` for an
+   * ordinary join. Non-null makes the room show "Calling" while the ring is out and an end card
+   * when it runs out or is declined.
+   */
+  readonly callNowCaller?: CallNowCallerView | null;
+}
+
+function noop(): void {}
+
+interface AnswerRequiredStepProps {
+  readonly answering: boolean;
+  readonly onAnswer: () => void;
+  readonly headingRef: React.RefCallback<HTMLHeadingElement>;
+}
+
+/** BAL-651 — the notice an expert-started ring lands the client on; only its button commits. */
+function AnswerRequiredStep({
+  answering,
+  onAnswer,
+  headingRef,
+}: Readonly<AnswerRequiredStepProps>): React.JSX.Element {
+  return (
+    <CallNoticeWell>
+      <JoinNoticeCard
+        icon={PhoneCall}
+        title={CALL_NOW_COPY.answerTitle(ANSWER_CALLER_LABEL)}
+        headingRef={headingRef}
+      >
+        <Button
+          type="button"
+          className="mt-5 min-h-11 w-full sm:w-auto"
+          disabled={answering}
+          onClick={onAnswer}
+        >
+          {answering && <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />}
+          {CALL_NOW_COPY.answerAction}
+        </Button>
+      </JoinNoticeCard>
+      <DashboardLink />
+    </CallNoticeWell>
+  );
+}
+
+interface AnswerFundingStepProps {
+  readonly funding: AnswerFundingState;
+  readonly onFunded: (ringId: string) => Promise<boolean>;
+  readonly onBack: () => void;
+  readonly onBookInstead: () => void;
+}
+
+/** BAL-651 — the funding step that takes the room's place when the answer is refused for credit. */
+function AnswerFundingStep({
+  funding,
+  onFunded,
+  onBack,
+  onBookInstead,
+}: Readonly<AnswerFundingStepProps>): React.JSX.Element {
+  return (
+    <CallNoticeWell>
+      <div className="w-full max-w-md">
+        <CallNowFundingStep
+          request={funding.request}
+          callerLens="expert"
+          onFunded={() => onFunded(funding.ringId)}
+          onBack={onBack}
+          onBookInstead={onBookInstead}
+          onBusyChange={noop}
+        />
+      </div>
+    </CallNoticeWell>
+  );
+}
+
+interface AnswerStepProps {
+  readonly phase: 'answer_required' | 'answer_funding';
+  readonly funding: AnswerFundingState | null;
+  readonly answering: boolean;
+  readonly onAnswer: () => void;
+  readonly onFunded: (ringId: string) => Promise<boolean>;
+  readonly onBack: () => void;
+  readonly onBookInstead: () => void;
+  readonly headingRef: React.RefCallback<HTMLHeadingElement>;
+}
+
+/** BAL-651 — whichever of the two answer states the room is in, in place of the room. */
+function AnswerStep({
+  phase,
+  funding,
+  answering,
+  onAnswer,
+  onFunded,
+  onBack,
+  onBookInstead,
+  headingRef,
+}: Readonly<AnswerStepProps>): React.JSX.Element {
+  if (phase === 'answer_required') {
+    return <AnswerRequiredStep answering={answering} onAnswer={onAnswer} headingRef={headingRef} />;
+  }
+  if (funding === null) {
+    return (
+      <CallNoticeWell>
+        <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
+        <DashboardLink />
+      </CallNoticeWell>
+    );
+  }
+  return (
+    <AnswerFundingStep
+      funding={funding}
+      onFunded={onFunded}
+      onBack={onBack}
+      onBookInstead={onBookInstead}
+    />
+  );
 }
 
 export function CallClient({
@@ -170,6 +303,7 @@ export function CallClient({
   chatChannelName,
   typingChannelName,
   hasBalance,
+  callNowCaller = null,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
@@ -196,12 +330,41 @@ export function CallClient({
    * capture a stale one; the ref is the shipped `useAdmissionPoll` pattern for the same reason.
    */
   const attemptRef = useRef<() => void>(() => {});
+  /**
+   * BAL-651 — ⚠⚠ THE CALLER'S OWN RING. `null` for an ordinary join, so nothing below polls, ticks
+   * or renders for anyone but the person who placed a Call now. The status here is the SERVER's
+   * answer (polled while `ringing`); the browser never decides a ring has run out.
+   */
+  const { endedOutcome, calling } = useCallNowCallerRoom(callNowCaller);
 
   /**
    * ⚠ FOCUS FOLLOWS THE PHASE, via the same callback-ref policy both join surfaces use — an
    * effect reading `ref.current` on a state change focuses the element that is about to unmount.
+   * The ring's end card is a state of its own, so it arms the same intent.
    */
-  const headingRef = useFocusOnTransition(phase);
+  const headingRef = useFocusOnTransition(endedOutcome ?? phase);
+
+  const handleAnswerOpened = useCallback((grant: MemberJoinResponse): void => {
+    setResponse(grant);
+    setPhase('joined');
+  }, []);
+  const handleAnswerFunding = useCallback((): void => setPhase('answer_funding'), []);
+  const handleAnswerRequired = useCallback((): void => setPhase('answer_required'), []);
+  const handleAnswerUnavailable = useCallback((): void => setPhase('unavailable'), []);
+  const {
+    offerAnswer,
+    answering,
+    answerFunding,
+    commitAnswer,
+    handleAnswer,
+    handleFundingBack,
+    handleFundingBook,
+  } = useCallNowAnswer({
+    onOpened: handleAnswerOpened,
+    onFunding: handleAnswerFunding,
+    onRequired: handleAnswerRequired,
+    onUnavailable: handleAnswerUnavailable,
+  });
 
   const attempt = useCallback((): void => {
     // ⚠ DELIBERATELY NOT AWAITED and NOT `void`-PREFIXED: this repo does not enable type-aware
@@ -215,6 +378,12 @@ export function CallClient({
           return;
         }
         const { reason } = result;
+        if (reason === 'answer_required') {
+          // BAL-651 — an expert-started ring awaits this client's commit. Nothing is committed
+          // here: the Answer button on this page is the explicit act that places the answer.
+          offerAnswer(result.ringId);
+          return;
+        }
         if (reason === 'account_refused') {
           // BAL-568 — the session-sync route re-reads the live row, destroys the cookie and
           // lands on /login?error=… with BAL-197's copy. ⚠ Never `logoutAction()` (it loses the
@@ -257,7 +426,7 @@ export function CallClient({
         setPhase('retrying');
         setIsExhausted(true);
       });
-  }, [meetingId]);
+  }, [meetingId, offerAnswer]);
 
   useEffect(() => {
     attemptRef.current = attempt;
@@ -673,6 +842,41 @@ export function CallClient({
     return endMeetingAction({ meetingId });
   }, [meetingId]);
 
+  /*
+    BAL-651 — A RING THAT RAN OUT OR WAS DECLINED ENDS THE ROOM FOR THE CALLER, AHEAD OF EVERY JOIN
+    STATE. The meeting is closed to join once the ring ends, so a join still in flight would
+    otherwise land on "not available"; the end card says what actually happened.
+  */
+  if (callNowCaller !== null && endedOutcome !== null) {
+    return (
+      <div className="relative h-full w-full">
+        <CallNowEndedCard
+          outcome={endedOutcome}
+          calleeLabel={callNowCaller.calleeLabel}
+          copyArm={callNowCaller.copyArm}
+          bookInPage={callNowCaller.bookInPage}
+          engagementId={callNowCaller.engagementId}
+          headingRef={headingRef}
+        />
+      </div>
+    );
+  }
+
+  if (phase === 'answer_required' || phase === 'answer_funding') {
+    return (
+      <AnswerStep
+        phase={phase}
+        funding={answerFunding}
+        answering={answering}
+        onAnswer={handleAnswer}
+        onFunded={commitAnswer}
+        onBack={handleFundingBack}
+        onBookInstead={handleFundingBook}
+        headingRef={headingRef}
+      />
+    );
+  }
+
   if (phase === 'unavailable') {
     return (
       <CallNoticeWell>
@@ -747,6 +951,7 @@ export function CallClient({
       onExit={handleExit}
       panels={panels}
       waitingPhase={waitingPhase}
+      calling={calling}
       waitingFacts={waitingFacts}
       clock={clock}
       endMeeting={endMeeting}

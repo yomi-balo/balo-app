@@ -14,6 +14,8 @@ const EXPECTED_FILES = [
   'approving-a-change-to-your-project.md',
   'booking-a-consultation.md',
   'buying-credit.md',
+  'calling-a-client-or-answering-a-call.md',
+  'calling-your-expert-now.md',
   'connecting-your-calendar.md',
   'dashboard-up-next.md',
   'dashboard-your-move-for-clients.md',
