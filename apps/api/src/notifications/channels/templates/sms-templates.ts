@@ -76,7 +76,7 @@ function sanitizeSmsText(value: string): string {
   const mapped = Array.from(value.normalize('NFC'), transliterate)
     .join('')
     .replaceAll(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
-    .replaceAll(/[‘-„–—−… ]/g, (char) => ASCII_TWINS[char] ?? ' ')
+    .replaceAll(/[‘-„–—−…\u00A0]/g, (char) => ASCII_TWINS[char] ?? ' ')
     .replaceAll('"', "'");
   const kept = Array.from(stripSchemes(mapped))
     .filter((char) => GSM7_KEPT.has(char))
