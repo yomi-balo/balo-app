@@ -1,11 +1,11 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { CalendarPlus, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ClientSmsOptIn } from './client-sms-opt-in';
 import { formatSlotDateTime } from './format';
-import { downloadIcsEvent } from './ics';
+import { AddToCalendarActions } from './add-to-calendar-actions';
 
 /** Draft copy, pending MJ approval. Points a hand-off at the per-person invite, not a forward. */
 export const HANDOFF_LINE =
@@ -51,15 +51,6 @@ export function StepBooked({
   const when = formatSlotDateTime(startIso, viewerTimezone);
   const caseVerb = isNewCase ? 'This started a new case' : 'Added to your case';
 
-  function handleAddToCalendar(): void {
-    downloadIcsEvent({
-      summary: `Consultation with ${name}`,
-      startIso,
-      durationMinutes,
-      filename: 'consultation.ics',
-    });
-  }
-
   return (
     <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
       <span className="bg-success/15 border-success/30 flex h-14 w-14 items-center justify-center rounded-full border shadow-[0_8px_24px_-4px_rgba(34,197,94,0.35)]">
@@ -95,10 +86,12 @@ export function StepBooked({
         )}
       </div>
       <ClientSmsOptIn surface="booking_confirmation" expertFirstName={expertFirstName} />
-      <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
-        <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
-        Add to calendar
-      </Button>
+      <AddToCalendarActions
+        summary={`Consultation with ${name}`}
+        startIso={startIso}
+        durationMinutes={durationMinutes}
+        filename="consultation.ics"
+      />
       <div className="flex flex-wrap items-center justify-center gap-2">
         <Button variant="outline" onClick={onDone}>
           Done

@@ -140,14 +140,14 @@ describe('StepBooked', () => {
     expect(mockPush).toHaveBeenCalledWith('/cases/engagement-1');
   });
 
-  it('builds and downloads the .ics event from "Add to calendar"', () => {
+  it('builds and downloads the .ics event from "Download .ics"', () => {
     const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
     renderStep({
       expertFirstName: 'Amara',
       startIso: '2026-06-05T09:00:00.000Z',
       durationMinutes: 30,
     });
-    screen.getByRole('button', { name: /Add to calendar/ }).click();
+    screen.getByRole('button', { name: /Download \.ics/ }).click();
     expect(spy).toHaveBeenCalledWith({
       summary: 'Consultation with Amara',
       startIso: '2026-06-05T09:00:00.000Z',
@@ -155,5 +155,20 @@ describe('StepBooked', () => {
       filename: 'consultation.ics',
     });
     spy.mockRestore();
+  });
+
+  it('links "Add to Google Calendar" to a pre-filled Google event in a new tab', () => {
+    renderStep({
+      expertFirstName: 'Amara',
+      startIso: '2026-06-05T09:00:00.000Z',
+      durationMinutes: 30,
+    });
+    const link = screen.getByRole('link', { name: /Add to Google Calendar/ });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    const url = new URL(link.getAttribute('href') ?? '');
+    expect(url.hostname).toBe('calendar.google.com');
+    expect(url.searchParams.get('text')).toBe('Consultation with Amara');
+    expect(url.searchParams.get('dates')).toBe('20260605T090000Z/20260605T093000Z');
   });
 });

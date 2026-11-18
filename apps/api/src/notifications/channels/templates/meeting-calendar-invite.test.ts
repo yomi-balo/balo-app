@@ -297,3 +297,51 @@ describe('MeetingCalendarInviteEmail — the withdrawal body (BAL-476)', () => {
     }
   );
 });
+
+describe('MeetingCalendarInviteEmail — "Add to Google Calendar" button', () => {
+  const GCAL =
+    'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Consultation&dates=20260901T100000Z%2F20260901T110000Z';
+  const ISSUING = ['booked', 'guest_added', 'rescheduled'] as const;
+  const WITHDRAWALS = ['cancelled', 'guest_removed'] as const;
+
+  it.each(ISSUING)('%s, member audience: renders the button with the given href', async (t) => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), googleCalendarUrl: GCAL })
+    );
+    expect(html).toContain('Add to Google Calendar');
+    expect(hrefsIn(html)).toContain(GCAL.replaceAll('&', '&amp;'));
+  });
+
+  it('guest audience: renders the button too (guests get the .ics as well)', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...guestProps(), googleCalendarUrl: GCAL })
+    );
+    expect(html).toContain('Add to Google Calendar');
+  });
+
+  it('no googleCalendarUrl: no button', async () => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps()));
+    expect(html).not.toContain('Add to Google Calendar');
+  });
+
+  it.each(WITHDRAWALS)('⚠ %s: never offers to ADD a withdrawn call', async (t) => {
+    const html = await render(
+      MeetingCalendarInviteEmail({ ...memberProps({ transition: t }), googleCalendarUrl: GCAL })
+    );
+    expect(html).not.toContain('Add to Google Calendar');
+    expect(hrefsIn(html).some((href) => href.includes('calendar.google.com'))).toBe(false);
+  });
+
+  it('getEmailTemplate passes data.googleCalendarUrl through to the body', async () => {
+    const { component } = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation',
+      startIso: START,
+      endIso: END,
+      transition: 'booked',
+      audience: 'member',
+      memberJoinUrl: `${SITE}/meetings/meeting-1/call`,
+      googleCalendarUrl: GCAL,
+    });
+    expect(await render(component)).toContain('Add to Google Calendar');
+  });
+});

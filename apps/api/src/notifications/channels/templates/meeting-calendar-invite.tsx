@@ -45,6 +45,12 @@ interface MeetingCalendarInviteEmailBaseProps {
   readonly endIso: string;
   readonly transition: CalendarInviteEmailTransition;
   readonly baseUrl: string;
+  /**
+   * Google Calendar "create event" link carrying the same title, window, description and location
+   * as the attached `.ics`. Offered as a secondary button because Google Calendar may not add an
+   * emailed invite on its own (its "Add invitations to my calendar" setting). Absent → no button.
+   */
+  readonly googleCalendarUrl?: string;
 }
 
 /**
@@ -135,7 +141,16 @@ export const TRANSITION_CHROME: Record<
 };
 
 export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInviteEmailProps>) {
-  const { recipientName, summary, startIso, endIso, transition, baseUrl, audience } = props;
+  const {
+    recipientName,
+    summary,
+    startIso,
+    endIso,
+    transition,
+    baseUrl,
+    audience,
+    googleCalendarUrl,
+  } = props;
   const window = formatMeetingWindowUtc(startIso, endIso);
   const chrome = TRANSITION_CHROME[transition];
   // ⚠ ONE definition of "is this a withdrawal" — never a second
@@ -178,10 +193,19 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
          * on) is the one thing this copy must not do.
          */}
         {isWithdrawal ? null : (
-          <JoinAffordance
-            audience={audience}
-            memberJoinUrl={audience === 'member' ? props.memberJoinUrl : undefined}
-          />
+          <>
+            <JoinAffordance
+              audience={audience}
+              memberJoinUrl={audience === 'member' ? props.memberJoinUrl : undefined}
+            />
+            {googleCalendarUrl === undefined ? null : (
+              <Section style={{ ...shared.ctaWrapper, margin: '0 0 20px' }}>
+                <Button style={shared.smallSecondaryButton} href={googleCalendarUrl}>
+                  📅 Add to Google Calendar
+                </Button>
+              </Section>
+            )}
+          </>
         )}
 
         <Text style={{ ...shared.bodyText, fontSize: '13px', color: colors.textTertiary }}>

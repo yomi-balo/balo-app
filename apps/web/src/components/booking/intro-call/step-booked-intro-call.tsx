@@ -1,11 +1,11 @@
 'use client';
 
 import type { CallKind } from '@balo/shared/notifications';
-import { CalendarPlus, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ClientSmsOptIn } from '../client-sms-opt-in';
 import { formatSlotDateTime } from '../format';
-import { downloadIcsEvent } from '../ics';
+import { AddToCalendarActions } from '../add-to-calendar-actions';
 
 export interface StepBookedIntroCallProps {
   /** `call` once this expert is the one the request chose — drops "intro" from the copy. */
@@ -44,15 +44,6 @@ export function StepBookedIntroCall({
   const isCall = callKind === 'call';
   const noun = isCall ? 'Call' : 'Intro call';
 
-  function handleAddToCalendar(): void {
-    downloadIcsEvent({
-      summary: `${noun} with ${name}`,
-      startIso,
-      durationMinutes,
-      filename: isCall ? 'call.ics' : 'intro-call.ics',
-    });
-  }
-
   return (
     <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
       <span className="bg-success/15 border-success/30 flex h-14 w-14 items-center justify-center rounded-full border shadow-[0_8px_24px_-4px_rgba(34,197,94,0.35)]">
@@ -84,12 +75,12 @@ export function StepBookedIntroCall({
         )}
       </div>
       <ClientSmsOptIn surface="intro_call_confirmation" expertFirstName={expertFirstName} />
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button variant="ghost" size="sm" onClick={handleAddToCalendar} className="gap-1.5">
-          <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
-          Add to calendar
-        </Button>
-      </div>
+      <AddToCalendarActions
+        summary={`${noun} with ${name}`}
+        startIso={startIso}
+        durationMinutes={durationMinutes}
+        filename={isCall ? 'call.ics' : 'intro-call.ics'}
+      />
       {/* No "View case" — there is no case. This closes the dialog; the client is already on
           the conversation page, so it is just `onDone` (design §Step 3). */}
       <Button onClick={onDone}>Back to conversation</Button>

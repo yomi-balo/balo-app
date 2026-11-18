@@ -242,6 +242,27 @@ describe('deliverCalendarInvite — happy path (user recipient)', () => {
     );
   });
 
+  it('hands the template a Google Calendar link built from the same facts and window as the ICS', async () => {
+    const job = makeJob({
+      recipientId: 'user-1',
+      template: 'meeting-calendar-invite',
+      event: 'meeting.calendar_invite',
+      data: {},
+      payload: { correlationId: 'corr-1' },
+      calendarInvite: USER_SPEC,
+    });
+
+    await deliverCalendarInvite(job, FAKE_TRANSPORT);
+
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [string, { googleCalendarUrl: string }];
+    const url = new URL(data.googleCalendarUrl);
+    expect(url.hostname).toBe('calendar.google.com');
+    expect(url.searchParams.get('text')).toBe(FACTS.summary);
+    expect(url.searchParams.get('dates')).toBe('20260901T040000Z/20260901T043000Z');
+    expect(url.searchParams.get('details')).toBe(FACTS.description);
+    expect(url.searchParams.get('location')).toBe(FACTS.location);
+  });
+
   it('F5 (fix round 1, R4) — the "sent" outcome line carries a non-null contextType (from facts, resolved at step 6)', async () => {
     const job = makeJob({
       recipientId: 'user-1',

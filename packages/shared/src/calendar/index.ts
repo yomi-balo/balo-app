@@ -14,6 +14,9 @@ export { EXPERT_CALENDAR_SETTINGS_PATH } from './settings-path';
 // see the note above.
 export { escapeIcsText } from './ics-text';
 
+// Google Calendar's one-click "create event" link. No `.js` extension — see the note above.
+export { buildGoogleCalendarLink, type GoogleCalendarLinkInput } from './google-calendar-link';
+
 // BAL-603 — the ONE busy-read trust rule (`listBusyBlocks` fails closed on it; web derives the
 // "Bookings paused" status from it). No `.js` extension — see the note above.
 export {

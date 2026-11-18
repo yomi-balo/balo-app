@@ -2677,6 +2677,9 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       endIso: (data.endIso as string) ?? '',
       transition,
       baseUrl: BASE_URL,
+      ...(typeof data.googleCalendarUrl === 'string'
+        ? { googleCalendarUrl: data.googleCalendarUrl }
+        : {}),
     };
     // F29 (fix round 1, UX5) — the discriminated union is constructed HERE, at the one seam
     // that turns untyped `data` into typed props: a `member` audience always carries a
