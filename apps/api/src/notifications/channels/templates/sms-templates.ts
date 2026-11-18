@@ -3,8 +3,13 @@ import { resolveAppUrl } from '../../../lib/app-url.js';
 /** One SMS is 160 GSM-7 characters; past that it splits and bills as several. */
 const SMS_MAX_LENGTH = 160;
 
-/** The longest caller label (company or first name) kept before the body is fitted. */
-const MAX_CALLER_LENGTH = 40;
+/**
+ * The longest caller label (company or first name) kept before the body is fitted. The fixed text
+ * and the ring path take 88 characters and the shortest kept case title 13 (10 plus `...`), which
+ * leaves 59 for the caller and the app origin: 28 here keeps an origin of up to 31 characters
+ * (e.g. `https://app.staging.balo.expert`) inside 160.
+ */
+const MAX_CALLER_LENGTH = 28;
 
 /** The least of a case title worth keeping when the rest of the body already fills the SMS. */
 const MIN_CASE_TITLE_LENGTH = 10;

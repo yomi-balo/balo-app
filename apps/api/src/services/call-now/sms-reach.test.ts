@@ -149,7 +149,7 @@ describe('resolveCallReach', () => {
     );
   });
 
-  it('the cap is 3 per rolling day', () => {
+  it('the cap is 3 per fixed 24 h window', () => {
     expect(CALL_NOW_SMS_CAP).toMatchObject({ maxRequests: 3, windowSeconds: 86_400 });
   });
 

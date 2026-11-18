@@ -26,7 +26,7 @@ Trigger: the caller confirms Call now. Recipient: the callee. Lives for the ring
 
 - SMS goes to experts by default and to clients only if they opted in.
 - SMS is skipped when the callee is active in the app, when it is outside reasonable hours in their time zone, or when the caller has reached the daily cap for that callee.
-- The SMS link opens the call room on mobile web. If the ring has expired, it opens the case, where the missed-call toast offers Call back.
+- The SMS link opens the call room on mobile web. It opens the case instead when the ring has expired (the missed-call toast there offers Call back), when the call has already ended, or when the person is a client the expert called, since that client answers from the case.
 - The in-app surfaces need a realtime push. The bell's 30-second poll is too slow for a 45-second ring.
 
 ## 2. Missed call

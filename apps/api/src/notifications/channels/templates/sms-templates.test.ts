@@ -205,22 +205,25 @@ describe('getSmsTemplate', () => {
       it.each([
         ['call-ringing-sms-expert', 'callerCompanyName'],
         ['call-ringing-sms-client', 'callerFirstName'],
-      ])('%s caps a 200-char caller at 40 with ASCII dots, within 160 and GSM-7', (name, key) => {
-        vi.stubEnv('APP_URL', 'https://balo.expert');
-        const body = getSmsTemplate(name, {
-          [key]: 'Northwind '.repeat(20),
-          callCaseTitle: 'Quarterly launch plan '.repeat(10),
-          ringId: RING_ID,
-        });
-        expect(body.length).toBeLessThanOrEqual(160);
-        expect(body).toMatch(GSM7_SHAPE);
-        const caller = /^Balo: (.*) is calling you now/.exec(body)?.[1] ?? '';
-        expect(caller.length).toBeLessThanOrEqual(40);
-        expect(caller.endsWith('...')).toBe(true);
-      });
+      ])(
+        '%s caps a 200-char caller at 28 with ASCII dots, within 160 and GSM-7 on a long origin',
+        (name, key) => {
+          vi.stubEnv('APP_URL', 'https://app.staging.balo.expert');
+          const body = getSmsTemplate(name, {
+            [key]: 'Northwind '.repeat(20),
+            callCaseTitle: 'Quarterly launch plan '.repeat(10),
+            ringId: RING_ID,
+          });
+          expect(body.length).toBeLessThanOrEqual(160);
+          expect(body).toMatch(GSM7_SHAPE);
+          const caller = /^Balo: (.*) is calling you now/.exec(body)?.[1] ?? '';
+          expect(caller.length).toBeLessThanOrEqual(28);
+          expect(caller.endsWith('...')).toBe(true);
+        }
+      );
 
-      it('leaves a caller of exactly 40 characters untouched', () => {
-        const name = 'A'.repeat(40);
+      it('leaves a caller of exactly 28 characters untouched', () => {
+        const name = 'A'.repeat(28);
         expect(render({ callerFirstName: name })).toContain(`Balo: ${name} is calling`);
       });
 

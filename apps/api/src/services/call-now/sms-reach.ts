@@ -30,7 +30,7 @@ import { withDeadline } from '../../lib/with-deadline.js';
 
 const log = createLogger('call-now-sms-reach');
 
-/** Ring SMS per (caller, callee) in a rolling day. */
+/** Ring SMS per (caller, callee) in a fixed 24 h window that starts at the first text. */
 export const CALL_NOW_SMS_CAP: RateLimitConfig = {
   keyPrefix: 'ratelimit:call-now-sms',
   maxRequests: 3,
