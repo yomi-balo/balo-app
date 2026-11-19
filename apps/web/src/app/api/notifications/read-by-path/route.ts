@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
 import { isAutoReadablePath } from '@/lib/notifications/auto-read-path';
+import { publishNotificationsRead } from '@/lib/realtime/ably-server';
 import { userNotificationsRepository } from '@balo/db';
 import { rejectNonJsonContentType } from '../require-json-content-type';
 
@@ -59,6 +60,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       user.id,
       parsed.data.path
     );
+    if (readIds.length > 0) await publishNotificationsRead(user.id);
     return NextResponse.json({ readIds });
   } catch (error) {
     log.error('Failed to mark notifications read by path', {

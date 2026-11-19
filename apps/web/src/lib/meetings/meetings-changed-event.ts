@@ -14,12 +14,15 @@ export const MEETING_CHANGE_NAMESPACES = ['booking', 'reschedule_proposal', 'mee
 /**
  * Exact events outside those namespaces that also change a call. `conversation.intro_call_booked`
  * covers every call booked from a request page; `project.kickoff_approved` re-anchors the request's
- * calls onto the new engagement, which changes their type and link. The rest of those namespaces
+ * calls onto the new engagement, which changes their type and link. `call.ringing` and
+ * `call.no_answer` mark a Call now ring starting or lapsing, which moves the pill's status. The rest of those namespaces
  * (messages, files, proposals) does not touch a call, so neither namespace is listed.
  */
 export const MEETING_CHANGE_EVENTS = [
   'conversation.intro_call_booked',
   'project.kickoff_approved',
+  'call.ringing',
+  'call.no_answer',
 ] as const;
 
 export function isMeetingChangeNotification(event: string): boolean {

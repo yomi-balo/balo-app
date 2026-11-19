@@ -1778,7 +1778,10 @@ describe('getInAppTemplate', () => {
       engagementId: 'eng-1',
       callCaseTitle: 'Flow migration',
       callerFirstName: 'Sandy',
+      callerCompanyName: 'Northwind Industrial',
       callerPersonLabel: 'Jordan Lee @ Northwind Industrial',
+      ringId: 'ring-1',
+      callerUserId: 'caller-1',
       startedAt: '2026-11-17T00:41:00.000Z',
       calleeTimeZone: 'Australia/Melbourne',
     };
@@ -1788,6 +1791,12 @@ describe('getInAppTemplate', () => {
         title: 'Missed call from Sandy',
         body: 'Sandy tried to reach you at 11:41 (Melbourne time) about Flow migration.',
         actionUrl: '/cases/eng-1',
+        metadata: {
+          callerLabel: 'Sandy',
+          ringId: 'ring-1',
+          callerUserId: 'caller-1',
+          startedAt: '2026-11-17T00:41:00.000Z',
+        },
       });
     });
 
@@ -1796,6 +1805,12 @@ describe('getInAppTemplate', () => {
         title: 'Missed call from Jordan Lee @ Northwind Industrial',
         body: 'They tried to reach you at 11:41 (Melbourne time) about Flow migration.',
         actionUrl: '/cases/eng-1',
+        metadata: {
+          callerLabel: 'Northwind Industrial',
+          ringId: 'ring-1',
+          callerUserId: 'caller-1',
+          startedAt: '2026-11-17T00:41:00.000Z',
+        },
       });
     });
 
@@ -1812,8 +1827,52 @@ describe('getInAppTemplate', () => {
         title: 'Missed call from Your expert',
         body: 'Your expert tried to reach you about your case.',
         actionUrl: undefined,
+        metadata: { callerLabel: 'Your expert' },
       });
       expect(getInAppTemplate('call-missed-expert', {}).title).toBe('Missed call from Your client');
+    });
+  });
+
+  describe('call-ringing (BAL-653)', () => {
+    const data = {
+      meetingId: 'meet-1',
+      callCaseTitle: 'Flow migration',
+      callerFirstName: 'Sandy',
+      callerCompanyName: 'Northwind Industrial',
+      ringId: 'ring-1',
+      callerUserId: 'caller-1',
+      startedAt: '2026-11-17T00:41:00.000Z',
+    };
+
+    it('tells a client who is calling and about what, and opens the call room', () => {
+      expect(getInAppTemplate('call-ringing-client', data)).toEqual({
+        title: 'Sandy is calling',
+        body: 'About Flow migration.',
+        actionUrl: '/meetings/meet-1/call',
+        metadata: {
+          callerLabel: 'Sandy',
+          ringId: 'ring-1',
+          callerUserId: 'caller-1',
+          startedAt: '2026-11-17T00:41:00.000Z',
+        },
+      });
+    });
+
+    it('names the client company to an expert, never the person', () => {
+      const item = getInAppTemplate('call-ringing-expert', data);
+
+      expect(item.title).toBe('Northwind Industrial is calling');
+      expect(item.metadata).toMatchObject({ callerLabel: 'Northwind Industrial' });
+    });
+
+    it('falls back to neutral names and omits metadata ids it was not given', () => {
+      expect(getInAppTemplate('call-ringing-client', {})).toEqual({
+        title: 'Your expert is calling',
+        body: 'About your case.',
+        actionUrl: undefined,
+        metadata: { callerLabel: 'Your expert' },
+      });
+      expect(getInAppTemplate('call-ringing-expert', {}).title).toBe('Your client is calling');
     });
   });
 });

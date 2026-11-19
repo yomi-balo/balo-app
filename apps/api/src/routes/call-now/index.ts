@@ -4,6 +4,7 @@
  *
  *   GET  /cases/:engagementId/call-now        the read view (the same gates `POST` enforces)
  *   POST /cases/:engagementId/call-now        start a ring
+ *   GET  /call-now/incoming                   the newest live ring aimed at the signed-in user, or null
  *   GET  /call-now/rings/:ringId              a ring's status, to its caller or callee only
  *   POST /call-now/rings/:ringId/decline      the callee turns a ring down (idempotent)
  *   POST /call-now/rings/:ringId/stop         the caller hangs up a ring (idempotent)
@@ -295,6 +296,44 @@ async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Pro
 }
 
 /**
+ * BAL-653 — the newest live ring aimed at the signed-in user, for the page-load read behind the
+ * call toast. `{ ring: null }` when none rings. The session is the only scope: a callee reads
+ * their own rings, so there is nothing to authorize beyond it.
+ */
+async function handleIncomingRead(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const userId = resolveUserId(request, reply);
+  if (userId === null) return;
+
+  try {
+    const ring = await meetingRingsRepository.findLiveRingingForCallee(userId, new Date());
+    if (ring === undefined) {
+      reply.code(200).send({ ring: null });
+      return;
+    }
+    const awaitsAnswer = ringAwaitsClientCommit({
+      status: ring.status,
+      placement: ring.placement,
+      callerSide: ring.callerSide,
+    });
+    reply.code(200).send({
+      ring: {
+        ringId: ring.id,
+        meetingId: ring.meetingId,
+        engagementId: ring.engagementId,
+        callerSide: ring.callerSide,
+        placement: ring.placement,
+        reachedBy: ring.reachedBy,
+        expiresAt: ring.expiresAt.toISOString(),
+        startedAt: ring.createdAt.toISOString(),
+        awaitsAnswer,
+      },
+    });
+  } catch (error) {
+    handleUnexpected(reply, error, { userId }, 'Call now incoming read failed');
+  }
+}
+
+/**
  * Decline (the callee) and stop (the caller) are the same act from opposite ends: the identity
  * check differs and so does the terminal status. A CAS that misses (already connected, expired,
  * or ended) answers `200` with the status the ring actually has.
@@ -366,6 +405,7 @@ export function callNowRoutes(fastify: FastifyInstance): Promise<void> {
   const preHandler = [requireAuth];
   fastify.get('/cases/:engagementId/call-now', { preHandler }, handleView);
   fastify.post('/cases/:engagementId/call-now', { preHandler }, handleStart);
+  fastify.get('/call-now/incoming', { preHandler }, handleIncomingRead);
   fastify.get('/call-now/rings/:ringId', { preHandler }, handleRingRead);
   fastify.post(
     '/call-now/rings/:ringId/decline',

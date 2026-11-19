@@ -343,10 +343,7 @@ async function hydrateCallContext(
   data: Record<string, unknown>
 ): Promise<void> {
   const { engagementId, callerUserId, calleeUserId, callerSide } = payload;
-  // The only `call.ringing` template that reads these strings is the SMS, sent for `reachedBy: 'sms'`.
-  const ringingWithoutSms = event === 'call.ringing' && payload.reachedBy !== 'sms';
   if (
-    ringingWithoutSms ||
     !CALL_EVENTS.has(event) ||
     typeof engagementId !== 'string' ||
     typeof callerUserId !== 'string' ||

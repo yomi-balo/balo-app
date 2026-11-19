@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
 import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
-import { CallNowEntry } from './call-now-entry';
+import { CallNowEntry, trackCallNowClicked } from './call-now-entry';
 
 const { mockSurface } = vi.hoisted(() => ({ mockSurface: vi.fn() }));
 vi.mock('@/lib/call-now/use-call-now-surface', () => ({
@@ -103,6 +103,20 @@ describe('CallNowEntry', () => {
         has_booking_today: false,
         surface: 'mobile',
       })
+    );
+  });
+
+  it('trackCallNowClicked returns the attempt id it tracked, with the entry it was given', () => {
+    const attemptId = trackCallNowClicked({
+      callNow: CLIENT_BUTTON,
+      lens: 'client',
+      surface: 'desktop',
+      entry: 'missed_call_back',
+    });
+    expect(attemptId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(track).toHaveBeenCalledWith(
+      CALL_NOW_EVENTS.CLICKED,
+      expect.objectContaining({ attempt_id: attemptId, entry: 'missed_call_back' })
     );
   });
 

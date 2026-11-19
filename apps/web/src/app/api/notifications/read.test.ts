@@ -25,6 +25,11 @@ vi.mock('@/lib/logging', () => ({
   },
 }));
 
+const mockPublishRead = vi.fn();
+vi.mock('@/lib/realtime/ably-server', () => ({
+  publishNotificationsRead: (...args: unknown[]) => mockPublishRead(...args),
+}));
+
 import { PATCH } from './[id]/read/route';
 import { POST } from './read-all/route';
 
@@ -59,6 +64,7 @@ describe('PATCH /api/notifications/[id]/read', () => {
       params: Promise.resolve({ id: '550e8400-e29b-41d4-a716-446655440000' }),
     });
     expect(res.status).toBe(404);
+    expect(mockPublishRead).not.toHaveBeenCalled();
   });
 
   it('marks notification as read and returns 200', async () => {
@@ -77,6 +83,7 @@ describe('PATCH /api/notifications/[id]/read', () => {
     expect(body.success).toBe(true);
     expect(body.notification.readAt).toBe(readAt);
     expect(mockMarkAsRead).toHaveBeenCalledWith('550e8400-e29b-41d4-a716-446655440000', 'user-1');
+    expect(mockPublishRead).toHaveBeenCalledWith('user-1');
   });
 
   it('returns 500 when repository throws', async () => {
@@ -112,6 +119,15 @@ describe('POST /api/notifications/read-all', () => {
     expect(body.success).toBe(true);
     expect(body.count).toBe(5);
     expect(mockMarkAllAsRead).toHaveBeenCalledWith('user-1');
+    expect(mockPublishRead).toHaveBeenCalledWith('user-1');
+  });
+
+  it('publishes no read ping when nothing changed', async () => {
+    mockMarkAllAsRead.mockResolvedValue(0);
+
+    await POST();
+
+    expect(mockPublishRead).not.toHaveBeenCalled();
   });
 
   it('returns 500 when repository throws', async () => {

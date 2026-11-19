@@ -1374,6 +1374,7 @@ export * from './meeting-absence';
 //
 // ⚠ EXTENSIONLESS relative specifier, as above.
 export * from './expert-application-submitted';
+export * from './call-toast-events';
 
 // ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
 //

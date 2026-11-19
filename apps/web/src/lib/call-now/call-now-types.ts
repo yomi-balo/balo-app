@@ -108,3 +108,37 @@ export interface CallNowStartRead {
   placement: CallRingPlacement;
   expiresAt: string;
 }
+
+/** `GET /call-now/incoming` for a live ring, parsed. `callerSide` is the CALLER's side. */
+export interface IncomingRingRead {
+  ringId: string;
+  meetingId: string;
+  engagementId: string;
+  callerSide: CallSide;
+  placement: CallRingPlacement | null;
+  reachedBy: CallRingReach;
+  expiresAt: string;
+  startedAt: string;
+  awaitsAnswer: boolean;
+}
+
+/**
+ * What the call toast needs to render a live ring for the signed-in callee. `lens` is the
+ * CALLEE's side, and `rateLine` is non-null for a client callee only, so an expert is never sent a
+ * money string.
+ */
+export interface IncomingCallView {
+  ringId: string;
+  meetingId: string;
+  engagementId: string;
+  lens: CallSide;
+  callerLabel: string;
+  caseTitle: string | null;
+  rateLine: string | null;
+  expiresAtIso: string;
+  startedAtIso: string;
+  awaitsAnswer: boolean;
+  joinPath: string;
+  /** The server's clock when the view was read; the toast times the ring from it, never the device clock. */
+  serverNowIso: string;
+}

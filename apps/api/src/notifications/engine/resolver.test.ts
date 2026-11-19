@@ -1184,14 +1184,22 @@ describe('resolveContext', () => {
       });
     });
 
-    it('skips hydration for a call.ringing that does not reach the callee by SMS', async () => {
+    it('hydrates a call.ringing whatever way it reaches the callee, for the bell row', async () => {
+      mockFindCaseByEngagementId.mockResolvedValue(caseRow);
+      mockFindNamesByIds.mockResolvedValue([
+        { id: 'caller-1', firstName: 'Jordan', lastName: 'Lee' },
+      ]);
+      mockFindTimezoneContext.mockResolvedValue(null);
+
       const app = await resolveContext('call.ringing', { ...ringPayload, reachedBy: 'app' });
       const absent = await resolveContext('call.ringing', ringPayload);
 
-      expect(app.data).toEqual({});
-      expect(absent.data).toEqual({});
-      expect(mockFindCaseByEngagementId).not.toHaveBeenCalled();
-      expect(mockFindNamesByIds).not.toHaveBeenCalled();
+      expect(app.data).toMatchObject({
+        callCaseTitle: 'Flow migration',
+        callerFirstName: 'Jordan',
+      });
+      expect(absent.data).toMatchObject({ callCaseTitle: 'Flow migration' });
+      expect(mockFindCaseByEngagementId).toHaveBeenCalledTimes(2);
     });
 
     it('hydrates nothing for a call event with no rule needing it, or a malformed payload', async () => {

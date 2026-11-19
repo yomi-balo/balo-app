@@ -20,6 +20,21 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 
+const callActions = vi.hoisted(() => ({
+  readIncoming: vi.fn(),
+  decline: vi.fn(),
+  readRing: vi.fn(),
+}));
+vi.mock('@/lib/call-now/actions/read-incoming-call', () => ({
+  readIncomingCallAction: callActions.readIncoming,
+}));
+vi.mock('@/lib/call-now/actions/decline-call-now-ring', () => ({
+  declineCallNowRingAction: callActions.decline,
+}));
+vi.mock('@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-ring', () => ({
+  readCallNowRingAction: callActions.readRing,
+}));
+
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
@@ -71,6 +86,7 @@ async function flush(ms: number): Promise<void> {
 describe('NotificationBell accessibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    callActions.readIncoming.mockResolvedValue(null);
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 

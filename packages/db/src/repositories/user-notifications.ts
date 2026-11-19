@@ -1,4 +1,5 @@
-import { eq, and, isNull, isNotNull, desc, sql } from 'drizzle-orm';
+import { eq, and, isNull, isNotNull, desc, notInArray, sql } from 'drizzle-orm';
+import { CALL_TOAST_EVENTS } from '@balo/shared/notifications';
 import { db } from '../client';
 import { userNotifications, type UserNotification, type NewUserNotification } from '../schema';
 
@@ -85,7 +86,8 @@ export const userNotificationsRepository = {
   /**
    * Mark unread notifications whose `action_url` path (the text before the first `?`) equals
    * `path` as read. Exact match: `/projects/p1` does not match `/projects/p1/files` or
-   * `/projects/p10`. A null `action_url` never matches. Returns the updated ids.
+   * `/projects/p10`. A null `action_url` never matches. `call.ringing` and `call.no_answer` rows
+   * are never matched. Returns the updated ids.
    */
   markReadByActionPath: async (userId: string, path: string): Promise<string[]> => {
     const rows = await db
@@ -96,7 +98,32 @@ export const userNotificationsRepository = {
           eq(userNotifications.userId, userId),
           isNull(userNotifications.readAt),
           isNull(userNotifications.deletedAt),
+          // A call row clears by path only if it existed before the visit began, which only the client
+          // knows, so the client reads those rows by id instead.
+          notInArray(userNotifications.event, [...CALL_TOAST_EVENTS]),
           sql`split_part(${userNotifications.actionUrl}, '?', 1) = ${path}`
+        )
+      )
+      .returning({ id: userNotifications.id });
+    return rows.map((row) => row.id);
+  },
+
+  /**
+   * Mark the user's unread `call.ringing` rows for one ring as read. Matches on
+   * `metadata->>'ringId'`; other events, other rings, other users and read rows are untouched.
+   * Returns the updated ids.
+   */
+  markCallRingingReadByRingId: async (userId: string, ringId: string): Promise<string[]> => {
+    const rows = await db
+      .update(userNotifications)
+      .set({ readAt: sql`NOW()` })
+      .where(
+        and(
+          eq(userNotifications.userId, userId),
+          eq(userNotifications.event, 'call.ringing'),
+          isNull(userNotifications.readAt),
+          isNull(userNotifications.deletedAt),
+          sql`${userNotifications.metadata}->>'ringId' = ${ringId}`
         )
       )
       .returning({ id: userNotifications.id });

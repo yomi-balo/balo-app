@@ -1,6 +1,6 @@
 /**
  * BAL-620 — the shared realtime contract for the in-app notification ping: the channel name and
- * the one event name that `apps/api`'s publisher (`in-app-push.ts`) and `apps/web`'s bell
+ * the event names that `apps/api`'s publisher (`in-app-push.ts`) and `apps/web`'s bell
  * subscriber (`use-notification-push.ts`) both agree on.
  *
  * PURE and dependency-free (mirrors `@balo/shared/rate-limit`): no I/O, no Ably SDK, no logging
@@ -13,8 +13,8 @@
  * ⚠ NO persistence or integration rule, EVER, on `notifications:*`. The ping is a disposable
  * "go refetch" signal; the durable record is the `user_notifications` row.
  *
- * ⚠ THE WIRE FORMAT: A NAME, NOTHING ELSE. {@link NOTIFICATIONS_EVENT_CREATED} is published
- * with NO `data` and `extras: { ephemeral: true }`, so it is exempt from history, rewind, resume
+ * ⚠ THE WIRE FORMAT: A NAME, NOTHING ELSE. {@link NOTIFICATIONS_EVENT_CREATED} and
+ * {@link NOTIFICATIONS_EVENT_READ} are published with NO `data` and `extras: { ephemeral: true }`, so it is exempt from history, rewind, resume
  * and integrations. A receiver reads only the name and refetches the feed through the
  * authenticated `GET /api/notifications`, so a channel subscriber learns nothing about the
  * notification itself.
@@ -33,3 +33,6 @@ export function notificationsChannelName(userId: string): string {
 
 /** Channel message name: a new in-app notification row was written for this user. No payload. */
 export const NOTIFICATIONS_EVENT_CREATED = 'notification.created';
+
+/** Channel message name: this user's notification rows were marked read. No payload. */
+export const NOTIFICATIONS_EVENT_READ = 'notification.read';

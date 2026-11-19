@@ -215,6 +215,27 @@ describe('NavCallPill — one moving thing', () => {
     expect(pillJoin().className).toContain(PING);
   });
 
+  it('shows "Calling now" and goes quiet while a ringing Join claims the same meeting', () => {
+    setData([call('m-1', 2)]);
+    renderPill(
+      <JoinMeetingButton
+        joinUrl="/meetings/m-1/call"
+        ariaLabel="Toast join"
+        onJoin={vi.fn()}
+        ringing
+        registerOnPage={false}
+      >
+        Join
+      </JoinMeetingButton>
+    );
+
+    const pill = screen.getByTestId('nav-call-pill');
+    expect(within(pill).getByText('Calling now')).toBeInTheDocument();
+    expect(within(pill).queryByText(/^Starts in/)).not.toBeInTheDocument();
+    expect(pillJoin().className).not.toContain(PING);
+    expect(pillJoin().className).toContain('ring-2');
+  });
+
   it('is static from the scheduled end onward (overrun grace)', () => {
     setData([call('m-1', -31)]);
     renderPill();
@@ -476,13 +497,35 @@ describe('NavCallPill — screen reader', () => {
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
+  it('stays silent and tracks quiet: true while a ringing Join claims the meeting', () => {
+    setData([call('m-1', 2)]);
+    renderPill(
+      <JoinMeetingButton
+        joinUrl="/meetings/m-1/call"
+        ariaLabel="Toast join"
+        onJoin={vi.fn()}
+        ringing
+        registerOnPage={false}
+      >
+        Join
+      </JoinMeetingButton>
+    );
+
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    fireEvent.click(pillJoin());
+    expect(track).toHaveBeenCalledWith(
+      NAV_EVENTS.CALL_JOIN_CLICKED,
+      expect.objectContaining({ source: 'pill', quiet: true })
+    );
+  });
+
   it('keeps the visible status line out of any live region', () => {
     setData([call('m-1', 2)]);
     renderPill();
 
     const statusLine = screen.getByText(/^Starts in \d+ min$/);
     expect(statusLine.closest('[aria-live]')).toBeNull();
-    expect(statusLine.closest('[role="status"]')).toBeNull();
+    expect(statusLine.closest('[role="status"], output')).toBeNull();
   });
 });
 

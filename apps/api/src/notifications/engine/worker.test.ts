@@ -38,6 +38,11 @@ vi.mock('../scheduling/call-missed.js', () => ({
   scheduleMissedCallEmailFromContext: (...args: unknown[]) => mockScheduleMissedCallEmail(...args),
 }));
 
+const mockRetract = vi.fn();
+vi.mock('../channels/call-ringing-row.js', () => ({
+  retractCallRingingRow: (...args: unknown[]) => mockRetract(...args),
+}));
+
 import { processNotificationEvent } from './worker.js';
 
 function makeJob(data: Record<string, unknown>): Job {
@@ -296,6 +301,56 @@ describe('processNotificationEvent', () => {
           })
         )
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('ringing row retraction (BAL-653)', () => {
+    const ringPayload = {
+      correlationId: 'ring-1',
+      ringId: 'ring-1',
+      callerUserId: 'caller',
+      calleeUserId: 'callee',
+      callerSide: 'client',
+    };
+    const job = (event: string): Job =>
+      makeJob({ event, payload: ringPayload, publishedAt: '2026-11-17T00:00:00Z' });
+
+    it.each(['call.connected', 'call.declined', 'call.stopped', 'call.no_answer'])(
+      '%s retracts the ringing row, even where the event has no rules',
+      async (event) => {
+        mockResolveContext.mockResolvedValue({ event, payload: ringPayload, data: {} });
+
+        await processNotificationEvent(job(event));
+
+        expect(mockRetract).toHaveBeenCalledWith(ringPayload);
+      }
+    );
+
+    it('retracts before the rules are looked up', async () => {
+      await processNotificationEvent(job('call.declined'));
+
+      expect(mockRetract).toHaveBeenCalledTimes(1);
+      expect(mockResolveContext).not.toHaveBeenCalled();
+    });
+
+    it('does not retract for call.ringing or an unrelated event', async () => {
+      await processNotificationEvent(job('call.ringing'));
+      await processNotificationEvent(job('user.welcome'));
+
+      expect(mockRetract).not.toHaveBeenCalled();
+    });
+
+    it('still dispatches call.no_answer when the retraction throws', async () => {
+      mockRetract.mockRejectedValueOnce(new Error('db down'));
+      mockResolveContext.mockResolvedValue({
+        event: 'call.no_answer',
+        payload: ringPayload,
+        data: {},
+      });
+
+      await expect(processNotificationEvent(job('call.no_answer'))).resolves.toBeUndefined();
+
+      expect(mockDispatch).toHaveBeenCalled();
     });
   });
 });

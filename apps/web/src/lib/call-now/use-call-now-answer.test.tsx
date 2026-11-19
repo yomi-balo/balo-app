@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { CALL_NOW_EVENTS } from '@balo/analytics/events';
 import { track } from '@/lib/analytics';
+import { markAnswerIntent } from './answer-intent';
 import { CALL_NOW_COPY, START_FAILURE_COPY } from './call-now-copy';
 
 const { mockAnswerAction, mockReadAnswerView, mockPush, mockToast, mockToastError } = vi.hoisted(
@@ -61,6 +62,7 @@ function gateEvents(): unknown[][] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  globalThis.sessionStorage.clear();
   mockReadAnswerView.mockResolvedValue({ kind: 'answer', callerName: 'Dana', rateLine: null });
 });
 
@@ -334,5 +336,68 @@ describe('useCallNowAnswer — the true exits', () => {
     act(() => result.current.handleFundingBook());
 
     expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}?book=1`);
+  });
+});
+
+describe('useCallNowAnswer — the toast Join answer intent', () => {
+  it('a matching intent commits the answer without the Answer click', async () => {
+    mockAnswerAction.mockResolvedValue({ ok: true, grant: GRANT });
+    markAnswerIntent({ meetingId: MEETING_ID, ringId: RING_ID });
+    const { result, options } = setup();
+
+    await act(async () => result.current.offerAnswer(RING_ID));
+
+    expect(mockAnswerAction).toHaveBeenCalledTimes(1);
+    expect(mockAnswerAction).toHaveBeenCalledWith({ ringId: RING_ID });
+    expect(options.onOpened).toHaveBeenCalledWith(GRANT);
+  });
+
+  it('keeps offerAnswer stable across a rerender with new onOpened and onFunding', () => {
+    const options = {
+      meetingId: MEETING_ID,
+      onOpened: vi.fn(),
+      onFunding: vi.fn(),
+      onRequired: vi.fn(),
+      onAwaitConnect: vi.fn(),
+      onConnecting: vi.fn(),
+      onUnavailable: vi.fn(),
+    };
+    const { result, rerender } = renderHook((props) => useCallNowAnswer(props), {
+      initialProps: options,
+    });
+    const first = result.current.offerAnswer;
+    rerender({ ...options, onOpened: vi.fn(), onFunding: vi.fn() });
+    expect(result.current.offerAnswer).toBe(first);
+  });
+
+  it('an intent for another ring leaves the Answer notice and commits nothing', async () => {
+    markAnswerIntent({ meetingId: MEETING_ID, ringId: 'another-ring' });
+    const { result, options } = setup();
+
+    await act(async () => result.current.offerAnswer(RING_ID));
+
+    expect(mockAnswerAction).not.toHaveBeenCalled();
+    expect(options.onRequired).toHaveBeenCalledTimes(1);
+    expect(result.current.answerRingId).toBe(RING_ID);
+  });
+
+  it('an expired intent leaves the Answer notice and commits nothing', async () => {
+    markAnswerIntent({ meetingId: MEETING_ID, ringId: RING_ID }, Date.now() - 120_000);
+    const { result } = setup();
+
+    await act(async () => result.current.offerAnswer(RING_ID));
+
+    expect(mockAnswerAction).not.toHaveBeenCalled();
+    expect(result.current.answerNotice).not.toBeNull();
+  });
+
+  it('a commit that throws on the intent path is the unavailable card', async () => {
+    mockAnswerAction.mockRejectedValue(new Error('boom'));
+    markAnswerIntent({ meetingId: MEETING_ID, ringId: RING_ID });
+    const { result, options } = setup();
+
+    await act(async () => result.current.offerAnswer(RING_ID));
+
+    expect(options.onUnavailable).toHaveBeenCalledTimes(1);
   });
 });

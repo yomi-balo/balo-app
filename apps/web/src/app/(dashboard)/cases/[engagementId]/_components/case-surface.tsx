@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { EngagementRatingCard } from '@/components/balo/reviews/engagement-rating-card';
@@ -33,7 +33,9 @@ import { MarkResolvedButton, RequestResolutionButton } from './case-actions';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import { canBookInPage } from '@/lib/call-now/book-in-page';
+import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 import { CallNowDialog } from './call-now-dialog';
+import { trackCallNowClicked } from './call-now-entry';
 
 /**
  * BAL-421 — the DESKTOP case surface.
@@ -183,6 +185,31 @@ export function CaseSurface({
     setCallNowAttemptId(attemptId);
     setCallNowOpen(true);
   }, []);
+  const callNowSurface = useCallNowSurface();
+  // The missed-call toast's "Call back" lands here with `?call=1`: open the confirm once, then drop
+  // the param. Keyed on the param itself so a Call back from this very case fires again.
+  const callParam = useSearchParams().get('call');
+  useEffect(() => {
+    if (callParam !== '1') return;
+    const { search, pathname } = globalThis.location;
+    const params = new URLSearchParams(search);
+    params.delete('call');
+    const rest = params.toString();
+    globalThis.history.replaceState(
+      globalThis.history.state,
+      '',
+      rest.length > 0 ? `${pathname}?${rest}` : pathname
+    );
+    if (callNow?.entry !== 'button' || callNow.confirm === null) return;
+    handleOpenCallNow(
+      trackCallNowClicked({
+        callNow,
+        lens: view.lens,
+        surface: callNowSurface,
+        entry: 'missed_call_back',
+      })
+    );
+  }, [callParam, callNow, view.lens, callNowSurface, handleOpenCallNow]);
   const handleCallNowBookTime = useCallback(() => requestFollowUp('call_now'), [requestFollowUp]);
 
   // The call room's "Book a time" and the ended card land here with `?book=1`: read it once,
@@ -566,7 +593,7 @@ export function CaseSurface({
           />
         )}
 
-        {callNow !== null && callNow.confirm !== null && callNowAttemptId !== null && (
+        {callNow?.confirm && callNowAttemptId !== null && (
           <CallNowDialog
             attemptId={callNowAttemptId}
             calleeOnline={callNow.calleeOnline}

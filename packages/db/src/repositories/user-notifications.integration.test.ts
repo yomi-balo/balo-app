@@ -542,4 +542,86 @@ describe('userNotificationsRepository.markReadByActionPath', () => {
       .where(eq(userNotifications.id, theirs.id));
     expect(row?.readAt).toBeNull();
   });
+  it('never reads call.ringing or call.no_answer rows, while another event on the path is read', async () => {
+    const user = await userFactory();
+    const other = await insertWithUrl(user.id, '/cases/c1');
+    const ringing = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'call.ringing',
+      title: 'ringing',
+      actionUrl: '/cases/c1',
+    });
+    const missed = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'call.no_answer',
+      title: 'missed',
+      actionUrl: '/cases/c1?from=call',
+    });
+
+    const ids = await userNotificationsRepository.markReadByActionPath(user.id, '/cases/c1');
+
+    expect(ids).toEqual([other.id]);
+    const rows = await db
+      .select({ id: userNotifications.id, readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.userId, user.id));
+    const readAt = (id: string) => rows.find((r) => r.id === id)?.readAt ?? null;
+    expect(readAt(other.id)).not.toBeNull();
+    expect(readAt(ringing.id)).toBeNull();
+    expect(readAt(missed.id)).toBeNull();
+  });
+});
+
+describe('userNotificationsRepository.markCallRingingReadByRingId', () => {
+  const insertRow = (userId: string, event: string, ringId: string | null) =>
+    userNotificationsRepository.insert({
+      userId,
+      event,
+      title: `${event} ${ringId ?? 'none'}`,
+      metadata: ringId === null ? null : { ringId },
+    });
+
+  it('marks only the unread call.ringing rows for that ring and that user', async () => {
+    const user = await userFactory();
+    const other = await userFactory();
+    const target = await insertRow(user.id, 'call.ringing', 'ring-1');
+    const otherRing = await insertRow(user.id, 'call.ringing', 'ring-2');
+    const otherEvent = await insertRow(user.id, 'call.no_answer', 'ring-1');
+    const noMeta = await insertRow(user.id, 'call.ringing', null);
+    const otherUser = await insertRow(other.id, 'call.ringing', 'ring-1');
+
+    const ids = await userNotificationsRepository.markCallRingingReadByRingId(user.id, 'ring-1');
+
+    expect(ids).toEqual([target.id]);
+    const rows = await db.select().from(userNotifications);
+    const readAt = (id: string) => rows.find((r) => r.id === id)?.readAt ?? null;
+    expect(readAt(target.id)).not.toBeNull();
+    for (const untouched of [otherRing, otherEvent, noMeta, otherUser]) {
+      expect(readAt(untouched.id)).toBeNull();
+    }
+  });
+
+  it('leaves an already-read row and a soft-deleted row alone', async () => {
+    const user = await userFactory();
+    const read = await insertRow(user.id, 'call.ringing', 'ring-3');
+    const deleted = await insertRow(user.id, 'call.ringing', 'ring-3');
+    const earlier = new Date('2026-01-01T00:00:00.000Z');
+    await db
+      .update(userNotifications)
+      .set({ readAt: earlier })
+      .where(eq(userNotifications.id, read.id));
+    await db
+      .update(userNotifications)
+      .set({ deletedAt: new Date() })
+      .where(eq(userNotifications.id, deleted.id));
+
+    const ids = await userNotificationsRepository.markCallRingingReadByRingId(user.id, 'ring-3');
+
+    expect(ids).toEqual([]);
+    const [row] = await db
+      .select({ readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.id, read.id));
+    expect(row?.readAt?.toISOString()).toBe(earlier.toISOString());
+  });
 });

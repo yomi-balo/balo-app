@@ -6,6 +6,7 @@ import { resolveContext } from './resolver.js';
 import { dispatch } from './dispatcher.js';
 import { scheduleConversationUnreadDigest } from '../scheduling/conversation-unread.js';
 import { scheduleMissedCallEmailFromContext } from '../scheduling/call-missed.js';
+import { retractCallRingingRow } from '../channels/call-ringing-row.js';
 
 const log = createLogger('notification-engine');
 
@@ -126,11 +127,39 @@ const EVENT_FOLLOW_UPS: Partial<Record<string, (ctx: RuleContext) => Promise<voi
   'call.no_answer': scheduleMissedCallEmailFromContext,
 };
 
+/**
+ * BAL-653 — events that END a ring. Each marks the callee's live `call.ringing` bell row read, so
+ * it never lingers as a stale "incoming call" item. ⚠ RUNS BEFORE THE RULES LOOKUP: `call.connected`,
+ * `call.declined` and `call.stopped` have no rules, and an event without rules returns early.
+ */
+const EVENT_RETRACTIONS: Partial<
+  Record<string, (payload: Record<string, unknown>) => Promise<void>>
+> = {
+  'call.connected': retractCallRingingRow,
+  'call.declined': retractCallRingingRow,
+  'call.stopped': retractCallRingingRow,
+  'call.no_answer': retractCallRingingRow,
+};
+
 /** Exported for testability — called by the BullMQ worker. */
 export async function processNotificationEvent(job: Job<NotificationEventJobData>): Promise<void> {
   const { event, payload } = job.data;
 
   log.info({ event, correlationId: payload.correlationId }, 'Processing notification event');
+
+  // 0. Retract the ringing bell row when this event ends a ring. The helper never throws; the
+  //    try/catch keeps a future change to it from failing the event.
+  const retraction = EVENT_RETRACTIONS[event];
+  if (retraction !== undefined) {
+    try {
+      await retraction(payload);
+    } catch (error) {
+      log.error(
+        { event, correlationId: payload.correlationId, ...errorFields(error) },
+        'Failed to retract ringing notification'
+      );
+    }
+  }
 
   // 1. Look up rules
   const rules = notificationRules[event];

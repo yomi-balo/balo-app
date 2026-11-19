@@ -1510,11 +1510,32 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   //
   // `call.declined`, `call.stopped` and `call.connected` HAVE NO RULE, on purpose: the caller is
   // watching the call room (§3), a replaced booking sends nothing (§4), and "Not now" must not
-  // produce a missed-call message.
+  // produce a missed-call message. The worker's retraction table (`EVENT_RETRACTIONS`) still runs
+  // for them, because it sits before the rules lookup.
+  //
+  // RING, BELL (BAL-653) — one `critical` in-app row per callee side, written at ring start so the
+  // call toast can show on every open tab. The engine marks it read when the ring ends (any
+  // outcome), so it never lingers as a stale "incoming call" item.
   //
   // RING SMS — one rule per callee side, because the side flips with `callerSide` while
   // `recipientSide` is fixed per rule. `critical`: a ring lives for seconds.
   'call.ringing': [
+    {
+      channel: 'in-app',
+      recipient: 'callee',
+      template: 'call-ringing-expert',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: calleeIsExpert,
+    },
+    {
+      channel: 'in-app',
+      recipient: 'callee',
+      template: 'call-ringing-client',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: calleeIsClient,
+    },
     {
       channel: 'sms',
       recipient: 'callee',

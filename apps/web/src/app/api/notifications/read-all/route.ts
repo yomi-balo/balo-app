@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { log } from '@/lib/logging';
+import { publishNotificationsRead } from '@/lib/realtime/ably-server';
 import { userNotificationsRepository } from '@balo/db';
 
 export async function POST(): Promise<NextResponse> {
@@ -11,6 +12,7 @@ export async function POST(): Promise<NextResponse> {
 
   try {
     const count = await userNotificationsRepository.markAllAsRead(user.id);
+    if (count > 0) await publishNotificationsRead(user.id);
     return NextResponse.json({ success: true, count });
   } catch (error) {
     log.error('Failed to mark all notifications as read', {

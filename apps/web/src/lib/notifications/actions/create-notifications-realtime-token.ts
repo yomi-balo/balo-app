@@ -13,7 +13,9 @@ import type { RealtimeTokenResult } from '@/lib/realtime/ably-auth';
  *
  * ⚠ SUBSCRIBE-ONLY, OVER EXACTLY ONE EXPLICIT CHANNEL — `notifications:{session user id}`,
  * never a wildcard. The action takes NO input: the channel is named from the session alone, so
- * a tampered browser cannot ask for another user's channel. The API is the only publisher.
+ * a tampered browser cannot ask for another user's channel. Only servers publish: the API sends
+ * `notification.created`, and the web read routes send `notification.read` to the reader's own
+ * channel.
  *
  * ⚠ THE SUBJECT IS THE SESSION ITSELF, so there is no tenancy gate and no capability axis to
  * resolve: a user may always listen to their own notification ping. The channel carries no

@@ -3,7 +3,11 @@
 import { useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { useLiveJoinRegistration } from './live-join-registry';
+import {
+  useLiveJoinRegistration,
+  useRingingJoin,
+  useRingingJoinRegistration,
+} from './live-join-registry';
 
 interface JoinMeetingButtonProps {
   /**
@@ -30,6 +34,12 @@ interface JoinMeetingButtonProps {
    * Join and the list rows pass `false`: they must not suppress themselves.
    */
   readonly registerOnPage?: boolean;
+  /**
+   * True only for the call toast's Join while a Call now ring is live. It claims the ring in
+   * `LiveJoinRegistryProvider`, and every other button for the same `joinUrl` then renders
+   * static (no ping halo, the static ring instead). Default `false`.
+   */
+  readonly ringing?: boolean;
   readonly children: React.ReactNode;
 }
 
@@ -81,6 +91,10 @@ interface JoinMeetingButtonProps {
  * call pill — so that only one control moves; that Join wears the static ring instead. Never
  * pass it to hide the cue on a lone Join. `registerOnPage` (default `true`) publishes `joinUrl`
  * to `LiveJoinRegistryProvider` so the pill can see a page-level Join is already live.
+ *
+ * ⚠ BAL-653 ADDED `ringing` (default `false`): the call toast's Join claims a live ring for its
+ * `joinUrl`, and any other button for that url (case nudge, pill, Up next) stops animating so the
+ * toast is the one moving thing.
  */
 export function JoinMeetingButton({
   joinUrl,
@@ -90,9 +104,13 @@ export function JoinMeetingButton({
   className,
   liveCue = true,
   registerOnPage = true,
+  ringing = false,
   children,
 }: Readonly<JoinMeetingButtonProps>): React.JSX.Element {
   useLiveJoinRegistration(joinUrl, registerOnPage);
+  useRingingJoinRegistration(joinUrl, ringing);
+  const ringClaimedByAnother = useRingingJoin(joinUrl) && !ringing;
+  const cue = liveCue && !ringClaimedByAnother;
 
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -141,11 +159,11 @@ export function JoinMeetingButton({
         // chip is `rounded-full`, the others `rounded-md`.
         // ⚠ `pointer-events-none`: the layer is decoration and must never join hit-testing — the
         // ≥44px tap target is `after:`'s job alone.
-        liveCue &&
+        cue &&
           'motion-safe:before:pointer-events-none motion-safe:before:absolute motion-safe:before:inset-0',
-        liveCue &&
+        cue &&
           "motion-safe:before:text-primary motion-safe:before:rounded-[inherit] motion-safe:before:content-['']",
-        liveCue && 'motion-safe:before:animate-ping-slow',
+        cue && 'motion-safe:before:animate-ping-slow',
         // The static "this is live" affordance under reduced motion. Moved here from two of the
         // three call sites so the third (the compact popover) gains it too — it had neither the
         // pulse nor this fallback (BAL-511 D2 / O2).
@@ -158,7 +176,7 @@ export function JoinMeetingButton({
         // parity with the animated ring above (BAL-511 UX phase; supersedes the ticket text).
         // ⚠ `liveCue={false}` (the pill's second Join): no `before:` halo at all, and the same
         // full-opacity ring applied UNCONDITIONALLY rather than only under reduced motion.
-        liveCue ? 'motion-reduce:ring-primary motion-reduce:ring-2' : 'ring-primary ring-2',
+        cue ? 'motion-reduce:ring-primary motion-reduce:ring-2' : 'ring-primary ring-2',
         className
       )}
     >

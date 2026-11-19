@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   sendMemberJoinGrant: vi.fn(),
   endRing: vi.fn(),
   findById: vi.fn(),
+  findLiveForCallee: vi.fn(),
   findMeeting: vi.fn(),
   checkRateLimit: vi.fn(),
   logError: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mocks.findMeeting },
   meetingRingsRepository: {
+    findLiveRingingForCallee: mocks.findLiveForCallee,
     findByIdForParty: async (ringId: string, userId: string) => {
       const row = (await mocks.findById(ringId, userId)) as
         | { callerUserId: string; calleeUserId: string }
@@ -751,6 +753,68 @@ describe('call-now routes (BAL-649)', () => {
       expect(mocks.logError).toHaveBeenCalledWith(
         expect.objectContaining({ ringId: RING_ID, error: 'boom' }),
         'Call now answer failed'
+      );
+    });
+  });
+
+  describe('GET /call-now/incoming (BAL-653)', () => {
+    const url = '/call-now/incoming';
+    const CREATED = new Date('2026-11-16T10:00:00.000Z');
+
+    it('200 with the callee’s newest live ring, read by the session user', async () => {
+      mocks.findLiveForCallee.mockResolvedValue(
+        ring({ calleeUserId: USER_ID, callerUserId: OTHER_USER, createdAt: CREATED })
+      );
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(mocks.findLiveForCallee).toHaveBeenCalledWith(USER_ID, expect.any(Date));
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        ring: {
+          ringId: RING_ID,
+          meetingId: MEETING_ID,
+          engagementId: ENGAGEMENT_ID,
+          callerSide: 'client',
+          placement: 'new_meeting',
+          reachedBy: 'app',
+          expiresAt: EXPIRES.toISOString(),
+          startedAt: CREATED.toISOString(),
+          awaitsAnswer: false,
+        },
+      });
+    });
+
+    it('flags awaitsAnswer for an expert-started in-place ring a client must commit to', async () => {
+      mocks.findLiveForCallee.mockResolvedValue(
+        ring({ callerSide: 'expert', placement: 'new_meeting', createdAt: CREATED })
+      );
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ ring: { callerSide: 'expert', awaitsAnswer: true } });
+    });
+
+    it('200 { ring: null } when nothing rings', async () => {
+      mocks.findLiveForCallee.mockResolvedValue(undefined);
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ring: null });
+    });
+
+    it('401 without auth; 500 and a logged error on a read failure', async () => {
+      expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      mocks.findLiveForCallee.mockRejectedValue(new Error('db'));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toMatchObject({ code: 'internal_error' });
+      expect(mocks.logError).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: USER_ID }),
+        'Call now incoming read failed'
       );
     });
   });

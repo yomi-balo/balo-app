@@ -24,6 +24,11 @@ vi.mock('@/lib/logging', () => ({
   },
 }));
 
+const mockPublishRead = vi.fn();
+vi.mock('@/lib/realtime/ably-server', () => ({
+  publishNotificationsRead: (...args: unknown[]) => mockPublishRead(...args),
+}));
+
 import { POST } from './read-by-path/route';
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -60,6 +65,15 @@ describe('POST /api/notifications/read-by-path', () => {
     expect(res.status).toBe(200);
     expect(mockMarkReadByActionPath).toHaveBeenCalledWith('user-1', '/projects/p1');
     expect(await res.json()).toEqual({ readIds: ['n1', 'n2'] });
+    expect(mockPublishRead).toHaveBeenCalledWith('user-1');
+  });
+
+  it('publishes no read ping when no row changed', async () => {
+    mockMarkReadByActionPath.mockResolvedValue([]);
+
+    await POST(makeRequest({ path: '/projects/p1' }));
+
+    expect(mockPublishRead).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1962,26 +1962,23 @@ describe('Call now rules (BAL-652)', () => {
     );
 
   describe('call.ringing', () => {
-    it('sends nothing for a stale ring whose expiresAt has passed', () => {
+    const sms = (payload: Record<string, unknown>): NotificationRule[] =>
+      firing('call.ringing', payload).filter((rule) => rule.channel === 'sms');
+    const bell = (payload: Record<string, unknown>): NotificationRule[] =>
+      firing('call.ringing', payload).filter((rule) => rule.channel === 'in-app');
+
+    it('sends no SMS for a stale ring whose expiresAt has passed', () => {
       const past = new Date(Date.now() - 1000).toISOString();
 
-      expect(
-        firing('call.ringing', { callerSide: 'client', reachedBy: 'sms', expiresAt: past })
-      ).toEqual([]);
+      expect(sms({ callerSide: 'client', reachedBy: 'sms', expiresAt: past })).toEqual([]);
     });
 
-    it.each([undefined, 12345, 'not-a-date'])('sends nothing when expiresAt is %s', (expiresAt) => {
-      expect(firing('call.ringing', { callerSide: 'client', reachedBy: 'sms', expiresAt })).toEqual(
-        []
-      );
+    it.each([undefined, 12345, 'not-a-date'])('sends no SMS when expiresAt is %s', (expiresAt) => {
+      expect(sms({ callerSide: 'client', reachedBy: 'sms', expiresAt })).toEqual([]);
     });
 
     it('SMS to an expert callee when a client calls and the ring reached by sms', () => {
-      const fired = firing('call.ringing', {
-        callerSide: 'client',
-        reachedBy: 'sms',
-        expiresAt: LIVE_UNTIL,
-      });
+      const fired = sms({ callerSide: 'client', reachedBy: 'sms', expiresAt: LIVE_UNTIL });
 
       expect(fired).toHaveLength(1);
       expect(fired[0]).toMatchObject({
@@ -1994,11 +1991,7 @@ describe('Call now rules (BAL-652)', () => {
     });
 
     it('SMS to a client callee when an expert calls and the ring reached by sms', () => {
-      const fired = firing('call.ringing', {
-        callerSide: 'expert',
-        reachedBy: 'sms',
-        expiresAt: LIVE_UNTIL,
-      });
+      const fired = sms({ callerSide: 'expert', reachedBy: 'sms', expiresAt: LIVE_UNTIL });
 
       expect(fired).toHaveLength(1);
       expect(fired[0]).toMatchObject({
@@ -2011,11 +2004,38 @@ describe('Call now rules (BAL-652)', () => {
     });
 
     it.each(['client', 'expert'])(
-      'sends nothing when the ring reached by app (%s caller)',
+      'sends no SMS when the ring reached by app (%s caller)',
       (side) => {
-        expect(firing('call.ringing', { callerSide: side, reachedBy: 'app' })).toEqual([]);
+        expect(sms({ callerSide: side, reachedBy: 'app' })).toEqual([]);
       }
     );
+
+    it('writes a critical bell row to an expert callee when a client calls, however the ring reached them', () => {
+      for (const reachedBy of ['app', 'sms']) {
+        const fired = bell({ callerSide: 'client', reachedBy });
+
+        expect(fired).toHaveLength(1);
+        expect(fired[0]).toMatchObject({
+          channel: 'in-app',
+          recipient: 'callee',
+          template: 'call-ringing-expert',
+          timing: 'immediate',
+          priority: 'critical',
+        });
+      }
+    });
+
+    it('writes a critical bell row to a client callee when an expert calls', () => {
+      const fired = bell({ callerSide: 'expert', reachedBy: 'app' });
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({
+        channel: 'in-app',
+        recipient: 'callee',
+        template: 'call-ringing-client',
+        priority: 'critical',
+      });
+    });
 
     it('sends nothing when the ring side is missing', () => {
       expect(firing('call.ringing', { reachedBy: 'sms', expiresAt: LIVE_UNTIL })).toEqual([]);
@@ -2120,7 +2140,9 @@ describe('Call now rules (BAL-652)', () => {
             'is calling you now about "Flow migration"'
           );
         } else if (channel === 'in-app') {
-          expect(getInAppTemplate(template, data).title).toMatch(/^Missed call from /);
+          expect(getInAppTemplate(template, data).title).toMatch(
+            /^(Missed call from |.+ is calling$)/
+          );
         } else {
           expect(getEmailTemplate(template, data).subject).toMatch(/^You missed a call from /);
         }

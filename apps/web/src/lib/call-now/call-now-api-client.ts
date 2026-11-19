@@ -5,6 +5,7 @@ import type {
   CallRingPlacement,
   CallRingReach,
   CallRingStatus,
+  CallSide,
   MemberJoinResponse,
 } from '@balo/shared/meetings';
 import {
@@ -14,7 +15,12 @@ import {
   readString,
   type BaloApiResult,
 } from '@/lib/api/balo-api-client';
-import type { CallNowRingRead, CallNowStartRead, CallNowViewRead } from './call-now-types';
+import type {
+  CallNowRingRead,
+  CallNowStartRead,
+  CallNowViewRead,
+  IncomingRingRead,
+} from './call-now-types';
 
 /**
  * The server-only web→api hop for Call now (BAL-649/650/652), on the shared `balo-api-client`
@@ -130,6 +136,53 @@ export function parseRingRead(body: unknown): CallNowRingRead | undefined {
   };
 }
 
+function isCallSide(value: unknown): value is CallSide {
+  return value === 'client' || value === 'expert';
+}
+
+/**
+ * Parse a `GET /call-now/incoming` body: `{ ring: null }` is `null` (no live ring), a well-formed
+ * ring is the ring, and anything else is `undefined` (malformed). Skew-tolerant: `placement` and
+ * `reachedBy` default as they do on the ring read.
+ */
+export function parseIncomingRing(
+  body: Record<string, unknown>
+): IncomingRingRead | null | undefined {
+  const { ring } = body;
+  if (ring === null) return null;
+  if (typeof ring !== 'object') return undefined;
+  const record = ring as Record<string, unknown>;
+  const ringId = readString(record, 'ringId');
+  const meetingId = readString(record, 'meetingId');
+  const engagementId = readString(record, 'engagementId');
+  const expiresAt = readString(record, 'expiresAt');
+  const startedAt = readString(record, 'startedAt');
+  const awaitsAnswer = readBoolean(record, 'awaitsAnswer');
+  const { callerSide, placement } = record;
+  if (
+    ringId === undefined ||
+    meetingId === undefined ||
+    engagementId === undefined ||
+    expiresAt === undefined ||
+    startedAt === undefined ||
+    awaitsAnswer === undefined ||
+    !isCallSide(callerSide)
+  ) {
+    return undefined;
+  }
+  return {
+    ringId,
+    meetingId,
+    engagementId,
+    callerSide,
+    placement: isRingPlacement(placement) ? placement : null,
+    reachedBy: readReachedBy(record),
+    expiresAt,
+    startedAt,
+    awaitsAnswer,
+  };
+}
+
 function parseStart(body: Record<string, unknown>): CallNowStartRead | null {
   const ringId = readString(body, 'ringId');
   const meetingId = readString(body, 'meetingId');
@@ -159,7 +212,7 @@ function parseJoinGrant(body: Record<string, unknown>): MemberJoinResponse | nul
   return hasGrant ? (body as unknown as MemberJoinResponse) : null;
 }
 
-function ringPath(ringId: string, action?: 'stop' | 'answer'): string {
+function ringPath(ringId: string, action?: 'stop' | 'answer' | 'decline'): string {
   const base = `/call-now/rings/${encodeURIComponent(ringId)}`;
   return action === undefined ? base : `${base}/${action}`;
 }
@@ -205,4 +258,27 @@ export function postStopRing(ringId: string): Promise<BaloApiResult<{ status: Ca
 
 export function postAnswerRing(ringId: string): Promise<BaloApiResult<MemberJoinResponse>> {
   return postBaloApiJson(ringPath(ringId, 'answer'), {}, parseJoinGrant, 'Call now answer');
+}
+
+/**
+ * The newest live ring aimed at the signed-in user. `data` is `null` when none rings; a malformed
+ * body is a failure, never an empty ring.
+ */
+export async function getIncomingCallNowRing(): Promise<
+  BaloApiResult<{ ring: IncomingRingRead | null }>
+> {
+  return getBaloApiJson(
+    '/call-now/incoming',
+    (body) => {
+      const ring = parseIncomingRing(body);
+      return ring === undefined ? null : { ring };
+    },
+    'Call now incoming read'
+  );
+}
+
+export function postDeclineRing(
+  ringId: string
+): Promise<BaloApiResult<{ status: CallRingStatus }>> {
+  return postBaloApiJson(ringPath(ringId, 'decline'), {}, parseStatusBody, 'Call now decline');
 }

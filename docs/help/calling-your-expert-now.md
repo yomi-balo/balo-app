@@ -36,6 +36,10 @@ screen. It shows the rate your expert starts from and the minimum, for example "
 calling and you'll wait in the call room. If {name} doesn't pick up, nothing is charged." Choose
 **Call now** to go ahead, or **Not now** to leave it.
 
+The first time you choose **Call now**, your browser may ask whether Balo can show notifications.
+If you allow them, a call from your expert can still get your attention while Balo sits in a
+background tab.
+
 **When your expert isn't online**, the screen says so: "{name} isn't online right now. We'll send a
 text, but they may not see it in time. If they don't pick up, nothing is charged — booking a time
 is the surer way to talk." The main button becomes **Book a time**, which takes you to booking on
@@ -93,21 +97,29 @@ Choose **Book a time** to find a slot with them, or **Back to the case**. There'
 
 ## If your expert calls you
 
-Your expert can start a call too. While it's ringing, **Join** appears in the top bar on any page.
-If you've asked for text updates, Balo may also text you a link that opens the case.
+Your expert can start a call too. While it's ringing, a pop-up appears under the bell on any page,
+saying **{name} is calling** with the same "From" rate and minimum as the confirm screen. It offers
+**Join** and **Not now**, and **Join** also appears in the top bar. If you've asked for text
+updates, Balo may also text you a link that opens the case.
 
-Choosing **Join** takes you to the call page, which says **{name} is calling** and shows the same
-"From" rate and minimum as the confirm screen. You answer by choosing **Answer** there. Opening the
-page doesn't answer for you. Balo checks your company's credit when you choose **Answer**, so if a
-top-up is needed you'll see the same **Add credit to start this call** screen first (its **Back**
-takes you to the case). While the call is still ringing, it goes ahead as soon as the credit lands.
-If it has stopped ringing by then, nothing is charged and you can call your expert back from the
-case. If answering fails for another reason, you see a message and **Answer** stays where it is, so
-you can try again. From there it works like any other call.
+Choosing **Join** from the pop-up answers the call straight away. Balo still checks your company's
+credit first, so if a top-up is needed you'll see the **Add credit to start this call** screen (its
+**Back** takes you to the case). While the call is still ringing, it goes ahead as soon as the
+credit lands. If it has stopped ringing by then, nothing is charged and you can call your expert
+back from the case. If answering fails for another reason, you see a message and can try again.
+**Not now** lets your expert know you can't talk right now. If your browser hasn't asked yet, the
+first time you choose **Not now**, or **Dismiss** or **Call back** on a missed call, it may ask
+whether Balo can show notifications.
+
+Opening the call page any other way, such as reloading it or using the top bar, doesn't answer for
+you. You answer by choosing **Answer** there, and the same credit check applies. From there it
+works like any other call.
 
 Only the person being called answers. If a colleague at your company opens the call page, they see
 **Waiting for the call to connect** and the call opens for them as soon as it connects. If you miss
-the call, you get a bell item and, about ten minutes later, one email.
+the call, you get a missed-call pop-up, plus a bell item and, about ten minutes later, one email.
+The pop-up shows even if you're already on the case when the call is missed. It stays until you
+dismiss it, choose **Call back** or open the case again afterwards.
 
 ## Where the call shows up
 

@@ -113,6 +113,46 @@ describe('ably-server', () => {
     );
   });
 
+  describe('publishNotificationsRead', () => {
+    it('defers a data-less ephemeral notification.read ping on notifications:{userId}', async () => {
+      process.env.ABLY_API_KEY = 'app.key:secret';
+      mockPublish.mockResolvedValue(undefined);
+      const { publishNotificationsRead } = await import('./ably-server');
+
+      await publishNotificationsRead('user-1');
+      expect(mockPublish).not.toHaveBeenCalled();
+      await getScheduled()?.();
+
+      expect(mockChannelsGet).toHaveBeenCalledWith('notifications:user-1');
+      expect(mockPublish).toHaveBeenCalledWith({
+        name: 'notification.read',
+        extras: { ephemeral: true },
+      });
+    });
+
+    it('never throws on a failed publish, and logs it', async () => {
+      process.env.ABLY_API_KEY = 'app.key:secret';
+      mockPublish.mockRejectedValue(new Error('socket down'));
+      const { publishNotificationsRead } = await import('./ably-server');
+      await publishNotificationsRead('user-1');
+
+      await expect(getScheduled()?.()).resolves.toBeUndefined();
+      expect(log.error).toHaveBeenCalledWith(
+        'Ably publish failed',
+        expect.objectContaining({ channel: 'notifications:user-1', name: 'notification.read' })
+      );
+    });
+
+    it('is a warn-and-skip without an ABLY_API_KEY', async () => {
+      const { publishNotificationsRead } = await import('./ably-server');
+      await publishNotificationsRead('user-1');
+      await getScheduled()?.();
+
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalled();
+    });
+  });
+
   describe('publishTypingSignal — the only writer of a typing channel', () => {
     it.each([
       ['started', 'typing.started'],

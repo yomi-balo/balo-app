@@ -954,6 +954,51 @@ describe('meetingRingsRepository — reads', () => {
     expect(await meetingRingsRepository.findRingingForEngagement(c.engagementId)).toBeUndefined();
   });
 
+  it('findLiveRingingForCallee returns the newest live ring and excludes expired, ended, soft-deleted and other-callee rings', async () => {
+    const now = new Date();
+    const older = await ringCase();
+    const olderRing = await ringNewMeeting(older);
+    const newer = await ringCase();
+    const newerRing = await ringNewMeeting(newer, { calleeUserId: older.calleeUserId });
+    // The harness runs each test in one transaction, so `now()` ties; order the rings explicitly.
+    await db
+      .update(meetingRings)
+      .set({ createdAt: new Date(now.getTime() - MINUTE_MS) })
+      .where(eq(meetingRings.id, olderRing.ring.id));
+
+    expect(await meetingRingsRepository.findLiveRingingForCallee(older.calleeUserId, now)).toEqual(
+      newerRing.ring
+    );
+    expect(
+      await meetingRingsRepository.findLiveRingingForCallee(newer.calleeUserId, now)
+    ).toBeUndefined();
+
+    expect(
+      await meetingRingsRepository.findLiveRingingForCallee(
+        older.calleeUserId,
+        new Date(now.getTime() + 2 * MINUTE_MS)
+      )
+    ).toBeUndefined();
+
+    await db
+      .update(meetingRings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingRings.id, newerRing.ring.id));
+    expect(
+      (await meetingRingsRepository.findLiveRingingForCallee(older.calleeUserId, now))?.id
+    ).toBe(olderRing.ring.id);
+
+    await meetingRingsRepository.endRing({
+      ringId: olderRing.ring.id,
+      to: 'stopped',
+      now: new Date(),
+      actorUserId: older.callerUserId,
+    });
+    expect(
+      await meetingRingsRepository.findLiveRingingForCallee(older.calleeUserId, now)
+    ).toBeUndefined();
+  });
+
   it('findByIdForParty returns the ring to its caller and callee only', async () => {
     const c = await ringCase();
     const started = await ringNewMeeting(c);

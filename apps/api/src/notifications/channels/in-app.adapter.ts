@@ -6,6 +6,7 @@ import { createRedisConnection } from '../../lib/redis.js';
 import { getInAppTemplate } from './templates/in-app-templates.js';
 import { logNotification } from './log.js';
 import { publishNotificationCreated } from './in-app-push.js';
+import { reconcileCallRingingRow } from './call-ringing-row.js';
 import type { DeliveryPayload } from './types.js';
 
 const log = createLogger('notification-in-app');
@@ -15,7 +16,7 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
   const payload = job.data;
 
   // 1. Render template
-  const { title, body, actionUrl } = getInAppTemplate(payload.template, {
+  const { title, body, actionUrl, metadata } = getInAppTemplate(payload.template, {
     ...payload.data,
     ...payload.payload,
   });
@@ -29,6 +30,7 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
       body: body ?? null,
       actionUrl: actionUrl ?? null,
       metadata: {
+        ...metadata,
         correlationId: payload.payload.correlationId,
         template: payload.template,
       },
@@ -79,6 +81,16 @@ export async function processInAppJob(job: Job<DeliveryPayload>): Promise<void> 
   // `publishNotificationCreated` is not expected to reject; the catch keeps the job from ever
   // retrying a delivery that already succeeded if that ever changes.
   await publishNotificationCreated(payload.recipientId).catch(() => undefined);
+
+  // 6. A ring that ended before this row landed would leave a stale "incoming call" item: the
+  // ring's terminal event retracted nothing because there was no row yet. Settle it here, after
+  // the insert, so the row is never read before it exists.
+  if (payload.event === 'call.ringing') {
+    await reconcileCallRingingRow({
+      ringId: payload.payload.ringId,
+      recipientId: payload.recipientId,
+    });
+  }
 }
 
 export function startInAppWorker(): Worker<DeliveryPayload> {

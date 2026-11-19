@@ -6,6 +6,7 @@ import {
   POLL_VISIBLE_MS,
   formatRelativeTime,
   formatUnreadTabTitle,
+  isCallToastEvent,
   liveLatencyMs,
   notificationActionLabel,
   notificationActionPath,
@@ -199,6 +200,27 @@ describe('selectUnseenNotifications', () => {
       'mid',
       'old',
     ]);
+  });
+});
+
+describe('call-toast events', () => {
+  const since = new Date('2026-01-01T10:00:00.000Z');
+
+  it.each(['call.ringing', 'call.no_answer'])('%s is a call-toast event', (event) => {
+    expect(isCallToastEvent(event)).toBe(true);
+  });
+
+  it.each(['call.declined', 'booking.confirmed'])('%s is not a call-toast event', (event) => {
+    expect(isCallToastEvent(event)).toBe(false);
+  });
+
+  it('selectUnseenNotifications drops call-toast events and keeps the rest', () => {
+    const list = [
+      { ...make('ringing', '2026-01-01T11:00:00.000Z'), event: 'call.ringing' },
+      { ...make('missed', '2026-01-01T11:00:00.000Z'), event: 'call.no_answer' },
+      make('other', '2026-01-01T11:00:00.000Z'),
+    ];
+    expect(selectUnseenNotifications(list, since, new Set()).map((n) => n.id)).toEqual(['other']);
   });
 });
 

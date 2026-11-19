@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
@@ -9,6 +9,7 @@ import type { MemberJoinResponse } from '@/lib/meetings/join-api-client';
 import { answerCallNowRingAction } from '@/app/(call)/meetings/[meetingId]/call/_actions/answer-call-now-ring';
 import { readCallNowAnswerViewAction } from '@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-answer-view';
 import { CALL_NOW_COPY, START_FAILURE_COPY } from './call-now-copy';
+import { takeAnswerIntent } from './answer-intent';
 import { callNowFundingRequest } from './call-now-funding';
 import type { CallNowFundingCode } from './call-now-types';
 
@@ -167,6 +168,12 @@ export function useCallNowAnswer({
     [router, resolveGate, onOpened, onFunding, onUnavailable]
   );
 
+  /** Read through a ref so `offerAnswer`'s identity never follows the callers' inline callbacks. */
+  const commitAnswerRef = useRef(commitAnswer);
+  useEffect(() => {
+    commitAnswerRef.current = commitAnswer;
+  }, [commitAnswer]);
+
   const offerAnswer = useCallback(
     (ringId: string | undefined): void => {
       if (ringId === undefined) {
@@ -179,6 +186,13 @@ export function useCallNowAnswer({
           setAnswerRingId(ringId);
           setAnswerNotice({ callerName: view.callerName, rateLine: view.rateLine });
           onRequired();
+          if (takeAnswerIntent(meetingId) === ringId) {
+            setAnswering(true);
+            commitAnswerRef
+              .current(ringId)
+              .catch(onUnavailable)
+              .finally(() => setAnswering(false));
+          }
           return;
         }
         if (view.kind === 'wait') {
