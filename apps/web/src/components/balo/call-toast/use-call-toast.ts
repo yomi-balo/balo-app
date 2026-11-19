@@ -288,7 +288,6 @@ export function useCallToast({
   }, [view, notifications]);
 
   const join = useCallback((ring: RingingToastView): void => {
-    requestCallNotificationPermission();
     const intent = ring.lens === 'client' && ring.awaitsAnswer;
     track(CALL_NOW_EVENTS.TOAST_JOIN_CLICKED, {
       lens: ring.lens,
@@ -332,6 +331,7 @@ export function useCallToast({
 
   const dismiss = useCallback(
     (missed: MissedToastView): void => {
+      requestCallNotificationPermission();
       track(CALL_NOW_EVENTS.MISSED_TOAST_DISMISSED, { missed_count: missed.count });
       clearMissed(missed);
     },
@@ -340,6 +340,7 @@ export function useCallToast({
 
   const callBack = useCallback(
     (missed: MissedToastView): void => {
+      requestCallNotificationPermission();
       track(CALL_NOW_EVENTS.MISSED_CALL_BACK_CLICKED, { missed_count: missed.count });
       clearMissed(missed);
       if (missed.engagementId !== null) router.push(`/cases/${missed.engagementId}?call=1`);

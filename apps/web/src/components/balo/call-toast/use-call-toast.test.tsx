@@ -500,15 +500,12 @@ describe('useCallToast — Join', () => {
     expect(takeAnswerIntent('meeting-1')).toBe('ring-1');
   });
 
-  it('asks for notification permission first, inside the click', async () => {
+  it('does not ask for notification permission: Join leaves the page before anyone could answer', async () => {
     const { result, view } = await ringing({});
 
     act(() => result.current.join(view));
 
-    expect(mocks.requestPermission).toHaveBeenCalledTimes(1);
-    const [asked] = mocks.requestPermission.mock.invocationCallOrder;
-    const [tracked] = vi.mocked(track).mock.invocationCallOrder.slice(-1);
-    expect(asked).toBeLessThan(tracked ?? 0);
+    expect(mocks.requestPermission).not.toHaveBeenCalled();
   });
 
   it('an expert leaves no intent', async () => {
@@ -574,6 +571,10 @@ describe('useCallToast — the missed toast', () => {
 
     expect(markRead).toHaveBeenCalledWith(['m2', 'm1']);
     expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.MISSED_TOAST_DISMISSED, { missed_count: 2 });
+    expect(mocks.requestPermission).toHaveBeenCalledTimes(1);
+    const [asked] = mocks.requestPermission.mock.invocationCallOrder;
+    const [tracked] = vi.mocked(track).mock.invocationCallOrder.slice(-1);
+    expect(asked).toBeLessThan(tracked ?? 0);
     expect(mocks.push).not.toHaveBeenCalled();
   });
 
@@ -589,6 +590,10 @@ describe('useCallToast — the missed toast', () => {
       missed_count: 2,
     });
     expect(mocks.push).toHaveBeenCalledWith('/cases/eng-1?call=1');
+    expect(mocks.requestPermission).toHaveBeenCalledTimes(1);
+    const [asked] = mocks.requestPermission.mock.invocationCallOrder;
+    const [pushed] = mocks.push.mock.invocationCallOrder;
+    expect(asked).toBeLessThan(pushed ?? 0);
   });
 
   it('clears once the feed reports those rows read (another tab dismissed it)', async () => {

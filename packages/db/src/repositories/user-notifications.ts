@@ -1,12 +1,7 @@
 import { eq, and, isNull, isNotNull, desc, notInArray, sql } from 'drizzle-orm';
+import { CALL_TOAST_EVENTS } from '@balo/shared/notifications';
 import { db } from '../client';
 import { userNotifications, type UserNotification, type NewUserNotification } from '../schema';
-
-/**
- * Events the path sweep never reads. A call row clears by path only when it existed before the
- * visit began, which only the client knows, so the client reads those rows by id instead.
- */
-const PATH_SWEEP_EXCLUDED_EVENTS = ['call.ringing', 'call.no_answer'];
 
 export const userNotificationsRepository = {
   /**
@@ -103,7 +98,9 @@ export const userNotificationsRepository = {
           eq(userNotifications.userId, userId),
           isNull(userNotifications.readAt),
           isNull(userNotifications.deletedAt),
-          notInArray(userNotifications.event, PATH_SWEEP_EXCLUDED_EVENTS),
+          // A call row clears by path only if it existed before the visit began, which only the client
+          // knows, so the client reads those rows by id instead.
+          notInArray(userNotifications.event, [...CALL_TOAST_EVENTS]),
           sql`split_part(${userNotifications.actionUrl}, '?', 1) = ${path}`
         )
       )

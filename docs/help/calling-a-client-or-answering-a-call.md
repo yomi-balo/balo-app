@@ -78,8 +78,8 @@ While a client's call is ringing, a pop-up appears under the bell on any page, w
 **Not now**. **Join** also appears in the top bar. Choose **Join** to pick up. You go straight into
 the call room, and the client is already waiting for you. There's no extra confirm step on your
 side. Choose **Not now** and the client is told you can't talk right now. If your browser hasn't
-asked yet, the first time you choose **Join** or **Not now** it may ask whether Balo can show
-notifications, so later calls can reach you in a background tab.
+asked yet, the first time you choose **Not now**, or **Dismiss** or **Call back** on a missed call,
+it may ask whether Balo can show notifications, so later calls can reach you in a background tab.
 
 The pop-up has no close button and stays until the ring ends. If you don't pick up before the ring
 runs out, the client sees that nobody answered and nothing is charged. Time spent waiting is never

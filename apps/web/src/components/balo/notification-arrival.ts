@@ -1,3 +1,4 @@
+import { isCallToastEvent } from '@balo/shared/notifications';
 import type { NOTIFICATION_EVENTS, NotificationEventMap } from '@/lib/analytics';
 
 /**
@@ -24,11 +25,7 @@ export interface BellNotification {
 }
 
 /** The events the call toast owns: the arrival toast never announces or counts them. */
-export const CALL_TOAST_EVENTS: readonly string[] = ['call.ringing', 'call.no_answer'];
-
-export function isCallToastEvent(event: string): boolean {
-  return CALL_TOAST_EVENTS.includes(event);
-}
+export { CALL_TOAST_EVENTS, isCallToastEvent } from '@balo/shared/notifications';
 
 export interface NotificationsResponse {
   notifications: BellNotification[];

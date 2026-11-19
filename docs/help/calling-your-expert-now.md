@@ -108,7 +108,8 @@ credit first, so if a top-up is needed you'll see the **Add credit to start this
 credit lands. If it has stopped ringing by then, nothing is charged and you can call your expert
 back from the case. If answering fails for another reason, you see a message and can try again.
 **Not now** lets your expert know you can't talk right now. If your browser hasn't asked yet, the
-first time you choose **Join** or **Not now** it may ask whether Balo can show notifications.
+first time you choose **Not now**, or **Dismiss** or **Call back** on a missed call, it may ask
+whether Balo can show notifications.
 
 Opening the call page any other way, such as reloading it or using the top bar, doesn't answer for
 you. You answer by choosing **Answer** there, and the same credit check applies. From there it
