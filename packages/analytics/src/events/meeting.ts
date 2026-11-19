@@ -417,8 +417,10 @@ export interface MeetingServerEventMap {
 
   /**
    * BAL-654 — the waiting-party SMS was accepted by the provider. `audience` is the RECIPIENT's
-   * side; `seconds_after_start` is the lag from `scheduled_start`, so the ≈60 s promise is
-   * measurable. Skips and provider failures emit nothing. NO PII: ids, a closed label, a count.
+   * side; `seconds_after_start` is the lag from the meeting's `scheduled_start` — NOT from the
+   * waiting party's join — so for a waiter who joined after the start it exceeds the ≈60 s
+   * promise by the lateness of their join. Skips and provider failures emit nothing. NO PII:
+   * ids, a closed label, a count.
    */
   [MEETING_SERVER_EVENTS.WAITING_SMS_SENT]: {
     meeting_id: string;

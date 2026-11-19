@@ -12,6 +12,7 @@ import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js'
 import { maskPhone, getBrevoClient } from '../../lib/brevo.js';
 import { getSmsTemplate } from './templates/sms-templates.js';
 import { logNotification } from './log.js';
+import { WAITING_SMS_EVENTS } from '../events.js';
 import type { DeliveryPayload } from './types.js';
 
 const log = createLogger('notification-sms');
@@ -55,19 +56,17 @@ function trackCallSmsSent(payload: DeliveryPayload): void {
   }
 }
 
-const WAITING_SMS_EVENTS: ReadonlySet<string> = new Set([
-  'meeting.waiting_for_client',
-  'meeting.waiting_for_expert',
-]);
+const WAITING_SMS_EVENT_NAMES: ReadonlySet<string> = new Set(WAITING_SMS_EVENTS);
 
 /**
  * BAL-654 — `waiting_sms_sent`, once Brevo has accepted a waiting-party SMS. `distinct_id` is the
- * MEETING id: there is no acting human, the recipient is the absent party.
+ * MEETING id: there is no acting human, the recipient is the absent party. `seconds_after_start` is
+ * measured from the meeting's scheduled start, not from the waiting party's join.
  *
  * ⚠ NEVER THROWS, for the reason {@link trackCallSmsSent} gives.
  */
 function trackWaitingSmsSent(payload: DeliveryPayload): void {
-  if (!WAITING_SMS_EVENTS.has(payload.event)) {
+  if (!WAITING_SMS_EVENT_NAMES.has(payload.event)) {
     return;
   }
   const { meetingId, scheduledStartIso } = payload.payload;

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockMeetingFindById,
   mockListByMeeting,
+  mockListRings,
   mockResolveRecipients,
   mockScheduleNotification,
   mockTrackServer,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
+  mockListRings: vi.fn(),
   mockResolveRecipients: vi.fn(),
   mockScheduleNotification: vi.fn(),
   mockTrackServer: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
   meetingPresenceRepository: { listByMeeting: mockListByMeeting },
+  meetingRingsRepository: { listForMeeting: mockListRings },
   clientPartyRecipientsRepository: { resolveClientPartyRecipients: mockResolveRecipients },
   scheduledNotificationsRepository: { findByDedupeKey: mockFindByDedupeKey },
 }));
@@ -65,6 +68,7 @@ import type { ScheduledNotification } from '@balo/db';
 
 beforeEach(() => {
   mockFindByDedupeKey.mockResolvedValue([]);
+  mockListRings.mockResolvedValue([]);
 });
 
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
@@ -310,6 +314,39 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
 
     expect(result.publish).toBe(true);
     expect(result.publish && result.payload.correlationId).toBe(CORRELATION_ID);
+  });
+
+  describe('an unanswered in-place ring leaves no attendance behind', () => {
+    const CALL_NOW_ATTEMPT_PRESENCE = [
+      { party: 'client', joinedAt: at(-30), leftAt: at(-28) },
+      { party: 'expert', joinedAt: START, leftAt: null },
+    ];
+
+    it('still nudges when the client only joined during an unanswered in-place ring', async () => {
+      mockListRings.mockResolvedValue([
+        {
+          placement: 'in_place',
+          status: 'unanswered',
+          createdAt: at(-30),
+          expiresAt: at(-29),
+          endedAt: at(-29),
+        },
+      ]);
+      mockListByMeeting.mockResolvedValue(CALL_NOW_ATTEMPT_PRESENCE);
+
+      const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+      expect(result.publish).toBe(true);
+    });
+
+    it('skips client_joined_before_nudge when no ring explains that presence', async () => {
+      mockListByMeeting.mockResolvedValue(CALL_NOW_ATTEMPT_PRESENCE);
+
+      expect(await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).toEqual({
+        publish: false,
+        reason: 'client_joined_before_nudge',
+      });
+    });
   });
 
   /**
@@ -816,7 +853,7 @@ describe('BAL-410 D3 — an armed promise self-skips once its meeting is CANCELL
 });
 
 /**
- * ⚠⚠ BAL-654 (decision 10) — THE RE-ARM DEFECT. The dedupe key folds only onto PENDING rows, so
+ * ⚠⚠ BAL-654 — THE RE-ARM DEFECT. The dedupe key folds only onto PENDING rows, so
  * once a promise has fired the next sweep tick's `first_wins` call schedules a fresh one, and the
  * nudge / ops alert re-fired every minute while its condition held. An arm site must therefore
  * read the key's history and arm nothing once it is DECIDED, and the recheck must skip a second

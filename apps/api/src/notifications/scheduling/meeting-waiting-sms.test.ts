@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   meetingFindById: vi.fn(),
   listPresence: vi.fn(),
   findRinging: vi.fn(),
+  listRings: vi.fn(),
   findBooker: vi.fn(),
   bookerParticipates: vi.fn(),
   findNames: vi.fn(),
@@ -25,7 +26,10 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mocks.meetingFindById },
   meetingPresenceRepository: { listByMeeting: mocks.listPresence },
-  meetingRingsRepository: { findRingingForMeeting: mocks.findRinging },
+  meetingRingsRepository: {
+    findRingingForMeeting: mocks.findRinging,
+    listForMeeting: mocks.listRings,
+  },
   clientPartyRecipientsRepository: {
     findMeetingBookerUserId: mocks.findBooker,
     bookerStillParticipatesInCompany: mocks.bookerParticipates,
@@ -133,10 +137,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  mocks.meetingFindById.mockResolvedValue({ id: MEETING_ID, status: 'waiting_for_participants' });
+  mocks.meetingFindById.mockResolvedValue({
+    id: MEETING_ID,
+    status: 'waiting_for_participants',
+    scheduledStart: START,
+  });
   mocks.listPresence.mockResolvedValue(EXPERT_ALONE);
   mocks.meetingOrigin.mockResolvedValue('booked');
   mocks.findRinging.mockResolvedValue(undefined);
+  mocks.listRings.mockResolvedValue([]);
   mocks.findByDedupeKey.mockResolvedValue([]);
   mocks.resolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
   mocks.findBooker.mockResolvedValue(BOOKER_ID);
@@ -354,7 +363,7 @@ describe('meetingWaitingSmsRecheck — publishing', () => {
     expect(result.publish).toBe(true);
   });
 
-  it('prefers the expert profile zone, then the saved zone, then UTC', async () => {
+  it('prefers the expert profile zone, then the saved zone', async () => {
     mocks.listPresence.mockResolvedValue(CLIENT_ALONE);
     mocks.findConsent.mockResolvedValue(EXPERT_CONSENT);
     mocks.findTimezoneContext.mockResolvedValue({
@@ -371,6 +380,45 @@ describe('meetingWaitingSmsRecheck — publishing', () => {
     expect(withProfile.publish && withProfile.payload.recipientTimeZone).toBe('Australia/Sydney');
     expect(savedOnly.publish && savedOnly.payload.recipientTimeZone).toBe('Australia/Sydney');
     expect(mocks.findTimezoneContext).toHaveBeenCalledWith(EXPERT_USER_ID, PROFILE_ID);
+  });
+
+  it('an expert profile zone of UTC falls through to the saved zone', async () => {
+    mocks.listPresence.mockResolvedValue(CLIENT_ALONE);
+    mocks.findConsent.mockResolvedValue(EXPERT_CONSENT);
+    mocks.findTimezoneContext.mockResolvedValue({
+      savedTimezone: 'Australia/Perth',
+      expert: { timezone: 'Etc/UTC' },
+    });
+
+    const result = await meetingWaitingSmsRecheck(row('to_expert'));
+
+    expect(result.publish && result.payload.recipientTimeZone).toBe('Australia/Perth');
+  });
+
+  it.each([
+    ['null', null],
+    ['blank', '  '],
+    ['an invalid IANA name', 'Not/AZone'],
+    ['UTC', 'UTC'],
+    ['Etc/UTC', 'Etc/UTC'],
+  ])('publishes a null recipientTimeZone, never UTC, when the zone is %s', async (_label, zone) => {
+    mocks.findTimezoneContext.mockResolvedValue({ savedTimezone: zone, expert: null });
+    const toClient = await meetingWaitingSmsRecheck(row('to_client'));
+
+    mocks.listPresence.mockResolvedValue(CLIENT_ALONE);
+    mocks.findConsent.mockResolvedValue(EXPERT_CONSENT);
+    const toExpert = await meetingWaitingSmsRecheck(row('to_expert'));
+
+    expect(toClient.publish && toClient.payload.recipientTimeZone).toBeNull();
+    expect(toExpert.publish && toExpert.payload.recipientTimeZone).toBeNull();
+  });
+
+  it('publishes a null recipientTimeZone when the user has no timezone context at all', async () => {
+    mocks.findTimezoneContext.mockResolvedValue(undefined);
+
+    const result = await meetingWaitingSmsRecheck(row('to_client'));
+
+    expect(result.publish && result.payload.recipientTimeZone).toBeNull();
   });
 
   it('⚠ publishes EXACTLY the payload keys — a stray userId on the row never reaches the dispatcher', async () => {
@@ -437,7 +485,7 @@ describe('meetingWaitingSmsRecheck — skips', () => {
   });
 
   it.each(['ended', 'cancelled'])('skips meeting_terminal for a %s meeting', async (status) => {
-    mocks.meetingFindById.mockResolvedValue({ id: MEETING_ID, status });
+    mocks.meetingFindById.mockResolvedValue({ id: MEETING_ID, status, scheduledStart: START });
     expect(await reasonFor()).toBe('meeting_terminal');
   });
 
@@ -484,13 +532,13 @@ describe('meetingWaitingSmsRecheck — skips', () => {
 
     mocks.scheduleNotification.mockClear();
     mocks.findByDedupeKey.mockResolvedValue([
-      { id: 'old', status: 'skipped', skipReason: 'outside_hours' },
+      { id: 'old', status: 'skipped', skipReason: 'active_in_app' },
     ]);
     await scheduleWaitingPartySms(input);
     expect(mocks.scheduleNotification).not.toHaveBeenCalled();
   });
 
-  describe('owner re-resolution (F1)', () => {
+  describe('owner re-resolution', () => {
     it('skips owner_mismatch when the payload company is not the meeting owner — nothing substituted', async () => {
       mocks.deliveringOwner.mockResolvedValue({
         companyId: 'other-company',
@@ -546,6 +594,37 @@ describe('meetingWaitingSmsRecheck — skips', () => {
     expect(await reasonFor('to_expert')).toBe('absent_party_joined');
   });
 
+  describe('an unanswered in-place ring leaves no attendance behind', () => {
+    const UNANSWERED_IN_PLACE_RING = {
+      placement: 'in_place',
+      status: 'unanswered',
+      createdAt: at(-30),
+      expiresAt: at(-29),
+      endedAt: at(-29),
+    };
+
+    it('still publishes to the client when only the ring-time presence of the client exists', async () => {
+      mocks.listRings.mockResolvedValue([UNANSWERED_IN_PLACE_RING]);
+      mocks.listPresence.mockResolvedValue([
+        { party: 'client', joinedAt: at(-30), leftAt: at(-28) },
+        { party: 'expert', joinedAt: START, leftAt: null },
+      ]);
+
+      const result = await meetingWaitingSmsRecheck(row('to_client'));
+
+      expect(result.publish).toBe(true);
+    });
+
+    it('reads the raw presence as an arrival when no ring explains it', async () => {
+      mocks.listPresence.mockResolvedValue([
+        { party: 'client', joinedAt: at(-30), leftAt: at(-28) },
+        { party: 'expert', joinedAt: START, leftAt: null },
+      ]);
+
+      expect(await reasonFor('to_client')).toBe('absent_party_joined');
+    });
+  });
+
   it('an observer alone is not a waiter', async () => {
     mocks.listPresence.mockResolvedValue([{ party: 'observer', joinedAt: START, leftAt: null }]);
     expect(await reasonFor('to_client')).toBe('waiter_left');
@@ -556,7 +635,7 @@ describe('meetingWaitingSmsRecheck — skips', () => {
     expect(await reasonFor()).toBe('case_closed');
   });
 
-  describe('recipients (decision 4)', () => {
+  describe('recipients — one person, never a role', () => {
     it('skips no_booker when the meeting has no booker', async () => {
       mocks.findBooker.mockResolvedValue(null);
       expect(await reasonFor()).toBe('no_booker');
@@ -587,7 +666,7 @@ describe('meetingWaitingSmsRecheck — skips', () => {
     });
   });
 
-  describe('eligibility (decision 1) — the ring SMS gates, without the daily cap', () => {
+  describe('eligibility — the ring SMS gates, without the daily cap', () => {
     it('skips no_number without a verified number', async () => {
       mocks.findConsent.mockResolvedValue({ ...CLIENT_CONSENT, phoneVerifiedAt: null });
       expect(await reasonFor()).toBe('no_number');
@@ -603,12 +682,7 @@ describe('meetingWaitingSmsRecheck — skips', () => {
       expect(await reasonFor()).toBe('not_opted_in');
     });
 
-    it('skips outside_hours for a client whose zone is unknown (UTC)', async () => {
-      mocks.findTimezoneContext.mockResolvedValue({ savedTimezone: null, expert: null });
-      expect(await reasonFor()).toBe('outside_hours');
-    });
-
-    it('skips outside_hours for an expert at 03:00 local', async () => {
+    it('has no quiet hours: an expert at 03:00 local is still texted', async () => {
       mocks.listPresence.mockResolvedValue(CLIENT_ALONE);
       mocks.findConsent.mockResolvedValue(EXPERT_CONSENT);
       mocks.findTimezoneContext.mockResolvedValue({
@@ -617,7 +691,17 @@ describe('meetingWaitingSmsRecheck — skips', () => {
       });
       vi.setSystemTime(new Date('2026-11-19T03:00:00.000Z'));
 
-      expect(await reasonFor('to_expert')).toBe('outside_hours');
+      const result = await meetingWaitingSmsRecheck(row('to_expert'));
+
+      expect(result.publish).toBe(true);
+    });
+
+    it('has no quiet hours: a client at 03:00 local is still texted', async () => {
+      vi.setSystemTime(new Date('2026-11-18T16:00:00.000Z'));
+
+      const result = await meetingWaitingSmsRecheck(row('to_client'));
+
+      expect(result.publish).toBe(true);
     });
 
     it('logs every skip with its reason and never the phone or the name', async () => {

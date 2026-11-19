@@ -521,11 +521,21 @@ export interface MeetingWaitingSmsPayload {
   expertProfileId: string | null;
   /** The single recipient — `null` when armed, set by the recheck. Read by the `self` recipient. */
   recipientUserId: string | null;
-  /** The recipient's IANA zone for `{time}` — `null` when armed, set by the recheck. */
+  /** The recipient's IANA zone for `{time}` — `null` when armed, and when none is usable (the body then omits the time). */
   recipientTimeZone: string | null;
   /** The waiting party's display name for `{name}` — `null` when armed, set by the recheck. */
   waitingPartyName: string | null;
 }
+
+/**
+ * The two waiting-party SMS events — one per audience. The single home of the names, read by the
+ * scheduling guard, the SMS adapter's analytics and both unions below.
+ */
+export const WAITING_SMS_EVENTS = [
+  'meeting.waiting_for_client',
+  'meeting.waiting_for_expert',
+] as const;
+export type WaitingSmsEvent = (typeof WAITING_SMS_EVENTS)[number];
 
 export type NotificationEvent =
   | 'user.welcome'
@@ -741,8 +751,7 @@ export type NotificationEvent =
   | 'call.missed_email_due'
   // BAL-654: the SMS to the ABSENT party of a scheduled consultation. `waiting_for_client` = the
   // expert is waiting (texts the client); `waiting_for_expert` = the client side is waiting.
-  | 'meeting.waiting_for_client'
-  | 'meeting.waiting_for_expert';
+  | WaitingSmsEvent;
 
 /**
  * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
@@ -869,8 +878,7 @@ export type ServerOnlyNotificationEvent =
   // BAL-652: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
   | 'call.missed_email_due'
   // BAL-654: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
-  | 'meeting.waiting_for_client'
-  | 'meeting.waiting_for_expert';
+  | WaitingSmsEvent;
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;

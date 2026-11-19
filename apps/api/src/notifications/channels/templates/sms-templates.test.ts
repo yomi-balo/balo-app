@@ -257,7 +257,7 @@ describe('getSmsTemplate', () => {
     const BASE = {
       meetingId: MEETING_ID,
       scheduledStartIso: '2026-11-19T10:00:00.000Z',
-      recipientTimeZone: 'UTC',
+      recipientTimeZone: 'Australia/Sydney',
     };
 
     afterEach(() => {
@@ -269,7 +269,7 @@ describe('getSmsTemplate', () => {
       expect(
         getSmsTemplate('meeting-waiting-sms-client', { ...BASE, waitingPartyName: 'Sandy' })
       ).toBe(
-        `Balo: Sandy is waiting in your 10:00 consultation. Join: https://balo.expert/meetings/${MEETING_ID}/call`
+        `Balo: Sandy is waiting in your 21:00 consultation. Join: https://balo.expert/meetings/${MEETING_ID}/call`
       );
     });
 
@@ -281,7 +281,19 @@ describe('getSmsTemplate', () => {
           waitingPartyName: 'Northwind Industrial',
         })
       ).toBe(
-        `Balo: Northwind Industrial is waiting in your 10:00 consultation. Join: https://balo.expert/meetings/${MEETING_ID}/call`
+        `Balo: Northwind Industrial is waiting in your 21:00 consultation. Join: https://balo.expert/meetings/${MEETING_ID}/call`
+      );
+    });
+
+    it.each([
+      ['meeting-waiting-sms-client', 'Sandy'],
+      ['meeting-waiting-sms-expert', 'Northwind Industrial'],
+    ])('%s leaves the time out when the recipient has no usable zone', (template, name) => {
+      vi.stubEnv('APP_URL', 'https://balo.expert');
+      expect(
+        getSmsTemplate(template, { ...BASE, recipientTimeZone: null, waitingPartyName: name })
+      ).toBe(
+        `Balo: ${name} is waiting in your consultation. Join: https://balo.expert/meetings/${MEETING_ID}/call`
       );
     });
 
@@ -326,16 +338,23 @@ describe('getSmsTemplate', () => {
       ).toContain('your 21:00 consultation');
     });
 
-    it.each([null, 'Not/AZone', ''])('falls back to UTC for the zone %s', (zone) => {
-      expect(
-        getSmsTemplate('meeting-waiting-sms-client', { ...BASE, recipientTimeZone: zone })
-      ).toContain('your 10:00 consultation');
-    });
+    it.each([null, undefined, 42, '', '  ', 'Not/AZone', 'UTC', 'Etc/UTC'])(
+      'omits the time, never shows UTC, for the zone %s',
+      (zone) => {
+        const body = getSmsTemplate('meeting-waiting-sms-client', {
+          ...BASE,
+          recipientTimeZone: zone,
+        });
 
-    it('leaves the time empty rather than throwing on an unreadable start', () => {
+        expect(body).toContain('is waiting in your consultation. Join: ');
+        expect(body).not.toMatch(/\d{2}:\d{2}/);
+      }
+    );
+
+    it('omits the time rather than throwing on an unreadable start', () => {
       expect(
         getSmsTemplate('meeting-waiting-sms-client', { ...BASE, scheduledStartIso: 'nope' })
-      ).toContain('your  consultation');
+      ).toContain('is waiting in your consultation. Join: ');
     });
 
     it('uses the origin alone when the meeting id is missing', () => {
@@ -343,6 +362,23 @@ describe('getSmsTemplate', () => {
       expect(
         getSmsTemplate('meeting-waiting-sms-client', { ...BASE, meetingId: undefined })
       ).toMatch(/Join: https:\/\/balo\.expert$/);
+    });
+
+    it.each([
+      ['meeting-waiting-sms-client', 'Australia/Sydney'],
+      ['meeting-waiting-sms-client', null],
+      ['meeting-waiting-sms-expert', 'Australia/Sydney'],
+      ['meeting-waiting-sms-expert', null],
+    ])('%s stays within 160 characters with the zone %s', (template, zone) => {
+      vi.stubEnv('APP_URL', 'https://app.staging.balo.expert');
+
+      const body = getSmsTemplate(template, {
+        ...BASE,
+        recipientTimeZone: zone,
+        waitingPartyName: 'N'.repeat(100),
+      });
+
+      expect(body.length).toBeLessThanOrEqual(160);
     });
 
     it('keeps a 60-character name and a 31-character origin within 160 characters', () => {

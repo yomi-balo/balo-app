@@ -37,13 +37,16 @@
 import { randomUUID } from 'node:crypto';
 import {
   meetingPresenceRepository,
+  meetingRingsRepository,
   meetingsRepository,
   clientPartyRecipientsRepository,
   type Meeting,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
+import { joinWindowOpensAt } from '@balo/shared/engagements';
 import {
+  clipUnansweredRingIntervals,
   meetingVenueReadyAt,
   summarisePresence,
   venueAbsenceAnchor,
@@ -107,7 +110,7 @@ export const CLIENT_ABSENT_SKIP_REASONS = [
 export type ClientAbsentSkipReason = (typeof CLIENT_ABSENT_SKIP_REASONS)[number];
 
 /**
- * BAL-654 (decision 10) — the skip reasons after which a promise may legitimately be armed again.
+ * BAL-654 — the skip reasons after which a promise may legitimately be armed again.
  * Every other skip is final, and so is a published or claimed row: see {@link scheduledKeyDecided}.
  *
  *   · expert-absent: the room was not ready, or became ready late — the anchor moved. A terminally
@@ -141,6 +144,11 @@ function clientAbsentSkip(reason: ClientAbsentSkipReason): { publish: false; rea
  * decide), and two copies of the load-and-summarise step would be exactly the cross-file
  * duplication SonarCloud's new-code gate flags. It also means the two guards can never disagree
  * about what "the meeting's presence" is.
+ *
+ * ⚠ THE PRESENCE IS CLIPPED EXACTLY AS THE LIFECYCLE SWEEP CLIPS IT: the presence an unanswered
+ * IN-PLACE ring left behind never reads as attendance at the booking (`clipUnansweredRingIntervals`
+ * to `joinWindowOpensAt`). Every recheck and the sweep that armed it therefore agree on who has
+ * "ever been present".
  */
 export async function loadAbsenceState(
   meetingId: string
@@ -149,11 +157,19 @@ export async function loadAbsenceState(
   if (meeting === undefined) {
     return null;
   }
-  const intervals = await meetingPresenceRepository.listByMeeting(meetingId);
+  const [rows, rings] = await Promise.all([
+    meetingPresenceRepository.listByMeeting(meetingId),
+    meetingRingsRepository.listForMeeting(meetingId),
+  ]);
+  const intervals = rows.map((row) => ({
+    party: row.party,
+    joinedAt: row.joinedAt,
+    leftAt: row.leftAt,
+  }));
   return {
     meeting,
     facts: summarisePresence(
-      intervals.map((row) => ({ party: row.party, joinedAt: row.joinedAt, leftAt: row.leftAt }))
+      clipUnansweredRingIntervals(intervals, rings, joinWindowOpensAt(meeting.scheduledStart))
     ),
   };
 }
@@ -419,7 +435,7 @@ export interface ScheduleExpertAbsentAlertInput {
 export async function scheduleExpertAbsentAlert(
   input: ScheduleExpertAbsentAlertInput
 ): Promise<void> {
-  // ⚠ THE KEY FOLDS ONLY ONTO PENDING ROWS — a fired alert must not be armed again (decision 10).
+  // ⚠ THE KEY FOLDS ONLY ONTO PENDING ROWS — a fired alert must not be armed again.
   if (
     await isScheduledKeyDecided(
       expertAbsentKey(input.meetingId),

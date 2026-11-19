@@ -12,13 +12,16 @@
  * The dedupe key folds only onto PENDING rows, so a fired promise would be armed again on the
  * next sweep tick. {@link scheduleWaitingPartySms} and the recheck therefore read the key's
  * history through `scheduledKeyDecided`; a skip is re-armable only for the reasons in
- * {@link REARMABLE_WAITING_SMS_SKIP_REASONS}. `active_in_app` and `outside_hours` are FINAL for now
+ * {@link REARMABLE_WAITING_SMS_SKIP_REASONS}. `active_in_app` is FINAL for now
  * (one decision per consultation); revisit with BAL-653's real presence.
  *
- * ── ⚠ ELIGIBILITY IS THE RING SMS'S, MINUS THE DAILY CAP ────────────────────────────────────
- * Only `smsEligibility` and `isInsideSmsHours` are reused from `call-now/sms-reach.ts`. The
+ * ── ⚠ ELIGIBILITY IS THE RING SMS'S, MINUS THE DAILY CAP AND THE QUIET HOURS ────────────────
+ * Only `smsEligibility` is reused from `call-now/sms-reach.ts`, with its hours gate held open: a
+ * waiting party is texted at any hour, so `outside_hours` is never this SMS's skip reason. The
  * per-pair daily cap is NOT consumed: one-per-meeting is the dedupe key's job. The presence
  * answer is the same stub seam BAL-652 uses (`offlineCalleePresence`); real presence is BAL-653.
+ * The recipient zone only feeds the `{time}` in the body: it is `null` when there is no usable one
+ * (see `usableRecipientZone`), and the body then leaves the time out.
  *
  * ── ⚠ RECIPIENTS ARE ONE PERSON, NEVER A ROLE ────────────────────────────────────────────────
  * Client direction → the meeting's booker only, and only while they still hold `participate`.
@@ -48,14 +51,15 @@ import {
 } from '../../services/meetings/delivering-party.js';
 import { meetingOrigin } from '../../services/call-now/meeting-origin.js';
 import { offlineCalleePresence } from '../../services/call-now/callee-presence.js';
-import { isInsideSmsHours, smsEligibility } from '../../services/call-now/sms-reach.js';
-import type { MeetingWaitingSmsPayload } from '../events.js';
+import { smsEligibility } from '../../services/call-now/sms-reach.js';
+import type { MeetingWaitingSmsPayload, WaitingSmsEvent } from '../events.js';
 import {
   isCaseNoLongerActive,
   isTerminal,
   loadAbsenceState,
   meetingIdFrom,
 } from './meeting-absence.js';
+import { usableRecipientZone } from '../channels/templates/sms-templates.js';
 import type { ScheduledRecheck } from './rechecks.js';
 import { scheduleNotification } from './schedule.js';
 import { isScheduledKeyDecided } from './scheduled-key-decided.js';
@@ -76,7 +80,7 @@ export type WaitingSmsDirection = 'to_client' | 'to_expert';
 export const WAITING_SMS_EVENT_BY_DIRECTION = {
   to_client: 'meeting.waiting_for_client',
   to_expert: 'meeting.waiting_for_expert',
-} as const satisfies Record<WaitingSmsDirection, string>;
+} as const satisfies Record<WaitingSmsDirection, WaitingSmsEvent>;
 
 /**
  * Every skip the waiting-party guard records besides the ones `smsEligibility` answers — defined
@@ -99,7 +103,10 @@ export const WAITING_SMS_SKIP_REASONS = [
 ] as const;
 export type WaitingSmsSkipReason =
   | (typeof WAITING_SMS_SKIP_REASONS)[number]
-  | Extract<ReturnType<typeof smsEligibility>, { eligible: false }>['reason'];
+  | Exclude<
+      Extract<ReturnType<typeof smsEligibility>, { eligible: false }>['reason'],
+      'outside_hours'
+    >;
 
 /**
  * The skips after which the promise may be armed again: the waiter walked out before the fire
@@ -194,7 +201,7 @@ export async function scheduleWaitingPartySms(input: ScheduleWaitingPartySmsInpu
 
 interface ResolvedRecipient {
   readonly userId: string;
-  readonly timeZone: string;
+  readonly timeZone: string | null;
   readonly name: string | null;
 }
 
@@ -239,7 +246,7 @@ async function resolveBookerRecipient(
     ok: true,
     recipient: {
       userId: bookerUserId,
-      timeZone: context?.savedTimezone ?? 'UTC',
+      timeZone: usableRecipientZone(context?.savedTimezone),
       name: await expertFirstName(expertUserId),
     },
   };
@@ -262,7 +269,9 @@ async function resolveExpertRecipient(
     ok: true,
     recipient: {
       userId: expertUserId,
-      timeZone: context?.expert?.timezone ?? context?.savedTimezone ?? 'UTC',
+      timeZone:
+        usableRecipientZone(context?.expert?.timezone) ??
+        usableRecipientZone(context?.savedTimezone),
       name: company?.name ?? null,
     },
   };
@@ -306,6 +315,31 @@ export const meetingWaitingSmsRecheck: ScheduledRecheck = async (row) => {
   }
   return decision;
 };
+
+/**
+ * BAL-652's SMS gates (verified number, client opt-in, not active in the app) WITHOUT quiet hours:
+ * the recipient booked this time, so the text is expected whenever it falls. `null` = eligible.
+ */
+async function waitingSmsIneligibility(
+  calleeSide: 'client' | 'expert',
+  userId: string
+): Promise<WaitingSmsSkipReason | null> {
+  const eligibility = smsEligibility({
+    calleeSide,
+    consent: await usersRepository.findClientSmsConsent(userId),
+    calleeOnline: await offlineCalleePresence.isOnline(userId),
+    withinCallHours: true,
+  });
+  if (eligibility.eligible) {
+    return null;
+  }
+  // `withinCallHours` is held open above, so `smsEligibility` never answers `outside_hours`; the
+  // narrowing keeps that a compile-time fact rather than a cast.
+  if (eligibility.reason === 'outside_hours') {
+    throw new Error('smsEligibility answered outside_hours with withinCallHours held open');
+  }
+  return eligibility.reason;
+}
 
 async function decideWaitingSms(
   row: Parameters<ScheduledRecheck>[0]
@@ -368,15 +402,12 @@ async function decideWaitingSms(
   }
   const { userId, timeZone, name } = resolved.recipient;
 
-  const calleeSide = armed === 'to_client' ? 'client' : 'expert';
-  const eligibility = smsEligibility({
-    calleeSide,
-    consent: await usersRepository.findClientSmsConsent(userId),
-    calleeOnline: await offlineCalleePresence.isOnline(userId),
-    withinCallHours: isInsideSmsHours(new Date(), timeZone, calleeSide),
-  });
-  if (!eligibility.eligible) {
-    return waitingSkip(eligibility.reason);
+  const ineligible = await waitingSmsIneligibility(
+    armed === 'to_client' ? 'client' : 'expert',
+    userId
+  );
+  if (ineligible !== null) {
+    return waitingSkip(ineligible);
   }
 
   const payload: MeetingWaitingSmsPayload = {
