@@ -542,6 +542,34 @@ describe('userNotificationsRepository.markReadByActionPath', () => {
       .where(eq(userNotifications.id, theirs.id));
     expect(row?.readAt).toBeNull();
   });
+  it('never reads call.ringing or call.no_answer rows, while another event on the path is read', async () => {
+    const user = await userFactory();
+    const other = await insertWithUrl(user.id, '/cases/c1');
+    const ringing = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'call.ringing',
+      title: 'ringing',
+      actionUrl: '/cases/c1',
+    });
+    const missed = await userNotificationsRepository.insert({
+      userId: user.id,
+      event: 'call.no_answer',
+      title: 'missed',
+      actionUrl: '/cases/c1?from=call',
+    });
+
+    const ids = await userNotificationsRepository.markReadByActionPath(user.id, '/cases/c1');
+
+    expect(ids).toEqual([other.id]);
+    const rows = await db
+      .select({ id: userNotifications.id, readAt: userNotifications.readAt })
+      .from(userNotifications)
+      .where(eq(userNotifications.userId, user.id));
+    const readAt = (id: string) => rows.find((r) => r.id === id)?.readAt ?? null;
+    expect(readAt(other.id)).not.toBeNull();
+    expect(readAt(ringing.id)).toBeNull();
+    expect(readAt(missed.id)).toBeNull();
+  });
 });
 
 describe('userNotificationsRepository.markCallRingingReadByRingId', () => {

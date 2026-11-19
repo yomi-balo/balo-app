@@ -61,6 +61,7 @@ export async function loadIncomingCall(userId: string): Promise<IncomingCallView
       startedAtIso: ring.startedAt,
       awaitsAnswer: ring.awaitsAnswer,
       joinPath: memberCallPath(ring.meetingId),
+      serverNowIso: new Date().toISOString(),
     };
   } catch (error) {
     log.warn('Call toast could not load the incoming ring', {

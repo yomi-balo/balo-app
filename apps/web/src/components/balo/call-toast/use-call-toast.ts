@@ -4,11 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
-import { readCallNowRingAction } from '@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-ring';
+import {
+  readCallNowRingAction,
+  type ReadCallNowRingResult,
+} from '@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-ring';
 import { CALL_NOW_EVENTS, track } from '@/lib/analytics';
 import { declineCallNowRingAction } from '@/lib/call-now/actions/decline-call-now-ring';
 import { readIncomingCallAction } from '@/lib/call-now/actions/read-incoming-call';
 import { markAnswerIntent } from '@/lib/call-now/answer-intent';
+import { requestCallNotificationPermission } from '@/lib/call-now/notification-permission';
 import type { IncomingCallView } from '@/lib/call-now/call-now-types';
 import { CALL_TOAST_COPY } from '@/lib/call-now/call-toast-copy';
 import type { BellNotification } from '../notification-arrival';
@@ -49,12 +53,34 @@ function ringIdOf(row: BellNotification): string | null {
   return row.call?.ringId ?? null;
 }
 
-function viewKeyOf(view: CallToastView): string {
-  return view.mode === 'ringing' ? `ringing:${view.ringId}` : view.key;
+/**
+ * One `call_toast_shown` per ring and mode: a lapsed ring's pending-missed toast and the row that
+ * replaces it are the same missed call. A legacy row with no ring id is keyed by its content.
+ */
+function shownKeyOf(view: CallToastView): string {
+  if (view.mode === 'missed' && view.ringId === null) return view.key;
+  return `${view.mode}:${view.ringId}`;
 }
 
 function report(error: unknown): void {
   Sentry.captureException(error);
+}
+
+type SettleOutcome = 'keep' | 'missed' | 'clear';
+
+/**
+ * What a ring read means for the ringing toast. `result` is `null` when the read threw. Before the
+ * lapse, a ring still ringing or an inconclusive read (thrown, or a transient failure) keeps the
+ * toast; after it, an inconclusive read clears it rather than claim a missed call.
+ */
+function settleOutcome(result: ReadCallNowRingResult | null, lapsed: boolean): SettleOutcome {
+  if (result?.ok === true) {
+    if (result.status === 'unanswered') return 'missed';
+    if (result.status === 'ringing') return lapsed ? 'missed' : 'keep';
+    return 'clear';
+  }
+  const inconclusive = result === null || result.transient;
+  return inconclusive && !lapsed ? 'keep' : 'clear';
 }
 
 /**
@@ -77,7 +103,7 @@ export function useCallToast({
   const [pendingMissed, setPendingMissed] = useState<IncomingCallView | null>(null);
   const [declined, setDeclined] = useState<ReadonlySet<string>>(EMPTY_IDS);
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(EMPTY_IDS);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(0);
 
   const aliveRef = useRef(true);
   const mountedAtRef = useRef(Date.now());
@@ -89,6 +115,9 @@ export function useCallToast({
   const triggerByRingRef = useRef(new Map<string, ShowTrigger>());
   const shownRef = useRef(new Set<string>());
   const lateMarkedRef = useRef(new Set<string>());
+  /** Server clock minus device clock, measured when the ring was read; a skewed device clock never times the ring. */
+  const clockOffsetRef = useRef(0);
+  const serverNowMs = useCallback((): number => Date.now() + clockOffsetRef.current, []);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -101,21 +130,27 @@ export function useCallToast({
     incomingRef.current = incoming;
   }, [incoming]);
 
-  const loadIncoming = useCallback(async (trigger: ShowTrigger): Promise<void> => {
-    try {
-      const next = await readIncomingCallAction();
-      if (!aliveRef.current || next === null) return;
-      if (declinedRef.current.has(next.ringId)) return;
-      if (incomingRef.current?.ringId === next.ringId) return;
-      triggerByRingRef.current.set(next.ringId, trigger);
-      incomingRef.current = next;
-      setNowMs(Date.now());
-      setIncoming(next);
-      setPendingMissed(null);
-    } catch (error) {
-      report(error);
-    }
-  }, []);
+  const loadIncoming = useCallback(
+    async (trigger: ShowTrigger): Promise<void> => {
+      try {
+        const next = await readIncomingCallAction();
+        if (!aliveRef.current || next === null) return;
+        if (declinedRef.current.has(next.ringId)) return;
+        if (incomingRef.current?.ringId === next.ringId) return;
+        triggerByRingRef.current.set(next.ringId, trigger);
+        incomingRef.current = next;
+        // A view without a readable server time (a build that predates it) keeps the device clock.
+        const serverNow = Date.parse(next.serverNowIso);
+        clockOffsetRef.current = Number.isNaN(serverNow) ? 0 : serverNow - Date.now();
+        setNowMs(serverNowMs());
+        setIncoming(next);
+        setPendingMissed(null);
+      } catch (error) {
+        report(error);
+      }
+    },
+    [serverNowMs]
+  );
 
   useEffect(() => {
     if (impersonating !== false) return;
@@ -138,27 +173,34 @@ export function useCallToast({
     }
   }, [notifications, impersonating, loadIncoming]);
 
-  const settle = useCallback(async (view: IncomingCallView): Promise<void> => {
-    if (settlingRef.current === view.ringId) return;
-    settlingRef.current = view.ringId;
-    let missed = false;
-    try {
-      const result = await readCallNowRingAction({ ringId: view.ringId });
-      const lapsed = Date.now() >= Date.parse(view.expiresAtIso);
-      if (result.ok && result.status === 'ringing' && !lapsed) {
+  /**
+   * Confirms a ring end against the ring read. Only a definitive answer or the lapse ends the
+   * ringing toast: a thrown read or a transient failure mid-ring keeps it, and the next signal or
+   * the expiry timer reads again.
+   */
+  const settle = useCallback(
+    async (view: IncomingCallView): Promise<void> => {
+      if (settlingRef.current === view.ringId) return;
+      settlingRef.current = view.ringId;
+      const expiresAtMs = Date.parse(view.expiresAtIso);
+      let result: ReadCallNowRingResult | null = null;
+      try {
+        result = await readCallNowRingAction({ ringId: view.ringId });
+      } catch (error) {
+        report(error);
+      }
+      const outcome = settleOutcome(result, serverNowMs() >= expiresAtMs);
+      if (outcome === 'keep') {
         settlingRef.current = null;
         return;
       }
-      missed =
-        result.ok && (result.status === 'unanswered' || (result.status === 'ringing' && lapsed));
-    } catch (error) {
-      report(error);
-    }
-    if (!aliveRef.current) return;
-    setNowMs(Math.max(Date.now(), Date.parse(view.expiresAtIso)));
-    setIncoming((current) => (current?.ringId === view.ringId ? null : current));
-    if (missed && !declinedRef.current.has(view.ringId)) setPendingMissed(view);
-  }, []);
+      if (!aliveRef.current) return;
+      setNowMs(Math.max(serverNowMs(), expiresAtMs));
+      setIncoming((current) => (current?.ringId === view.ringId ? null : current));
+      if (outcome === 'missed' && !declinedRef.current.has(view.ringId)) setPendingMissed(view);
+    },
+    [serverNowMs]
+  );
 
   const incomingRingId = incoming?.ringId ?? null;
   const incomingExpiresAt = incoming?.expiresAtIso ?? null;
@@ -178,10 +220,10 @@ export function useCallToast({
     if (ringRowRead) settle(current).catch(report);
     const timer = setTimeout(
       () => settle(current).catch(report),
-      Math.max(0, Date.parse(incomingExpiresAt) - Date.now())
+      Math.max(0, Date.parse(incomingExpiresAt) - serverNowMs())
     );
     return () => clearTimeout(timer);
-  }, [incomingRingId, incomingExpiresAt, ringRowRead, settle]);
+  }, [incomingRingId, incomingExpiresAt, ringRowRead, settle, serverNowMs]);
 
   const pendingRingId = pendingMissed?.ringId ?? null;
   const pendingRowArrived = useMemo(
@@ -221,22 +263,22 @@ export function useCallToast({
 
   const view = useMemo(
     () =>
-      impersonating !== false
-        ? null
-        : selectCallToast({
+      impersonating === false
+        ? selectCallToast({
             incoming,
             pendingMissed,
             rows: notifications,
             nowMs,
             declinedRingIds: declined,
             dismissedRingIds: dismissed,
-          }),
+          })
+        : null,
     [impersonating, incoming, pendingMissed, notifications, nowMs, declined, dismissed]
   );
 
   useEffect(() => {
     if (view === null) return;
-    const key = viewKeyOf(view);
+    const key = shownKeyOf(view);
     if (shownRef.current.has(key)) return;
     shownRef.current.add(key);
     track(CALL_NOW_EVENTS.TOAST_SHOWN, {
@@ -246,6 +288,7 @@ export function useCallToast({
   }, [view, notifications]);
 
   const join = useCallback((ring: RingingToastView): void => {
+    requestCallNotificationPermission();
     const intent = ring.lens === 'client' && ring.awaitsAnswer;
     track(CALL_NOW_EVENTS.TOAST_JOIN_CLICKED, {
       lens: ring.lens,
@@ -255,6 +298,7 @@ export function useCallToast({
   }, []);
 
   const decline = useCallback((ring: RingingToastView): void => {
+    requestCallNotificationPermission();
     const next = withId(declinedRef.current, ring.ringId);
     declinedRef.current = next;
     setDeclined(next);

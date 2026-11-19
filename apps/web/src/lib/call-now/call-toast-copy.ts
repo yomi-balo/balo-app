@@ -21,6 +21,8 @@ export const CALL_TOAST_COPY = {
   missedTitle: (label: string): string => `You missed a call from ${label}`,
   missedTitleMany: (count: number, label: string): string => `${count} missed calls from ${label}`,
   missedBody: (time: string): string => `They tried to reach you at ${time}.`,
+  /** The missed title when a legacy row has neither a caller label nor a title. */
+  missedFallbackTitle: 'You missed a call',
   /** The missed body when the call's start time could not be read. */
   missedBodyNoTime: 'They tried to reach you.',
   callBack: 'Call back',

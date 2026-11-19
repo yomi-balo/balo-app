@@ -108,6 +108,44 @@ function readReadIdsCount(data: unknown): number {
   return Array.isArray(readIds) ? readIds.length : 0;
 }
 
+async function patchRead(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reads the visited path's rows on the server and returns how many were read. The path sweep
+ * skips call rows, so those are read by id; the sweep is posted only when other rows matched.
+ */
+async function autoReadOnServer(
+  path: string,
+  sweepPath: boolean,
+  callIds: readonly string[]
+): Promise<number> {
+  const [swept, ...patched] = await Promise.all([
+    sweepPath ? postJson('/api/notifications/read-by-path', { path }) : Promise.resolve(null),
+    ...callIds.map(patchRead),
+  ]);
+  return readReadIdsCount(swept) + patched.filter(Boolean).length;
+}
+
+/**
+ * Whether a row clears by visiting `path`. A call row clears only if it was already known when
+ * this visit to the path began; one that lands mid-visit stays unread, so its toast still shows.
+ */
+function clearsOnVisit(
+  n: BellNotification,
+  path: string,
+  knownAtVisitStart: ReadonlySet<string>
+): boolean {
+  if (n.readAt !== null || notificationActionPath(n.actionUrl) !== path) return false;
+  return !isCallToastEvent(n.event) || knownAtVisitStart.has(n.id);
+}
+
 /**
  * Owns the bell's fetch, polling, seen cursor, auto-read and announcement flow. Every announcement
  * decision reads refs, so the callbacks stay stable and the poll loop never restarts on a render.
@@ -135,6 +173,8 @@ export function useNotificationFeed({
   const announcedIdsRef = useRef(new Set<string>());
   const meetingSignalIdsRef = useRef<Set<string> | null>(null);
   const autoReadAttemptedRef = useRef(new Set<string>());
+  /** Row ids known when the current path visit began; `null` until the first feed response. */
+  const visitKnownIdsRef = useRef<ReadonlySet<string> | null>(null);
   const loadPendingRef = useRef(true);
   const toastKeyRef = useRef(0);
   const fetchSeqRef = useRef(0);
@@ -214,23 +254,21 @@ export function useNotificationFeed({
   const applyAutoRead = useCallback(
     (list: BellNotification[]): { list: BellNotification[]; matched: BellNotification[] } => {
       const path = pathnameRef.current;
-      const matched =
-        path && isAutoReadablePath(path) && !impersonatingRef.current
-          ? list.filter(
-              (n) =>
-                n.readAt === null &&
-                !autoReadAttemptedRef.current.has(n.id) &&
-                notificationActionPath(n.actionUrl) === path
-            )
-          : [];
+      if (!path || !isAutoReadablePath(path) || impersonatingRef.current) {
+        return { list, matched: [] };
+      }
+      const known = visitKnownIdsRef.current ?? EMPTY_IDS;
+      const matched = list.filter(
+        (n) => !autoReadAttemptedRef.current.has(n.id) && clearsOnVisit(n, path, known)
+      );
       if (matched.length === 0) return { list, matched };
 
       const ids = matched.map((n) => n.id);
       for (const id of ids) autoReadAttemptedRef.current.add(id);
       markAnnounced(ids);
+      const callIds = matched.filter((n) => isCallToastEvent(n.event)).map((n) => n.id);
       detach(
-        postJson('/api/notifications/read-by-path', { path }).then((data) => {
-          const count = readReadIdsCount(data);
+        autoReadOnServer(path, callIds.length < matched.length, callIds).then((count) => {
           if (count > 0) track(NOTIFICATION_EVENTS.AUTO_READ, { count });
         })
       );
@@ -333,7 +371,10 @@ export function useNotificationFeed({
       setImpersonating(impersonatingRef.current);
       if (data.lastSeenAt) advanceCursor(Date.parse(data.lastSeenAt));
       const cursor = cursorRef.current;
-      const { list, matched } = applyAutoRead(data.notifications ?? []);
+      const rows = data.notifications ?? [];
+      // On the first response, every row counts as known when this path visit began.
+      visitKnownIdsRef.current ??= new Set(rows.map((n) => n.id));
+      const { list, matched } = applyAutoRead(rows);
       // Rows the arrival toast must not count: auto-read matches, and the call toast's own rows.
       const excludedCount =
         cursor === null
@@ -457,6 +498,9 @@ export function useNotificationFeed({
 
   useEffect(() => {
     pathnameRef.current = pathname;
+    if (visitKnownIdsRef.current !== null) {
+      visitKnownIdsRef.current = new Set(listRef.current.map((n) => n.id));
+    }
     const { list, matched } = applyAutoRead(listRef.current);
     if (matched.length === 0) return;
     commitList(list);

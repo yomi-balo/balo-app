@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   captureException: vi.fn(),
+  requestPermission: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mocks.push }) }));
@@ -28,6 +29,9 @@ vi.mock('@/lib/call-now/actions/decline-call-now-ring', () => ({
 }));
 vi.mock('@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-ring', () => ({
   readCallNowRingAction: mocks.readRing,
+}));
+vi.mock('@/lib/call-now/notification-permission', () => ({
+  requestCallNotificationPermission: mocks.requestPermission,
 }));
 
 const NOW = Date.parse('2026-11-19T10:00:00.000Z');
@@ -46,6 +50,7 @@ function ring(overrides: Partial<IncomingCallView> = {}): IncomingCallView {
     startedAtIso: new Date(NOW).toISOString(),
     awaitsAnswer: true,
     joinPath: '/meetings/meeting-1/call',
+    serverNowIso: new Date(NOW).toISOString(),
     ...overrides,
   };
 }
@@ -296,6 +301,105 @@ describe('useCallToast — the ring ends', () => {
     expect(result.current.view).toMatchObject({ pending: false, rowIds: ['m1'] });
   });
 
+  it('logs one missed toast for a lapsed ring, though its row replaces the pending toast', async () => {
+    mocks.readIncoming.mockResolvedValue(ring());
+    const { result, rerender } = mount();
+    await flush();
+    await flush(RING_MS);
+
+    rerender({ notifications: [row('m1', 'call.no_answer')] });
+    await flush();
+
+    expect(result.current.view).toMatchObject({ pending: false, rowIds: ['m1'] });
+    expect(shownCalls().map(([, props]) => props)).toEqual([
+      { mode: 'ringing', trigger: 'load' },
+      { mode: 'missed', trigger: 'live' },
+    ]);
+  });
+
+  it('logs a later missed call from the same caller as its own toast', async () => {
+    const first = row('m1', 'call.no_answer', {}, 'ring-a');
+    const { rerender } = mount({ notifications: [first] });
+    await flush();
+
+    rerender({
+      notifications: [
+        row('m2', 'call.no_answer', { createdAt: new Date(NOW + 9_000).toISOString() }, 'ring-b'),
+        first,
+      ],
+    });
+    await flush();
+
+    expect(shownCalls()).toHaveLength(2);
+  });
+
+  it('times the ring by the server clock when the device clock runs fast', async () => {
+    mocks.readIncoming.mockResolvedValue(ring());
+    vi.setSystemTime(NOW + 20_000);
+    const { result } = mount();
+    await flush();
+
+    await flush(RING_MS - 1_000);
+
+    expect(result.current.view).toMatchObject({ mode: 'ringing', ringId: 'ring-1' });
+    expect(mocks.readRing).not.toHaveBeenCalled();
+
+    await flush(1_000);
+
+    expect(mocks.readRing).toHaveBeenCalledTimes(1);
+    expect(result.current.view).toMatchObject({ mode: 'missed', pending: true });
+  });
+
+  it('times the ring by the server clock when the device clock runs slow', async () => {
+    mocks.readIncoming.mockResolvedValue(ring());
+    vi.setSystemTime(NOW - 60_000);
+    const { result } = mount();
+    await flush();
+
+    await flush(RING_MS);
+
+    expect(mocks.readRing).toHaveBeenCalledTimes(1);
+    expect(result.current.view).toMatchObject({ mode: 'missed', pending: true });
+  });
+
+  it.each([
+    [
+      'a transient failure',
+      () => mocks.readRing.mockResolvedValueOnce({ ok: false, transient: true }),
+    ],
+    ['a thrown read', () => mocks.readRing.mockRejectedValueOnce(new Error('blip'))],
+  ])('keeps a live ring through %s mid-ring, and reads again at expiry', async (_, failOnce) => {
+    mocks.readIncoming.mockResolvedValue(ring());
+    const unread = row('r1', 'call.ringing');
+    const { result, rerender } = mount({ notifications: [unread] });
+    await flush();
+    failOnce();
+
+    rerender({ notifications: [{ ...unread, readAt: new Date(NOW).toISOString() }] });
+    await flush(1_000);
+
+    expect(mocks.readRing).toHaveBeenCalledTimes(1);
+    expect(result.current.view).toMatchObject({ mode: 'ringing', ringId: 'ring-1' });
+
+    await flush(RING_MS);
+
+    expect(mocks.readRing).toHaveBeenCalledTimes(2);
+    expect(result.current.view).toMatchObject({ mode: 'missed', pending: true });
+  });
+
+  it('clears a live ring at once on a definitive failure mid-ring', async () => {
+    mocks.readRing.mockResolvedValue({ ok: false, transient: false });
+    mocks.readIncoming.mockResolvedValue(ring());
+    const unread = row('r1', 'call.ringing');
+    const { result, rerender } = mount({ notifications: [unread] });
+    await flush();
+
+    rerender({ notifications: [{ ...unread, readAt: new Date(NOW).toISOString() }] });
+    await flush();
+
+    expect(result.current.view).toBeNull();
+  });
+
   it('drops the pending toast after the grace window when no row arrives', async () => {
     mocks.readIncoming.mockResolvedValue(ring());
     const { result } = mount();
@@ -317,6 +421,17 @@ describe('useCallToast — Not now', () => {
     const view = hook.result.current.view as RingingToastView;
     return { ...hook, view };
   }
+
+  it('asks for notification permission first, inside the click', async () => {
+    const { result, view } = await ringing();
+
+    act(() => result.current.decline(view));
+
+    expect(mocks.requestPermission).toHaveBeenCalledTimes(1);
+    const [asked] = mocks.requestPermission.mock.invocationCallOrder;
+    const [declined] = mocks.decline.mock.invocationCallOrder;
+    expect(asked).toBeLessThan(declined ?? 0);
+  });
 
   it('hides the toast immediately, tracks it and tells the caller', async () => {
     const { result, view } = await ringing();
@@ -383,6 +498,17 @@ describe('useCallToast — Join', () => {
       awaits_answer: true,
     });
     expect(takeAnswerIntent('meeting-1')).toBe('ring-1');
+  });
+
+  it('asks for notification permission first, inside the click', async () => {
+    const { result, view } = await ringing({});
+
+    act(() => result.current.join(view));
+
+    expect(mocks.requestPermission).toHaveBeenCalledTimes(1);
+    const [asked] = mocks.requestPermission.mock.invocationCallOrder;
+    const [tracked] = vi.mocked(track).mock.invocationCallOrder.slice(-1);
+    expect(asked).toBeLessThan(tracked ?? 0);
   });
 
   it('an expert leaves no intent', async () => {

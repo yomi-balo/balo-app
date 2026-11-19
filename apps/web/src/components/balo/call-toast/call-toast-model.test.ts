@@ -25,6 +25,7 @@ function ring(overrides: Partial<IncomingCallView> = {}): IncomingCallView {
     startedAtIso: '2026-11-19T09:59:30.000Z',
     awaitsAnswer: true,
     joinPath: '/meetings/meeting-1/call',
+    serverNowIso: new Date(NOW).toISOString(),
     ...overrides,
   };
 }

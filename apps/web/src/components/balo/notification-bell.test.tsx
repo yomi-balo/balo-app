@@ -1574,6 +1574,7 @@ describe('NotificationBell', () => {
         startedAtIso: new Date().toISOString(),
         awaitsAnswer: false,
         joinPath: '/meetings/meeting-1/call',
+        serverNowIso: new Date().toISOString(),
       });
       setFeed({
         notifications: [
@@ -1586,7 +1587,7 @@ describe('NotificationBell', () => {
       await flush(701);
 
       expect(callToastCard()).toHaveAttribute('data-mode', 'ringing');
-      expect(screen.getByRole('alertdialog', { name: 'Northwind is calling' })).toBeInTheDocument();
+      expect(screen.getByRole('group', { name: 'Northwind is calling' })).toBeInTheDocument();
       expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
     });
 
@@ -1692,6 +1693,89 @@ describe('NotificationBell', () => {
       expect(callToastCard()).toBeNull();
       expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
       expect(track).not.toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, expect.anything());
+    });
+
+    describe('path auto-read on the call row', () => {
+      it('leaves a missed row that lands mid-visit unread, so its toast shows', async () => {
+        nav.pathname = '/cases/case-1';
+        setFeed({ notifications: [], unreadCount: 0 });
+        render(<NotificationBell />);
+        await flush(1);
+
+        setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+        await flush(30_000);
+        await flush(701);
+
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(0);
+        expect(callsTo('/api/notifications/read-by-path')).toHaveLength(0);
+        expect(callToastCard()).toHaveAttribute('data-mode', 'missed');
+      });
+
+      it('reads a missed row already present when the visit starts, by id', async () => {
+        nav.pathname = '/cases/case-1';
+        setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+        render(<NotificationBell />);
+        await flush(701);
+
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(1);
+        expect(callsTo('/api/notifications/read-by-path')).toHaveLength(0);
+        expect(callToastCard()).toBeNull();
+        expect(track).toHaveBeenCalledWith(NOTIFICATION_EVENTS.AUTO_READ, { count: 1 });
+      });
+
+      it('reads a mid-visit missed row once the case is visited again', async () => {
+        nav.pathname = '/cases/case-1';
+        setFeed({ notifications: [], unreadCount: 0 });
+        const { rerender } = render(<NotificationBell />);
+        await flush(1);
+        setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+        await flush(30_000);
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(0);
+
+        nav.pathname = '/dashboard';
+        rerender(<NotificationBell />);
+        await flush(1);
+        nav.pathname = '/cases/case-1';
+        rerender(<NotificationBell />);
+        await flush(1);
+
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(1);
+        expect(callToastCard()).toBeNull();
+      });
+
+      it('a background case tab reads neither by path nor by id for a call row that lands', async () => {
+        nav.pathname = '/cases/case-1';
+        setFeed({ notifications: [], unreadCount: 0 });
+        render(<NotificationBell />);
+        await flush(1);
+        setVisibility('hidden');
+        document.dispatchEvent(new Event('visibilitychange'));
+
+        setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+        await flush(60_000);
+
+        expect(feedFetches().length).toBeGreaterThan(1);
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(0);
+        expect(callsTo('/api/notifications/read-by-path')).toHaveLength(0);
+      });
+
+      it('still sweeps another event on the path that lands mid-visit', async () => {
+        nav.pathname = '/cases/case-1';
+        setFeed({ notifications: [], unreadCount: 0 });
+        render(<NotificationBell />);
+        await flush(1);
+
+        setFeed({
+          notifications: [callRow(), makeNotification({ id: 'other', title: 'Other' })],
+          unreadCount: 2,
+          unseenCount: 2,
+        });
+        await flush(30_000);
+
+        const [, init] = callsTo('/api/notifications/read-by-path')[0] ?? [];
+        expect(JSON.parse(String(init?.body))).toEqual({ path: '/cases/case-1' });
+        expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(0);
+      });
     });
 
     it('renders nothing call-related while staff view as the user', async () => {

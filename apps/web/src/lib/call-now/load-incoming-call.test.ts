@@ -64,7 +64,10 @@ beforeEach(() => {
 
 describe('loadIncomingCall', () => {
   it('gives the client lens the expert first name, the rate line and the join path', async () => {
-    await expect(loadIncomingCall(USER_ID)).resolves.toEqual({
+    vi.useFakeTimers({ now: new Date('2026-11-19T10:00:05.000Z'), toFake: ['Date'] });
+    const view = await loadIncomingCall(USER_ID);
+    vi.useRealTimers();
+    expect(view).toEqual({
       ringId: 'ring-1',
       meetingId: 'meeting-1',
       engagementId: 'eng-1',
@@ -76,6 +79,7 @@ describe('loadIncomingCall', () => {
       startedAtIso: RING.startedAt,
       awaitsAnswer: true,
       joinPath: '/meetings/meeting-1/call',
+      serverNowIso: '2026-11-19T10:00:05.000Z',
     });
     expect(mockReadFirstName).toHaveBeenCalledWith('ep-1');
     expect(mockReadRateLine).toHaveBeenCalledWith('ep-1');

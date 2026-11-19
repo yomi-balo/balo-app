@@ -23,10 +23,8 @@ interface CallToastProps {
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
-const MISSED_FALLBACK_TITLE = 'You missed a call';
-
 function missedTitle(view: MissedToastView): string {
-  if (view.callerLabel === null) return view.fallbackTitle ?? MISSED_FALLBACK_TITLE;
+  if (view.callerLabel === null) return view.fallbackTitle ?? CALL_TOAST_COPY.missedFallbackTitle;
   return view.count > 1
     ? CALL_TOAST_COPY.missedTitleMany(view.count, view.callerLabel)
     : CALL_TOAST_COPY.missedTitle(view.callerLabel);
@@ -54,13 +52,11 @@ function toastTitle(view: CallToastView): string {
     : missedTitle(view);
 }
 
-/**
- * What the announcer says: the title once a call is missed. A ring is announced by the alertdialog
- * itself (its title and body are its accessible name and description), so the announcer stays
- * silent for it and the ring is heard once.
- */
-function announcementFor(view: CallToastView): string {
-  return view.mode === 'ringing' ? '' : missedTitle(view);
+/** What the assertive announcer says for a ring: its title, then its body. */
+function ringAnnouncement(view: RingingToastView): string {
+  const body = ringingBody(view);
+  const title = CALL_TOAST_COPY.incomingTitle(view.callerLabel);
+  return body === '' ? title : `${title}. ${body}`;
 }
 
 /**
@@ -69,6 +65,9 @@ function announcementFor(view: CallToastView): string {
  * It becomes MISSED in place and stays until it is dismissed, called back, or its rows are read.
  * Nothing here navigates on its own; every move is a click. There is no in-place choice here: a
  * client's Join answers the call as it is.
+ *
+ * A ring is heard once, through the assertive announcer: its card is a plain labelled `group`,
+ * which neither announces itself nor takes focus.
  */
 export function CallToast({
   view,
@@ -86,7 +85,7 @@ export function CallToast({
   useCallRingSound(ring !== null);
   useCallBrowserNotification(ring);
 
-  const announcement = view === null ? '' : announcementFor(view);
+  const missedCall = view?.mode === 'missed' ? view : null;
 
   const keepFocus = useCallback((): void => {
     const root = rootRef.current;
@@ -119,19 +118,19 @@ export function CallToast({
       ref={rootRef}
       className="absolute top-[calc(100%+0.5rem)] right-0 z-50 w-[360px] max-w-[calc(100vw-2rem)] max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:w-auto max-sm:max-w-none"
     >
-      <div
-        data-slot="call-toast-announcer"
-        aria-live={ring === null ? 'polite' : 'assertive'}
-        className="sr-only"
-      >
-        {announcement}
+      {/* Both regions stay mounted so each text change is announced, once, at its own urgency. */}
+      <div data-slot="call-toast-announcer" aria-live="assertive" className="sr-only">
+        {ring === null ? '' : ringAnnouncement(ring)}
+      </div>
+      <div data-slot="call-toast-missed-announcer" aria-live="polite" className="sr-only">
+        {missedCall === null ? '' : missedTitle(missedCall)}
       </div>
       {view !== null && (
         <motion.div
           data-slot="call-toast"
           data-mode={view.mode}
           data-animated={shouldReduceMotion ? 'false' : 'true'}
-          role={view.mode === 'missed' ? 'status' : 'alertdialog'}
+          role={view.mode === 'missed' ? 'status' : 'group'}
           aria-label={view.mode === 'missed' ? toastTitle(view) : undefined}
           aria-labelledby={view.mode === 'ringing' ? titleId : undefined}
           aria-describedby={

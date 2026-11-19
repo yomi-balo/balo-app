@@ -9,6 +9,7 @@ describe('CALL_TOAST_COPY', () => {
     expect(CALL_TOAST_COPY.missedTitleMany(2, 'Sandy')).toBe('2 missed calls from Sandy');
     expect(CALL_TOAST_COPY.missedBody('3:05 pm')).toBe('They tried to reach you at 3:05 pm.');
     expect(CALL_TOAST_COPY.callBack).toBe('Call back');
+    expect(CALL_TOAST_COPY.missedFallbackTitle).toBe('You missed a call');
     expect(CALL_TOAST_COPY.browserTitle('Sandy')).toBe('Sandy is calling');
     expect(CALL_TOAST_COPY.browserBody('Flow migration')).toBe(
       'Flow migration. Open Balo to join.'

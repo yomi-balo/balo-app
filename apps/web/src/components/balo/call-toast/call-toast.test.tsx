@@ -104,7 +104,7 @@ describe('CallToast — ringing', () => {
   it('names the caller and the case, and offers Join and Not now', () => {
     setup(ringing());
 
-    const dialog = screen.getByRole('alertdialog', { name: 'Sandy is calling' });
+    const dialog = screen.getByRole('group', { name: 'Sandy is calling' });
     expect(dialog).toHaveTextContent('About Flow migration.');
     expect(screen.getByRole('button', { name: 'Join Sandy’s call' })).toHaveTextContent('Join');
     expect(screen.getByRole('button', { name: 'Not now' })).toBeInTheDocument();
@@ -124,13 +124,13 @@ describe('CallToast — ringing', () => {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
     });
 
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Sandy is calling' })).toBeInTheDocument();
   });
 
   it('shows the rate line and the 15-minute minimum to a client', () => {
     setup(ringing());
 
-    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Sandy is calling' })).toHaveTextContent(
       'From A$2.00/min · 15-minute minimum. The timer starts when you’re both in.'
     );
   });
@@ -138,7 +138,7 @@ describe('CallToast — ringing', () => {
   it('shows a client with no rate the timer line alone', () => {
     setup(ringing({ rateLine: null }));
 
-    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Sandy is calling' })).toHaveTextContent(
       'About Flow migration. The timer starts when you’re both in.'
     );
   });
@@ -148,7 +148,7 @@ describe('CallToast — ringing', () => {
       ringing({ lens: 'expert', rateLine: null, awaitsAnswer: false, callerLabel: 'Northwind' })
     );
 
-    const dialog = screen.getByRole('alertdialog', { name: 'Northwind is calling' });
+    const dialog = screen.getByRole('group', { name: 'Northwind is calling' });
     expect(dialog).toHaveTextContent('About Flow migration.');
     expect(dialog).not.toHaveTextContent('A$');
     expect(dialog).not.toHaveTextContent('timer');
@@ -188,23 +188,63 @@ describe('CallToast — ringing', () => {
     expect(mockAssign).not.toHaveBeenCalled();
   });
 
-  it('announces the call once: the alertdialog names itself, the announcer stays silent, and it rings only while ringing', () => {
+  it('announces the ring once, through the assertive announcer; the card itself announces nothing', () => {
     setup(ringing());
 
     const announcer = document.querySelector('[data-slot="call-toast-announcer"]');
-    expect(announcer).toBeEmptyDOMElement();
-    const dialog = screen.getByRole('alertdialog');
-    expect(dialog).toHaveAccessibleName('Sandy is calling');
-    expect(dialog).toHaveAccessibleDescription(/About Flow migration\./);
+    expect(announcer).toHaveAttribute('aria-live', 'assertive');
+    expect(announcer).toHaveTextContent(
+      'Sandy is calling. About Flow migration. From A$2.00/min · 15-minute minimum. The timer starts when you’re both in.'
+    );
+    const card = screen.getByRole('group', { name: 'Sandy is calling' });
+    expect(card).toHaveAccessibleDescription(/About Flow migration\./);
+    expect(card).not.toHaveAttribute('aria-live');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(
       [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"]')].filter(
         (el) => (el.textContent ?? '') !== ''
       )
-    ).toHaveLength(0);
+    ).toEqual([announcer]);
     expect(mocks.ringSound).toHaveBeenLastCalledWith(true);
     expect(mocks.browserNotification).toHaveBeenLastCalledWith(
       expect.objectContaining({ ringId: 'ring-1' })
     );
+  });
+
+  it('announces an expert ring by its title and case alone', () => {
+    setup(
+      ringing({ lens: 'expert', rateLine: null, awaitsAnswer: false, callerLabel: 'Northwind' })
+    );
+
+    expect(document.querySelector('[data-slot="call-toast-announcer"]')).toHaveTextContent(
+      /^Northwind is calling\. About Flow migration\.$/
+    );
+  });
+
+  it('moves the announcement to the polite region when the ring turns missed', () => {
+    const { rerender } = render(
+      <CallToast
+        view={ringing()}
+        onJoin={vi.fn()}
+        onDecline={vi.fn()}
+        onDismiss={vi.fn()}
+        onCallBack={vi.fn()}
+      />
+    );
+    rerender(
+      <CallToast
+        view={missed()}
+        onJoin={vi.fn()}
+        onDecline={vi.fn()}
+        onDismiss={vi.fn()}
+        onCallBack={vi.fn()}
+      />
+    );
+
+    expect(document.querySelector('[data-slot="call-toast-announcer"]')).toBeEmptyDOMElement();
+    const polite = document.querySelector('[data-slot="call-toast-missed-announcer"]');
+    expect(polite).toHaveAttribute('aria-live', 'polite');
+    expect(polite).toHaveTextContent('You missed a call from Sandy');
   });
 });
 
@@ -240,6 +280,12 @@ describe('CallToast — missed', () => {
     expect(status).toHaveTextContent('Old body');
   });
 
+  it('falls back to a plain missed-call title when the legacy row has no title either', () => {
+    setup(missed({ callerLabel: null, fallbackTitle: null, fallbackBody: null, startedAt: null }));
+
+    expect(screen.getByRole('status', { name: 'You missed a call' })).toBeInTheDocument();
+  });
+
   it('has a Dismiss X and Call back that call their handlers', async () => {
     const handlers = setup(missed());
 
@@ -270,7 +316,7 @@ describe('CallToast — empty and motion', () => {
   it('renders no card without a view', () => {
     setup(null);
 
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group')).not.toBeInTheDocument();
     expect(document.querySelector('[data-slot="call-toast"]')).toBeNull();
   });
 
@@ -331,6 +377,7 @@ describe('CallToast wired to useCallToast', () => {
     expiresAtIso: new Date(Date.now() + 60_000).toISOString(),
     startedAtIso: new Date().toISOString(),
     joinPath: '/meetings/meeting-1/call',
+    serverNowIso: new Date().toISOString(),
   };
 
   it('a client with awaitsAnswer has written the intent before the page navigates', async () => {
@@ -395,7 +442,9 @@ describe('CallToast — focus', () => {
 
     expect(trigger).not.toHaveFocus();
     expect(document.body.contains(document.activeElement)).toBe(true);
-    expect(screen.getByRole('alertdialog').contains(document.activeElement)).toBe(false);
+    expect(
+      screen.getByRole('group', { name: 'Sandy is calling' }).contains(document.activeElement)
+    ).toBe(false);
     trigger.remove();
   });
 });

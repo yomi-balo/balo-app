@@ -139,4 +139,6 @@ export interface IncomingCallView {
   startedAtIso: string;
   awaitsAnswer: boolean;
   joinPath: string;
+  /** The server's clock when the view was read; the toast times the ring from it, never the device clock. */
+  serverNowIso: string;
 }
