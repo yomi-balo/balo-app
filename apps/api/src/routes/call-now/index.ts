@@ -51,7 +51,12 @@ import {
   calleeRateLimitIdentifier,
   releaseCalleeRateLimitSlot,
 } from './guards.js';
-import { engagementIdParamsSchema, ringIdParamsSchema, startCallNowBodySchema } from './schema.js';
+import {
+  engagementIdParamsSchema,
+  ringIdParamsSchema,
+  startCallNowBodySchema,
+  startCallNowQuerySchema,
+} from './schema.js';
 
 const log = createLogger('call-now-route');
 
@@ -120,9 +125,15 @@ async function handleView(request: FastifyRequest, reply: FastifyReply): Promise
       mayRing: authorized.mayRing,
       now: new Date(),
     });
+    const reason = gates.availability.canCallNow ? null : gates.availability.reason;
+    // ⚠ A client's presence is never shown to an expert: the signal exists for the client caller
+    // deciding whether to ring an expert, and is `false` whenever the callee is the client.
+    const calleeOnline = authorized.side === 'client' && gates.calleeOnline;
     reply.code(200).send({
       canCallNow: gates.availability.canCallNow,
-      reason: gates.availability.canCallNow ? null : gates.availability.reason,
+      reason,
+      calleeOnline,
+      calleeTimeZone: reason === 'outside_hours' ? (gates.callee?.timeZone ?? null) : null,
       inPlaceCandidate:
         gates.inPlaceCandidate === null
           ? null
@@ -145,12 +156,16 @@ async function handleStart(request: FastifyRequest, reply: FastifyReply): Promis
   const body = parseBodyOr400(startCallNowBodySchema, request, reply);
   if (body === null) return;
   const { engagementId } = params;
+  // A malformed `attemptId` is dropped, never a 400: analytics must not block a call.
+  const query = startCallNowQuerySchema.safeParse(request.query);
+  const attemptId = query.success ? query.data.attemptId : undefined;
 
   try {
     const result = await startCallNow({
       engagementId,
       userId,
       inPlaceOfMeetingId: body.inPlaceOfMeetingId,
+      attemptId,
       log: request.log,
       meterCallee: (calleeUserId, callingParty) =>
         enforceBookingRateLimit(
@@ -222,6 +237,23 @@ async function meetingHasEnded(meetingId: string): Promise<boolean> {
   return meeting === undefined || meeting.status === 'ended' || meeting.status === 'cancelled';
 }
 
+/**
+ * BAL-651 — the caller's analytics correlation, handed to the caller's own room only: the web
+ * attempt id and the callee's presence at the start. ⚠ A client's presence is never shown to an
+ * expert (the same posture as the case view's `calleeOnline`), so an expert caller always reads
+ * `offline`. The callee reads `null` for both.
+ */
+function callerAnalyticsFields(
+  ring: MeetingRing,
+  role: 'caller' | 'callee'
+): { attemptId: string | null; calleePresenceAtStart: 'online' | 'offline' | null } {
+  if (role !== 'caller') {
+    return { attemptId: null, calleePresenceAtStart: null };
+  }
+  const online = ring.callerSide === 'client' && ring.calleeOnlineAtStart === true;
+  return { attemptId: ring.attemptId, calleePresenceAtStart: online ? 'online' : 'offline' };
+}
+
 async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const userId = resolveUserId(request, reply);
   if (userId === null) return;
@@ -252,8 +284,10 @@ async function handleRingRead(request: FastifyRequest, reply: FastifyReply): Pro
       placement: ring.placement,
       expiresAt: ring.expiresAt.toISOString(),
       role,
+      reachedBy: ring.reachedBy,
       awaitsAnswer,
       meetingEnded,
+      ...callerAnalyticsFields(ring, role),
     });
   } catch (error) {
     handleUnexpected(reply, error, { ringId, userId }, 'Call now ring read failed');

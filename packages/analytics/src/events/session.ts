@@ -3,6 +3,7 @@ import type {
   DebtCoveringCreditReason,
   DrawdownKey,
 } from '@balo/shared/credit';
+import type { CallNowFacts } from '@balo/shared/meetings';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) in-session drawdown / overdraft analytics.
@@ -132,6 +133,11 @@ export interface SessionServerEventMap {
      * D3's guest-admission billing and the no-show system open exist to recover.
      */
     opened_by: CreditSessionOpenedByLabel;
+    /**
+     * BAL-651 — `call_now` when a Call now ring created the session's meeting; `booked` otherwise,
+     * including a session with no meeting. Same derivation as `meeting_ended.origin`.
+     */
+    origin: CallNowFacts['origin'];
     /** = company_id. */
     distinct_id: string;
     // ── BAL-412 (ADR-1044 §7). OPTIONAL, present only on a presence-settled session. A

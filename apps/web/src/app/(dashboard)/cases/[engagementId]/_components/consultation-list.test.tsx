@@ -8,6 +8,7 @@ import type {
   CaseConsultationRowView,
   CaseConsultationStateLabel,
 } from '@/lib/cases/case-view-types';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import { ConsultationList } from './consultation-list';
 
 /**
@@ -59,6 +60,7 @@ function makeRow(overrides: Partial<CaseConsultationRowView> = {}): CaseConsulta
     // BAL-581 — row contract: `false` on every non-upcoming row (the default `state: 'held'`
     // here is one), matching what `mapCaseConsultations` actually emits.
     roomReady: false,
+    callNowNote: null,
     ...overrides,
   };
 }
@@ -914,5 +916,33 @@ describe('ConsultationList — the guest-count control (BAL-573)', () => {
       registerTrigger
     );
     expect(registerTrigger).toHaveBeenCalledWith('m-a', 'guests', expect.any(HTMLButtonElement));
+  });
+});
+
+describe('ConsultationList — the Call now note (BAL-651)', () => {
+  it('renders nothing extra for a booked consultation', () => {
+    renderList([makeRow()]);
+    expect(screen.queryByText(CALL_NOW_COPY.rowNote)).not.toBeInTheDocument();
+  });
+
+  it('renders "Unscheduled call" under the state note for an unscheduled call', () => {
+    renderList([makeRow({ state: 'cancelled', callNowNote: { kind: 'unscheduled' } })]);
+    expect(screen.getByText(CALL_NOW_COPY.rowNote)).toBeInTheDocument();
+    expect(screen.getByText('Cancelled — nothing charged')).toBeInTheDocument();
+  });
+
+  it('renders the moved line with the booked time, no money and no pill', () => {
+    renderList([
+      makeRow({ callNowNote: { kind: 'moved', bookedForIso: '2026-06-12T09:00:00.000Z' } }),
+    ]);
+    const note = screen.getByText(/^Started early — was booked for /);
+    expect(note.tagName).toBe('P');
+    expect(note.textContent).not.toMatch(/A\$|\/min/);
+  });
+
+  it('falls back to "Unscheduled call" when the booked time cannot be formatted', () => {
+    renderList([makeRow({ callNowNote: { kind: 'moved', bookedForIso: 'not-a-date' } })]);
+    expect(screen.getByText(CALL_NOW_COPY.rowNote)).toBeInTheDocument();
+    expect(screen.queryByText(/was booked for/)).not.toBeInTheDocument();
   });
 });

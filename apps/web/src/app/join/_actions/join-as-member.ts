@@ -11,6 +11,7 @@ import {
   type MemberJoinFailureReason,
 } from '@/lib/meetings/member-join-failure';
 import {
+  answerRequiredFrom,
   notOpenYetFrom,
   postMemberJoin,
   type MemberJoinResponse,
@@ -57,6 +58,8 @@ export type JoinAsMemberResult =
       reason: MemberJoinFailureReason;
       /** D16 — ISO instant the join window opens. Present ONLY with `reason: 'not_open_yet'`. */
       opensAt?: string;
+      /** BAL-651 — the ring to commit to. Present ONLY with `reason: 'answer_required'`. */
+      ringId?: string;
     };
 
 /**
@@ -127,10 +130,12 @@ export async function joinAsMemberAction(input: {
       reason,
     });
     const notOpenYet = notOpenYetFrom(result);
+    const answerRequired = answerRequiredFrom(result);
     return {
       success: false,
       reason,
       ...(notOpenYet === undefined ? {} : { opensAt: notOpenYet.opensAt }),
+      ...(answerRequired === undefined ? {} : { ringId: answerRequired.ringId }),
     };
   }
 

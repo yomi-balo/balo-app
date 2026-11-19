@@ -55,6 +55,7 @@ import {
 import { dailyRoomTeardown, type RoomTeardown } from '../daily/rooms.js';
 import { enqueueRecordingStop } from '../../jobs/recording-capture.js';
 import { endRingForHumanEnd } from '../call-now/end-ring.js';
+import { meetingOrigin } from '../call-now/meeting-origin.js';
 import { isReleasedSettlementCode } from '../credit-session/released-settlement-codes.js';
 import { settleSessionlessCaseMeeting } from '../credit-session/settle-sessionless-case-meeting.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
@@ -449,6 +450,7 @@ export async function emitMeetingEnded(input: {
     leftAt: row.leftAt,
   }));
   const ceiling = meeting.endedAt ?? now;
+  const origin = await meetingOrigin(meeting.id);
   // Presence is stored at its TRUE instants (Rule A); the two duration figures below are measured over
   // intervals CLAMPED to the scheduled start, exactly as they always were.
   const clocks = computeMeetingClocks(
@@ -468,6 +470,7 @@ export async function emitMeetingEnded(input: {
     participant_count: rows.length,
     outcome: meeting.outcome,
     ended_by: endedBy,
+    origin,
     distinct_id: actorUserId ?? meeting.id,
   });
 }

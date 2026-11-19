@@ -102,6 +102,7 @@ describe('useBookingFunding', () => {
     ['company', request({ caseChoice: { kind: 'new', companyId: 'company-2' } })],
     ['case', request({ caseChoice: { kind: 'existing', engagementId: 'engagement-1' } })],
     ['expert', request({ expertProfileId: 'expert-2' })],
+    ['ring', request({ ringId: '66666666-6666-4666-8666-666666666666' })],
   ])(
     'reads again when the %s changes, clearing the old view while it loads',
     async (_label, next) => {

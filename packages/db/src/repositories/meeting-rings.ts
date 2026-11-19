@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   exists,
@@ -14,8 +15,10 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import type { CallRingFacts } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
+  auditEvents,
   engagements,
   meetings,
   meetingContexts,
@@ -37,6 +40,9 @@ import { isUniqueViolation } from './experts';
 import { assertEveryEdgeLegal, END_MEETING_FROM, IN_PROGRESS_FROM } from './meetings';
 
 /** The partial unique index that allows at most one `ringing` ring per case. */
+/** The window `countCallerRingsToCallee` looks back over. */
+const RING_COUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const ONE_RINGING_PER_ENGAGEMENT_IDX = 'meeting_ring_one_ringing_per_engagement_idx';
 
 /**
@@ -60,6 +66,13 @@ export interface StartRingInput {
   expiresAt: Date;
   /** The instant the ring starts, written to `created_at`. Defaults to the database clock. */
   now?: Date;
+  /**
+   * BAL-651 — the web client's per-tap attempt id, for `call_now_ring_ended` only. `null` when
+   * the request carried none or an invalid one. Never an authorization input.
+   */
+  attemptId: string | null;
+  /** BAL-651 — the presence gate's answer at the start, unmasked. Server analytics only. */
+  calleeOnlineAtStart: boolean;
 }
 
 /** A committed ring start. `expertProfileId` is whose availability to rebuild, if anyone's. */
@@ -147,6 +160,8 @@ async function insertRingTx(
       placement: input.placement,
       reachedBy: input.reachedBy,
       expiresAt: input.expiresAt,
+      attemptId: input.attemptId,
+      calleeOnlineAtStart: input.calleeOnlineAtStart,
       ...(input.now === undefined ? {} : { createdAt: input.now }),
     })
     .returning();
@@ -543,6 +558,32 @@ export const meetingRingsRepository = {
   },
 
   /**
+   * BAL-651 — how many live rings `callerUserId` placed to `calleeUserId` in the rolling 24 hours
+   * ending at `endingAt`: `created_at` in `[endingAt − 24 h, endingAt]`, both ends INCLUSIVE,
+   * whatever their status or case. Feeds `call_now_ring_ended.attempt_number_today`, where
+   * `endingAt` is the ring's own `created_at`, so the ring counts itself. Rides
+   * `meeting_ring_caller_idx`.
+   */
+  async countCallerRingsToCallee(
+    input: { callerUserId: string; calleeUserId: string; endingAt: Date },
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await exec
+      .select({ value: count() })
+      .from(meetingRings)
+      .where(
+        and(
+          eq(meetingRings.callerUserId, input.callerUserId),
+          eq(meetingRings.calleeUserId, input.calleeUserId),
+          gte(meetingRings.createdAt, new Date(input.endingAt.getTime() - RING_COUNT_WINDOW_MS)),
+          lte(meetingRings.createdAt, input.endingAt),
+          isNull(meetingRings.deletedAt)
+        )
+      );
+    return row?.value ?? 0;
+  },
+
+  /**
    * What happened between a caller and a callee at or after `since`: the missed-call email's
    * recheck. Read from Postgres (the ring rows), never Redis.
    *
@@ -721,6 +762,88 @@ export const meetingRingsRepository = {
       .from(meetingRings)
       .where(and(eq(meetingRings.meetingId, meetingId), isNull(meetingRings.deletedAt)))
       .orderBy(asc(meetingRings.createdAt), asc(meetingRings.id));
+  },
+
+  /**
+   * BAL-651 — the batched twin of `listForMeeting`: every live ring on any of `meetingIds`,
+   * reduced to the lifecycle facts and tagged with its meeting, oldest first. Rides
+   * `meeting_ring_meeting_idx`. `[]` for an empty input, with no query.
+   */
+  async listFactsForMeetings(
+    meetingIds: string[],
+    exec: DbExecutor = db
+  ): Promise<Array<CallRingFacts & { meetingId: string }>> {
+    if (meetingIds.length === 0) {
+      return [];
+    }
+    return exec
+      .select({
+        meetingId: meetingRings.meetingId,
+        placement: meetingRings.placement,
+        status: meetingRings.status,
+        createdAt: meetingRings.createdAt,
+        expiresAt: meetingRings.expiresAt,
+        endedAt: meetingRings.endedAt,
+      })
+      .from(meetingRings)
+      .where(and(inArray(meetingRings.meetingId, meetingIds), isNull(meetingRings.deletedAt)))
+      .orderBy(asc(meetingRings.createdAt), asc(meetingRings.id));
+  },
+
+  /**
+   * BAL-651 — for each meeting a Call now connected IN PLACE of a booking, the start that booking
+   * was held for. The ring row does not keep it; the `meeting.rescheduled` audit row the connect
+   * wrote (`reason: 'call_now_connected'`) does, as an ISO string in jsonb. The newest such row
+   * wins. Meetings with no such ring, or no parsable audit row, are absent. Rides
+   * `audit_events_entity_idx`. `[]` for an empty input, with no query.
+   */
+  async listInPlaceBookedStarts(
+    meetingIds: string[],
+    exec: DbExecutor = db
+  ): Promise<Array<{ meetingId: string; bookedStart: Date }>> {
+    if (meetingIds.length === 0) {
+      return [];
+    }
+    const inPlaceMeetings = exec
+      .select({ meetingId: meetingRings.meetingId })
+      .from(meetingRings)
+      .where(
+        and(
+          inArray(meetingRings.meetingId, meetingIds),
+          eq(meetingRings.placement, 'in_place'),
+          eq(meetingRings.status, 'connected'),
+          isNull(meetingRings.deletedAt)
+        )
+      );
+    const rows = await exec
+      .select({
+        meetingId: auditEvents.entityId,
+        previousScheduledStart: sql<
+          string | null
+        >`${auditEvents.metadata}->>'previousScheduledStart'`,
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, 'meeting'),
+          inArray(auditEvents.entityId, inPlaceMeetings),
+          eq(auditEvents.action, 'meeting.rescheduled'),
+          sql`${auditEvents.metadata}->>'reason' = 'call_now_connected'`
+        )
+      )
+      .orderBy(desc(auditEvents.createdAt), desc(auditEvents.seq));
+
+    const newestByMeeting = new Map<string, Date>();
+    for (const row of rows) {
+      if (newestByMeeting.has(row.meetingId) || row.previousScheduledStart === null) {
+        continue;
+      }
+      const parsed = new Date(row.previousScheduledStart);
+      if (!Number.isNaN(parsed.getTime())) {
+        newestByMeeting.set(row.meetingId, parsed);
+      }
+    }
+    return [...newestByMeeting].map(([meetingId, bookedStart]) => ({ meetingId, bookedStart }));
   },
 
   /**

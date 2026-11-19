@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SESSION_EVENTS, SESSION_SERVER_EVENTS } from './session';
+import { SESSION_EVENTS, SESSION_SERVER_EVENTS, type SessionServerEventMap } from './session';
 
 // Values do NOT share a feature prefix, so the guard uses the GENERIC snake_case matcher.
 const SNAKE_CASE = /^[a-z]+(_[a-z]+)*$/;
@@ -53,5 +53,24 @@ describe('SESSION_SERVER_EVENTS (server)', () => {
     for (const value of Object.values(SESSION_SERVER_EVENTS)) {
       expect(value).toMatch(SNAKE_CASE);
     }
+  });
+
+  it('`session_settled.origin` is required and is `call_now` or `booked` (BAL-651)', () => {
+    const base: Omit<SessionServerEventMap['session_settled'], 'origin'> = {
+      session_id: 'session-1',
+      company_id: 'company-1',
+      outcome: 'success',
+      overdraft_settled_minor: 0,
+      opened_by: 'client',
+      distinct_id: 'company-1',
+    };
+    const origins = (['call_now', 'booked'] as const).map(
+      (origin): SessionServerEventMap['session_settled'] => ({ ...base, origin })
+    );
+    // @ts-expect-error — `origin` is required: an emitter cannot leave it out.
+    const missing: SessionServerEventMap['session_settled'] = base;
+
+    expect(origins.map((p) => p.origin)).toEqual(['call_now', 'booked']);
+    expect(missing).not.toHaveProperty('origin');
   });
 });

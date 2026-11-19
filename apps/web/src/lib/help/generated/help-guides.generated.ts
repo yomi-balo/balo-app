@@ -612,6 +612,204 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "calling-a-client-or-answering-a-call",
+    "title": "Calling a client or answering a call",
+    "summary": "Start an unscheduled call from a case, what happens while it rings and how to pick up when a client calls you.",
+    "audience": [
+      "expert"
+    ],
+    "category": {
+      "expert": "calls-cases"
+    },
+    "order": 3,
+    "updated": "2026-11-19",
+    "related": [
+      "your-cases",
+      "joining-a-call"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Not every conversation needs a booking. From a case you can call your client straight away, and a\nclient can call you the same way. This guide covers both sides.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Calling a client",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Open the case and look at the client's card. <strong>Call now</strong> sits at the bottom of it. You won't always\nsee it. Instead, the card may show one quiet line that says why:</p>\n<ul>\n<li>\"{company} is in another call\" — try again in a little while.</li>\n<li>\"It's {time} for {company} — book a time instead\" — it's outside their usual hours. The time is\ntheirs, not yours.</li>\n</ul>\n<p>If neither line is there and there's no button, Call now isn't available on this case right now.</p>\n<p>Choosing <strong>Call now</strong> opens <strong>Call {company} now?</strong> On a phone, it slides up from the bottom of the\nscreen. It reads: \"We'll let {company} know you're calling. They see your rate before they join, and\nthe timer starts when you're both in. Waiting isn't counted on an unscheduled call.\" They see it as\na starting rate, \"From A$x/min\", with the 15-minute minimum. Choose <strong>Call now</strong> to go ahead, or\n<strong>Not now</strong> to leave it.</p>\n<p>Starting a call isn't checked against the client's credit. The client company is checked when they\nanswer, and if it can't cover the 15-minute minimum they're asked to add credit before they join.\nTheir balance is never shown to you.</p>\n<p>Your call rings the person who booked the case. A colleague at {company} is never rung, and if\nthey open the call page they wait until the call connects.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "While it rings",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You wait in the call room on <strong>Calling {company}</strong>: \"We've let {company} know. Waiting isn't counted\non an unscheduled call — the timer starts once you're both in.\" A line underneath counts down: \"We'll\nkeep trying for {n} more seconds.\"</p>\n<p>The client may also get a text with a link to join, but only if they've opted in to text updates and\nhave a verified phone number, and only within their usual hours. Balo limits how many texts you can\nsend the same person in a day. When a text goes out, the call keeps ringing for up to two minutes\ninstead of under one.</p>\n<p>Choose <strong>Stop calling</strong> to end the attempt. You go back to the case, and nothing is counted or\ncharged.</p>\n<p>When the client picks up, you go straight into the call. See <a href=\"/help/joining-a-call\">Joining a call</a>\nfor what the call looks like and how it ends.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "If nobody answers",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If the client doesn't pick up, you see <strong>No answer from {company}</strong>: \"Nothing was counted or\ncharged. {company} will see that you called.\" A missed call shows up as a bell item for them\nstraight away, and if you haven't spoken by then they get one email about ten minutes later. Several\nmissed calls in a row share that one email.</p>\n<p>If they choose <strong>Not now</strong>, the heading reads \"{company} can't talk right now\" and the message is\njust \"Nothing was counted or charged.\" A call they turned down leaves no missed-call item or email.\nThe same goes if you stop calling yourself.</p>\n<p>Choose <strong>Back to the case</strong> to carry on there. There's nothing to cancel. To arrange a time instead,\nmessage the client from the case.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "When a client calls you",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>While a client's call is ringing, <strong>Join</strong> appears in the top bar on any page. Choose it to pick up.\nYou go straight into the call room, and the client is already waiting for you. There's no extra\nconfirm step on your side.</p>\n<p>If you don't pick up before the ring runs out, the client sees that nobody answered and nothing is\ncharged. Time spent waiting is never counted on an unscheduled call. You get a bell item for the\nmissed call and, about ten minutes later, one email, unless you've spoken by then.</p>\n<p>You may also get a text with a link to join, if you have a verified phone number and you're not\nalready online in Balo.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "Where the call shows up",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Back on the case, a call that wasn't booked is marked <strong>Unscheduled call</strong> in the list of\nconsultations. When a client used it in place of a booking from earlier today, the note reads\n\"Started early — was booked for {time}\". See <a href=\"/help/your-cases\">Your cases</a> for the rest of the\nlist.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
+    "slug": "calling-your-expert-now",
+    "title": "Calling your expert now",
+    "summary": "Start a call from a case without booking a time, what the confirm screen tells you, what happens if your expert is away and what to do if they call you first.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "calls"
+    },
+    "order": 3,
+    "updated": "2026-11-19",
+    "related": [
+      "booking-a-consultation",
+      "your-cases",
+      "joining-a-call",
+      "buying-credit"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Sometimes it's quicker to talk now than to find a time. From a case you can call your expert\nstraight away. They get the call, and if they pick up, you're in a call together within moments.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "Where to find it",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Open the case and look at your expert's card. <strong>Call now</strong> sits at the bottom of it. When your\nexpert is online, the card also shows an <strong>Online</strong> indicator.</p>\n<p>You won't always see the button. Instead, the card may show one quiet line that says why:</p>\n<ul>\n<li>\"{name} is in another call\" — try again in a little while, or book a time.</li>\n<li>\"It's {time} for {name} — book a time instead\" — it's outside their usual hours. The time is\ntheirs, not yours.</li>\n</ul>\n<p>If neither line is there and there's no button, Call now isn't available on this case right now.</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "The confirm screen",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Choosing <strong>Call now</strong> opens <strong>Call {name} now?</strong> On a phone, it slides up from the bottom of the\nscreen. It shows the rate your expert starts from and the minimum, for example \"From A$4.20/min ·\n15-minute minimum. The timer starts when you're both in.\"</p>\n<p><strong>When your expert is online</strong>, the screen says: \"{name} is online. We'll let them know you're\ncalling and you'll wait in the call room. If {name} doesn't pick up, nothing is charged.\" Choose\n<strong>Call now</strong> to go ahead, or <strong>Not now</strong> to leave it.</p>\n<p><strong>When your expert isn't online</strong>, the screen says so: \"{name} isn't online right now. We'll send a\ntext, but they may not see it in time. If they don't pick up, nothing is charged — booking a time\nis the surer way to talk.\" The main button becomes <strong>Book a time</strong>, which takes you to booking on\nthe same case. Choose <strong>Call anyway</strong> if you'd rather try. If booking isn't available for this\nexpert, <strong>Call anyway</strong> is the main button and <strong>Not now</strong> sits beside it.</p>\n<h3>If you already have a booking today</h3>\n<p>When you have another consultation booked later today on the same case, the confirm screen offers\n<strong>Use this call in place of today's {time} consultation</strong>, ticked by default. The note underneath\nreads: \"No extra credit is needed for this call, and the later slot is released.\" Untick it to keep\nyour booking and make this a separate call, which is checked for credit like any other.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "If your company needs more credit first",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Before the call starts, Balo checks that your company can cover the 15-minute minimum. If it can't,\nyou see <strong>Add credit to start this call</strong>. What happens next depends on your role:</p>\n<ul>\n<li><strong>You can manage billing.</strong> You can top up right there and the call starts as soon as the credit\nlands. When the top-up can't be done from this screen, <strong>Add credit</strong> takes you to the top-up page.</li>\n<li><strong>You're on a team without billing access.</strong> You see <strong>A billing admin needs to add credit</strong>, with\nthe name of your company. Ask someone who can top up, or choose <strong>Book a time</strong> instead.</li>\n</ul>\n<p>Choose <strong>Back</strong> to return to the confirm screen. See <a href=\"/help/buying-credit\">Buying credit</a> for how\ntop-ups work.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "While it rings",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>You wait in the call room on <strong>Calling {name}</strong>. It reads: \"We've let {name} know. Nothing is\ncharged while you wait — the timer starts once you're both in.\" If your expert was reached by text\ninstead, it says \"We've texted {name}\". A line underneath counts down: \"We'll keep trying for {n}\nmore seconds.\"</p>\n<p>Your expert gets a text when they aren't online, have a verified phone number and it's within their\nusual hours. Balo also limits how many texts one person can send another in a day. When a text goes\nout, the call keeps ringing for up to two minutes instead of under one.</p>\n<p>You can leave at any point with <strong>Stop calling</strong>. Nothing is charged and you go back to the case.</p>\n<p>When your expert picks up, you go straight into the call. See <a href=\"/help/joining-a-call\">Joining a call</a>\nfor what the call looks like and how it ends. The timer starts once you're both in.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 5,
+        "title": "If nobody answers",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If your expert doesn't pick up, you see <strong>No answer from {name}</strong>: \"Nothing was charged. {name} will\nsee that you called.\" A missed call shows up as a bell item for them straight away, and if you\nhaven't spoken by then they get one email about ten minutes later. Several missed calls in a row\nshare that one email.</p>\n<p>If they choose <strong>Not now</strong>, the heading reads \"{name} can't talk right now\" and the message is just\n\"Nothing was charged.\" A call they turned down leaves no missed-call item or email. The same goes if\nyou stop calling yourself.</p>\n<p>Choose <strong>Book a time</strong> to find a slot with them, or <strong>Back to the case</strong>. There's nothing to cancel.</p>",
+            "id": "s5-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 6,
+        "title": "If your expert calls you",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Your expert can start a call too. While it's ringing, <strong>Join</strong> appears in the top bar on any page.\nIf you've asked for text updates, Balo may also text you a link that opens the case.</p>\n<p>Choosing <strong>Join</strong> takes you to the call page, which says <strong>{name} is calling</strong> and shows the same\n\"From\" rate and minimum as the confirm screen. You answer by choosing <strong>Answer</strong> there. Opening the\npage doesn't answer for you. Balo checks your company's credit when you choose <strong>Answer</strong>, so if a\ntop-up is needed you'll see the same <strong>Add credit to start this call</strong> screen first (its <strong>Back</strong>\ntakes you to the case). While the call is still ringing, it goes ahead as soon as the credit lands.\nIf it has stopped ringing by then, nothing is charged and you can call your expert back from the\ncase. If answering fails for another reason, you see a message and <strong>Answer</strong> stays where it is, so\nyou can try again. From there it works like any other call.</p>\n<p>Only the person being called answers. If a colleague at your company opens the call page, they see\n<strong>Waiting for the call to connect</strong> and the call opens for them as soon as it connects. If you miss\nthe call, you get a bell item and, about ten minutes later, one email.</p>",
+            "id": "s6-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 7,
+        "title": "Where the call shows up",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Back on the case, a call that wasn't booked is marked <strong>Unscheduled call</strong> in the list of\nconsultations. If you used it in place of a booking from earlier today, the note reads \"Started\nearly — was booked for {time}\". See <a href=\"/help/your-cases\">Your cases</a> for the rest of the list.</p>",
+            "id": "s7-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "connecting-your-calendar",
     "title": "Connecting your calendar",
     "summary": "Link Google or Microsoft so busy times block bookings and new consultations land on your calendar.",
@@ -1190,7 +1388,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "calls-cases"
     },
     "order": 2,
-    "updated": "2026-11-11",
+    "updated": "2026-11-19",
     "related": [
       "booking-a-consultation",
       "your-cases"
@@ -1209,7 +1407,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Join opens 3 minutes before the scheduled start and stays available until 30 minutes after the\nscheduled end, or until the call itself ends. Try earlier and you'll see \"This call isn't open yet\n— you can join from {time}.\" — the time is shown in your device's timezone, and you can come back\nto the same page when it arrives.</p>\n<p>On your project request page, <strong>Join</strong> also appears in the conversation header once a call with your\nexpert is booked. It opens at the same time and shows a countdown until then.</p>\n<p><strong>Join from anywhere.</strong> Once a call is 3 minutes from starting, <strong>Join</strong> also appears in the top bar\non any page, so you don't need to find the case first. The bar shows calls for the workspace you're\nin, plus calls you host as an expert. If more than one call is open, the latest to start gets the\nbutton and <strong>+N</strong> lists the others. When a call's room is still being set up, the bar shows \"Setting\nup room\" until it's ready.</p>\n<p>If you're signed in to Balo and you're part of the consultation, opening the link takes you\nstraight in. There's no name or email step.</p>\n<p>Before you enter, you get a quick camera-and-sound check headed <strong>Ready to join?</strong> Choose <strong>Join\nnow</strong> when you're set. If your camera is blocked in your browser, you can still join. Tick <strong>Skip\nthis next time</strong> and Balo takes you straight into the call on this device from then on.</p>\n<p>Consultations are recorded and may be transcribed, and you're told before you go in: \"This\nconsultation is recorded and may be transcribed.\"</p>",
+            "html": "<p>Join opens 3 minutes before the scheduled start and stays available until 30 minutes after the\nscheduled end, or until the call itself ends. Try earlier and you'll see \"This call isn't open yet\n— you can join from {time}.\" — the time is shown in your device's timezone, and you can come back\nto the same page when it arrives. A call started without a booking has no join window to wait for:\nit's marked <strong>Unscheduled call</strong> on the case, and <strong>Join</strong> opens the call room while it's ringing.</p>\n<p>On your project request page, <strong>Join</strong> also appears in the conversation header once a call with your\nexpert is booked. It opens at the same time and shows a countdown until then.</p>\n<p><strong>Join from anywhere.</strong> Once a call is 3 minutes from starting, <strong>Join</strong> also appears in the top bar\non any page, so you don't need to find the case first. The bar shows calls for the workspace you're\nin, plus calls you host as an expert. If more than one call is open, the latest to start gets the\nbutton and <strong>+N</strong> lists the others. When a call's room is still being set up, the bar shows \"Setting\nup room\" until it's ready.</p>\n<p>If you're signed in to Balo and you're part of the consultation, opening the link takes you\nstraight in. There's no name or email step.</p>\n<p>Before you enter, you get a quick camera-and-sound check headed <strong>Ready to join?</strong> Choose <strong>Join\nnow</strong> when you're set. If your camera is blocked in your browser, you can still join. Tick <strong>Skip\nthis next time</strong> and Balo takes you straight into the call on this device from then on.</p>\n<p>Consultations are recorded and may be transcribed, and you're told before you go in: \"This\nconsultation is recorded and may be transcribed.\"</p>",
             "id": "s1-b0"
           }
         ],
@@ -2390,6 +2588,81 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     ]
   },
   {
+    "slug": "what-a-call-costs",
+    "title": "What a call costs",
+    "summary": "How the 15-minute minimum works on an unscheduled call, why nothing is charged unless you both join and what you need on your account first.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "credit-billing"
+    },
+    "order": 3,
+    "updated": "2026-11-19",
+    "related": [
+      "booking-a-consultation",
+      "buying-credit",
+      "joining-a-call"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>Sometimes it's quicker to talk now than to find a time. When you or your expert start a call on an\nopen case without a booking, a few simple rules decide what it costs.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "The 15-minute minimum",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>An unscheduled call is billed for at least 15 minutes, the same as any consultation. After that,\nyou're billed for the time you actually spend together, down to the minute. The rate your expert\nstarts from is shown before you confirm, for example \"From A$4.20/min · 15-minute minimum\".</p>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 2,
+        "title": "Nothing is charged unless you both join",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>The clock starts once you're both in the call room. If your expert doesn't pick up, declines or the\ncall is stopped before you connect, nothing is charged. The same goes the other way: if you're the\none who is called and you don't answer, no time is billed and no charge appears on your account.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 3,
+        "title": "What you need before a call",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Balo checks that your company can cover the minimum before the call starts.</p>\n<ul>\n<li><strong>A card on file.</strong> If your company has a card saved for automatic charging and nothing left\nunpaid from an earlier call, you're ready. Any time beyond your balance is charged to the card\nafter the call. While an earlier call is left unpaid, a top-up is needed first, even with a card.</li>\n<li><strong>Credit.</strong> Otherwise, your company needs enough credit for 15 minutes with your expert, on top\nof what your upcoming booked consultations will need. If it falls short, Balo shows how\nmuch to add. See <a href=\"/help/buying-credit\">Buying credit</a>.</li>\n</ul>\n<p>If your expert calls you, Balo runs the same check when you choose <strong>Answer</strong> on the call page, so you\nalways know before you join. If you need to top up first, the call keeps ringing while you do. If it\nis still ringing once the credit lands, the call goes ahead. If it has stopped by then, nothing is\ncharged and you can call your expert back from the case.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": null
+      },
+      {
+        "n": 4,
+        "title": "Calling in place of a booking",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If you have a consultation booked for later today on the same case, you can start the call in place\nof it. You're billed once, for the call, and the later slot is freed up. No extra credit is needed,\nbecause the booking was already checked when you made it. If the call isn't answered, your booking\nstays exactly as it was.</p>\n<p>To find out how to join once the call is under way, see <a href=\"/help/joining-a-call\">Joining a call</a>.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": null
+      }
+    ]
+  },
+  {
     "slug": "what-happens-after-you-apply",
     "title": "What happens after you apply",
     "summary": "How we review applications and what happens either way.",
@@ -2669,7 +2942,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "calls-cases"
     },
     "order": 1,
-    "updated": "2026-11-06",
+    "updated": "2026-11-19",
     "related": [
       "booking-a-consultation",
       "joining-a-call",
@@ -2689,7 +2962,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The list is company-wide: it shows every case your company has booked with an expert, not just\nthe ones you started yourself.</p>\n<p>Your next consultation is promoted to a ticket at the top of the list, with the day, the time and\nhow long it runs. <strong>Join call</strong> appears 3 minutes before it starts and takes you straight into\nthe call — you're already signed in, so there's no name or email step. Outside that window the\nticket says when Join opens instead. Join stays available until 30 minutes after the scheduled\nend, or until the call itself ends, whichever comes first.</p>\n<p>Every other open case shows as a card with what's happening next on it:</p>\n<ul>\n<li><strong>A booked time</strong> — the day and time of the next consultation.</li>\n<li><strong>\"Nothing booked\"</strong> — the case is open and waiting on a next step. <strong>Book another</strong> opens the\ncase, where you can pick a time.</li>\n<li><strong>\"No consultation booked\"</strong> — nothing has been scheduled on this case yet. <strong>Book a time</strong> gets it\nstarted.</li>\n</ul>\n<p>Two situations put a coloured band across the top of a card, because both are waiting on you:</p>\n<ul>\n<li><strong>Amber, \"{Name} suggested {n} new times\"</strong> — the expert has asked to move a booked\nconsultation. <strong>Choose a time</strong> opens the case, where you can pick one of their times or keep\nthe one you have. If you do nothing, your original time simply stands.</li>\n<li><strong>Violet, \"{Name} thinks this one's sorted\"</strong> — the expert believes the work is done and has\nasked whether you agree. <strong>Review</strong> opens the case, where you can mark it resolved or say not\nyet. Only you can close a case; an expert can only ask.</li>\n</ul>\n<p>The name on a band is the person who actually did it. If they work through an agency and aren't\nthe expert delivering your case, their agency is named after them — \"Priya @ CloudPeak\".</p>\n<p>Each card also shows how many consultations are completed, how many open action items are\nassigned to your side, and whether there are messages you haven't read.</p>\n<p>The row of dots is the case's consultation history, oldest first:</p>\n<ul>\n<li><strong>Filled</strong> — completed.</li>\n<li><strong>Outlined</strong> — booked, still to come.</li>\n<li><strong>Dashed</strong> — cancelled.</li>\n<li><strong>Solid grey</strong> — missed: the call was due, but one side didn't arrive.</li>\n<li><strong>Pale grey</strong> — the call ended, but what happened wasn't recorded.</li>\n</ul>\n<p>If you use a screen reader, the row reads as a summary — \"Consultations: 2 completed, 1 booked\".</p>\n<p><strong>Resolved</strong> holds closed cases. Each says whether it was resolved or closed automatically after\n30 days with no consultations, bookings or messages, and how many consultations were completed.\nEverything in a resolved case stays readable. <strong>Book again</strong> starts a new case with the same\nexpert, as long as they're still listed on Balo — the closed one stays as it is.</p>\n<p>Nothing here yet? <strong>Book a consultation</strong> takes you to expert search.</p>",
+            "html": "<p>The list is company-wide: it shows every case your company has booked with an expert, not just\nthe ones you started yourself.</p>\n<p>Your next consultation is promoted to a ticket at the top of the list, with the day, the time and\nhow long it runs. <strong>Join call</strong> appears 3 minutes before it starts and takes you straight into\nthe call — you're already signed in, so there's no name or email step. Outside that window the\nticket says when Join opens instead. Join stays available until 30 minutes after the scheduled\nend, or until the call itself ends, whichever comes first. A call started without a booking is\nmarked <strong>Unscheduled call</strong> in the case's list of consultations, and <strong>Join</strong> opens the call room\nstraight away while it's ringing.</p>\n<p>Every other open case shows as a card with what's happening next on it:</p>\n<ul>\n<li><strong>A booked time</strong> — the day and time of the next consultation.</li>\n<li><strong>\"Nothing booked\"</strong> — the case is open and waiting on a next step. <strong>Book another</strong> opens the\ncase, where you can pick a time.</li>\n<li><strong>\"No consultation booked\"</strong> — nothing has been scheduled on this case yet. <strong>Book a time</strong> gets it\nstarted.</li>\n</ul>\n<p>Two situations put a coloured band across the top of a card, because both are waiting on you:</p>\n<ul>\n<li><strong>Amber, \"{Name} suggested {n} new times\"</strong> — the expert has asked to move a booked\nconsultation. <strong>Choose a time</strong> opens the case, where you can pick one of their times or keep\nthe one you have. If you do nothing, your original time simply stands.</li>\n<li><strong>Violet, \"{Name} thinks this one's sorted\"</strong> — the expert believes the work is done and has\nasked whether you agree. <strong>Review</strong> opens the case, where you can mark it resolved or say not\nyet. Only you can close a case; an expert can only ask.</li>\n</ul>\n<p>The name on a band is the person who actually did it. If they work through an agency and aren't\nthe expert delivering your case, their agency is named after them — \"Priya @ CloudPeak\".</p>\n<p>Each card also shows how many consultations are completed, how many open action items are\nassigned to your side, and whether there are messages you haven't read.</p>\n<p>The row of dots is the case's consultation history, oldest first:</p>\n<ul>\n<li><strong>Filled</strong> — completed.</li>\n<li><strong>Outlined</strong> — booked, still to come.</li>\n<li><strong>Dashed</strong> — cancelled.</li>\n<li><strong>Solid grey</strong> — missed: the call was due, but one side didn't arrive.</li>\n<li><strong>Pale grey</strong> — the call ended, but what happened wasn't recorded.</li>\n</ul>\n<p>If you use a screen reader, the row reads as a summary — \"Consultations: 2 completed, 1 booked\".</p>\n<p><strong>Resolved</strong> holds closed cases. Each says whether it was resolved or closed automatically after\n30 days with no consultations, bookings or messages, and how many consultations were completed.\nEverything in a resolved case stays readable. <strong>Book again</strong> starts a new case with the same\nexpert, as long as they're still listed on Balo — the closed one stays as it is.</p>\n<p>Nothing here yet? <strong>Book a consultation</strong> takes you to expert search.</p>",
             "id": "s1-b0"
           }
         ],

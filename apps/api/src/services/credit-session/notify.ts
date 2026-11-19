@@ -34,6 +34,7 @@ import {
 } from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { notificationEvents } from '../../notifications/publisher.js';
+import { meetingOrigin } from '../call-now/meeting-origin.js';
 import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
 import {
   clearCoveredHold,
@@ -206,6 +207,7 @@ export async function publishSessionSettled(
 ): Promise<void> {
   const overdraft = session.overdraftSettledMinor ?? 0;
   const expertName = await resolveExpertName(session.expertProfileId);
+  const origin = await meetingOrigin(session.meetingId);
   await notificationEvents.publish('session.settled', {
     correlationId: `${session.id}:settled`,
     sessionId: session.id,
@@ -221,6 +223,7 @@ export async function publishSessionSettled(
     outcome: 'success',
     overdraft_settled_minor: overdraft,
     opened_by: session.openedBy,
+    origin,
     distinct_id: session.companyId,
     ...(settlementShape === undefined ? {} : { settlement_outcome: settlementShape }),
   });
@@ -462,7 +465,7 @@ export async function publishHoldDunningNotice(input: {
  */
 export async function publishSettlementFailure(input: {
   /** `openedBy` labels the analytics; the rest identify the wallet the notice is about. */
-  session: Pick<SettleableSession, 'id' | 'companyId' | 'walletId' | 'openedBy'>;
+  session: Pick<SettleableSession, 'id' | 'companyId' | 'walletId' | 'openedBy' | 'meetingId'>;
   reason: 'declined' | 'requires_action';
   amountMinor: number;
   /** The receivable that just opened — the notice's per-write identity. */
@@ -470,12 +473,14 @@ export async function publishSettlementFailure(input: {
   now: Date;
 }): Promise<void> {
   const { session, reason, amountMinor, receivableId, now } = input;
+  const origin = await meetingOrigin(session.meetingId);
   trackServer(SESSION_SERVER_EVENTS.SESSION_SETTLED, {
     session_id: session.id,
     company_id: session.companyId,
     outcome: reason === 'requires_action' ? 'requires_action' : 'fail',
     overdraft_settled_minor: amountMinor,
     opened_by: session.openedBy,
+    origin,
     distinct_id: session.companyId,
   });
   trackServer(SESSION_SERVER_EVENTS.RECEIVABLE_OPENED, {
@@ -648,14 +653,14 @@ async function readClientSideEverPresent(
   try {
     const facts = await meetingPresenceRepository.factsByMeetingIds([meetingId]);
     return facts.get(meetingId)?.clientSideEverPresent ?? null;
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.error(
       {
         op: 'publishSessionMissedCall',
         sessionId,
         meetingId,
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'Failed to read meeting presence for the missed-call notice (publishing with presence unknown)'
     );
@@ -737,17 +742,17 @@ export async function publishReceivableCleared(input: {
       cleared_by: clearedBy,
       distinct_id: companyId,
     });
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.warn(
       {
         op: 'publishReceivableCleared',
         operationId,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
         // CLAUDE.md's caught-error rule is message + STACK + ids. `join-meeting.ts` states it
         // outright ("THE STACK IS REQUIRED, NOT OPTIONAL"): without it the original throw site
         // is unrecoverable from the log, which is the whole point of logging at a boundary
         // that swallows.
-        stack: err instanceof Error ? err.stack : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'Failed to emit receivable_cleared (hold released; analytics best-effort)'
     );
@@ -762,7 +767,7 @@ export async function publishReceivableCleared(input: {
       balanceAfterMinor,
       clearedBy,
     });
-  } catch (err: unknown) {
+  } catch (error: unknown) {
     log.error(
       {
         op: 'publishReceivableCleared',
@@ -770,8 +775,8 @@ export async function publishReceivableCleared(input: {
         companyId,
         walletId,
         receivableCount,
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       },
       'Failed to publish credit.receivable.cleared (hold released; notification best-effort)'
     );

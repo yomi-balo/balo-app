@@ -28,6 +28,11 @@ export interface SettleableSession {
    * carries the label.
    */
   openedBy: CreditSessionOpenedByLabel;
+  /**
+   * BAL-651 — the session's meeting, `null` for a session with none. Carried so the settled
+   * analytics can report the meeting's `origin` (`call_now` | `booked`); never a billing input.
+   */
+  meetingId: string | null;
 }
 
 /**
@@ -42,6 +47,7 @@ export function toSettleableSession(session: SettleableSession): SettleableSessi
     expertProfileId: session.expertProfileId,
     overdraftSettledMinor: session.overdraftSettledMinor,
     openedBy: session.openedBy,
+    meetingId: session.meetingId,
   };
 }
 

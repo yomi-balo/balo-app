@@ -166,6 +166,33 @@ describe('joinAsMemberAction — the allowlisted failures (BAL-581)', () => {
     });
   });
 
+  it('⚠ BAL-651 — a `call_answer_required` hold is `answer_required` and carries the ring id, and only then', async () => {
+    const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+    mockPostMemberJoin.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'call_answer_required',
+      ringId: RING_ID,
+    });
+    await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      reason: 'answer_required',
+      ringId: RING_ID,
+    });
+
+    // Any other refusal never carries one, even if a value somehow rode along.
+    mockPostMemberJoin.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'meeting_not_open_for_join',
+      ringId: RING_ID,
+    });
+    await expect(joinAsMemberAction({ meetingId: MEETING_ID })).resolves.toEqual({
+      success: false,
+      reason: 'not_open',
+    });
+  });
+
   it('never echoes the api code or the meeting id', async () => {
     mockPostMemberJoin.mockResolvedValue({ ok: false, status: 404, code: 'meeting_not_found' });
 

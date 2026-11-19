@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
   findRingingForMeeting: vi.fn(),
   endNoAnswerMeeting: vi.fn(),
+  countCallerRingsToCallee: vi.fn(),
   meetingFindById: vi.fn(),
   reconcile: vi.fn(),
   eject: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('@balo/db', () => ({
     findById: mocks.findById,
     findRingingForMeeting: mocks.findRingingForMeeting,
     endNoAnswerMeeting: mocks.endNoAnswerMeeting,
+    countCallerRingsToCallee: mocks.countCallerRingsToCallee,
   },
   meetingsRepository: { findById: mocks.meetingFindById },
 }));
@@ -67,6 +69,7 @@ const CALLER = '11111111-1111-4111-8111-111111111111';
 const CALLEE = '55555555-5555-4555-8555-555555555555';
 const EXPERT_PROFILE_ID = '66666666-6666-4666-8666-666666666666';
 const START = new Date('2026-11-16T10:00:00.000Z');
+const ATTEMPT_ID = '99999999-9999-4999-8999-999999999999';
 const NOW = new Date('2026-11-16T10:00:45.000Z');
 const ROOM = dailyRoomNameForMeeting(MEETING_ID);
 
@@ -81,6 +84,8 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     placement: 'new_meeting',
     status: 'unanswered',
     reachedBy: 'app',
+    attemptId: ATTEMPT_ID,
+    calleeOnlineAtStart: false,
     createdAt: START,
     updatedAt: NOW,
     expiresAt: NOW,
@@ -101,6 +106,8 @@ function endedNewMeeting(status: string): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.trackServer.mockReset();
+  mocks.countCallerRingsToCallee.mockResolvedValue(1);
   mocks.deleteRoom.mockResolvedValue('deleted');
   mocks.emitMeetingEnded.mockResolvedValue(undefined);
   mocks.publish.mockResolvedValue(undefined);
@@ -190,7 +197,7 @@ describe('endRing — new_meeting', () => {
     });
 
     expect(outcome).toMatchObject({ ended: true, status: 'unanswered' });
-    expect(mocks.warn).toHaveBeenCalledTimes(5);
+    await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledTimes(5));
   });
 });
 
@@ -355,6 +362,7 @@ describe('endRing — events and analytics', () => {
 
     await endRing({ ringId: RING_ID, to, actorUserId: null, now: NOW });
 
+    await vi.waitFor(() => expect(mocks.trackServer).toHaveBeenCalled());
     expect(mocks.trackServer).toHaveBeenCalledWith('call_now_ring_ended', {
       outcome,
       ring_seconds: 45,
@@ -362,8 +370,25 @@ describe('endRing — events and analytics', () => {
       reached_by: 'app',
       placement: 'new_meeting',
       meeting_id: MEETING_ID,
+      attempt_id: ATTEMPT_ID,
+      callee_presence_at_start: 'offline',
+      in_place_of_booking: false,
+      attempt_number_today: 1,
       distinct_id: CALLER,
     });
+  });
+});
+
+describe('endRing — analytics never delays the end', () => {
+  it('⚠ a tracking call that never settles does not hold the end back', async () => {
+    mocks.repoEndRing.mockResolvedValue(endedNewMeeting('stopped'));
+    mocks.countCallerRingsToCallee.mockReturnValue(new Promise<number>(() => undefined));
+
+    const outcome = await endRing({ ringId: RING_ID, to: 'stopped', actorUserId: null, now: NOW });
+
+    expect(outcome).toMatchObject({ ended: true, status: 'stopped' });
+    expect(mocks.countCallerRingsToCallee).toHaveBeenCalled();
+    expect(mocks.trackServer).not.toHaveBeenCalled();
   });
 });
 

@@ -31,3 +31,14 @@ export const startCallNowBodySchema = z
   .strict();
 
 export type StartCallNowBody = z.infer<typeof startCallNowBodySchema>;
+
+/**
+ * BAL-651 — the `POST /cases/:engagementId/call-now` QUERY. `attemptId` is the web funnel's
+ * per-tap id. It rides the query rather than the body because the body is `.strict()`: a new web
+ * build calling an older API would otherwise get a 400 on every start, while an unknown query
+ * parameter is ignored. A value that fails to parse is dropped, never a 400: analytics must never
+ * block a call.
+ */
+export const startCallNowQuerySchema = z.object({ attemptId: z.uuid() }).partial();
+
+export type StartCallNowQuery = z.infer<typeof startCallNowQuerySchema>;

@@ -7,6 +7,15 @@ const { mockCallSessionApi, mockLogWarn } = vi.hoisted(() => ({
   mockLogWarn: vi.fn(),
 }));
 
+vi.mock('@/lib/api/balo-api-client', () => ({
+  getBaloApiJson: vi.fn(),
+  postBaloApiJson: vi.fn(),
+  postBaloApiJsonWithFailureDetail: vi.fn(),
+  readString: (body: Record<string, unknown>, key: string) =>
+    typeof body[key] === 'string' ? body[key] : undefined,
+  readInstant: (body: Record<string, unknown>, key: string) =>
+    typeof body[key] === 'string' ? body[key] : undefined,
+}));
 vi.mock('@/lib/credit/api-client', () => ({ callSessionApi: mockCallSessionApi }));
 vi.mock('@/lib/logging', () => ({
   log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },

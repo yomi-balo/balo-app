@@ -3,12 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Hourglass, Loader2, PhoneCall } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import { preloadMeetingFrame } from '@/components/balo/meetings/meeting-frame';
 import { CallNoticeWell } from '@/components/balo/meetings/call-notice-well';
-import { JoinNotOpenYetNotice, JoinRetryNotice } from '@/components/balo/meetings/join-notice-card';
+import {
+  JoinNoticeCard,
+  JoinNotOpenYetNotice,
+  JoinRetryNotice,
+} from '@/components/balo/meetings/join-notice-card';
 import { MemberJoinNotice } from '@/components/balo/meetings/member-join-notice';
 import { MeetingConnectingCard } from '@/components/balo/meetings/meeting-connecting-card';
+import { CallNowEndedCard } from '@/components/balo/meetings/call-now-ended-card';
+import { CallNowFundingStep } from '@/components/balo/call-now/call-now-funding-step';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
 import {
@@ -28,6 +36,14 @@ import { useMeetingStatePoll } from '@/lib/meetings/use-meeting-state-poll';
 import { pollIntervalFor } from '@/lib/meetings/use-admission-poll';
 import { resolveTopBarClock } from '@/lib/meetings/top-bar-clock';
 import { joinAsMemberAction } from '@/app/join/_actions/join-as-member';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
+import { useCallNowCallerRoom } from '@/lib/call-now/use-call-now-caller-room';
+import {
+  useCallNowAnswer,
+  type AnswerFundingState,
+  type AnswerNoticeFacts,
+} from '@/lib/call-now/use-call-now-answer';
+import type { CallNowCallerView } from '@/lib/call-now/call-now-types';
 import { UNKNOWN_WAITING_FACTS, type WaitingFacts } from '@/lib/meetings/waiting-copy';
 import {
   MEETING_STATE_RETRY_LABEL,
@@ -82,7 +98,20 @@ type Phase =
   | 'setting_up'
   | 'not_open'
   | 'not_open_yet'
+  | 'answer_required'
+  | 'answer_funding'
+  | 'awaiting_connect'
+  | 'answer_retry'
   | 'unavailable';
+
+/**
+ * BAL-651 — how often a colleague waiting for someone else's call re-attempts the join. The join
+ * succeeds the moment the ring connects, so this is the whole wait.
+ */
+const AWAIT_CONNECT_RETRY_MS = 5_000;
+
+/** The phases that wait on the join to be re-attempted on a timer: a colleague, or a failed who-is-this read. */
+const RE_ATTEMPT_PHASES: ReadonlySet<Phase> = new Set<Phase>(['awaiting_connect', 'answer_retry']);
 
 /**
  * D16 — the longest wait the call page will sit through on its own before re-trying at `opensAt`. Past this the
@@ -159,7 +188,196 @@ export interface CallClientProps {
    * post-join re-resolve effect for the member whose OWN join creates that row.
    */
   readonly hasBalance: boolean;
+  /**
+   * BAL-651 — the ring this viewer placed, verified server-side from `?ring=`, or `null` for an
+   * ordinary join. Non-null makes the room show "Calling" while the ring is out and an end card
+   * when it runs out or is declined.
+   */
+  readonly callNowCaller?: CallNowCallerView | null;
 }
+
+function noop(): void {}
+
+interface AnswerRequiredStepProps {
+  readonly notice: AnswerNoticeFacts | null;
+  readonly answering: boolean;
+  readonly onAnswer: () => void;
+  readonly headingRef: React.RefCallback<HTMLHeadingElement>;
+}
+
+/** BAL-651 — the notice an expert-started ring lands the client on; only its button commits. */
+function AnswerRequiredStep({
+  notice,
+  answering,
+  onAnswer,
+  headingRef,
+}: Readonly<AnswerRequiredStepProps>): React.JSX.Element {
+  if (notice === null) {
+    return (
+      <CallNoticeWell>
+        <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
+        <DashboardLink />
+      </CallNoticeWell>
+    );
+  }
+  const terms =
+    notice.rateLine === null
+      ? CALL_NOW_COPY.clientTermsNoRate
+      : CALL_NOW_COPY.clientTerms(notice.rateLine);
+  return (
+    <CallNoticeWell>
+      <JoinNoticeCard
+        icon={PhoneCall}
+        title={CALL_NOW_COPY.answerTitle(notice.callerName)}
+        body={terms}
+        headingRef={headingRef}
+      >
+        <Button
+          type="button"
+          className="mt-5 min-h-11 w-full sm:w-auto"
+          disabled={answering}
+          onClick={onAnswer}
+        >
+          {answering && <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />}
+          {CALL_NOW_COPY.answerAction}
+        </Button>
+      </JoinNoticeCard>
+      <DashboardLink />
+    </CallNoticeWell>
+  );
+}
+
+interface AnswerFundingStepProps {
+  readonly funding: AnswerFundingState;
+  readonly onFunded: (ringId: string) => Promise<boolean>;
+  readonly onBack: () => void;
+  readonly onBookInstead: () => void;
+}
+
+/** BAL-651 — the funding step that takes the room's place when the answer is refused for credit. */
+function AnswerFundingStep({
+  funding,
+  onFunded,
+  onBack,
+  onBookInstead,
+}: Readonly<AnswerFundingStepProps>): React.JSX.Element {
+  return (
+    <CallNoticeWell>
+      <div className="w-full max-w-md">
+        <CallNowFundingStep
+          request={funding.request}
+          callerLens="expert"
+          fundingCode={funding.fundingCode}
+          context="answer"
+          onFunded={() => onFunded(funding.ringId)}
+          onBack={onBack}
+          onBookInstead={onBookInstead}
+          onBusyChange={noop}
+        />
+      </div>
+    </CallNoticeWell>
+  );
+}
+
+interface AnswerStepProps {
+  readonly phase: 'answer_required' | 'answer_funding';
+  readonly notice: AnswerNoticeFacts | null;
+  readonly funding: AnswerFundingState | null;
+  readonly answering: boolean;
+  readonly onAnswer: () => void;
+  readonly onFunded: (ringId: string) => Promise<boolean>;
+  readonly onBack: () => void;
+  readonly onBookInstead: () => void;
+  readonly headingRef: React.RefCallback<HTMLHeadingElement>;
+}
+
+/** BAL-651 — whichever of the two answer states the room is in, in place of the room. */
+function AnswerStep({
+  phase,
+  notice,
+  funding,
+  answering,
+  onAnswer,
+  onFunded,
+  onBack,
+  onBookInstead,
+  headingRef,
+}: Readonly<AnswerStepProps>): React.JSX.Element {
+  if (phase === 'answer_required') {
+    return (
+      <AnswerRequiredStep
+        notice={notice}
+        answering={answering}
+        onAnswer={onAnswer}
+        headingRef={headingRef}
+      />
+    );
+  }
+  if (funding === null) {
+    return (
+      <CallNoticeWell>
+        <MemberJoinNotice reason="unavailable" headingRef={headingRef} />
+        <DashboardLink />
+      </CallNoticeWell>
+    );
+  }
+  return (
+    <AnswerFundingStep
+      funding={funding}
+      onFunded={onFunded}
+      onBack={onBack}
+      onBookInstead={onBookInstead}
+    />
+  );
+}
+
+/**
+ * BAL-651 — the neutral wait while the read that says who the viewer is to this call is retried.
+ * It never claims the call is for someone else: the viewer may be the very person being called.
+ */
+function AnswerRetryStep({
+  headingRef,
+}: Readonly<{ headingRef: React.RefCallback<HTMLHeadingElement> }>): React.JSX.Element {
+  return (
+    <CallNoticeWell>
+      <JoinNoticeCard
+        icon={Hourglass}
+        title={CALL_NOW_COPY.connectingTitle}
+        body={CALL_NOW_COPY.connectingBody}
+        headingRef={headingRef}
+      />
+      <DashboardLink />
+    </CallNoticeWell>
+  );
+}
+
+/** BAL-651 — a colleague of the person being called: never offered Answer, never a dead end. */
+function AwaitConnectStep({
+  headingRef,
+}: Readonly<{ headingRef: React.RefCallback<HTMLHeadingElement> }>): React.JSX.Element {
+  return (
+    <CallNoticeWell>
+      <JoinNoticeCard
+        icon={Hourglass}
+        title={CALL_NOW_COPY.waitConnectTitle}
+        body={CALL_NOW_COPY.waitConnectBody}
+        headingRef={headingRef}
+      />
+      <DashboardLink />
+    </CallNoticeWell>
+  );
+}
+
+/** The two waits that re-attempt the join on a timer, by phase (see {@link RE_ATTEMPT_PHASES}). */
+const WAIT_STEPS: Partial<
+  Record<
+    Phase,
+    (props: { readonly headingRef: React.RefCallback<HTMLHeadingElement> }) => React.JSX.Element
+  >
+> = {
+  awaiting_connect: AwaitConnectStep,
+  answer_retry: AnswerRetryStep,
+};
 
 export function CallClient({
   meetingId,
@@ -170,6 +388,7 @@ export function CallClient({
   chatChannelName,
   typingChannelName,
   hasBalance,
+  callNowCaller = null,
 }: Readonly<CallClientProps>): React.JSX.Element {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
@@ -183,6 +402,11 @@ export function CallClient({
   const [response, setResponse] = useState<MemberJoinResponse | null>(null);
   const [balanceAppeared, setBalanceAppeared] = useState(false);
   const [isExhausted, setIsExhausted] = useState(false);
+  /**
+   * BAL-651 — bumped on EVERY wait answer, so the re-attempt timer re-arms even when each attempt
+   * lands back on the same `awaiting_connect` phase.
+   */
+  const [awaitSeq, setAwaitSeq] = useState(0);
   const failureCountRef = useRef(0);
   /** D16 — automatic re-tries spent on the current `not_open_yet` card. */
   const notOpenYetRetriesRef = useRef(0);
@@ -196,12 +420,53 @@ export function CallClient({
    * capture a stale one; the ref is the shipped `useAdmissionPoll` pattern for the same reason.
    */
   const attemptRef = useRef<() => void>(() => {});
+  /**
+   * BAL-651 — ⚠⚠ THE CALLER'S OWN RING. `null` for an ordinary join, so nothing below polls, ticks
+   * or renders for anyone but the person who placed a Call now. The status here is the SERVER's
+   * answer (polled while `ringing`); the browser never decides a ring has run out.
+   */
+  const { endedOutcome, calling } = useCallNowCallerRoom(callNowCaller);
 
   /**
    * ⚠ FOCUS FOLLOWS THE PHASE, via the same callback-ref policy both join surfaces use — an
    * effect reading `ref.current` on a state change focuses the element that is about to unmount.
+   * The ring's end card is a state of its own, so it arms the same intent.
    */
-  const headingRef = useFocusOnTransition(phase);
+  const headingRef = useFocusOnTransition(endedOutcome ?? phase);
+
+  const handleAnswerOpened = useCallback((grant: MemberJoinResponse): void => {
+    setResponse(grant);
+    setPhase('joined');
+  }, []);
+  const handleAnswerFunding = useCallback((): void => setPhase('answer_funding'), []);
+  const handleAnswerRequired = useCallback((): void => setPhase('answer_required'), []);
+  const handleAwaitConnect = useCallback((): void => {
+    setAwaitSeq((seq) => seq + 1);
+    setPhase('awaiting_connect');
+  }, []);
+  const handleAnswerConnecting = useCallback((): void => {
+    setAwaitSeq((seq) => seq + 1);
+    setPhase('answer_retry');
+  }, []);
+  const handleAnswerUnavailable = useCallback((): void => setPhase('unavailable'), []);
+  const {
+    offerAnswer,
+    answerNotice,
+    answering,
+    answerFunding,
+    commitAnswer,
+    handleAnswer,
+    handleFundingBack,
+    handleFundingBook,
+  } = useCallNowAnswer({
+    meetingId,
+    onOpened: handleAnswerOpened,
+    onFunding: handleAnswerFunding,
+    onRequired: handleAnswerRequired,
+    onAwaitConnect: handleAwaitConnect,
+    onConnecting: handleAnswerConnecting,
+    onUnavailable: handleAnswerUnavailable,
+  });
 
   const attempt = useCallback((): void => {
     // ⚠ DELIBERATELY NOT AWAITED and NOT `void`-PREFIXED: this repo does not enable type-aware
@@ -215,6 +480,12 @@ export function CallClient({
           return;
         }
         const { reason } = result;
+        if (reason === 'answer_required') {
+          // BAL-651 — an expert-started ring awaits this client's commit. Nothing is committed
+          // here: the Answer button on this page is the explicit act that places the answer.
+          offerAnswer(result.ringId);
+          return;
+        }
         if (reason === 'account_refused') {
           // BAL-568 — the session-sync route re-reads the live row, destroys the cookie and
           // lands on /login?error=… with BAL-197's copy. ⚠ Never `logoutAction()` (it loses the
@@ -257,7 +528,7 @@ export function CallClient({
         setPhase('retrying');
         setIsExhausted(true);
       });
-  }, [meetingId]);
+  }, [meetingId, offerAnswer]);
 
   useEffect(() => {
     attemptRef.current = attempt;
@@ -293,6 +564,19 @@ export function CallClient({
     setPhase('connecting');
     attempt();
   }, [attempt]);
+
+  /*
+    BAL-651 — A COLLEAGUE WAITS FOR SOMEONE ELSE'S CALL. One timer per wait answer re-runs the join,
+    which asks the server again who this viewer is to the ring: the real callee sees Answer on the
+    next try, a colleague gets in the moment the ring connects, and a ring that ended falls into the
+    ordinary unavailable handling. A failed who-is-this read (`answer_retry`) is retried the same
+    way, so a real callee recovers to Answer. Nothing is committed here.
+  */
+  useEffect(() => {
+    if (!RE_ATTEMPT_PHASES.has(phase)) return;
+    const timer = setTimeout(() => attemptRef.current(), AWAIT_CONNECT_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [phase, awaitSeq]);
 
   /*
     D16 — WHEN THE WINDOW OPENS WHILE THE CARD IS UP, JOIN FOR THE PERSON. A bounded, single timer: it fires a beat
@@ -673,6 +957,48 @@ export function CallClient({
     return endMeetingAction({ meetingId });
   }, [meetingId]);
 
+  /*
+    BAL-651 — A RING THAT RAN OUT OR WAS DECLINED ENDS THE ROOM FOR THE CALLER, AHEAD OF EVERY JOIN
+    STATE. The meeting is closed to join once the ring ends, so a join still in flight would
+    otherwise land on "not available"; the end card says what actually happened.
+  */
+  if (callNowCaller !== null && endedOutcome !== null) {
+    return (
+      <div className="relative h-full w-full">
+        <CallNowEndedCard
+          outcome={endedOutcome}
+          calleeLabel={callNowCaller.calleeLabel}
+          copyArm={callNowCaller.copyArm}
+          bookInPage={callNowCaller.bookInPage}
+          engagementId={callNowCaller.engagementId}
+          attemptId={callNowCaller.attemptId}
+          headingRef={headingRef}
+        />
+      </div>
+    );
+  }
+
+  if (phase === 'answer_required' || phase === 'answer_funding') {
+    return (
+      <AnswerStep
+        phase={phase}
+        notice={answerNotice}
+        funding={answerFunding}
+        answering={answering}
+        onAnswer={handleAnswer}
+        onFunded={commitAnswer}
+        onBack={handleFundingBack}
+        onBookInstead={handleFundingBook}
+        headingRef={headingRef}
+      />
+    );
+  }
+
+  const WaitStep = WAIT_STEPS[phase];
+  if (WaitStep !== undefined) {
+    return <WaitStep headingRef={headingRef} />;
+  }
+
   if (phase === 'unavailable') {
     return (
       <CallNoticeWell>
@@ -747,6 +1073,7 @@ export function CallClient({
       onExit={handleExit}
       panels={panels}
       waitingPhase={waitingPhase}
+      calling={calling}
       waitingFacts={waitingFacts}
       clock={clock}
       endMeeting={endMeeting}

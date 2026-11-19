@@ -61,6 +61,7 @@ vi.mock('@/app/join/_actions/join-as-member', () => ({
 vi.mock('../_actions/send-meeting-typing', () => ({
   sendMeetingTypingAction: mockSendMeetingTypingAction,
 }));
+vi.mock('@/lib/call-now/use-call-now-surface', () => ({ useCallNowSurface: () => 'desktop' }));
 vi.mock('@/components/balo/meetings/meeting-frame', () => ({ preloadMeetingFrame: vi.fn() }));
 vi.mock('../_actions/get-meeting-state', () => ({
   getMeetingStateAction: mockGetMeetingStateAction,

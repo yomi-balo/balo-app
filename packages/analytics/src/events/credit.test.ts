@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { CREDIT_EVENTS, CREDIT_SERVER_EVENTS } from './credit';
+import { describe, it, expect, expectTypeOf } from 'vitest';
+import { CREDIT_EVENTS, CREDIT_SERVER_EVENTS, type CreditSurfaceProperty } from './credit';
 
 describe('CREDIT_EVENTS (client)', () => {
   it('has exactly the expected keys', () => {
@@ -60,5 +60,11 @@ describe('CREDIT_SERVER_EVENTS', () => {
     for (const value of Object.values(CREDIT_SERVER_EVENTS)) {
       expect(value).toMatch(/^credit_/);
     }
+  });
+});
+
+describe('CreditSurfaceProperty', () => {
+  it('names the billing composer, the booking funding block and a Call now (BAL-651)', () => {
+    expectTypeOf<'billing' | 'booking' | 'call'>().toEqualTypeOf<CreditSurfaceProperty>();
   });
 });

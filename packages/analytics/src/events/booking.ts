@@ -134,7 +134,9 @@ export type BookingSource =
    * BAL-616 — the request page's "Book a call" on a not-selected thread or a closed request,
    * which routes to the expert's profile booking (`?book=1&src=request_thread`).
    */
-  | 'request_thread';
+  | 'request_thread'
+  /** BAL-651 — the call-now confirm's "Book a time", which opens the case's in-page booking. */
+  | 'call_now';
 
 /** Whether the confirm step renders the case chooser or a FIXED case (D4a #3). */
 export type BookingEntryMode = 'chooser' | 'fixed_case';

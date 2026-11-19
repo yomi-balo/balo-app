@@ -2,12 +2,16 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { axe } from '@/test/axe';
+import userEvent from '@testing-library/user-event';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import {
   CLIENT_WAITING_BODY,
   NEUTRAL_WAITING_COPY,
   UNKNOWN_WAITING_FACTS,
+  callingCopy,
   waitingCopyFor,
   type WaitingAbsentParty,
+  type WaitingCallingView,
   type WaitingFacts,
   type WaitingPhase,
 } from '@/lib/meetings/waiting-copy';
@@ -452,5 +456,132 @@ describe('WaitingStage — ⚠ the facts reach the copy (BAL-134)', () => {
     });
 
     expect(container.textContent ?? '').not.toContain('is counted');
+  });
+});
+
+describe('WaitingStage — the calling variant (BAL-651)', () => {
+  const CALLING: WaitingCallingView = {
+    copyArm: 'client',
+    calleeLabel: 'Dana',
+    reachedBy: 'app',
+    remainingSeconds: 31,
+    onStop: vi.fn(),
+    stopping: false,
+  };
+
+  function renderCalling(overrides: Partial<WaitingCallingView> = {}): HTMLElement {
+    return render(
+      <WaitingStage
+        phase="pre-start"
+        subject={null}
+        facts={UNKNOWN_WAITING_FACTS}
+        calling={{ ...CALLING, ...overrides }}
+      />
+    ).container;
+  }
+
+  it('renders the calling title and the client body instead of the scheduled copy', () => {
+    renderCalling();
+
+    expect(screen.getByRole('heading', { name: CALL_NOW_COPY.callingTitle('Dana') })).toBeVisible();
+    expect(screen.getByText(callingCopy(CALLING).body)).toBeVisible();
+    expect(screen.queryByText(NEUTRAL_WAITING_COPY.body)).toBeNull();
+  });
+
+  it('says "texted" when the other side was reached by SMS', () => {
+    renderCalling({ reachedBy: 'sms' });
+
+    expect(screen.getByText(CALL_NOW_COPY.callingClient('Dana', true))).toBeVisible();
+  });
+
+  it('uses the expert body on the expert arm, with no charge language', () => {
+    const container = renderCalling({ copyArm: 'expert', calleeLabel: 'Northwind' });
+
+    expect(screen.getByText(CALL_NOW_COPY.callingExpert('Northwind'))).toBeVisible();
+    expect(container.textContent ?? '').not.toMatch(/charged|credit/i);
+  });
+
+  it('⚠ shows the seconds OUTSIDE the live region', () => {
+    renderCalling({ remainingSeconds: 31 });
+
+    const line = screen.getByText(CALL_NOW_COPY.ringRemaining(31));
+    expect(line).toBeVisible();
+    expect(line.closest('output')).toBeNull();
+  });
+
+  it('hides the seconds line once the ring window has passed', () => {
+    const container = renderCalling({ remainingSeconds: null });
+
+    expect(container.textContent ?? '').not.toMatch(/keep trying/i);
+  });
+
+  it('Stop calling fires the handler and is disabled while stopping', async () => {
+    const onStop = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <WaitingStage
+        phase="pre-start"
+        subject={null}
+        facts={UNKNOWN_WAITING_FACTS}
+        calling={{ ...CALLING, onStop }}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: CALL_NOW_COPY.stop }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <WaitingStage
+        phase="pre-start"
+        subject={null}
+        facts={UNKNOWN_WAITING_FACTS}
+        calling={{ ...CALLING, onStop, stopping: true }}
+      />
+    );
+    expect(screen.getByRole('button', { name: CALL_NOW_COPY.stop })).toBeDisabled();
+  });
+
+  it('⚠ shows a motion-safe spinner on Stop only while stopping (never aria-busy: it mutes the live region)', () => {
+    const { rerender } = render(
+      <WaitingStage
+        phase="pre-start"
+        subject={null}
+        facts={UNKNOWN_WAITING_FACTS}
+        calling={CALLING}
+      />
+    );
+    const idle = screen.getByRole('button', { name: CALL_NOW_COPY.stop });
+    expect(idle).not.toHaveAttribute('aria-busy');
+    expect(idle.querySelector('svg')).toBeNull();
+
+    rerender(
+      <WaitingStage
+        phase="pre-start"
+        subject={null}
+        facts={UNKNOWN_WAITING_FACTS}
+        calling={{ ...CALLING, stopping: true }}
+      />
+    );
+    const busy = screen.getByRole('button', { name: CALL_NOW_COPY.stop });
+    expect(busy).not.toHaveAttribute('aria-busy');
+    const spinner = busy.querySelector('svg');
+    expect(spinner).not.toBeNull();
+    expect(spinner?.getAttribute('class')).toContain('motion-safe:animate-spin');
+  });
+
+  it('has no Cancel anywhere and passes axe', async () => {
+    const container = renderCalling();
+
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('a null calling view leaves the shipped copy untouched', () => {
+    render(
+      <WaitingStage phase="pre-start" subject={null} facts={UNKNOWN_WAITING_FACTS} calling={null} />
+    );
+
+    expect(screen.getByRole('heading', { name: NEUTRAL_WAITING_COPY.title })).toBeVisible();
+    expect(screen.queryByRole('button', { name: CALL_NOW_COPY.stop })).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import {
   fundedPartialFollowUp,
   fundedSessionFollowUp,
   fundingBlockCopy,
+  fundingCopyFor,
   savedForLaterBody,
   staleSlotFundedFollowUp,
   PAY_AFTER_COPY,
@@ -361,5 +362,160 @@ describe('payAfterConsentLine', () => {
     expect(line).toContain("your team's low-balance setting");
     expect(line).toContain('charge this card');
     expect(line).not.toMatch(/so (that )?(the|your) card|makes? .* chargeable/i);
+  });
+});
+
+describe('fundingCopyFor', () => {
+  const BOOKING_WORDING = /\bbook/i;
+
+  function strings(value: unknown): string[] {
+    if (typeof value === 'string') return [value];
+    if (typeof value === 'function') return [];
+    if (typeof value === 'object' && value !== null) return Object.values(value).flatMap(strings);
+    return [];
+  }
+
+  const callViews: readonly [string, RefusedFundingView][] = [
+    ['a first-time setup', refusedView({ firstTime: true })],
+    ['a returning setup', refusedView({ firstTime: false })],
+    [
+      'a reserved balance',
+      refusedView({ arm: 'reserved', topUpNeededMinor: 27_500, reservedBookingCount: 2 }),
+    ],
+    ['a hold with a figure', refusedView({ arm: 'hold', topUpNeededMinor: 27_500 })],
+    ['a covered hold', refusedView({ arm: 'hold', topUpNeededMinor: null })],
+  ];
+
+  it('is the booking copy, untouched, for the booking context', () => {
+    const copy = fundingCopyFor('booking');
+    expect(copy.stage).toBe(FUNDING_STAGE_COPY);
+    expect(copy.payAfter).toBe(PAY_AFTER_COPY);
+    expect(copy.creditPending('Northwind')).toBe(creditPendingCopy('Northwind'));
+    expect(copy.consentLine('Northwind', null)).toBe(payAfterConsentLine('Northwind', null));
+    expect(copy.topUpLabel(null)).toBe('Top up & book');
+    expect(copy.topUpLabel(30_000)).toBe('Top up A$300 & book');
+    expect(copy.creditRetryLabel).toBe('Book now');
+  });
+
+  it('never says "book" in any call string a manager can reach', () => {
+    const copy = fundingCopyFor('call');
+    const everything = [
+      ...strings(copy.stage),
+      ...strings(copy.payAfter),
+      copy.creditPending('Northwind'),
+      copy.creditPending(null),
+      copy.consentLine('Northwind', null),
+      copy.consentLine('Northwind', SAVED_CARD),
+      copy.topUpLabel(null),
+      copy.topUpLabel(30_000),
+      copy.creditRetryLabel,
+      copy.payAfter.topup.description('Northwind'),
+      copy.payAfter.switchedToast('Northwind'),
+    ];
+    for (const line of everything) expect(line).not.toMatch(BOOKING_WORDING);
+  });
+
+  it.each(callViews)('has a call band for %s with no booking wording', (_label, view) => {
+    const copy = fundingCopyFor('call');
+    for (const method of ['topup', 'pay_after'] as const) {
+      const { heading, body } = copy.blockCopy(view, false, method);
+      expect(heading).not.toMatch(BOOKING_WORDING);
+      expect(body).not.toMatch(BOOKING_WORDING);
+    }
+  });
+
+  it('keeps the owner-approved reserved and hold headings in the call band', () => {
+    const copy = fundingCopyFor('call');
+    expect(
+      copy.blockCopy(refusedView({ arm: 'reserved', reservedBookingCount: 2 }), false, 'topup')
+        .heading
+    ).toBe(BALANCE_PANEL_COPY.reserved.heading.figure(BALANCE));
+    expect(
+      copy.blockCopy(refusedView({ arm: 'hold', topUpNeededMinor: 27_500 }), false, 'topup').heading
+    ).toBe(BALANCE_PANEL_COPY.hold.heading.figure(BALANCE));
+  });
+
+  it('states the figure and starts the call, rather than booking, on the hold arm', () => {
+    const { body } = fundingCopyFor('call').blockCopy(
+      refusedView({ arm: 'hold', topUpNeededMinor: 27_500 }),
+      false,
+      'topup'
+    );
+    expect(body).toContain('A$275.00');
+    expect(body).toContain('before new calls can start');
+  });
+
+  it('labels the call actions, and shifts the stage and retry to the call', () => {
+    const copy = fundingCopyFor('call');
+    expect(copy.topUpLabel(null)).toBe('Top up & call');
+    expect(copy.topUpLabel(30_000)).toBe('Top up A$300 & call');
+    expect(copy.stage.booking).toBe('Starting the call…');
+    expect(copy.stage.processing).toBe(FUNDING_STAGE_COPY.processing);
+    expect(copy.creditRetryLabel).toBe('Call now');
+    expect(copy.creditPending('Northwind')).toContain('Press Call now to finish');
+    expect(copy.consentLine('Northwind', null)).toMatch(/^By calling, you switch/);
+  });
+
+  describe('the answer context (the callee’s side of a call)', () => {
+    const CALL_PLACING_WORDING = /call now|starting the call|start the call/i;
+
+    it('labels the answer actions, and shifts the stage and retry to answering', () => {
+      const copy = fundingCopyFor('answer');
+      expect(copy.topUpLabel(null)).toBe('Top up & answer');
+      expect(copy.topUpLabel(30_000)).toBe('Top up A$300 & answer');
+      expect(copy.stage.booking).toBe('Answering…');
+      expect(copy.creditRetryLabel).toBe('Answer');
+      expect(copy.creditPending('Northwind')).toContain('Press Answer to finish');
+      expect(copy.consentLine('Northwind', null)).toMatch(/^By answering, you switch/);
+    });
+
+    it('⚠ never says "call now", "starting the call" or "book" in any string a manager can reach', () => {
+      const copy = fundingCopyFor('answer');
+      const everything = [
+        ...strings(copy.stage),
+        ...strings(copy.payAfter),
+        copy.creditPending('Northwind'),
+        copy.consentLine('Northwind', SAVED_CARD),
+        copy.topUpLabel(null),
+        copy.topUpLabel(30_000),
+        copy.creditRetryLabel,
+      ];
+      for (const line of everything) {
+        expect(line).not.toMatch(CALL_PLACING_WORDING);
+        expect(line).not.toMatch(BOOKING_WORDING);
+      }
+    });
+
+    it.each(callViews)('has a band for %s with no booking wording', (_label, view) => {
+      const copy = fundingCopyFor('answer');
+      for (const method of ['topup', 'pay_after'] as const) {
+        const { heading, body } = copy.blockCopy(view, false, method);
+        expect(heading).not.toMatch(BOOKING_WORDING);
+        expect(body).not.toMatch(BOOKING_WORDING);
+      }
+    });
+
+    it('answers the pay-after actions with "answer"', () => {
+      const { ctaSaved, ctaNew, cardSaved, stage } = fundingCopyFor('answer').payAfter;
+      expect(ctaSaved).toBe('Answer, pay after');
+      expect(ctaNew).toBe('Add card & answer');
+      expect(cardSaved).toMatch(/answer\.$/);
+      expect(stage.booking).toBe('Answering…');
+    });
+
+    it('leaves the caller’s bundle unchanged', () => {
+      const copy = fundingCopyFor('call');
+      expect(copy.topUpLabel(null)).toBe('Top up & call');
+      expect(copy.stage.booking).toBe('Starting the call…');
+      expect(copy.creditRetryLabel).toBe('Call now');
+    });
+  });
+
+  it('keeps the strings the call does not change identical to the booking’s', () => {
+    const copy = fundingCopyFor('call').payAfter;
+    expect(copy.methodGroupLabel).toBe(PAY_AFTER_COPY.methodGroupLabel);
+    expect(copy.checkAgain).toBe(PAY_AFTER_COPY.checkAgain);
+    expect(copy.errors.settlement_outstanding).toBe(PAY_AFTER_COPY.errors.settlement_outstanding);
+    expect(copy.stage.awaiting_mandate).toBe(PAY_AFTER_COPY.stage.awaiting_mandate);
   });
 });

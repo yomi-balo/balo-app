@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     resolveReach: vi.fn(),
     releaseSmsSlot: vi.fn(),
     trackSuppressed: vi.fn(),
+    trackServer: vi.fn(),
     warn: vi.fn(),
     info: vi.fn(),
   };
@@ -46,6 +47,10 @@ vi.mock('./sms-reach.js', () => ({
   resolveCallReach: mocks.resolveReach,
   releaseCallSmsSlot: mocks.releaseSmsSlot,
   trackCallSmsSuppressed: mocks.trackSuppressed,
+}));
+vi.mock('@balo/analytics/server', () => ({
+  trackServer: mocks.trackServer,
+  CALL_NOW_SERVER_EVENTS: { RING_ENDED: 'call_now_ring_ended', REFUSED: 'call_now_refused' },
 }));
 vi.mock('../meetings/case-booking-funding.js', () => ({
   checkCaseBookingFunding: mocks.checkFunding,
@@ -82,6 +87,7 @@ const CLIENT = '11111111-1111-4111-8111-111111111111';
 const EXPERT_USER = '22222222-2222-4222-8222-222222222222';
 const BOOKER = '55555555-5555-4555-8555-555555555555';
 const RING_ID = '88888888-8888-4888-8888-888888888888';
+const ATTEMPT_ID = '99999999-9999-4999-8999-999999999999';
 const NEW_MEETING_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const BOOKED_MEETING_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const NOW = new Date('2026-11-16T10:00:00.000Z');
@@ -139,6 +145,7 @@ function start(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.trackServer.mockReset();
   mocks.authorize.mockResolvedValue({ ok: true, side: 'client', caseRow: CASE_ROW, mayRing: true });
   mocks.loadGates.mockResolvedValue(gates());
   mocks.meterCallee.mockResolvedValue(false);
@@ -181,11 +188,33 @@ describe('startCallNow — placement', () => {
       calleeUserId: EXPERT_USER,
       callerSide: 'client',
       reachedBy: 'app',
+      attemptId: null,
+      calleeOnlineAtStart: false,
       expiresAt: new Date(NOW.getTime() + CALL_NOW_RING_MS),
       scheduledStart: NOW,
       scheduledEnd: new Date(NOW.getTime() + CALL_NOW_SCHEDULED_MINUTES * 60_000),
     });
     expect(mocks.startOnMeeting).not.toHaveBeenCalled();
+  });
+
+  it('persists the web attempt id and the unmasked presence the gates read (BAL-651)', async () => {
+    mocks.loadGates.mockResolvedValue(gates({ calleeOnline: true }));
+
+    await start({ attemptId: ATTEMPT_ID });
+
+    expect(mocks.startWithNewMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptId: ATTEMPT_ID, calleeOnlineAtStart: true })
+    );
+  });
+
+  it('writes the attempt id on an in-place ring too (BAL-651)', async () => {
+    mocks.loadGates.mockResolvedValue(gates({ inPlaceCandidate: CANDIDATE }));
+
+    await start({ inPlaceOfMeetingId: BOOKED_MEETING_ID, attemptId: ATTEMPT_ID });
+
+    expect(mocks.startOnMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptId: ATTEMPT_ID, calleeOnlineAtStart: false })
+    );
   });
 
   it('client naming the candidate → in_place on the booked meeting, with no room or rebuild', async () => {
@@ -377,6 +406,120 @@ describe('startCallNow — refusals', () => {
     mocks.startWithNewMeeting.mockRejectedValue(new Error('db down'));
 
     await expect(start()).rejects.toThrow('db down');
+  });
+});
+
+describe('startCallNow — call_now_refused (BAL-651)', () => {
+  const refused = (reason: string, lens = 'client'): void => {
+    expect(mocks.trackServer).toHaveBeenCalledTimes(1);
+    expect(mocks.trackServer).toHaveBeenCalledWith('call_now_refused', {
+      caller_lens: lens,
+      reason,
+      distinct_id: lens === 'client' ? CLIENT : EXPERT_USER,
+    });
+  };
+
+  it('⚠ case_not_found never fires it — the side is unknown', async () => {
+    mocks.authorize.mockResolvedValue({ ok: false, code: 'case_not_found' });
+
+    await start();
+
+    expect(mocks.trackServer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['busy', { refusal: 'callee_busy', reason: 'busy' }],
+    ['outside_hours', { refusal: 'outside_hours', reason: 'outside_hours' }],
+    ['call_now_unavailable', { refusal: 'callee_unavailable', reason: null }],
+  ])('a refused gate fires reason %s', async (reason, availability) => {
+    mocks.loadGates.mockResolvedValue(
+      gates({ availability: { canCallNow: false, ...availability } })
+    );
+
+    await start();
+
+    refused(reason);
+  });
+
+  it('a live ring in the way is call_now_unavailable with no display reason', async () => {
+    mocks.startWithNewMeeting.mockRejectedValue(new mocks.RingAlreadyLive('race'));
+
+    await start();
+
+    refused('call_now_unavailable');
+  });
+
+  it('an expert sending inPlaceOfMeetingId fires in_place_not_allowed with the expert lens', async () => {
+    mocks.authorize.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      caseRow: CASE_ROW,
+      mayRing: true,
+    });
+
+    await start({ userId: EXPERT_USER, inPlaceOfMeetingId: BOOKED_MEETING_ID });
+
+    refused('in_place_not_allowed', 'expert');
+  });
+
+  it('a bad placement fires in_place_not_eligible', async () => {
+    await start({ inPlaceOfMeetingId: BOOKED_MEETING_ID });
+
+    refused('in_place_not_eligible');
+  });
+
+  it('a lost in-place write fires in_place_not_eligible', async () => {
+    mocks.loadGates.mockResolvedValue(gates({ inPlaceCandidate: CANDIDATE }));
+    mocks.startOnMeeting.mockResolvedValue(undefined);
+
+    await start({ inPlaceOfMeetingId: BOOKED_MEETING_ID });
+
+    refused('in_place_not_eligible');
+  });
+
+  it('a spent callee budget fires rate_limited', async () => {
+    mocks.meterCallee.mockResolvedValue(true);
+
+    await start();
+
+    refused('rate_limited');
+  });
+
+  it('a room that cannot be provisioned fires venue_unavailable', async () => {
+    mocks.provision.mockResolvedValue({ provisioned: false });
+
+    await start();
+
+    refused('venue_unavailable');
+  });
+
+  it.each([
+    'account_on_hold',
+    'booking_unfunded',
+    'booking_reserved',
+    'booking_funding_unavailable',
+  ])('a funding refusal fires %s', async (code) => {
+    mocks.checkFunding.mockResolvedValue({ ok: false, code, suggestedTopUpMinor: null });
+
+    await start();
+
+    refused(code);
+  });
+
+  it('a started ring fires no refusal', async () => {
+    await start();
+
+    expect(mocks.trackServer).not.toHaveBeenCalled();
+  });
+
+  it('an analytics failure never changes the refusal', async () => {
+    mocks.trackServer.mockImplementation(() => {
+      throw new Error('posthog');
+    });
+    mocks.meterCallee.mockResolvedValue(true);
+
+    await expect(start()).resolves.toEqual({ ok: false, code: 'rate_limited' });
+    expect(mocks.warn).toHaveBeenCalled();
   });
 });
 

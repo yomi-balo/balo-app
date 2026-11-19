@@ -8,6 +8,7 @@ const mockEnforceBookingFunding = vi.fn();
 const mockResolveFundingSubject = vi.fn();
 const mockFindByCompanyId = vi.fn();
 const mockLogWarn = vi.fn();
+const mockGetCallNowRing = vi.fn();
 const mockLogError = vi.fn();
 const mockPublishNotificationEvent = vi.fn();
 const mockTrackServerAndFlush = vi.fn();
@@ -36,6 +37,9 @@ vi.mock('@/lib/analytics/server', () => ({
   trackServerAndFlush: (...args: unknown[]) => mockTrackServerAndFlush(...args),
 }));
 vi.mock('@/lib/analytics', () => ({ track: (...args: unknown[]) => mockTrack(...args) }));
+vi.mock('@/lib/call-now/call-now-api-client', () => ({
+  getCallNowRing: (...args: unknown[]) => mockGetCallNowRing(...args),
+}));
 vi.mock('../booking-funding-gate', () => ({
   assessBookingFunding: (...args: unknown[]) => mockAssessBookingFunding(...args),
   enforceBookingFunding: (...args: unknown[]) => mockEnforceBookingFunding(...args),
@@ -173,6 +177,87 @@ describe('readBookingFundingAction', () => {
       slot: { startIso: REQUEST.slot.startIso, endIso: REQUEST.slot.endIso },
       activeCompanyId: COMPANY_ID,
       onCoveredHold: 'refuse',
+    });
+  });
+
+  describe('ringId', () => {
+    const MEETING_ID = '44444444-4444-4444-8444-444444444444';
+    const RING_ID = '66666666-6666-4666-8666-666666666666';
+    const ENGAGEMENT_ID = '55555555-5555-4555-8555-555555555555';
+    const EXISTING = { kind: 'existing', engagementId: ENGAGEMENT_ID } as const;
+
+    const ring = (overrides: Record<string, unknown> = {}) => ({
+      ok: true,
+      data: {
+        ringId: RING_ID,
+        meetingId: MEETING_ID,
+        engagementId: ENGAGEMENT_ID,
+        role: 'callee',
+        awaitsAnswer: true,
+        ...overrides,
+      },
+    });
+
+    it('excludes the ring’s own meeting for the callee who still awaits the answer', async () => {
+      mockGetCallNowRing.mockResolvedValue(ring());
+      await readBookingFundingAction({ ...REQUEST, caseChoice: EXISTING, ringId: RING_ID });
+      expect(mockGetCallNowRing).toHaveBeenCalledWith(RING_ID);
+      expect(mockAssessBookingFunding).toHaveBeenCalledWith(
+        expect.objectContaining({ excludeMeetingId: MEETING_ID })
+      );
+    });
+
+    it.each([
+      ['the viewer is the caller', { role: 'caller' }],
+      ['the viewer has no role on the ring', { role: null }],
+      ['the ring no longer awaits an answer', { awaitsAnswer: false }],
+      [
+        'the ring belongs to another case',
+        { engagementId: '77777777-7777-4777-8777-777777777777' },
+      ],
+    ])('excludes nothing when %s', async (_name, overrides) => {
+      mockGetCallNowRing.mockResolvedValue(ring(overrides));
+      await readBookingFundingAction({ ...REQUEST, caseChoice: EXISTING, ringId: RING_ID });
+      expect(mockAssessBookingFunding.mock.calls[0]?.[0]).not.toHaveProperty('excludeMeetingId');
+      expect(mockLogWarn).toHaveBeenCalled();
+    });
+
+    it('excludes nothing when the ring cannot be read', async () => {
+      mockGetCallNowRing.mockResolvedValue({ ok: false, status: 404, code: 'not_found' });
+      await readBookingFundingAction({ ...REQUEST, caseChoice: EXISTING, ringId: RING_ID });
+      expect(mockAssessBookingFunding.mock.calls[0]?.[0]).not.toHaveProperty('excludeMeetingId');
+    });
+
+    it('never reads the ring for a new case', async () => {
+      await readBookingFundingAction({ ...REQUEST, ringId: RING_ID });
+      expect(mockGetCallNowRing).not.toHaveBeenCalled();
+      expect(mockAssessBookingFunding.mock.calls[0]?.[0]).not.toHaveProperty('excludeMeetingId');
+    });
+
+    it('is absent when none is sent', async () => {
+      await readBookingFundingAction({ ...REQUEST, caseChoice: EXISTING });
+      expect(mockGetCallNowRing).not.toHaveBeenCalled();
+      expect(mockAssessBookingFunding.mock.calls[0]?.[0]).not.toHaveProperty('excludeMeetingId');
+    });
+
+    it('a raw excludeMeetingId from the browser is rejected as unavailable', async () => {
+      const result = await readBookingFundingAction({
+        ...REQUEST,
+        caseChoice: EXISTING,
+        excludeMeetingId: MEETING_ID,
+      } as BookingFundingRequest);
+      expect(result).toEqual({ kind: 'unavailable' });
+      expect(mockAssessBookingFunding).not.toHaveBeenCalled();
+    });
+
+    it('a malformed ring id is rejected as unavailable', async () => {
+      const result = await readBookingFundingAction({
+        ...REQUEST,
+        caseChoice: EXISTING,
+        ringId: 'nope',
+      });
+      expect(result).toEqual({ kind: 'unavailable' });
+      expect(mockAssessBookingFunding).not.toHaveBeenCalled();
     });
   });
 

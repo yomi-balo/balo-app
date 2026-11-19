@@ -28,11 +28,11 @@ export const CREDIT_EVENTS = {
 export type PaymentMethodSourceProperty = 'new_card' | 'saved_card';
 
 /**
- * Which surface hosts the top-up parts that fired the event: the billing composer, or the
- * inline funding block on the booking flow's Review & confirm step. Omitted on callers that
- * predate the property.
+ * Which surface hosts the top-up parts that fired the event: the billing composer, the
+ * inline funding block on the booking flow's Review & confirm step, or the same block inside a
+ * Call now (BAL-651). Omitted on callers that predate the property.
  */
-export type CreditSurfaceProperty = 'billing' | 'booking';
+export type CreditSurfaceProperty = 'billing' | 'booking' | 'call';
 
 /**
  * What the RECEIPT could verify about the wallet when the event fired — the client-side half of

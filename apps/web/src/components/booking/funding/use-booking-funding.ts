@@ -28,7 +28,7 @@ export interface UseBookingFunding {
 /** Everything the verdict depends on, as one comparable string. */
 function requestKey(request: BookingFundingRequest | null): string | null {
   if (request === null) return null;
-  const { expertProfileId, slot, caseChoice } = request;
+  const { expertProfileId, slot, caseChoice, ringId } = request;
   return JSON.stringify([
     expertProfileId,
     slot.startIso,
@@ -36,6 +36,7 @@ function requestKey(request: BookingFundingRequest | null): string | null {
     slot.durationMinutes,
     caseChoice.kind,
     caseChoice.kind === 'new' ? (caseChoice.companyId ?? null) : caseChoice.engagementId,
+    ringId ?? null,
   ]);
 }
 

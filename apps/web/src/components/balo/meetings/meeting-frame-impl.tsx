@@ -24,7 +24,12 @@ import { useMeetingRoute, type MeetingExitReason } from '@/lib/meetings/meeting-
 import { END_MEETING_FAILED_COPY } from '@/lib/meetings/meeting-state';
 import type { MeetingPanelId, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { resolvePanelCapabilities } from '@/lib/meetings/panel-capabilities';
-import type { WaitingFacts, WaitingPhase, WaitingSubject } from '@/lib/meetings/waiting-copy';
+import type {
+  WaitingCallingView,
+  WaitingFacts,
+  WaitingPhase,
+  WaitingSubject,
+} from '@/lib/meetings/waiting-copy';
 import { useDrawdownPoll, type DrawdownPollState } from '@/lib/meetings/use-drawdown-poll';
 import { resolveAutoOpen } from '@/lib/meetings/drawdown-auto-open';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
@@ -1705,6 +1710,8 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
                 waiting={route.waiting}
                 // ⚠ BAL-134 — the server's phase label. `'pre-start'` on both guest mounts.
                 waitingPhase={route.waitingPhase}
+                // BAL-651 — the caller's "Calling" view while their Call now ring is out; `null` elsewhere.
+                calling={route.calling}
                 // ⚠ BAL-134 — the facts the copy may not assert without. All-unknown on both
                 // guest mounts and before the first poll, so the copy claims less rather than
                 // more. See `WaitingFacts`.
@@ -1863,6 +1870,8 @@ interface FrameStageProps {
    * missing provider).
    */
   readonly waitingPhase: WaitingPhase;
+  /** BAL-651 — the caller's "Calling" view, or `null`. */
+  readonly calling: WaitingCallingView | null;
   /**
    * BAL-134 — the server-mirror facts the waiting copy may not assert without: the no-show floor
    * in minutes, the settled outcome, and whether an expert has actually been OBSERVED in the
@@ -1902,6 +1911,7 @@ function FrameStage({
   displayName,
   waiting,
   waitingPhase,
+  calling,
   waitingFacts,
   isJoining,
   micOn,
@@ -1971,6 +1981,7 @@ function FrameStage({
         subject={waiting}
         facts={waitingFacts}
         headingRef={headingRef}
+        calling={calling}
       />
     );
   }

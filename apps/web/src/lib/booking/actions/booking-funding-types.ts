@@ -17,6 +17,13 @@ export interface BookingFundingRequest {
     durationMinutes: 15 | 30 | 45 | 60;
   };
   caseChoice: { kind: 'new'; companyId?: string } | { kind: 'existing'; engagementId: string };
+  /**
+   * The ring a callee is answering. The browser never names a meeting to exclude: the action
+   * resolves this ring through the viewer's own party-scoped ring read and, only when the viewer is
+   * the ring's callee awaiting the answer on the same case, excludes that ring's meeting from the
+   * pre-flight. Any mismatch excludes nothing. Honoured only with `caseChoice.kind === 'existing'`.
+   */
+  ringId?: string;
 }
 
 /**

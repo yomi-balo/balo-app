@@ -20,6 +20,8 @@ import { useViewerClock } from '@/hooks/use-viewer-clock';
 import { useAbsoluteConsultationTime } from '@/hooks/use-consultation-time-label';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
+import { formatScheduledStartLabel } from '@/lib/meetings/format-scheduled-start';
 import { Badge } from '@/components/ui/badge';
 import { NOBODY_JOINED_LABEL, NOBODY_JOINED_NOTE } from '@/lib/meetings/nobody-joined-copy';
 import { ROOM_SETTING_UP_ROW_LABEL } from '@/lib/meetings/room-setting-up-copy';
@@ -213,6 +215,18 @@ const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
  */
 /** `pending_reschedule` deliberately keeps its own pill inside the join window too — its
  *  Cancel-only state there is a different reason than the join window. */
+/**
+ * The Call now line under a row. A moved call whose booked time cannot be formatted reads as a
+ * plain unscheduled call rather than naming no time.
+ */
+function callNowNoteText(note: NonNullable<CaseConsultationRowView['callNowNote']>): string {
+  if (note.kind === 'moved') {
+    const bookedFor = formatScheduledStartLabel(note.bookedForIso);
+    if (bookedFor !== null) return CALL_NOW_COPY.rowNoteMoved(bookedFor);
+  }
+  return CALL_NOW_COPY.rowNote;
+}
+
 function stateLabel(
   state: CaseConsultationStateLabel,
   lens: 'client' | 'expert',
@@ -445,6 +459,11 @@ function ConsultationRow({
         )}
 
         {note !== null && <p className="text-muted-foreground mt-0.5 text-xs">{note}</p>}
+        {row.callNowNote !== null && (
+          <p className="text-muted-foreground mt-0.5 text-xs" suppressHydrationWarning>
+            {callNowNoteText(row.callNowNote)}
+          </p>
+        )}
       </div>
 
       <ConsultationRowMenu

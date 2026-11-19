@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Reveal } from '@/components/balo/engagement/reveal';
@@ -31,6 +31,9 @@ import { CaseFilesCard } from './case-files-card';
 import { CasePeopleCard } from './case-people-card';
 import { MarkResolvedButton, RequestResolutionButton } from './case-actions';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
+import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
+import { canBookInPage } from '@/lib/call-now/book-in-page';
+import { CallNowDialog } from './call-now-dialog';
 
 /**
  * BAL-421 — the DESKTOP case surface.
@@ -124,11 +127,17 @@ export function CaseSurface({
   view,
   viewerEmailDomain = null,
   productsTaxonomy,
+  callNow = null,
 }: Readonly<{
   view: CaseSurfaceView;
   viewerEmailDomain?: string | null;
   /** The booking dialog's product picker, for a new case started from this one. */
   productsTaxonomy?: ProductTaxonomy;
+  /**
+   * BAL-651 — the Call now read for this viewer, a sibling of `view` so `CaseSurfaceView` stays
+   * desktop-neutral. `null` when the entry must not render (including an impersonated session).
+   */
+  callNow?: CaseCallNowView | null;
 }>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -158,8 +167,42 @@ export function CaseSurface({
   );
   // In-page booking reads the public availability route, so it follows the same rule as the
   // profile link: an expert who is no longer publicly listed is not bookable from here.
-  const bookFollowUpInPage =
-    view.lens === 'client' && view.header.isOpen && view.party.profileHref !== null;
+  const bookFollowUpInPage = canBookInPage({
+    lens: view.lens,
+    isOpen: view.header.isOpen,
+    hasPublicProfile: view.party.profileHref !== null,
+  });
+
+  // BAL-651 — Call now's confirm. "Book a time" there closes the dialog and asks the quick-pick
+  // for the same in-page follow-up the party card's CTA uses.
+  const [callNowOpen, setCallNowOpen] = useState(false);
+  // Minted by the entry tap and kept after the confirm closes, so the dialog stays mounted for its
+  // close animation. A new tap replaces it.
+  const [callNowAttemptId, setCallNowAttemptId] = useState<string | null>(null);
+  const handleOpenCallNow = useCallback((attemptId: string) => {
+    setCallNowAttemptId(attemptId);
+    setCallNowOpen(true);
+  }, []);
+  const handleCallNowBookTime = useCallback(() => requestFollowUp('call_now'), [requestFollowUp]);
+
+  // The call room's "Book a time" and the ended card land here with `?book=1`: read it once,
+  // open the follow-up, and drop the param so a refresh or a back-navigation doesn't reopen it.
+  const bookParamHandledRef = useRef(false);
+  useEffect(() => {
+    if (bookParamHandledRef.current) return;
+    const { search, pathname } = globalThis.location;
+    const params = new URLSearchParams(search);
+    if (params.get('book') !== '1') return;
+    bookParamHandledRef.current = true;
+    if (bookFollowUpInPage) requestFollowUp('call_now');
+    params.delete('book');
+    const rest = params.toString();
+    globalThis.history.replaceState(
+      globalThis.history.state,
+      '',
+      rest.length > 0 ? `${pathname}?${rest}` : pathname
+    );
+  }, [bookFollowUpInPage, requestFollowUp]);
 
   // Keyed by `meetingId#slot` so a closed dialog can restore focus to the control that opened
   // it — the row's own `DropdownMenu` has already unmounted by then, so Radix's own
@@ -523,6 +566,18 @@ export function CaseSurface({
           />
         )}
 
+        {callNow !== null && callNow.confirm !== null && callNowAttemptId !== null && (
+          <CallNowDialog
+            attemptId={callNowAttemptId}
+            calleeOnline={callNow.calleeOnline}
+            open={callNowOpen}
+            onOpenChange={setCallNowOpen}
+            calleeLabel={callNow.calleeLabel}
+            confirm={callNow.confirm}
+            onBookTime={bookFollowUpInPage ? handleCallNowBookTime : null}
+          />
+        )}
+
         <div className="mt-3 flex flex-wrap items-start gap-3">
           {/* Main column — the conversation LEADS it. Between calls, the conversation is
               the case; the consultation list is the record of what has already happened. */}
@@ -565,6 +620,8 @@ export function CaseSurface({
                 productsTaxonomy={productsTaxonomy}
                 onBookFollowUp={bookFollowUpInPage ? handlePartyBookFollowUp : undefined}
                 followUpRequest={followUpRequest}
+                callNow={callNow}
+                onCallNow={handleOpenCallNow}
               />
             </Reveal>
             <Reveal delay={0.2}>

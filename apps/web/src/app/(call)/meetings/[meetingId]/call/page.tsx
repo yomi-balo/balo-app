@@ -9,7 +9,14 @@ import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { conversationChannelName, typingChannelName } from '@/lib/realtime/channels';
-import { analyticsIdentifyPropsFor, type AnalyticsIdentifyProps } from '@/lib/auth/impersonation';
+import {
+  analyticsIdentifyPropsFor,
+  isImpersonatedSession,
+  type AnalyticsIdentifyProps,
+} from '@/lib/auth/impersonation';
+import { loadCallNowCallerView } from '@/lib/call-now/load-call-now-caller-view';
+import { isRingId } from '@/lib/call-now/resolve-ring-landing';
+import type { CallNowCallerView } from '@/lib/call-now/call-now-types';
 import { AnalyticsIdentify } from '@/components/providers/analytics-identify';
 import { CallClient } from './_components/call-client';
 
@@ -167,10 +174,35 @@ async function resolveBalanceSlot(meetingId: string, userId: string | null): Pro
   }
 }
 
+/**
+ * BAL-651 — ⚠⚠ **THE CALLER'S RING, VERIFIED SERVER-SIDE FROM `?ring=`.** A caller who just
+ * started a Call now lands here with the ring in the query. The query is a HINT, never a grant:
+ * the api's ring read is party-scoped and the loader keeps only a ring this viewer placed for THIS
+ * meeting, so a stale, foreign or forged id is simply absent and the room is an ordinary join.
+ *
+ * `searchParams` is a Promise (Next 16). A malformed value (or a repeated key) never reaches the
+ * api. An impersonated session skips the hop: staff viewing a call are never the caller.
+ */
+async function resolveCallNowCaller(
+  ringParam: string | string[] | undefined,
+  meetingId: string,
+  userId: string | null,
+  impersonated: boolean
+): Promise<CallNowCallerView | null> {
+  if (userId === null || impersonated) return null;
+  if (typeof ringParam !== 'string' || !isRingId(ringParam)) return null;
+  return loadCallNowCallerView({ ringId: ringParam, meetingId, userId });
+}
+
 export default async function MeetingCallPage({
   params,
-}: Readonly<{ params: Promise<{ meetingId: string }> }>): Promise<React.JSX.Element> {
+  searchParams,
+}: Readonly<{
+  params: Promise<{ meetingId: string }>;
+  searchParams: Promise<{ ring?: string | string[] }>;
+}>): Promise<React.JSX.Element> {
   const { meetingId } = await params;
+  const { ring: ringParam } = await searchParams;
 
   const drift = await checkSessionDrift();
   if (drift.action === 'sync-needed') {
@@ -185,10 +217,12 @@ export default async function MeetingCallPage({
   // ⚠ NAME ONLY, AND ONLY FOR PreJoin's "Joining as …" LINE. Never the email, never the id.
   let viewerName: string | null = null;
   let userId: string | null = null;
+  let impersonated = false;
   let identifyProps: AnalyticsIdentifyProps = {};
   try {
     const user = await getCurrentUser();
     userId = user?.id ?? null;
+    impersonated = user !== null && isImpersonatedSession(user);
     identifyProps = analyticsIdentifyPropsFor(user);
     const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
     viewerName = name.length === 0 ? null : name;
@@ -206,12 +240,13 @@ export default async function MeetingCallPage({
     });
   }
 
-  // ⚠ TWO INDEPENDENT SLOT RESOLUTIONS, RUN CONCURRENTLY — never a sequential waterfall for
+  // ⚠ THREE INDEPENDENT RESOLUTIONS, RUN CONCURRENTLY — never a sequential waterfall for
   // unrelated reads (vercel-react-best-practices). Both degrade to `false` on their own; neither
   // can fail the other.
-  const [chatSlot, hasBalance] = await Promise.all([
+  const [chatSlot, hasBalance, callNowCaller] = await Promise.all([
     resolveChatSlot(meetingId, userId),
     resolveBalanceSlot(meetingId, userId),
+    resolveCallNowCaller(ringParam, meetingId, userId, impersonated),
   ]);
 
   return (
@@ -234,6 +269,7 @@ export default async function MeetingCallPage({
         isRealtimeEnabled={isRealtimeConfigured()}
         chatChannelName={chatSlot.chatChannelName}
         typingChannelName={chatSlot.typingChannelName}
+        callNowCaller={callNowCaller}
       />
       <AnalyticsIdentify {...identifyProps} />
     </>

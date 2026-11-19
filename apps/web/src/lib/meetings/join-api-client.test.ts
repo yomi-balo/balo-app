@@ -24,6 +24,7 @@ vi.mock('@/lib/auth/api-account-refusal', () => ({
 
 import { log } from '@/lib/logging';
 import {
+  answerRequiredFrom,
   postGuestJoin,
   postGuestJoinProbe,
   postLobbyClaim,
@@ -214,6 +215,33 @@ describe('⚠ nothing here throws', () => {
     const terminal = await postGuestJoin(MEETING_ID, GUEST_TOKEN);
     expect(terminal).toEqual({ ok: false, status: 409, code: 'meeting_not_open_for_join' });
     expect('opensAt' in terminal).toBe(false);
+  });
+
+  it('⚠ BAL-651 — `ringId` rides ONLY on a `call_answer_required` failure', async () => {
+    const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+    mockLoggedFetch.mockResolvedValue(
+      response(409, { error: 'call_answer_required', ringId: RING_ID })
+    );
+    const held = await postMemberJoin(MEETING_ID);
+    expect(held).toEqual({ ok: false, status: 409, code: 'call_answer_required', ringId: RING_ID });
+    if (held.ok) throw new Error('expected a failure');
+    expect(answerRequiredFrom(held)).toEqual({ ringId: RING_ID });
+
+    mockLoggedFetch.mockResolvedValue(
+      response(409, { error: 'meeting_not_open_for_join', ringId: RING_ID })
+    );
+    const terminal = await postMemberJoin(MEETING_ID);
+    expect('ringId' in terminal).toBe(false);
+    if (terminal.ok) throw new Error('expected a failure');
+    expect(answerRequiredFrom(terminal)).toBeUndefined();
+  });
+
+  it('BAL-651 — a `call_answer_required` body with no usable `ringId` omits the key', async () => {
+    mockLoggedFetch.mockResolvedValue(response(409, { error: 'call_answer_required', ringId: 7 }));
+    const held = await postMemberJoin(MEETING_ID);
+    expect(held).toEqual({ ok: false, status: 409, code: 'call_answer_required' });
+    if (held.ok) throw new Error('expected a failure');
+    expect(answerRequiredFrom(held)).toBeUndefined();
   });
 
   it('D16 — a `meeting_not_open_yet` body with no usable `opensAt` omits the key rather than inventing one', async () => {

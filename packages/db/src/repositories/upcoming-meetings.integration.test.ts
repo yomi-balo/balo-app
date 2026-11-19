@@ -48,6 +48,7 @@ import {
 import { caseEngagementsRepository } from './case-engagements';
 import { conversationsRepository } from './conversations';
 import { engagementsRepository } from './engagements';
+import { meetingRingsRepository } from './meeting-rings';
 import { partyMembershipsRepository } from './party-memberships';
 import { projectEngagementsRepository } from './project-engagements';
 import { projectRequestsRepository } from './project-requests';
@@ -442,6 +443,42 @@ const ARM_SPECS: readonly ArmSpec[] = [
   DISCOVERY_SPEC,
   INTERACTION_SPEC,
 ];
+
+describe('upcomingMeetingsRepository.listForCompany — Call now (BAL-651)', () => {
+  it('a Call now meeting that ended no_answer is absent, while a ringing one is listed', async () => {
+    const world = await seedWorld();
+    const unansweredFixture = await CASE_SPEC.seedParent(world.companyAId, world.expertProfileId);
+    const ringingFixture = await CASE_SPEC.seedParent(world.companyAId, world.expertProfileId);
+    const callee = await userFactory();
+    const now = Date.now();
+    const ringOn = (engagementId: string) =>
+      meetingRingsRepository.startWithNewMeeting({
+        engagementId,
+        callerUserId: world.memberAUserId,
+        calleeUserId: callee.id,
+        callerSide: 'client',
+        reachedBy: 'app',
+        attemptId: null,
+        calleeOnlineAtStart: false,
+        expiresAt: new Date(now + 45_000),
+        scheduledStart: new Date(now),
+        scheduledEnd: new Date(now + 15 * 60_000),
+      });
+    const unanswered = await ringOn(unansweredFixture.contextId);
+    await meetingRingsRepository.endRing({
+      ringId: unanswered.ring.id,
+      to: 'declined',
+      now: new Date(now + 20_000),
+      actorUserId: callee.id,
+    });
+    const ringing = await ringOn(ringingFixture.contextId);
+
+    const ids = await listIds(world.companyAId);
+
+    expect(ids).toEqual([ringing.meeting.id]);
+    expect(ids).not.toContain(unanswered.meeting.id);
+  });
+});
 
 describe.each(ARM_SPECS)('upcomingMeetingsRepository.listForCompany — $arm arm', (spec) => {
   it('member with permission: participates, lists EXACTLY company A’s meeting, and the row passes its own gate', async () => {

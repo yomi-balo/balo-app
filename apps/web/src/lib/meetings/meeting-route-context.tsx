@@ -9,6 +9,7 @@ import type { EndMeetingResult } from './meeting-state';
 import type { MeetingPanelRegistration } from './meeting-panels';
 import {
   UNKNOWN_WAITING_FACTS,
+  type WaitingCallingView,
   type WaitingFacts,
   type WaitingPhase,
   type WaitingSubject,
@@ -172,6 +173,12 @@ export interface MeetingRouteValue {
    */
   readonly waitingPhase: WaitingPhase;
   /**
+   * BAL-651 — **THE CALLER'S "CALLING" VIEW**, present only while this viewer's Call now ring is
+   * still `ringing`. `null` once the ring connects, and on every mount without a ring (both guest
+   * mounts leave it at the provider's default), so the waiting stage keeps its shipped copy.
+   */
+  readonly calling: WaitingCallingView | null;
+  /**
    * BAL-134 — **THE SERVER-MIRROR FACTS THE WAITING COPY MAY NOT ASSERT WITHOUT.**
    *
    * ⚠⚠ SEPARATE FROM `waiting` ON PURPOSE, BECAUSE THEY COME FROM DIFFERENT SOURCES. `waiting`
@@ -242,6 +249,7 @@ const EMPTY: MeetingRouteValue = {
   // shipped top-bar chrome, and `null` means there is no end action to reach. See each
   // field's docblock.
   waitingPhase: 'pre-start',
+  calling: null,
   waitingFacts: UNKNOWN_WAITING_FACTS,
   clock: null,
   endMeeting: null,
@@ -268,6 +276,7 @@ export function MeetingRouteContextProvider({
   resolveExitReason,
   panels = null,
   waitingPhase = 'pre-start',
+  calling = null,
   waitingFacts = UNKNOWN_WAITING_FACTS,
   clock = null,
   endMeeting = null,
@@ -293,6 +302,8 @@ export function MeetingRouteContextProvider({
   panels?: MeetingPanelRegistration | null;
   /** BAL-134 — ⚠ DEFAULTS TO THE SHIPPED `'pre-start'`, so an unwired mount is unchanged. */
   waitingPhase?: WaitingPhase;
+  /** BAL-651 — ⚠ DEFAULTS TO `null` = NO RING OF THIS VIEWER'S OWN, so the shipped copy shows. */
+  calling?: WaitingCallingView | null;
   /** BAL-134 — ⚠ DEFAULTS TO ALL-UNKNOWN, which is the copy that claims the least. */
   waitingFacts?: WaitingFacts;
   /** BAL-134 — ⚠ DEFAULTS TO `null` = NO MIRROR, i.e. the frame keeps its shipped chrome. */
@@ -317,6 +328,7 @@ export function MeetingRouteContextProvider({
       resolveExitReason,
       panels,
       waitingPhase,
+      calling,
       waitingFacts,
       clock,
       endMeeting,
@@ -332,6 +344,7 @@ export function MeetingRouteContextProvider({
       resolveExitReason,
       panels,
       waitingPhase,
+      calling,
       waitingFacts,
       clock,
       endMeeting,

@@ -5,8 +5,8 @@ audience: [client]
 category:
   client: credit-billing
 order: 3
-published: false
-updated: 2026-11-17
+published: true
+updated: 2026-11-19
 related: [booking-a-consultation, buying-credit, joining-a-call]
 ---
 
@@ -16,8 +16,8 @@ open case without a booking, a few simple rules decide what it costs.
 ## The 15-minute minimum
 
 An unscheduled call is billed for at least 15 minutes, the same as any consultation. After that,
-you're billed for the time you actually spend together, down to the minute. The expert's rate is
-shown before you confirm.
+you're billed for the time you actually spend together, down to the minute. The rate your expert
+starts from is shown before you confirm, for example "From A$4.20/min · 15-minute minimum".
 
 ## Nothing is charged unless you both join
 
@@ -36,9 +36,10 @@ Balo checks that your company can cover the minimum before the call starts.
   of what your upcoming booked consultations will need. If it falls short, Balo shows how
   much to add. See [Buying credit](/help/buying-credit).
 
-If your expert calls you, Balo runs the same check when you answer, so you always know before you
-join. If you need to top up first, the call stops ringing while you do. Once the credit lands, call
-your expert back from the case.
+If your expert calls you, Balo runs the same check when you choose **Answer** on the call page, so you
+always know before you join. If you need to top up first, the call keeps ringing while you do. If it
+is still ringing once the credit lands, the call goes ahead. If it has stopped by then, nothing is
+charged and you can call your expert back from the case.
 
 ## Calling in place of a booking
 

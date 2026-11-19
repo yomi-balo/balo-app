@@ -112,7 +112,7 @@ describe('BookingFundingMethodProperty', () => {
 });
 
 describe('BookingSource', () => {
-  it('is exactly the booking entry points, including the request thread (BAL-616)', () => {
+  it('is exactly the booking entry points, including the request thread (BAL-616) and Call now (BAL-651)', () => {
     expectTypeOf<
       | 'profile'
       | 'search'
@@ -121,6 +121,7 @@ describe('BookingSource', () => {
       | 'case_nudge'
       | 'home_spotlight'
       | 'request_thread'
+      | 'call_now'
     >().toEqualTypeOf<BookingSource>();
     expectTypeOf<
       BookingEventMap[typeof BOOKING_EVENTS.FLOW_OPENED]['source']

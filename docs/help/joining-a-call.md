@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 2
 published: true
-updated: 2026-11-11
+updated: 2026-11-19
 related: [booking-a-consultation, your-cases]
 ---
 
@@ -19,7 +19,8 @@ ways in and what you see when the call wraps up.
 Join opens 3 minutes before the scheduled start and stays available until 30 minutes after the
 scheduled end, or until the call itself ends. Try earlier and you'll see "This call isn't open yet
 — you can join from {time}." — the time is shown in your device's timezone, and you can come back
-to the same page when it arrives.
+to the same page when it arrives. A call started without a booking has no join window to wait for:
+it's marked **Unscheduled call** on the case, and **Join** opens the call room while it's ringing.
 
 On your project request page, **Join** also appears in the conversation header once a call with your
 expert is booked. It opens at the same time and shows a countdown until then.

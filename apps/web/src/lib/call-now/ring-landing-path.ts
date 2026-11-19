@@ -30,3 +30,12 @@ export function ringLandingPath(ring: RingLandingFacts, now: Date): string {
   }
   return casePath;
 }
+
+/**
+ * Where a caller lands after starting a call: the call room, carrying the ring so the room can
+ * show "Calling" and the no-answer end states. `ringId` is a server-minted uuid, so it needs no
+ * encoding. The room re-verifies it party-scoped against the api; the query is a hint, not a grant.
+ */
+export function callNowCallerPath(meetingId: string, ringId: string): string {
+  return `${memberCallPath(meetingId)}?ring=${ringId}`;
+}

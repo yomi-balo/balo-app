@@ -47,6 +47,15 @@ vi.mock('./_lib/load-case', () => ({
   loadCase: (...a: unknown[]) => mockLoadCase(...a),
 }));
 
+// BAL-651 — the Call now read. The loader's own suite proves the shaping; here the page is only
+// proven to start the read beside `loadCase`, skip it under impersonation, and hand the result on.
+const mockReadCallNowView = vi.fn();
+const mockLoadCaseCallNow = vi.fn();
+vi.mock('@/lib/call-now/load-case-call-now', () => ({
+  readCallNowView: (...a: unknown[]) => mockReadCallNowView(...a),
+  loadCaseCallNow: (...a: unknown[]) => mockLoadCaseCallNow(...a),
+}));
+
 const PRODUCTS_TAXONOMY = { groups: [{ category: 'Clouds', items: [] }] };
 const mockLoadTaxonomy = vi.fn();
 vi.mock('@/lib/search/load-taxonomy', () => ({
@@ -117,6 +126,7 @@ function consultation(n: number): CaseConsultationRowView {
     scheduledMinutes: 30,
     live: false,
     roomReady: false,
+    callNowNote: null,
   };
 }
 
@@ -288,6 +298,57 @@ describe('CasePage — access', () => {
     expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
       expect.objectContaining({ viewerEmailDomain: null })
     );
+  });
+});
+
+describe('CasePage — Call now (BAL-651)', () => {
+  const CALL_NOW_VIEW = {
+    entry: 'button' as const,
+    calleeLabel: 'Amara',
+    onlineBadge: true,
+    calleeTimeZone: null,
+    confirm: null,
+  };
+  const READ = Promise.resolve({ canCallNow: true });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCurrentUser.mockResolvedValue({ id: USER_ID, email: USER_EMAIL });
+    mockLoadCase.mockResolvedValue(CLIENT_VIEW);
+    mockReadCallNowView.mockReturnValue(READ);
+    mockLoadCaseCallNow.mockResolvedValue(CALL_NOW_VIEW);
+  });
+
+  it('starts the read for this case and passes the shaped view to the surface', async () => {
+    const element = await CasePage(props());
+    render(element);
+
+    expect(mockReadCallNowView).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(mockLoadCaseCallNow).toHaveBeenCalledWith({ view: CLIENT_VIEW, read: READ });
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
+      expect.objectContaining({ callNow: CALL_NOW_VIEW })
+    );
+  });
+
+  it('does not call the api and passes callNow null under an impersonated session', async () => {
+    mockGetCurrentUser.mockResolvedValue({
+      id: USER_ID,
+      email: USER_EMAIL,
+      isImpersonating: true,
+    });
+    const element = await CasePage(props());
+    render(element);
+
+    expect(mockReadCallNowView).not.toHaveBeenCalled();
+    expect(mockLoadCaseCallNow).not.toHaveBeenCalled();
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(expect.objectContaining({ callNow: null }));
+  });
+
+  it('degrades to callNow null when the loader has nothing to show', async () => {
+    mockLoadCaseCallNow.mockResolvedValue(null);
+    const element = await CasePage(props());
+    render(element);
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(expect.objectContaining({ callNow: null }));
   });
 });
 

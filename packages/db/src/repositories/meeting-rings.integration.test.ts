@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { GUEST_TOKEN_TTL_AFTER_END_MS } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
@@ -65,6 +65,8 @@ function startInput(c: RingCase, overrides: Partial<StartRingInput> = {}): Start
     callerSide: 'client',
     reachedBy: 'app',
     expiresAt: new Date(Date.now() + RING_MS),
+    attemptId: null,
+    calleeOnlineAtStart: false,
     ...overrides,
   };
 }
@@ -218,6 +220,55 @@ describe('meetingRingsRepository.startWithNewMeeting', () => {
     const second = await ringNewMeeting(c);
     expect(second.ring.status).toBe('ringing');
     expect(second.meeting.id).not.toBe(first.meeting.id);
+  });
+
+  it('writes the attempt id and the callee’s presence at the start (BAL-651)', async () => {
+    const c = await ringCase();
+    const attemptId = randomUUID();
+
+    const started = await ringNewMeeting(c, { attemptId, calleeOnlineAtStart: true });
+
+    expect(started.ring).toMatchObject({ attemptId, calleeOnlineAtStart: true });
+    expect(await meetingRingsRepository.findById(started.ring.id)).toMatchObject({
+      attemptId,
+      calleeOnlineAtStart: true,
+    });
+  });
+
+  it('stores a missing attempt id as NULL and an offline callee as false', async () => {
+    const c = await ringCase();
+
+    const started = await ringNewMeeting(c, { attemptId: null, calleeOnlineAtStart: false });
+
+    expect(await meetingRingsRepository.findById(started.ring.id)).toMatchObject({
+      attemptId: null,
+      calleeOnlineAtStart: false,
+    });
+  });
+
+  it('a ring written by a build that predates the columns reads both as NULL (expand-only)', async () => {
+    const c = await ringCase();
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: c.engagementId }],
+    });
+
+    // Raw SQL on purpose: the previous build's INSERT names only the columns it declares, and a
+    // Drizzle insert from THIS schema would name the new ones too.
+    const inserted = await db.execute<{ id: string }>(sql`
+      INSERT INTO meeting_rings
+        (meeting_id, engagement_id, caller_user_id, callee_user_id, caller_side, placement, expires_at)
+      VALUES
+        (${meeting.id}, ${c.engagementId}, ${c.callerUserId}, ${c.calleeUserId}, 'client',
+         'in_place', ${new Date(Date.now() + RING_MS).toISOString()})
+      RETURNING id
+    `);
+    const [row] = inserted;
+    if (row === undefined) throw new Error('ring was not inserted');
+
+    expect(await meetingRingsRepository.findById(row.id)).toMatchObject({
+      attemptId: null,
+      calleeOnlineAtStart: null,
+    });
   });
 
   it('rethrows every other failure untouched — the caller-not-callee and expiry CHECKs', async () => {
@@ -968,6 +1019,88 @@ describe('meetingRingsRepository — reads', () => {
     ).toBe(false);
   });
 
+  describe('countCallerRingsToCallee (BAL-651)', () => {
+    const ringAt = new Date('2026-06-01T15:00:00.000Z');
+    const windowStart = new Date(ringAt.getTime() - 24 * 60 * 60 * 1000);
+
+    /** A fresh case for the same pair, so each seeded ring has its own one-ringing slot. */
+    async function samePair(c: RingCase): Promise<RingCase> {
+      const { engagement } = await caseEngagementFactory({ expertProfileId: c.expertProfileId });
+      return { ...c, engagementId: engagement.id };
+    }
+
+    /** Ring on `c`, then force its `created_at` (and optionally status / soft delete). */
+    async function seedAt(
+      c: RingCase,
+      createdAt: Date,
+      overrides: { status?: 'connected' | 'unanswered'; deletedAt?: Date } = {}
+    ): Promise<void> {
+      const started = await ringNewMeeting(c);
+      await db
+        .update(meetingRings)
+        .set({
+          createdAt,
+          ...(overrides.status === undefined
+            ? {}
+            : { status: overrides.status, endedAt: createdAt }),
+          ...(overrides.deletedAt === undefined ? {} : { deletedAt: overrides.deletedAt }),
+        })
+        .where(eq(meetingRings.id, started.ring.id));
+    }
+
+    const pairWindow = (c: RingCase) => ({
+      callerUserId: c.callerUserId,
+      calleeUserId: c.calleeUserId,
+      endingAt: ringAt,
+    });
+
+    it('counts the pair’s rings of any status and case, both window ends included (exactly 24 h before counts)', async () => {
+      const c = await ringCase();
+      await seedAt(c, windowStart, { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date('2026-06-01T10:00:00.000Z'), {
+        status: 'connected',
+      });
+      await seedAt(await samePair(c), ringAt);
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(3);
+    });
+
+    it('excludes the day before, after the ring, soft-deleted rings, another callee and the reverse direction', async () => {
+      const c = await ringCase();
+      await seedAt(c, ringAt);
+      await seedAt(await samePair(c), new Date(windowStart.getTime() - 1), {
+        status: 'unanswered',
+      });
+      await seedAt(await samePair(c), new Date(ringAt.getTime() + 1), { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date('2026-06-01T12:00:00.000Z'), {
+        status: 'unanswered',
+        deletedAt: new Date('2026-06-01T12:30:00.000Z'),
+      });
+      const otherCallee = await ringCase();
+      await seedAt(
+        { ...otherCallee, callerUserId: c.callerUserId },
+        new Date('2026-06-01T11:00:00.000Z'),
+        {
+          status: 'unanswered',
+        }
+      );
+      const reverse = await samePair(c);
+      await seedAt(
+        { ...reverse, callerUserId: c.calleeUserId, calleeUserId: c.callerUserId },
+        new Date('2026-06-01T11:00:00.000Z'),
+        { status: 'unanswered' }
+      );
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(1);
+    });
+
+    it('answers 0 for a pair with no rings', async () => {
+      const c = await ringCase();
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(0);
+    });
+  });
+
   describe('summarizeMissedCallWindow', () => {
     const since = new Date('2026-01-01T00:00:00.000Z');
 
@@ -1304,6 +1437,167 @@ describe('meetingRingsRepository — reads', () => {
     expect(rings.map((ring) => ring.id)).toEqual([second.ring.id, first.ring.id]);
     expect(rings.map((ring) => ring.status)).toEqual(['ringing', 'stopped']);
     expect(await meetingRingsRepository.listForMeeting(randomUUID())).toEqual([]);
+  });
+
+  it('listFactsForMeetings batches every live ring across meetings, tagged with its meeting, and skips soft-deleted rings', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const inPlace = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (inPlace === undefined) throw new Error('ring did not start');
+    const other = await ringCase();
+    const fresh = await ringNewMeeting(other);
+    const deletedCase = await ringCase();
+    const deleted = await ringNewMeeting(deletedCase);
+    await db
+      .update(meetingRings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingRings.id, deleted.ring.id));
+
+    const facts = await meetingRingsRepository.listFactsForMeetings([
+      booked.id,
+      fresh.meeting.id,
+      deleted.meeting.id,
+    ]);
+
+    expect(facts).toHaveLength(2);
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        {
+          meetingId: booked.id,
+          placement: 'in_place',
+          status: 'ringing',
+          createdAt: inPlace.ring.createdAt,
+          expiresAt: inPlace.ring.expiresAt,
+          endedAt: null,
+        },
+        expect.objectContaining({ meetingId: fresh.meeting.id, placement: 'new_meeting' }),
+      ])
+    );
+  });
+
+  it('listFactsForMeetings answers [] for an empty input and for meetings with no ring', async () => {
+    expect(await meetingRingsRepository.listFactsForMeetings([])).toEqual([]);
+    expect(await meetingRingsRepository.listFactsForMeetings([randomUUID()])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts returns the booked start of an in-place ring that connected', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+
+    const result = await meetingRingsRepository.listInPlaceBookedStarts([booked.id, randomUUID()]);
+
+    expect(result).toEqual([{ meetingId: booked.id, bookedStart: booked.scheduledStart }]);
+  });
+
+  it('listInPlaceBookedStarts omits a ring that is still ringing, ended unconnected, or on a new meeting', async () => {
+    const ringingCase = await ringCase();
+    const ringingBooked = await bookLaterToday(ringingCase);
+    await meetingRingsRepository.startOnMeeting({
+      ...startInput(ringingCase),
+      meetingId: ringingBooked.id,
+    });
+
+    const stoppedCase = await ringCase();
+    const stoppedBooked = await bookLaterToday(stoppedCase);
+    const stopped = await meetingRingsRepository.startOnMeeting({
+      ...startInput(stoppedCase),
+      meetingId: stoppedBooked.id,
+    });
+    if (stopped === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.endRing({
+      ringId: stopped.ring.id,
+      to: 'stopped',
+      now: new Date(),
+      actorUserId: stoppedCase.callerUserId,
+    });
+
+    const newCase = await ringCase();
+    const fresh = await ringNewMeeting(newCase);
+    await meetingRingsRepository.connect({
+      ringId: fresh.ring.id,
+      startedAt: new Date(fresh.meeting.scheduledStart.getTime() + 5 * SECOND_MS),
+    });
+
+    const result = await meetingRingsRepository.listInPlaceBookedStarts([
+      ringingBooked.id,
+      stoppedBooked.id,
+      fresh.meeting.id,
+    ]);
+
+    expect(result).toEqual([]);
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts skips an audit row whose previous start does not parse', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+    await db
+      .update(auditEvents)
+      .set({
+        metadata: sql`jsonb_set(${auditEvents.metadata}, '{previousScheduledStart}', '"not-a-date"')`,
+      })
+      .where(
+        and(eq(auditEvents.entityId, booked.id), eq(auditEvents.action, 'meeting.rescheduled'))
+      );
+
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([booked.id])).toEqual([]);
+  });
+
+  it('listInPlaceBookedStarts takes the newest call_now_connected row for the meeting, and ignores other reschedule reasons', async () => {
+    const c = await ringCase();
+    const booked = await bookLaterToday(c);
+    const started = await meetingRingsRepository.startOnMeeting({
+      ...startInput(c),
+      meetingId: booked.id,
+    });
+    if (started === undefined) throw new Error('ring did not start');
+    await meetingRingsRepository.connect({
+      ringId: started.ring.id,
+      startedAt: new Date(Date.now() + 10 * SECOND_MS),
+    });
+    const newer = new Date(booked.scheduledStart.getTime() + 2 * HOUR_MS);
+    await db.insert(auditEvents).values([
+      {
+        action: 'meeting.rescheduled',
+        entityType: 'meeting',
+        entityId: booked.id,
+        metadata: { reason: 'call_now_connected', previousScheduledStart: newer.toISOString() },
+      },
+      {
+        action: 'meeting.rescheduled',
+        entityType: 'meeting',
+        entityId: booked.id,
+        metadata: {
+          reason: 'party_reschedule',
+          previousScheduledStart: new Date(0).toISOString(),
+        },
+      },
+    ]);
+
+    expect(await meetingRingsRepository.listInPlaceBookedStarts([booked.id])).toEqual([
+      { meetingId: booked.id, bookedStart: newer },
+    ]);
   });
 
   it('listOverdueRinging returns ringing rings past `expires_at`, soonest-expired first, within `limit`', async () => {

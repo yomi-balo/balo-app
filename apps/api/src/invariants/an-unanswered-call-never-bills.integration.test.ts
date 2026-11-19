@@ -207,6 +207,8 @@ async function startUnansweredCandidate(
     calleeUserId: scenario.expertUserId,
     callerSide: 'client',
     reachedBy: 'app',
+    attemptId: null,
+    calleeOnlineAtStart: false,
     expiresAt: new Date(start.getTime() + CALL_NOW_RING_MS),
     now: start,
     scheduledStart: start,

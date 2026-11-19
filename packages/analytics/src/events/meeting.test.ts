@@ -111,6 +111,7 @@ describe('MEETING_SERVER_EVENTS', () => {
       participant_count: 2,
       outcome: null,
       ended_by: 'client_principal',
+      origin: 'booked',
       distinct_id: 'user-1',
     };
     const systemEnd: MeetingServerEventMap['meeting_ended'] = {
@@ -131,12 +132,34 @@ describe('MEETING_SERVER_EVENTS', () => {
     const noAnswerEnd: MeetingServerEventMap['meeting_ended'] = {
       ...systemEnd,
       outcome: 'no_answer',
+      origin: 'call_now',
     };
 
     expect(humanEnd.outcome).toBeNull();
     expect(systemEnd.ended_by).toBe('system_idle');
     expect(venueUnavailableEnd.outcome).toBe('venue_unavailable');
     expect(noAnswerEnd.outcome).toBe('no_answer');
+  });
+
+  it('`meeting_ended.origin` is required and is `call_now` or `booked` (BAL-651)', () => {
+    const base: Omit<MeetingServerEventMap['meeting_ended'], 'origin'> = {
+      meeting_id: 'meeting-1',
+      billable_seconds: 900,
+      expert_present_seconds: 900,
+      billable_before_start_seconds: 0,
+      participant_count: 2,
+      outcome: 'completed',
+      ended_by: 'expert_host',
+      distinct_id: 'user-1',
+    };
+    const origins = (['call_now', 'booked'] as const).map(
+      (origin): MeetingServerEventMap['meeting_ended'] => ({ ...base, origin })
+    );
+    // @ts-expect-error — `origin` is required: an emitter cannot leave it out.
+    const missing: MeetingServerEventMap['meeting_ended'] = base;
+
+    expect(origins.map((p) => p.origin)).toEqual(['call_now', 'booked']);
+    expect(missing).not.toHaveProperty('origin');
   });
 
   it('uses snake_case event values', () => {

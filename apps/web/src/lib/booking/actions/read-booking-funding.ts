@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { creditWalletsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
+import { resolveRingMeetingToExclude } from '@/lib/call-now/resolve-ring-meeting-to-exclude';
 import { walletHasEverHeldCredit, projectBookingTopUpWallet } from '@/lib/credit/wallet-read';
 import { assessBookingFunding, type BookingFundingRefusal } from '../booking-funding-gate';
 import { bookingSlotSchema } from '../booking-slot-schema';
@@ -38,6 +39,7 @@ const requestSchema = z
       z.object({ kind: z.literal('existing'), engagementId: z.uuid() }).strict(),
     ]),
     onCoveredHold: z.enum(['defer', 'refuse']).optional(),
+    ringId: z.uuid().optional(),
   })
   .strict();
 
@@ -101,6 +103,15 @@ export async function readBookingFundingAction(
       return { kind: 'unavailable' };
     }
 
+    const excludeMeetingId =
+      input.caseChoice.kind === 'existing' && input.ringId !== undefined
+        ? await resolveRingMeetingToExclude({
+            userId: user.id,
+            ringId: input.ringId,
+            engagementId: input.caseChoice.engagementId,
+          })
+        : undefined;
+
     const result = await assessBookingFunding({
       actorUserId: user.id,
       companyId: subject.companyId,
@@ -108,6 +119,7 @@ export async function readBookingFundingAction(
       slot: { startIso: input.slot.startIso, endIso: input.slot.endIso },
       activeCompanyId: user.companyId,
       onCoveredHold: input.onCoveredHold ?? 'defer',
+      ...(excludeMeetingId === undefined ? {} : { excludeMeetingId }),
     });
     if (result.ok) {
       return { kind: 'clear' };

@@ -188,6 +188,20 @@ describe('enforceBookingFunding — the unfunded arm (BAL-478)', () => {
     });
   });
 
+  it('reads with no excluded meeting unless the caller names one (booking never does)', async () => {
+    mockReadSnapshot.mockResolvedValue({ kind: 'mandate', walletId: WALLET_ID });
+    await enforceBookingFunding(BASE_INPUT);
+    expect(mockReadSnapshot.mock.calls[0]?.[0].excludeMeetingId).toBeUndefined();
+  });
+
+  it('passes the excluded meeting to the snapshot read, so a call does not reserve against itself', async () => {
+    mockReadSnapshot.mockResolvedValue({ kind: 'mandate', walletId: WALLET_ID });
+    await assessBookingFunding({ ...BASE_INPUT, excludeMeetingId: 'meeting-9' });
+    expect(mockReadSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeMeetingId: 'meeting-9' })
+    );
+  });
+
   it('balance arm alone: exactly-equal available passes (the >= boundary)', async () => {
     mockReadSnapshot.mockResolvedValue(noMandate(ESTIMATE_30_MINOR));
 
