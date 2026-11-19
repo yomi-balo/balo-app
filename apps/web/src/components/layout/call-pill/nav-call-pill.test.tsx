@@ -525,7 +525,7 @@ describe('NavCallPill — screen reader', () => {
 
     const statusLine = screen.getByText(/^Starts in \d+ min$/);
     expect(statusLine.closest('[aria-live]')).toBeNull();
-    expect(statusLine.closest('[role="status"]')).toBeNull();
+    expect(statusLine.closest('[role="status"], output')).toBeNull();
   });
 });
 

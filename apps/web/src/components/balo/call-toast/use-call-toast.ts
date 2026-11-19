@@ -119,9 +119,11 @@ export function useCallToast({
 
   useEffect(() => {
     if (impersonating !== false) return;
-    loadIncoming('load').finally(() => {
-      mountSettledRef.current = true;
-    });
+    loadIncoming('load')
+      .finally(() => {
+        mountSettledRef.current = true;
+      })
+      .catch(report);
   }, [impersonating, loadIncoming]);
 
   useEffect(() => {

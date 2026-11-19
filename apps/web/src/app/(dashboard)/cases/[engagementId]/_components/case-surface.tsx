@@ -593,7 +593,7 @@ export function CaseSurface({
           />
         )}
 
-        {callNow !== null && callNow.confirm !== null && callNowAttemptId !== null && (
+        {callNow?.confirm && callNowAttemptId !== null && (
           <CallNowDialog
             attemptId={callNowAttemptId}
             calleeOnline={callNow.calleeOnline}

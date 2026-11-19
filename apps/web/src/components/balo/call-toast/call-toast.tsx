@@ -90,7 +90,7 @@ export function CallToast({
 
   const keepFocus = useCallback((): void => {
     const root = rootRef.current;
-    if (root !== null && root.contains(document.activeElement)) returnFocusRef?.current?.focus();
+    if (root?.contains(document.activeElement)) returnFocusRef?.current?.focus();
   }, [returnFocusRef]);
   const decline = useCallback(
     (ring: RingingToastView): void => {

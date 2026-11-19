@@ -1616,7 +1616,7 @@ describe('NotificationBell', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
       await flush(0);
 
-      expect(feedFetches().length).toBe(before + 1);
+      expect(feedFetches()).toHaveLength(before + 1);
     });
 
     it('Call back marks the row read and opens the case with the confirm param', async () => {

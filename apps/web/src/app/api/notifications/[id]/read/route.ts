@@ -5,7 +5,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationsRead } from '@/lib/realtime/ably-server';
 import { userNotificationsRepository } from '@balo/db';
 
-const uuidSchema = z.string().uuid();
+const uuidSchema = z.uuid();
 
 export async function PATCH(
   _request: Request,

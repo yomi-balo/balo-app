@@ -1071,9 +1071,10 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const actor = (data.actorExpertLabel as string) ?? 'Your expert';
     const summary = (data.changeSummary as string) ?? 'updated the delivery plan';
     const detail = data.changeDetail as string | undefined;
+    const whatChanged = detail === undefined ? '' : ` What changed: ${detail}`;
     return engagementNotice(
       'Delivery plan updated',
-      `${actor} updated the delivery plan: ${summary}.${detail === undefined ? '' : ` What changed: ${detail}`}`,
+      `${actor} updated the delivery plan: ${summary}.${whatChanged}`,
       data
     );
   },

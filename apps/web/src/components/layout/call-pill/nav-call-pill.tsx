@@ -196,9 +196,7 @@ export function NavCallPill(): React.JSX.Element {
 
   return (
     <>
-      <span role="status" className="sr-only">
-        {viewMounted ? announcement : ''}
-      </span>
+      <output className="sr-only">{viewMounted ? announcement : ''}</output>
       {viewMounted && (
         <NavCallPillView
           data={data}

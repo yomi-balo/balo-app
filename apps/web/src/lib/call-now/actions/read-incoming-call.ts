@@ -17,7 +17,7 @@ import type { IncomingCallView } from '../call-now-types';
  */
 export async function readIncomingCallAction(): Promise<IncomingCallView | null> {
   const user = await getCurrentUser();
-  if (user === null || user.onboardingCompleted !== true) return null;
+  if (user?.onboardingCompleted !== true) return null;
   if (isImpersonatedSession(user)) return null;
   return loadIncomingCall(user.id);
 }
