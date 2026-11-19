@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth';
 import { log } from '@/lib/logging';
+import { publishNotificationsRead } from '@/lib/realtime/ably-server';
 import { userNotificationsRepository } from '@balo/db';
 
 const uuidSchema = z.string().uuid();
@@ -26,6 +27,9 @@ export async function PATCH(
     if (!notification) {
       return NextResponse.json({ error: 'Notification not found' }, { status: 404 });
     }
+
+    // A row changed: other open tabs clear their call toast on this ping.
+    await publishNotificationsRead(user.id);
 
     return NextResponse.json({
       success: true,

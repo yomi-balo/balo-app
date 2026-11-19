@@ -17,6 +17,7 @@ import {
   notificationActionPath,
   pollDelayMs,
   seenThroughNow,
+  isCallToastEvent,
   selectUnseenNotifications,
   type ArrivalSource,
   type ArrivalToastDismissReason,
@@ -42,7 +43,19 @@ export interface NotificationFeed {
   closePanel: () => void;
   dismissToast: (reason: ArrivalToastDismissReason) => void;
   openNotification: (notification: BellNotification, source: ArrivalSource) => void;
+  /** Marks the given rows read: optimistic, one PATCH per id, a refetch on any failure. */
+  markRead: (ids: readonly string[]) => void;
   markAllRead: () => void;
+  /**
+   * True when staff is viewing as this user; the call toast renders nothing then. `null` until the
+   * first feed response says either way.
+   */
+  impersonating: boolean | null;
+  /**
+   * While `true`, arrivals still advance the seen cursor but raise no arrival toast and no
+   * `notification_toast_shown`; they wait in the bell. Turning it on clears a toast already up.
+   */
+  setArrivalToastSuppressed: (suppressed: boolean) => void;
   retry: () => void;
 }
 
@@ -112,6 +125,7 @@ export function useNotificationFeed({
   const [ringKey, setRingKey] = useState(0);
   const [highlightedIds, setHighlightedIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [impersonating, setImpersonating] = useState<boolean | null>(null);
 
   const listRef = useRef<BellNotification[]>([]);
   const toastRef = useRef<ArrivalToastState | null>(null);
@@ -126,6 +140,7 @@ export function useNotificationFeed({
   const fetchSeqRef = useRef(0);
   const mountedRef = useRef(false);
   const impersonatingRef = useRef(false);
+  const suppressedRef = useRef(false);
   const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pushDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -256,6 +271,10 @@ export function useNotificationFeed({
           loadPendingRef.current = true;
           return;
         }
+        if (suppressedRef.current) {
+          postSeen(new Date(newest.createdAt));
+          return;
+        }
         const unreadIds = new Set(
           listRef.current.filter((n) => n.readAt === null).map((n) => n.id)
         );
@@ -292,7 +311,7 @@ export function useNotificationFeed({
           ROW_HIGHLIGHT_MS
         );
         setRingKey((key) => key + 1);
-      } else {
+      } else if (!suppressedRef.current) {
         const previous = toastRef.current;
         showToast(
           {
@@ -311,11 +330,19 @@ export function useNotificationFeed({
   const processResponse = useCallback(
     (data: NotificationsResponse, source: FetchSource): void => {
       impersonatingRef.current = data.impersonating === true;
+      setImpersonating(impersonatingRef.current);
       if (data.lastSeenAt) advanceCursor(Date.parse(data.lastSeenAt));
       const cursor = cursorRef.current;
       const { list, matched } = applyAutoRead(data.notifications ?? []);
+      // Rows the arrival toast must not count: auto-read matches, and the call toast's own rows.
       const excludedCount =
-        cursor === null ? 0 : matched.filter((n) => Date.parse(n.createdAt) > cursor).length;
+        cursor === null
+          ? 0
+          : matched.filter((n) => Date.parse(n.createdAt) > cursor).length +
+            list.filter(
+              (n) =>
+                n.readAt === null && isCallToastEvent(n.event) && Date.parse(n.createdAt) > cursor
+            ).length;
 
       commitList(list);
       setUnreadCount(Math.max(0, (data.unreadCount ?? 0) - matched.length));
@@ -411,7 +438,7 @@ export function useNotificationFeed({
     }, PUSH_REFETCH_DEBOUNCE_MS);
   }, [fetchFeed]);
 
-  const { pushLive } = useNotificationPush({ userId: realtimeUserId, onCreated: onPushCreated });
+  const { pushLive } = useNotificationPush({ userId: realtimeUserId, onPing: onPushCreated });
 
   // The poll cadence follows the connection state, and the timer restarts from NOW on a change so
   // a stale 120s wait is never sat out after a drop. Ephemeral pings skip Ably's resume, and a row
@@ -473,6 +500,14 @@ export function useNotificationFeed({
     [commitToast]
   );
 
+  const setArrivalToastSuppressed = useCallback(
+    (suppressed: boolean): void => {
+      suppressedRef.current = suppressed;
+      if (suppressed) commitToast(null);
+    },
+    [commitToast]
+  );
+
   const openNotification = useCallback(
     (notification: BellNotification, source: ArrivalSource): void => {
       if (notification.readAt === null) {
@@ -489,6 +524,27 @@ export function useNotificationFeed({
       if (notification.actionUrl) router.push(notification.actionUrl);
     },
     [commitList, commitPanelOpen, commitToast, fetchFeed, router]
+  );
+
+  const markRead = useCallback(
+    (ids: readonly string[]): void => {
+      const target = new Set(ids);
+      const changed = listRef.current.filter((n) => n.readAt === null && target.has(n.id));
+      if (changed.length === 0) return;
+      const readAt = new Date().toISOString();
+      commitList(listRef.current.map((n) => (changed.includes(n) ? { ...n, readAt } : n)));
+      setUnreadCount((count) => Math.max(0, count - changed.length));
+      for (const { id } of changed) {
+        fetch(`/api/notifications/${id}/read`, { method: 'PATCH' })
+          .then((res) => {
+            if (!res.ok) detach(fetchFeed());
+          })
+          .catch(() => {
+            detach(fetchFeed());
+          });
+      }
+    },
+    [commitList, fetchFeed]
   );
 
   const markAllRead = useCallback((): void => {
@@ -517,7 +573,10 @@ export function useNotificationFeed({
     closePanel,
     dismissToast,
     openNotification,
+    markRead,
     markAllRead,
+    impersonating,
+    setArrivalToastSuppressed,
     retry,
   };
 }

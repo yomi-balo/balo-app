@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
-import { useLiveJoinOnPage } from '@/components/balo/meetings/live-join-registry';
+import { useLiveJoinOnPage, useRingingJoin } from '@/components/balo/meetings/live-join-registry';
 import { RoomSettingUpSlot } from '@/components/balo/meetings/room-setting-up-slot';
 import { useSidebar } from '@/components/layout/sidebar-context';
 import { useServerAnchoredClock } from '@/hooks/use-server-anchored-clock';
@@ -15,7 +15,7 @@ import type { NavCallsResponse } from '@/lib/meetings/nav-call-view-types';
 import { UP_NEXT_JOIN } from '@/lib/meetings/up-next-copy';
 import { useRoomReadyRefetch } from '@/lib/meetings/use-room-ready-refetch';
 import { MoreCallsList } from './more-calls-list';
-import { navCallReadyAnnouncement } from './nav-call-copy';
+import { NAV_CALL_CALLING_NOW, navCallReadyAnnouncement } from './nav-call-copy';
 import {
   navCallEventProps,
   navCallIsQuiet,
@@ -48,10 +48,12 @@ function NavCallPillView({
     [data.calls, now, pathname]
   );
   const joinOnPage = useLiveJoinOnPage(primary?.call.joinPath ?? null);
+  const ringing = useRingingJoin(primary?.call.joinPath ?? null);
   const quiet =
     primary === null
       ? true
-      : navCallIsQuiet({ joinOnPage, now, scheduledEnd: new Date(primary.call.scheduledEnd) });
+      : ringing ||
+        navCallIsQuiet({ joinOnPage, now, scheduledEnd: new Date(primary.call.scheduledEnd) });
 
   // Keyed on the latest-start candidate deliberately: its refetch deadline covers every earlier call.
   const settingUp = [primary, ...others].find((candidate) => candidate?.timing.roomSettingUp);
@@ -106,7 +108,9 @@ function NavCallPillView({
 
   const { call, timing } = primary;
   const name = navCallPartyName(call);
-  const statusLine = timing.statusLine ?? meetingTypeLabel(call.contextType);
+  const statusLine = ringing
+    ? NAV_CALL_CALLING_NOW
+    : (timing.statusLine ?? meetingTypeLabel(call.contextType));
   const textBlock = (
     <>
       <span className="text-foreground block truncate text-[13px] font-semibold">{name}</span>

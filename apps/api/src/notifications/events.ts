@@ -458,9 +458,11 @@ export interface BillingEmailChangedPayload {
 
 /**
  * BAL-649 / ADR-1058 — what every Call now ring event carries. SERVER-ONLY: published from the
- * API's ring services post-commit, never from apps/web. `call.ringing` (SMS), `call.no_answer`
- * (bell + the delayed missed-call email) and `call.missed_email_due` have rules; `call.declined`,
- * `call.stopped` and `call.connected` have none, so the engine logs and drops them.
+ * API's ring services post-commit, never from apps/web. `call.ringing` (SMS, and the live bell
+ * row the call toast reads), `call.no_answer` (bell + the delayed missed-call email) and
+ * `call.missed_email_due` have rules; `call.declined`, `call.stopped` and `call.connected` have
+ * none, so the engine logs and drops them. All four ring-ending events (those three and
+ * `call.no_answer`) also retract the ringing bell row before the rules lookup.
  *
  * ⚠ NO NAMES, NO ADDRESSES — ids and closed enums only. `correlationId` is the ring id: it is
  * colon-free by construction and unique per ring, and `buildJobId` further scopes it by event.

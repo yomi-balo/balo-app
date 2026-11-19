@@ -230,6 +230,18 @@ describe('CallNowDialog', () => {
   });
 
   describe('starting the call', () => {
+    it('asks for browser notification permission on the Call now click', async () => {
+      const requestPermission = vi.fn().mockResolvedValue('granted');
+      vi.stubGlobal('Notification', { permission: 'default', requestPermission });
+      try {
+        renderDialog();
+        await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
+        expect(requestPermission).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('pushes the caller to the call room on success', async () => {
       renderDialog();
       await userEvent.click(screen.getByRole('button', { name: 'Call now' }));

@@ -4,6 +4,8 @@ import {
   LiveJoinRegistryProvider,
   useLiveJoinOnPage,
   useLiveJoinRegistration,
+  useRingingJoin,
+  useRingingJoinRegistration,
 } from './live-join-registry';
 
 const URL_A = '/meetings/m-a/call';
@@ -97,5 +99,42 @@ describe('LiveJoinRegistry', () => {
       )
     ).not.toThrow();
     expect(probeValue()).toBe('false');
+  });
+});
+
+describe('LiveJoinRegistry — ringing claims', () => {
+  function RingingProbe({ joinUrl }: Readonly<{ joinUrl: string | null }>): React.JSX.Element {
+    return <span data-testid="ringing">{String(useRingingJoin(joinUrl))}</span>;
+  }
+  function RingingClaim({
+    joinUrl,
+    enabled = true,
+  }: Readonly<{ joinUrl: string; enabled?: boolean }>): null {
+    useRingingJoinRegistration(joinUrl, enabled);
+    return null;
+  }
+
+  it('claims while a claimant is mounted and releases when it unmounts', () => {
+    const tree = (claimed: boolean): React.JSX.Element => (
+      <LiveJoinRegistryProvider>
+        <RingingProbe joinUrl={URL_A} />
+        {claimed ? <RingingClaim joinUrl={URL_A} /> : null}
+      </LiveJoinRegistryProvider>
+    );
+    const { rerender } = render(tree(true));
+    expect(screen.getByTestId('ringing').textContent).toBe('true');
+    rerender(tree(false));
+    expect(screen.getByTestId('ringing').textContent).toBe('false');
+  });
+
+  it('is independent of the live registration and of a disabled claim', () => {
+    render(
+      <LiveJoinRegistryProvider>
+        <RingingProbe joinUrl={URL_A} />
+        <Registrant joinUrl={URL_A} />
+        <RingingClaim joinUrl={URL_A} enabled={false} />
+      </LiveJoinRegistryProvider>
+    );
+    expect(screen.getByTestId('ringing').textContent).toBe('false');
   });
 });

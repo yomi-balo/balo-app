@@ -101,6 +101,16 @@ export const CALL_NOW_EVENTS = {
   ABANDONED: 'call_now_abandoned',
   /** BAL-651 — the caller chose to book a time instead of calling. */
   BOOK_INSTEAD_CLICKED: 'call_now_book_instead_clicked',
+  /** BAL-653 — the call toast appeared: ringing, or the sticky missed variant. */
+  TOAST_SHOWN: 'call_toast_shown',
+  /** BAL-653 — Join was clicked on the ringing toast. */
+  TOAST_JOIN_CLICKED: 'call_toast_join_clicked',
+  /** BAL-653 — "Not now" was clicked on the ringing toast. */
+  TOAST_DECLINED: 'call_toast_declined',
+  /** BAL-653 — the missed-call toast was dismissed. */
+  MISSED_TOAST_DISMISSED: 'missed_call_toast_dismissed',
+  /** BAL-653 — Call back was clicked on the missed-call toast. */
+  MISSED_CALL_BACK_CLICKED: 'missed_call_call_back_clicked',
 } as const;
 
 /**
@@ -160,6 +170,26 @@ export interface CallNowEventMap {
      * the credit step's own "Book a time" exit.
      */
     from: 'confirm_offline' | 'no_answer' | 'funding';
+  };
+  [CALL_NOW_EVENTS.TOAST_SHOWN]: {
+    mode: 'ringing' | 'missed';
+    /** `live` arrived by push while the page was open; `load` was found on page load. */
+    trigger: 'live' | 'load';
+  };
+  [CALL_NOW_EVENTS.TOAST_JOIN_CLICKED]: {
+    /** The callee's side. */
+    lens: CallSide;
+    awaits_answer: boolean;
+  };
+  [CALL_NOW_EVENTS.TOAST_DECLINED]: {
+    /** The callee's side. */
+    lens: CallSide;
+  };
+  [CALL_NOW_EVENTS.MISSED_TOAST_DISMISSED]: {
+    missed_count: number;
+  };
+  [CALL_NOW_EVENTS.MISSED_CALL_BACK_CLICKED]: {
+    missed_count: number;
   };
 }
 

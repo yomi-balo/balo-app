@@ -3,10 +3,29 @@ import { z } from 'zod';
 import { getCurrentUser } from '@/lib/auth';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
+import { isCallToastEvent, type BellCallMeta } from '@/components/balo/notification-arrival';
 import { userNotificationsRepository, usersRepository } from '@balo/db';
 
 // Read items shown after the unread ones in the panel.
 const PANEL_READ_LIMIT = 5;
+
+function metadataString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === 'string' ? value : null;
+}
+
+/** The call-toast fields of a call row's metadata; `null` for every other event. Never throws. */
+function projectCallMeta(event: string, metadata: unknown): BellCallMeta | null {
+  if (!isCallToastEvent(event)) return null;
+  const record =
+    typeof metadata === 'object' && metadata !== null ? (metadata as Record<string, unknown>) : {};
+  return {
+    ringId: metadataString(record, 'ringId'),
+    callerUserId: metadataString(record, 'callerUserId'),
+    callerLabel: metadataString(record, 'callerLabel'),
+    startedAt: metadataString(record, 'startedAt'),
+  };
+}
 
 const querySchema = z.object({
   unread: z.enum(['true']).optional(),
@@ -43,9 +62,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       userNotificationsRepository.countUnreadAndUnseenByUserId(user.id, lastSeenAt),
     ]);
 
-    // Project only client-needed fields (omit metadata, userId, updatedAt, deletedAt)
+    // Project only client-needed fields (userId, updatedAt, deletedAt are omitted, and metadata
+    // is reduced to the call-toast fields).
     const notifications = rawNotifications.map(
-      ({ id, event, title, body, actionUrl, readAt, createdAt }) => ({
+      ({ id, event, title, body, actionUrl, readAt, createdAt, metadata }) => ({
         id,
         event,
         title,
@@ -53,6 +73,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         actionUrl,
         readAt,
         createdAt,
+        call: projectCallMeta(event, metadata),
       })
     );
 

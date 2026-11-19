@@ -1,5 +1,16 @@
 import type { NOTIFICATION_EVENTS, NotificationEventMap } from '@/lib/analytics';
 
+/**
+ * The call-toast fields of a `call.ringing` / `call.no_answer` row, read from its metadata. Every
+ * field is `null` when the row predates it, so a legacy row never groups and falls back to its title.
+ */
+export interface BellCallMeta {
+  ringId: string | null;
+  callerUserId: string | null;
+  callerLabel: string | null;
+  startedAt: string | null;
+}
+
 export interface BellNotification {
   id: string;
   event: string;
@@ -8,6 +19,15 @@ export interface BellNotification {
   actionUrl: string | null;
   readAt: string | null;
   createdAt: string;
+  /** Present only on call-toast events. Optional so rows without it still type-check. */
+  call?: BellCallMeta | null;
+}
+
+/** The events the call toast owns: the arrival toast never announces or counts them. */
+export const CALL_TOAST_EVENTS: readonly string[] = ['call.ringing', 'call.no_answer'];
+
+export function isCallToastEvent(event: string): boolean {
+  return CALL_TOAST_EVENTS.includes(event);
 }
 
 export interface NotificationsResponse {
@@ -168,7 +188,11 @@ export function selectUnseenNotifications(
   const sinceMs = since.getTime();
   return list
     .filter(
-      (n) => n.readAt === null && Date.parse(n.createdAt) > sinceMs && !announcedIds.has(n.id)
+      (n) =>
+        n.readAt === null &&
+        Date.parse(n.createdAt) > sinceMs &&
+        !announcedIds.has(n.id) &&
+        !isCallToastEvent(n.event)
     )
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }

@@ -23,7 +23,11 @@
  * conversation UUID is globally unique, so no prefix is needed.
  */
 
-export { notificationsChannelName, NOTIFICATIONS_EVENT_CREATED } from '@balo/shared/realtime';
+export {
+  notificationsChannelName,
+  NOTIFICATIONS_EVENT_CREATED,
+  NOTIFICATIONS_EVENT_READ,
+} from '@balo/shared/realtime';
 
 /** `conversation:{conversationId}` — one private channel per thread. */
 export function conversationChannelName(conversationId: string): string {

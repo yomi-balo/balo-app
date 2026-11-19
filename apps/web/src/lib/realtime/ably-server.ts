@@ -6,6 +6,8 @@ import { runAfterResponse } from '@/lib/after-response';
 import {
   conversationChannelName,
   meetingChannelName,
+  NOTIFICATIONS_EVENT_READ,
+  notificationsChannelName,
   typingChannelName,
   typingEventNameFor,
   type TypingSignal,
@@ -156,6 +158,15 @@ export async function publishTypingSignal(
  * stability, exactly as the shipped contract states.
  */
 function deferPublish(channel: string, name: string, data: unknown): Promise<void> {
+  return deferPublishMessage(channel, name, (target) => target.publish(name, data));
+}
+
+/** The deferral, the unconfigured warn and the swallow-and-log, for any message shape. */
+function deferPublishMessage(
+  channel: string,
+  name: string,
+  send: (target: Ably.Channel) => Promise<unknown>
+): Promise<void> {
   runAfterResponse('Ably publish', async () => {
     const client = getAblyRest();
     if (client === null) {
@@ -164,7 +175,7 @@ function deferPublish(channel: string, name: string, data: unknown): Promise<voi
     }
 
     try {
-      await client.channels.get(channel).publish(name, data);
+      await send(client.channels.get(channel));
     } catch (error) {
       log.error('Ably publish failed', {
         channel,
@@ -176,4 +187,19 @@ function deferPublish(channel: string, name: string, data: unknown): Promise<voi
   });
 
   return Promise.resolve();
+}
+
+/**
+ * BAL-653 — tell every open tab of `userId` that some of their notifications were marked read, so
+ * a sticky call toast clears everywhere within seconds. Publishes `notification.read` on
+ * `notifications:{userId}` with NO `data` and `extras: { ephemeral: true }`, the same wire as the
+ * api's `notification.created` ping: a receiver reads the name and refetches the feed.
+ *
+ * ⚠ THE ARGUMENT IS THE SESSION USER'S ID, passed by a read route after its auth gate. It is
+ * deferred and NEVER throws, exactly like {@link publishConversationEvent}.
+ */
+export function publishNotificationsRead(userId: string): Promise<void> {
+  return deferPublishMessage(notificationsChannelName(userId), NOTIFICATIONS_EVENT_READ, (target) =>
+    target.publish({ name: NOTIFICATIONS_EVENT_READ, extras: { ephemeral: true } })
+  );
 }

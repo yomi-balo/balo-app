@@ -18,6 +18,9 @@ vi.mock('@/lib/api/balo-api-client', async (importOriginal) => {
 
 import {
   getCallNowRing,
+  getIncomingCallNowRing,
+  parseIncomingRing,
+  postDeclineRing,
   getCallNowView,
   parseCallNowView,
   parseRingRead,
@@ -204,5 +207,72 @@ describe('the hops', () => {
       roomUrl: 'https://x.daily.co/r',
     });
     expect(parse({ roomUrl: 'https://x.daily.co/r' })).toBeNull();
+  });
+});
+
+describe('the incoming ring read', () => {
+  const INCOMING = {
+    ringId: 'ring-1',
+    meetingId: 'meeting-1',
+    engagementId: 'eng-1',
+    callerSide: 'expert',
+    placement: 'new_meeting',
+    reachedBy: 'sms',
+    expiresAt: '2026-11-19T04:01:00.000Z',
+    startedAt: '2026-11-19T04:00:15.000Z',
+    awaitsAnswer: true,
+  };
+
+  it('parses a live ring', () => {
+    expect(parseIncomingRing({ ring: INCOMING })).toEqual({
+      ringId: 'ring-1',
+      meetingId: 'meeting-1',
+      engagementId: 'eng-1',
+      callerSide: 'expert',
+      placement: 'new_meeting',
+      reachedBy: 'sms',
+      expiresAt: '2026-11-19T04:01:00.000Z',
+      startedAt: '2026-11-19T04:00:15.000Z',
+      awaitsAnswer: true,
+    });
+  });
+
+  it('defaults placement and reachedBy when an older api omits them', () => {
+    const bare = { ...INCOMING, placement: undefined, reachedBy: undefined };
+    expect(parseIncomingRing({ ring: bare })).toMatchObject({ placement: null, reachedBy: 'app' });
+  });
+
+  it('parses `ring: null` as no ring', () => {
+    expect(parseIncomingRing({ ring: null })).toBeNull();
+  });
+
+  it.each([
+    ['a missing ring', {}],
+    ['a non-object ring', { ring: 'x' }],
+    ['a missing id', { ring: { ...INCOMING, ringId: undefined } }],
+    ['a missing startedAt', { ring: { ...INCOMING, startedAt: undefined } }],
+    ['a non-boolean awaitsAnswer', { ring: { ...INCOMING, awaitsAnswer: 'yes' } }],
+    ['an unknown caller side', { ring: { ...INCOMING, callerSide: 'staff' } }],
+  ])('treats %s as malformed', (_name, body) => {
+    expect(parseIncomingRing(body)).toBeUndefined();
+  });
+
+  it('reads /call-now/incoming and turns a malformed body into a failed parse', async () => {
+    mockGet.mockResolvedValue({ ok: true, data: { ring: null } });
+    await getIncomingCallNowRing();
+    const [path, parse, label] = mockGet.mock.calls[0] ?? [];
+    expect(path).toBe('/call-now/incoming');
+    expect(label).toBe('Call now incoming read');
+    expect(parse({ ring: null })).toEqual({ ring: null });
+    expect(parse({ ring: INCOMING })).toMatchObject({ ring: { ringId: 'ring-1' } });
+    expect(parse({ nope: true })).toBeNull();
+  });
+
+  it('declines a ring by its encoded id', async () => {
+    mockPost.mockResolvedValue({ ok: true, data: {} });
+    await postDeclineRing('ring/1');
+    expect(mockPost.mock.calls[0]?.[0]).toBe('/call-now/rings/ring%2F1/decline');
+    expect(mockPost.mock.calls[0]?.[2]({ status: 'declined' })).toEqual({ status: 'declined' });
+    expect(mockPost.mock.calls[0]?.[2]({})).toBeNull();
   });
 });

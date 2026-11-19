@@ -31,6 +31,7 @@ import {
 } from '@/lib/call-now/call-now-copy';
 import { callNowFundingRequest } from '@/lib/call-now/call-now-funding';
 import { callNowPresence } from '@/lib/call-now/call-now-presence';
+import { requestCallNotificationPermission } from '@/lib/call-now/notification-permission';
 import type { CallNowConfirmView, CallNowFundingCode } from '@/lib/call-now/call-now-types';
 import { callNowCallerPath } from '@/lib/call-now/ring-landing-path';
 import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
@@ -442,6 +443,8 @@ export function CallNowDialog({
   // attempt: going Back from the funding step and committing again sends no second event.
   // `call_anyway` is the commit from the offline confirm; every other button reads "Call now".
   const handleCall = useCallback(() => {
+    // First, and synchronously, so the browser still counts it as part of the click.
+    requestCallNotificationPermission();
     if (confirmedAttemptRef.current !== attemptId) {
       confirmedAttemptRef.current = attemptId;
       track(CALL_NOW_EVENTS.CONFIRMED, {

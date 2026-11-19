@@ -10,7 +10,7 @@ import type {
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
 import type { EndOfCallRatingView } from '@/lib/meetings/end-of-call-view-types';
-import { track, RECAP_EVENTS } from '@/lib/analytics';
+import { track, RECAP_EVENTS, CALL_NOW_EVENTS } from '@/lib/analytics';
 import { PEOPLE_CARD_CLIENT_DISCLOSURE, PEOPLE_CARD_NARROW_DISCLOSURE } from './case-people-card';
 
 const trackMock = vi.mocked(track);
@@ -52,6 +52,7 @@ vi.mock('motion/react', () => ({
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: mockRouterRefresh, push: vi.fn(), replace: mockRouterReplace }),
+  useSearchParams: () => new URLSearchParams(globalThis.location.search),
 }));
 
 // BAL-651 — the real dialog reads `window.matchMedia` (absent in jsdom) and has its own suite
@@ -1815,6 +1816,31 @@ describe('CaseSurface — Call now (BAL-651)', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
     expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('book: none');
+  });
+
+  it('?call=1 opens the confirm, strips the param and tracks the missed-call entry', () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1&x=1`);
+    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+
+    expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+    expect(globalThis.location.pathname + globalThis.location.search).toBe(
+      `/cases/${ENGAGEMENT_ID}?x=1`
+    );
+    expect(trackMock).toHaveBeenCalledWith(
+      CALL_NOW_EVENTS.CLICKED,
+      expect.objectContaining({ entry: 'missed_call_back', lens: 'client', surface: 'desktop' })
+    );
+  });
+
+  it('?call=1 opens nothing when Call now is not offered, and still strips the param', () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1`);
+    render(
+      <CaseSurface view={clientView()} callNow={{ ...CALL_NOW, entry: 'busy', confirm: null }} />
+    );
+
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+    expect(trackMock).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.CLICKED, expect.anything());
+    expect(globalThis.location.search).toBe('');
   });
 
   it('opens the follow-up once for ?book=1 and drops the param', () => {

@@ -148,6 +148,26 @@ describe('JoinMeetingButton — the DOM', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('false');
   });
 
+  it('a ringing claim on the url makes every other button for it static, but not the claimant', () => {
+    const url = '/meetings/m-1/call';
+    render(
+      <LiveJoinRegistryProvider>
+        <JoinMeetingButton joinUrl={url} ariaLabel="Toast join" onJoin={vi.fn()} ringing>
+          Join
+        </JoinMeetingButton>
+        <JoinMeetingButton joinUrl={url} ariaLabel="Page join" onJoin={vi.fn()}>
+          Join
+        </JoinMeetingButton>
+      </LiveJoinRegistryProvider>
+    );
+
+    const claimant = screen.getByRole('button', { name: 'Toast join' }).className.split(' ');
+    const other = screen.getByRole('button', { name: 'Page join' }).className.split(' ');
+    expect(claimant).toContain('motion-safe:before:animate-ping-slow');
+    expect(other).not.toContain('motion-safe:before:animate-ping-slow');
+    expect(other).toContain('ring-2');
+  });
+
   it('D6 — a call-site className="absolute …" still wins over the baked-in relative', () => {
     render(
       <JoinMeetingButton

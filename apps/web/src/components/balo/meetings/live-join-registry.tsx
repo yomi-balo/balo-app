@@ -14,17 +14,16 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore } 
 interface LiveJoinStore {
   register: (joinUrl: string) => () => void;
   isLive: (joinUrl: string) => boolean;
+  registerRinging: (joinUrl: string) => () => void;
+  isRinging: (joinUrl: string) => boolean;
   subscribe: (listener: () => void) => () => void;
 }
 
-function createStore(): LiveJoinStore {
+function createRefCountedSet(notify: () => void): {
+  register: (joinUrl: string) => () => void;
+  has: (joinUrl: string) => boolean;
+} {
   const counts = new Map<string, number>();
-  const listeners = new Set<() => void>();
-
-  const notify = (): void => {
-    for (const listener of listeners) listener();
-  };
-
   return {
     register: (joinUrl) => {
       counts.set(joinUrl, (counts.get(joinUrl) ?? 0) + 1);
@@ -36,7 +35,25 @@ function createStore(): LiveJoinStore {
         notify();
       };
     },
-    isLive: (joinUrl) => (counts.get(joinUrl) ?? 0) > 0,
+    has: (joinUrl) => (counts.get(joinUrl) ?? 0) > 0,
+  };
+}
+
+function createStore(): LiveJoinStore {
+  const listeners = new Set<() => void>();
+
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
+
+  const live = createRefCountedSet(notify);
+  const ringing = createRefCountedSet(notify);
+
+  return {
+    register: live.register,
+    isLive: live.has,
+    registerRinging: ringing.register,
+    isRinging: ringing.has,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
@@ -72,6 +89,28 @@ export function useLiveJoinOnPage(joinUrl: string | null): boolean {
   return useSyncExternalStore(
     store === null ? NOOP_SUBSCRIBE : store.subscribe,
     () => (store !== null && joinUrl !== null ? store.isLive(joinUrl) : false),
+    () => false
+  );
+}
+
+/**
+ * Publishes a RINGING claim on `joinUrl` while `enabled` and mounted: the call toast's Join, for a
+ * live Call now ring. Every other Join for the same url then renders static (one moving thing).
+ */
+export function useRingingJoinRegistration(joinUrl: string, enabled: boolean): void {
+  const store = useContext(LiveJoinContext);
+  useEffect(() => {
+    if (store === null || !enabled) return undefined;
+    return store.registerRinging(joinUrl);
+  }, [store, joinUrl, enabled]);
+}
+
+/** True while a ringing Join claims `joinUrl` on the page. */
+export function useRingingJoin(joinUrl: string | null): boolean {
+  const store = useContext(LiveJoinContext);
+  return useSyncExternalStore(
+    store === null ? NOOP_SUBSCRIBE : store.subscribe,
+    () => (store !== null && joinUrl !== null ? store.isRinging(joinUrl) : false),
     () => false
   );
 }

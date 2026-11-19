@@ -15,7 +15,7 @@ vi.mock('../../lib/ably.js', () => ({
   getAblyRest: () => mockGetAblyRest(),
 }));
 
-import { publishNotificationCreated } from './in-app-push.js';
+import { publishNotificationCreated, publishNotificationRead } from './in-app-push.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -95,5 +95,38 @@ describe('publishNotificationCreated', () => {
     await expect(publishNotificationCreated('user-1')).resolves.toBeUndefined();
 
     expect(mockLog.warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('publishNotificationRead', () => {
+  it('publishes a content-free ephemeral notification.read ping on the recipient channel', async () => {
+    await publishNotificationRead('user-1');
+
+    expect(mockChannelsGet).toHaveBeenCalledWith('notifications:user-1');
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith({
+      name: 'notification.read',
+      extras: { ephemeral: true },
+    });
+  });
+
+  it('resolves and warns once when the publish rejects', async () => {
+    mockPublish.mockRejectedValue(new Error('ably 500'));
+
+    await expect(publishNotificationRead('user-1')).resolves.toBeUndefined();
+
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientId: 'user-1', error: 'ably 500' }),
+      'Notification push failed'
+    );
+  });
+
+  it('skips with a debug log when no Ably key is configured', async () => {
+    mockGetAblyRest.mockReturnValue(null);
+
+    await publishNotificationRead('user-1');
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockLog.debug).toHaveBeenCalledTimes(1);
   });
 });

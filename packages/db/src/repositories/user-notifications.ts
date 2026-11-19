@@ -104,6 +104,28 @@ export const userNotificationsRepository = {
   },
 
   /**
+   * Mark the user's unread `call.ringing` rows for one ring as read. Matches on
+   * `metadata->>'ringId'`; other events, other rings, other users and read rows are untouched.
+   * Returns the updated ids.
+   */
+  markCallRingingReadByRingId: async (userId: string, ringId: string): Promise<string[]> => {
+    const rows = await db
+      .update(userNotifications)
+      .set({ readAt: sql`NOW()` })
+      .where(
+        and(
+          eq(userNotifications.userId, userId),
+          eq(userNotifications.event, 'call.ringing'),
+          isNull(userNotifications.readAt),
+          isNull(userNotifications.deletedAt),
+          sql`${userNotifications.metadata}->>'ringId' = ${ringId}`
+        )
+      )
+      .returning({ id: userNotifications.id });
+    return rows.map((row) => row.id);
+  },
+
+  /**
    * Mark a single notification as read (excludes soft-deleted)
    * Returns the updated row or null if not found / wrong user
    */

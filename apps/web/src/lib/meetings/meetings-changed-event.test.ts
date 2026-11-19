@@ -30,10 +30,16 @@ describe('isMeetingChangeNotification', () => {
     expect(MEETING_CHANGE_NAMESPACES).toEqual(['booking', 'reschedule_proposal', 'meeting']);
   });
 
+  it.each(['call.ringing', 'call.no_answer'])('treats %s as a meeting change', (event) => {
+    expect(isMeetingChangeNotification(event)).toBe(true);
+  });
+
   it('pins the exact-event allowlist', () => {
     expect(MEETING_CHANGE_EVENTS).toEqual([
       'conversation.intro_call_booked',
       'project.kickoff_approved',
+      'call.ringing',
+      'call.no_answer',
     ]);
   });
 });

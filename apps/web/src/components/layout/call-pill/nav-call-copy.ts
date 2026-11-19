@@ -14,3 +14,6 @@ export const navMoreCalls = (count: number): string =>
   count === 1 ? `${count} more call` : `${count} more calls`;
 
 export const navMoreCallsAriaLabel = (count: number): string => `Show ${navMoreCalls(count)}`;
+
+/** The pill's status line while a live Call now ring is aimed at this meeting. */
+export const NAV_CALL_CALLING_NOW = 'Calling now';

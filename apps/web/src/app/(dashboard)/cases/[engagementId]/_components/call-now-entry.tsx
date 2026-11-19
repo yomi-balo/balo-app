@@ -7,6 +7,7 @@ import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
 import { callNowPresence } from '@/lib/call-now/call-now-presence';
 import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
+import type { CallNowSurface } from '@balo/analytics/events';
 import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 
 /**
@@ -40,6 +41,34 @@ function formatCalleeTime(timeZone: string | null): string | null {
   }
 }
 
+/**
+ * Tracks a Call now click and returns the attempt id it minted, so every later event for the same
+ * attempt joins to it. The party card's tap and the missed-call "Call back" both start here.
+ */
+export function trackCallNowClicked({
+  callNow,
+  lens,
+  surface,
+  entry,
+}: Readonly<{
+  callNow: CaseCallNowView;
+  lens: 'client' | 'expert';
+  surface: CallNowSurface;
+  entry: 'party_card' | 'missed_call_back';
+}>): string {
+  const attemptId = crypto.randomUUID();
+  track(CALL_NOW_EVENTS.CLICKED, {
+    attempt_id: attemptId,
+    lens,
+    callee_presence: callNowPresence(callNow),
+    has_booking_today:
+      callNow.confirm?.kind === 'client_terms' && callNow.confirm.inPlaceCandidate !== null,
+    surface,
+    entry,
+  });
+  return attemptId;
+}
+
 function QuietLine({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <p
@@ -56,20 +85,11 @@ export function CallNowEntry({
   lens,
   onCallNow,
 }: Readonly<CallNowEntryProps>): React.JSX.Element | null {
-  const { confirm } = callNow;
   const surface = useCallNowSurface();
   const handleClick = useCallback(() => {
-    const attemptId = crypto.randomUUID();
-    track(CALL_NOW_EVENTS.CLICKED, {
-      attempt_id: attemptId,
-      lens,
-      callee_presence: callNowPresence(callNow),
-      has_booking_today: confirm?.kind === 'client_terms' && confirm.inPlaceCandidate !== null,
-      surface,
-      entry: 'party_card',
-    });
+    const attemptId = trackCallNowClicked({ callNow, lens, surface, entry: 'party_card' });
     onCallNow(attemptId);
-  }, [lens, callNow, confirm, surface, onCallNow]);
+  }, [lens, callNow, surface, onCallNow]);
 
   if (callNow.entry === 'busy') {
     return <QuietLine>{CALL_NOW_COPY.busy(callNow.calleeLabel)}</QuietLine>;

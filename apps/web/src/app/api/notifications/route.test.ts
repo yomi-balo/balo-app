@@ -187,6 +187,51 @@ describe('GET /api/notifications', () => {
     });
   });
 
+  describe('call projection', () => {
+    it('projects the call fields of a call.no_answer row, nulling any that are missing', async () => {
+      mockFindUnreadByUserId.mockResolvedValue([
+        makeNotification({
+          event: 'call.no_answer',
+          metadata: { ringId: 'ring-1', callerUserId: 'u-9', callerLabel: 'Sandy', startedAt: 7 },
+        }),
+      ]);
+
+      const body = await (await GET(makeRequest('unread=true'))).json();
+
+      expect(body.notifications[0].call).toEqual({
+        ringId: 'ring-1',
+        callerUserId: 'u-9',
+        callerLabel: 'Sandy',
+        startedAt: null,
+      });
+    });
+
+    it('projects all-null call fields for a legacy call row without metadata keys', async () => {
+      mockFindUnreadByUserId.mockResolvedValue([
+        makeNotification({ event: 'call.ringing', metadata: null }),
+      ]);
+
+      const body = await (await GET(makeRequest('unread=true'))).json();
+
+      expect(body.notifications[0].call).toEqual({
+        ringId: null,
+        callerUserId: null,
+        callerLabel: null,
+        startedAt: null,
+      });
+    });
+
+    it('projects call as null for every other event', async () => {
+      mockFindUnreadByUserId.mockResolvedValue([
+        makeNotification({ metadata: { ringId: 'ring-1' } }),
+      ]);
+
+      const body = await (await GET(makeRequest('unread=true'))).json();
+
+      expect(body.notifications[0].call).toBeNull();
+    });
+  });
+
   describe('validation', () => {
     it('returns 400 for invalid limit', async () => {
       const res = await GET(makeRequest('limit=100'));

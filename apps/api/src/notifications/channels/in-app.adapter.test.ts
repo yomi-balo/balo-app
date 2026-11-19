@@ -53,6 +53,11 @@ vi.mock('./in-app-push.js', () => ({
   publishNotificationCreated: (...args: unknown[]) => mockPublishNotificationCreated(...args),
 }));
 
+const mockReconcile = vi.fn().mockResolvedValue(undefined);
+vi.mock('./call-ringing-row.js', () => ({
+  reconcileCallRingingRow: (...args: unknown[]) => mockReconcile(...args),
+}));
+
 // Import after mocks are set up
 import { processInAppJob } from './in-app.adapter.js';
 
@@ -113,6 +118,26 @@ describe('processInAppJob', () => {
         event: 'booking.confirmed',
         distinct_id: 'user-1',
       });
+    });
+
+    it('writes the template metadata, and the fixed keys win over it', async () => {
+      mockGetInAppTemplate.mockReturnValueOnce({
+        title: 'Sandy is calling',
+        metadata: { ringId: 'ring-1', callerLabel: 'Sandy', correlationId: 'spoofed' },
+      });
+
+      await processInAppJob(makeJob());
+
+      expect(mockInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: {
+            ringId: 'ring-1',
+            callerLabel: 'Sandy',
+            correlationId: 'corr-1',
+            template: 'booking-confirmed',
+          },
+        })
+      );
     });
 
     it('handles template with no actionUrl', async () => {
@@ -188,6 +213,36 @@ describe('processInAppJob', () => {
         'failed',
         expect.anything()
       );
+    });
+  });
+
+  // -- Ringing row reconcile (BAL-653) --------------------------------------
+
+  describe('ringing row reconcile', () => {
+    it('reconciles after the ping for a call.ringing row', async () => {
+      await processInAppJob(
+        makeJob({
+          event: 'call.ringing',
+          template: 'call-ringing-client',
+          payload: { correlationId: 'ring-1', ringId: 'ring-1' },
+        })
+      );
+
+      expect(mockReconcile).toHaveBeenCalledWith({ ringId: 'ring-1', recipientId: 'user-1' });
+      const [pingOrder] = mockPublishNotificationCreated.mock.invocationCallOrder;
+      const [reconcileOrder] = mockReconcile.mock.invocationCallOrder;
+      expect(reconcileOrder).toBeGreaterThan(pingOrder as number);
+    });
+
+    it('does not reconcile any other event, or a failed insert', async () => {
+      await processInAppJob(makeJob());
+      expect(mockReconcile).not.toHaveBeenCalled();
+
+      mockInsert.mockRejectedValueOnce(new Error('down'));
+      await expect(
+        processInAppJob(makeJob({ event: 'call.ringing', template: 'call-ringing-client' }))
+      ).rejects.toThrow('down');
+      expect(mockReconcile).not.toHaveBeenCalled();
     });
   });
 

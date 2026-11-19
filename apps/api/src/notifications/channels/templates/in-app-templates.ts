@@ -31,6 +31,8 @@ interface InAppOutput {
   title: string;
   body: string;
   actionUrl?: string;
+  /** Extra row metadata; the adapter's fixed `correlationId` and `template` keys win over it. */
+  metadata?: Readonly<Record<string, string>>;
 }
 
 /** Coerce a merged-payload numeric field to a number; 0 when absent/non-numeric. */
@@ -359,6 +361,47 @@ function callText(data: Record<string, unknown>, key: string, fallback: string):
 }
 
 /**
+ * BAL-653 — the metadata every call row carries (`ringId`, `callerUserId`, `callerLabel`,
+ * `startedAt`), so the toast groups by caller id and never parses title text. A field the payload
+ * lacks is left out.
+ */
+function callRowMetadata(
+  data: Record<string, unknown>,
+  callerLabel: string
+): Record<string, string> {
+  const metadata: Record<string, string> = { callerLabel };
+  for (const key of ['ringId', 'callerUserId', 'startedAt']) {
+    const value = data[key];
+    if (typeof value === 'string' && value.length > 0) {
+      metadata[key] = value;
+    }
+  }
+  return metadata;
+}
+
+/**
+ * BAL-653 — the bell item for a LIVE Call now ring, for either callee side. It is retracted
+ * (marked read) by the engine when the ring ends. The action is the call room, which is not an
+ * auto-read path, so visiting the case never clears a live ring.
+ */
+function ringingCallItem(
+  calleeSide: 'client' | 'expert',
+  data: Record<string, unknown>
+): InAppOutput {
+  const caller =
+    calleeSide === 'client'
+      ? callText(data, 'callerFirstName', 'Your expert')
+      : callText(data, 'callerCompanyName', 'Your client');
+  const meetingId = data.meetingId as string | undefined;
+  return {
+    title: `${caller} is calling`,
+    body: `About ${callText(data, 'callCaseTitle', 'your case')}.`,
+    actionUrl: meetingId ? `/meetings/${meetingId}/call` : undefined,
+    metadata: callRowMetadata(data, caller),
+  };
+}
+
+/**
  * BAL-652 — the bell item for a missed Call now ring, for either callee side. The title and the
  * opening of the body differ by side (copy sheet §2); the time is the ring's start in the
  * callee's own zone, and the action opens the case.
@@ -382,12 +425,14 @@ function missedCallItem(
       title: `Missed call from ${caller}`,
       body: `${caller} tried to reach you${when} about ${caseTitle}.`,
       actionUrl,
+      metadata: callRowMetadata(data, caller),
     };
   }
   return {
     title: `Missed call from ${callText(data, 'callerPersonLabel', 'Your client')}`,
     body: `They tried to reach you${when} about ${caseTitle}.`,
     actionUrl,
+    metadata: callRowMetadata(data, callText(data, 'callerCompanyName', 'Your client')),
   };
 }
 
@@ -1953,6 +1998,8 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
 
   // BAL-652 — a missed Call now ring (copy sheet §2). One bell item per missed ring; the toast's
   // grouping is BAL-653's.
+  'call-ringing-client': (data) => ringingCallItem('client', data),
+  'call-ringing-expert': (data) => ringingCallItem('expert', data),
   'call-missed-client': (data) => missedCallItem('client', data),
   'call-missed-expert': (data) => missedCallItem('expert', data),
 };

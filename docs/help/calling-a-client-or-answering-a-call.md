@@ -70,13 +70,16 @@ message the client from the case.
 
 ## When a client calls you
 
-While a client's call is ringing, **Join** appears in the top bar on any page. Choose it to pick up.
-You go straight into the call room, and the client is already waiting for you. There's no extra
-confirm step on your side.
+While a client's call is ringing, a pop-up appears under the bell on any page, with **Join** and
+**Not now**. **Join** also appears in the top bar. Choose **Join** to pick up. You go straight into
+the call room, and the client is already waiting for you. There's no extra confirm step on your
+side. Choose **Not now** and the client is told you can't talk right now.
 
-If you don't pick up before the ring runs out, the client sees that nobody answered and nothing is
-charged. Time spent waiting is never counted on an unscheduled call. You get a bell item for the
-missed call and, about ten minutes later, one email, unless you've spoken by then.
+The pop-up has no close button and stays until the ring ends. If you don't pick up before the ring
+runs out, the client sees that nobody answered and nothing is charged. Time spent waiting is never
+counted on an unscheduled call. The pop-up then turns into a missed-call pop-up, and you also get a
+bell item and, about ten minutes later, one email, unless you've spoken by then. The missed-call
+pop-up stays until you dismiss it, choose **Call back**, or open the case.
 
 You may also get a text with a link to join, if you have a verified phone number and you're not
 already online in Balo.

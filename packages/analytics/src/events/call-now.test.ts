@@ -142,6 +142,11 @@ describe('CALL_NOW_EVENTS', () => {
       'CONFIRMED',
       'FUNDING_GATE_RESOLVED',
       'FUNDING_GATE_SHOWN',
+      'MISSED_CALL_BACK_CLICKED',
+      'MISSED_TOAST_DISMISSED',
+      'TOAST_DECLINED',
+      'TOAST_JOIN_CLICKED',
+      'TOAST_SHOWN',
     ]);
   });
 
@@ -152,6 +157,29 @@ describe('CALL_NOW_EVENTS', () => {
     expect(CALL_NOW_EVENTS.CONFIRMED).toBe('call_now_confirmed');
     expect(CALL_NOW_EVENTS.ABANDONED).toBe('call_now_abandoned');
     expect(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED).toBe('call_now_book_instead_clicked');
+    expect(CALL_NOW_EVENTS.TOAST_SHOWN).toBe('call_toast_shown');
+    expect(CALL_NOW_EVENTS.TOAST_JOIN_CLICKED).toBe('call_toast_join_clicked');
+    expect(CALL_NOW_EVENTS.TOAST_DECLINED).toBe('call_toast_declined');
+    expect(CALL_NOW_EVENTS.MISSED_TOAST_DISMISSED).toBe('missed_call_toast_dismissed');
+    expect(CALL_NOW_EVENTS.MISSED_CALL_BACK_CLICKED).toBe('missed_call_call_back_clicked');
+  });
+
+  it('types the toast events with the ticket’s exact properties', () => {
+    const shown: CallNowEventMap['call_toast_shown'] = { mode: 'ringing', trigger: 'live' };
+    const join: CallNowEventMap['call_toast_join_clicked'] = {
+      lens: 'client',
+      awaits_answer: true,
+    };
+    const declined: CallNowEventMap['call_toast_declined'] = { lens: 'expert' };
+    const dismissed: CallNowEventMap['missed_call_toast_dismissed'] = { missed_count: 2 };
+    const callBack: CallNowEventMap['missed_call_call_back_clicked'] = { missed_count: 1 };
+    expect([shown.mode, join.awaits_answer, declined.lens, dismissed.missed_count]).toEqual([
+      'ringing',
+      true,
+      'expert',
+      2,
+    ]);
+    expect(callBack.missed_count).toBe(1);
   });
 
   it('types the four funnel events with the ticket’s exact properties', () => {
@@ -229,7 +257,7 @@ describe('CALL_NOW_EVENTS', () => {
 
   it('uses snake_case event values with the feature prefix', () => {
     for (const value of Object.values(CALL_NOW_EVENTS)) {
-      expect(value).toMatch(/^call_now(_[a-z]+)+$/);
+      expect(value).toMatch(/^(call_now|call_toast|missed_call)(_[a-z]+)+$/);
     }
   });
 

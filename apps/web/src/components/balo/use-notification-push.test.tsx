@@ -61,9 +61,9 @@ import { useNotificationPush } from './use-notification-push';
 
 const TOKEN_REQUEST = { keyName: 'k', nonce: 'n', mac: 'm' };
 
-async function mount(userId: string | null, onCreated: () => void = vi.fn()) {
+async function mount(userId: string | null, onPing: () => void = vi.fn()) {
   const hook = renderHook(
-    ({ id }: { id: string | null }) => useNotificationPush({ userId: id, onCreated }),
+    ({ id }: { id: string | null }) => useNotificationPush({ userId: id, onPing }),
     { initialProps: { id: userId } }
   );
   if (userId !== null) await waitFor(() => expect(fake.instances.length).toBeGreaterThan(0));
@@ -95,11 +95,14 @@ describe('useNotificationPush', () => {
     expect(result.current.pushLive).toBe(false);
   });
 
-  it('subscribes to the user channel for the ping event only', async () => {
+  it('subscribes to the user channel for the two ping events only', async () => {
     await mount('u1');
 
     expect(client().requestedChannels).toEqual(['notifications:u1']);
-    expect(client().channel.subscriptions.map((s) => s.event)).toEqual(['notification.created']);
+    expect(client().channel.subscriptions.map((s) => s.event)).toEqual([
+      'notification.created',
+      'notification.read',
+    ]);
   });
 
   it('is live only when the connection is connected AND the channel is attached', async () => {
@@ -146,11 +149,11 @@ describe('useNotificationPush', () => {
     expect(result.current.pushLive).toBe(true);
   });
 
-  it('calls the latest onCreated for each ping without restarting the connection', async () => {
+  it('calls the latest onPing for each ping without restarting the connection', async () => {
     const first = vi.fn();
     const second = vi.fn();
     const hook = renderHook(
-      ({ cb }: { cb: () => void }) => useNotificationPush({ userId: 'u1', onCreated: cb }),
+      ({ cb }: { cb: () => void }) => useNotificationPush({ userId: 'u1', onPing: cb }),
       { initialProps: { cb: first } }
     );
     await waitFor(() => expect(fake.instances.length).toBeGreaterThan(0));
@@ -168,6 +171,19 @@ describe('useNotificationPush', () => {
     expect(client().closed).toBe(0);
   });
 
+  it.each(['notification.created', 'notification.read'])(
+    'triggers onPing for a %s ping',
+    async (name) => {
+      const onPing = vi.fn();
+      await mount('u1', onPing);
+      const subscription = client().channel.subscriptions.find((s) => s.event === name);
+
+      subscription?.handler();
+
+      expect(onPing).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('closes the client and reports not live on unmount', async () => {
     const { result, unmount } = await mount('u1');
     act(() => client().goLive());
@@ -179,7 +195,7 @@ describe('useNotificationPush', () => {
   });
 
   it('creates no client when unmounted before the SDK chunk resolves', async () => {
-    const { unmount } = renderHook(() => useNotificationPush({ userId: 'u1', onCreated: vi.fn() }));
+    const { unmount } = renderHook(() => useNotificationPush({ userId: 'u1', onPing: vi.fn() }));
     unmount();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -279,7 +295,7 @@ describe('useNotificationPush', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(client().channel.subscriptions).toHaveLength(1);
+    expect(client().channel.subscriptions).toHaveLength(2);
     expect(result.current.pushLive).toBe(false);
   });
 });

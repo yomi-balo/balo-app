@@ -32,6 +32,21 @@ vi.mock('motion/react', async () => {
 
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 
+const callActions = vi.hoisted(() => ({
+  readIncoming: vi.fn(),
+  decline: vi.fn(),
+  readRing: vi.fn(),
+}));
+vi.mock('@/lib/call-now/actions/read-incoming-call', () => ({
+  readIncomingCallAction: callActions.readIncoming,
+}));
+vi.mock('@/lib/call-now/actions/decline-call-now-ring', () => ({
+  declineCallNowRingAction: callActions.decline,
+}));
+vi.mock('@/app/(call)/meetings/[meetingId]/call/_actions/read-call-now-ring', () => ({
+  readCallNowRingAction: callActions.readRing,
+}));
+
 type Listener = () => void;
 
 const { push, MockRealtime } = vi.hoisted(() => {
@@ -186,6 +201,7 @@ describe('NotificationBell', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    callActions.readIncoming.mockResolvedValue(null);
     push.instances.length = 0;
     mockTokenAction.mockResolvedValue({ success: false, disabled: true });
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -1487,6 +1503,210 @@ describe('NotificationBell', () => {
         'data-animated',
         'false'
       );
+    });
+  });
+
+  describe('call toast', () => {
+    function callRow(overrides: Record<string, unknown> = {}) {
+      return makeNotification({
+        id: 'missed-1',
+        event: 'call.no_answer',
+        title: 'Missed call from Sandy',
+        body: 'legacy body',
+        actionUrl: '/cases/case-1',
+        createdAt: minutesAgo(1),
+        call: {
+          ringId: 'ring-1',
+          callerUserId: 'u-9',
+          callerLabel: 'Sandy',
+          startedAt: new Date().toISOString(),
+        },
+        ...overrides,
+      });
+    }
+
+    function callToastCard(): HTMLElement | null {
+      return document.querySelector<HTMLElement>('[data-slot="call-toast"]');
+    }
+
+    it('shows an unread missed call as the call toast, never in the arrival toast or its count', async () => {
+      setFeed({
+        notifications: [
+          callRow(),
+          makeNotification({ id: 'other', title: 'Other', createdAt: minutesAgo(2) }),
+        ],
+        unreadCount: 2,
+        unseenCount: 2,
+      });
+      render(<NotificationBell />);
+      await flush(701);
+
+      expect(callToastCard()).toHaveAttribute('data-mode', 'missed');
+      expect(
+        screen.getByRole('status', { name: 'You missed a call from Sandy' })
+      ).toBeInTheDocument();
+      expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
+    });
+
+    it('the arrival toast does not announce the call row, so the bell badge still counts it', async () => {
+      setFeed({
+        notifications: [callRow({ readAt: null })],
+        unreadCount: 1,
+        unseenCount: 1,
+      });
+      render(<NotificationBell />);
+      await flush(701);
+
+      expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
+      expect(screen.getByRole('button', { name: '1 unread notification' })).toBeInTheDocument();
+    });
+
+    it('shows the ringing toast for a live ring and holds the arrival toast back', async () => {
+      callActions.readIncoming.mockResolvedValue({
+        ringId: 'ring-2',
+        meetingId: 'meeting-1',
+        engagementId: 'case-1',
+        lens: 'expert',
+        callerLabel: 'Northwind',
+        caseTitle: 'Flow migration',
+        rateLine: null,
+        expiresAtIso: new Date(Date.now() + 40_000).toISOString(),
+        startedAtIso: new Date().toISOString(),
+        awaitsAnswer: false,
+        joinPath: '/meetings/meeting-1/call',
+      });
+      setFeed({
+        notifications: [
+          makeNotification({ id: 'other', title: 'Other', createdAt: minutesAgo(1) }),
+        ],
+        unreadCount: 1,
+        unseenCount: 1,
+      });
+      render(<NotificationBell />);
+      await flush(701);
+
+      expect(callToastCard()).toHaveAttribute('data-mode', 'ringing');
+      expect(screen.getByRole('alertdialog', { name: 'Northwind is calling' })).toBeInTheDocument();
+      expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
+    });
+
+    it('Dismiss marks the missed row read through the read route and clears the toast', async () => {
+      setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+      render(<NotificationBell />);
+      await flush(701);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+      await flush(0);
+
+      expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(1);
+      expect(callToastCard()).toBeNull();
+    });
+
+    it('refetches the feed when marking a call row read fails', async () => {
+      setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+      render(<NotificationBell />);
+      await flush(701);
+      const before = feedFetches().length;
+      mockFetch.mockImplementation((input: string) => {
+        if (input === '/api/notifications/missed-1/read')
+          return Promise.reject(new Error('offline'));
+        return Promise.resolve(jsonResponse(feed));
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+      await flush(0);
+
+      expect(feedFetches().length).toBe(before + 1);
+    });
+
+    it('Call back marks the row read and opens the case with the confirm param', async () => {
+      setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+      render(<NotificationBell />);
+      await flush(701);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Call back' }));
+      await flush(0);
+
+      expect(callsTo('/api/notifications/missed-1/read')).toHaveLength(1);
+      expect(mockPush).toHaveBeenCalledWith('/cases/case-1?call=1');
+    });
+
+    it('clears when a refetch reports the row read from another tab', async () => {
+      setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+      render(<NotificationBell realtimeUserId="u1" />);
+      await act(async () => {
+        await vi.waitFor(() => expect(push.instances).toHaveLength(1));
+      });
+      await flush(701);
+      expect(callToastCard()).not.toBeNull();
+
+      setFeed({
+        notifications: [callRow({ readAt: new Date().toISOString() })],
+        unreadCount: 0,
+      });
+      act(() => {
+        const [instance] = push.instances;
+        for (const handler of instance?.channel.handlers ?? []) handler();
+      });
+      await flush(600);
+
+      expect(callToastCard()).toBeNull();
+    });
+
+    it('reads no live ring while staff view as the user', async () => {
+      setFeed({ notifications: [], impersonating: true });
+      render(<NotificationBell />);
+      await flush(701);
+
+      expect(callActions.readIncoming).not.toHaveBeenCalled();
+    });
+
+    it('an arrival while the call toast is up advances the seen cursor but raises no arrival toast, now or later', async () => {
+      setFeed({ notifications: [callRow()], unreadCount: 1, unseenCount: 1 });
+      render(<NotificationBell />);
+      await flush(701);
+      expect(callToastCard()).not.toBeNull();
+      vi.mocked(track).mockClear();
+      const arrivedAt = new Date(Date.now() + 5000).toISOString();
+
+      setFeed({
+        notifications: [
+          callRow(),
+          makeNotification({ id: 'live', title: 'Arrived mid-call', createdAt: arrivedAt }),
+        ],
+        unreadCount: 2,
+        lastSeenAt: null,
+      });
+      await flush(30_000);
+
+      expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
+      expect(track).not.toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, expect.anything());
+      const seen = callsTo('/api/notifications/seen').map(([, init]) =>
+        String((JSON.parse(String((init as RequestInit).body)) as { through: string }).through)
+      );
+      expect(seen).toContain(arrivedAt);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+      await flush(30_000);
+
+      expect(callToastCard()).toBeNull();
+      expect(document.querySelector('[data-slot="arrival-toast"]')).toBeNull();
+      expect(track).not.toHaveBeenCalledWith(NOTIFICATION_EVENTS.TOAST_SHOWN, expect.anything());
+    });
+
+    it('renders nothing call-related while staff view as the user', async () => {
+      callActions.readIncoming.mockResolvedValue(null);
+      setFeed({
+        notifications: [callRow()],
+        unreadCount: 1,
+        unseenCount: 1,
+        impersonating: true,
+      });
+      render(<NotificationBell />);
+      await flush(701);
+
+      expect(callToastCard()).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Call back' })).not.toBeInTheDocument();
     });
   });
 

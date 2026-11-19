@@ -1,12 +1,14 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Bell, CheckCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { CallToast } from './call-toast/call-toast';
+import { useCallToast } from './call-toast/use-call-toast';
 import { ArrivalToast } from './notification-arrival-toast';
 import {
   NOTIFICATION_ARRIVAL_COPY,
@@ -120,9 +122,17 @@ export function NotificationBell({
     closePanel,
     dismissToast,
     openNotification,
+    markRead,
     markAllRead,
+    impersonating,
+    setArrivalToastSuppressed,
     retry,
   } = useNotificationFeed({ realtimeUserId });
+  const callToast = useCallToast({ notifications, impersonating, markRead });
+  const callToastVisible = callToast.view !== null;
+  useEffect(() => {
+    setArrivalToastSuppressed(callToastVisible);
+  }, [callToastVisible, setArrivalToastSuppressed]);
   useUnreadTabTitle(unreadCount);
   const shouldReduceMotion = useReducedMotion();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -262,6 +272,14 @@ export function NotificationBell({
           )}
         </PopoverContent>
       </Popover>
+      <CallToast
+        view={callToast.view}
+        onJoin={callToast.join}
+        onDecline={callToast.decline}
+        onDismiss={callToast.dismiss}
+        onCallBack={callToast.callBack}
+        returnFocusRef={triggerRef}
+      />
       <ArrivalToast
         toast={toast}
         items={toastItems}

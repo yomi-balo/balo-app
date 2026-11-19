@@ -4,13 +4,17 @@ import { useEffect, useRef, useState } from 'react';
 import type * as Ably from 'ably';
 import { createNotificationsRealtimeTokenAction } from '@/lib/notifications/actions/create-notifications-realtime-token';
 import { fetchRealtimeToken, type RealtimeTokenResult } from '@/lib/realtime/ably-auth';
-import { NOTIFICATIONS_EVENT_CREATED, notificationsChannelName } from '@/lib/realtime/channels';
+import {
+  NOTIFICATIONS_EVENT_CREATED,
+  NOTIFICATIONS_EVENT_READ,
+  notificationsChannelName,
+} from '@/lib/realtime/channels';
 
 interface UseNotificationPushArgs {
   /** The signed-in user's id, or `null` where this surface must not hold a connection. */
   userId: string | null;
-  /** Called once per `notification.created` ping; the ping carries no payload. */
-  onCreated: () => void;
+  /** Called once per `notification.created` or `notification.read` ping; a ping carries no payload. */
+  onPing: () => void;
 }
 
 const CONNECTION_STATES = [
@@ -43,17 +47,17 @@ type ChannelState = (typeof CHANNEL_STATES)[number];
  * suspended, failed, a refused token) is `false`, so the feed falls back to its fast poll.
  *
  * `userId === null` creates no client and never loads the `ably` chunk. A message is read by NAME
- * only: it has no payload, and the caller refetches the feed through the authenticated API.
+ * only (`notification.created` and `notification.read` alike): it has no payload, and the caller refetches the feed through the authenticated API.
  */
-export function useNotificationPush({ userId, onCreated }: Readonly<UseNotificationPushArgs>): {
+export function useNotificationPush({ userId, onPing }: Readonly<UseNotificationPushArgs>): {
   pushLive: boolean;
 } {
   const [pushLive, setPushLive] = useState(false);
-  const onCreatedRef = useRef(onCreated);
+  const onPingRef = useRef(onPing);
 
   useEffect(() => {
-    onCreatedRef.current = onCreated;
-  }, [onCreated]);
+    onPingRef.current = onPing;
+  }, [onPing]);
 
   useEffect(() => {
     if (userId === null) return;
@@ -103,13 +107,14 @@ export function useNotificationPush({ userId, onCreated }: Readonly<UseNotificat
           publishLiveness();
         });
       }
-      channel
-        .subscribe(NOTIFICATIONS_EVENT_CREATED, () => {
-          if (!disposed) onCreatedRef.current();
-        })
-        .catch(() => {
+      const handlePing = (): void => {
+        if (!disposed) onPingRef.current();
+      };
+      for (const name of [NOTIFICATIONS_EVENT_CREATED, NOTIFICATIONS_EVENT_READ]) {
+        channel.subscribe(name, handlePing).catch(() => {
           // An attach failure surfaces through the channel and connection state listeners.
         });
+      }
     };
 
     connect().catch(() => {

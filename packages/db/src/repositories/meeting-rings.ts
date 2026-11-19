@@ -740,6 +740,30 @@ export const meetingRingsRepository = {
   },
 
   /**
+   * The newest live ring aimed at `calleeUserId` that is still `ringing` and unexpired at `now`.
+   * `undefined` when none.
+   */
+  async findLiveRingingForCallee(
+    calleeUserId: string,
+    now: Date,
+    exec: DbExecutor = db
+  ): Promise<MeetingRing | undefined> {
+    const [ring] = await exec
+      .select()
+      .from(meetingRings)
+      .where(
+        and(
+          eq(meetingRings.calleeUserId, calleeUserId),
+          liveRinging(),
+          gt(meetingRings.expiresAt, now)
+        )
+      )
+      .orderBy(desc(meetingRings.createdAt), desc(meetingRings.id))
+      .limit(1);
+    return ring;
+  },
+
+  /**
    * The case's `ringing` ring, expired or not — at most one exists
    * (`meeting_ring_one_ringing_per_engagement_idx`). `undefined` when none rings.
    */
