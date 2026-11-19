@@ -1562,9 +1562,11 @@ describe('meetingPresenceRepository.settlementFacts (BAL-412)', () => {
       expertEverPresent: false,
       expertOpen: false,
       clientSideEverPresent: false,
+      clientSideOpen: false,
       anyOpen: false,
       lastLeftAt: null,
       expertFirstJoinedAt: null,
+      clientSideFirstJoinedAt: null,
     });
     expect(clocks.expertPresentMs).toBe(0);
     expect(clocks.billableMs).toBe(0);
@@ -1881,9 +1883,11 @@ describe('meetingPresenceRepository.factsByMeetingIds', () => {
       expertEverPresent: false,
       expertOpen: false,
       clientSideEverPresent: false,
+      clientSideOpen: false,
       anyOpen: false,
       lastLeftAt: null,
       expertFirstJoinedAt: null,
+      clientSideFirstJoinedAt: null,
     });
   });
 
