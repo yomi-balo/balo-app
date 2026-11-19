@@ -567,7 +567,7 @@ describe('CallClient — the answer commit', () => {
     expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
   });
 
-  it('⚠ a ring that ended while the top-up ran says so too, and reports the gate abandoned', async () => {
+  it('⚠ a ring that ended while the top-up ran says the credit was added, and reports the gate resolved as top_up', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
     mockAnswerCallNowRingAction.mockResolvedValueOnce(FUNDING_REFUSAL);
     mockAnswerCallNowRingAction.mockResolvedValueOnce({
@@ -581,9 +581,9 @@ describe('CallClient — the answer commit', () => {
     await userEvent.setup().click(await screen.findByRole('button', { name: 'funded' }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`));
-    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
+    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedAfterTopUpToast('Dana'));
     expect(resolvedGateEvents()).toEqual([
-      [CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, { via: 'abandoned' }],
+      [CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, { via: 'top_up' }],
     ]);
   });
 

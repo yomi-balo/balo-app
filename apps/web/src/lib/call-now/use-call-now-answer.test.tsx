@@ -258,6 +258,30 @@ describe('useCallNowAnswer — the true exits', () => {
     expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
     expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`);
     expect(document.body.textContent ?? '').not.toMatch(/Your expert/);
+    expect(gateEvents()).toEqual([]);
+  });
+
+  it('⚠ a ring that lapses during a top-up resolves the gate as top_up and says the credit was added', async () => {
+    mockAnswerAction.mockResolvedValueOnce(FUNDING_REFUSAL);
+    mockAnswerAction.mockResolvedValueOnce({
+      ok: false,
+      code: 'ring_not_ringing',
+      engagementId: ENGAGEMENT_ID,
+    });
+    const { result } = setup();
+    await act(async () => result.current.offerAnswer(RING_ID));
+
+    await act(async () => {
+      await result.current.commitAnswer(RING_ID);
+    });
+    await act(async () => {
+      await result.current.commitAnswer(RING_ID);
+    });
+
+    expect(gateEvents()).toEqual([[CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, { via: 'top_up' }]]);
+    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedAfterTopUpToast('Dana'));
+    expect(mockToast).not.toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
+    expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`);
   });
 
   it.each(['unavailable', 'impersonation_refused', 'session_expired', 'invalid'] as const)(

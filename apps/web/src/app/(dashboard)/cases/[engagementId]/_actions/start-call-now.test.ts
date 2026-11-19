@@ -36,8 +36,8 @@ const BASE = { engagementId: ENGAGEMENT_ID, attemptId: ATTEMPT_ID };
 
 const USER = { id: 'u0000000-0000-4000-8000-000000000005' };
 
-function refusal(status: number, code: string, suggestedTopUpMinor: number | null = null) {
-  return { ok: false, status, code, detail: { suggestedTopUpMinor } };
+function refusal(status: number, code: string) {
+  return { ok: false, status, code };
 }
 
 describe('startCallNowAction', () => {
@@ -107,7 +107,7 @@ describe('startCallNowAction', () => {
   it.each([['account_on_hold'], ['booking_unfunded'], ['booking_reserved']])(
     '⚠ maps the 409 %s refusal to the funding step with the code ONLY — the api’s figure never reaches the browser',
     async (fundingCode) => {
-      mockPostStart.mockResolvedValue(refusal(409, fundingCode, 4500));
+      mockPostStart.mockResolvedValue(refusal(409, fundingCode));
       const result = await startCallNowAction(BASE);
       expect(result).toEqual({ ok: false, code: 'funding', fundingCode });
       expect(result).not.toHaveProperty('suggestedTopUpMinor');

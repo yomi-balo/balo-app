@@ -34,6 +34,9 @@ Starting a call isn't checked against the client's credit. The client company is
 answer, and if it can't cover the 15-minute minimum they're asked to add credit before they join.
 Their balance is never shown to you.
 
+Your call rings the person who booked the case. A colleague at {company} is never rung, and if
+they open the call page they wait until the call connects.
+
 ## While it rings
 
 You wait in the call room on **Calling {company}**: "We've let {company} know. Waiting isn't counted
@@ -77,9 +80,6 @@ missed call and, about ten minutes later, one email, unless you've spoken by the
 
 You may also get a text with a link to join, if you have a verified phone number and you're not
 already online in Balo.
-
-A client's call rings the person who opened the case. A colleague at the client's company is never
-rung, and if they open the call page they wait until the call connects.
 
 ## Where the call shows up
 

@@ -70,14 +70,9 @@ function ringSeconds(ring: MeetingRing): number {
 type RingEndedProperties = ServerEvents[typeof CALL_NOW_SERVER_EVENTS.RING_ENDED];
 type RefusedReason = ServerEvents[typeof CALL_NOW_SERVER_EVENTS.REFUSED]['reason'];
 
-/** The start of the UTC day `at` falls in. `attempt_number_today` counts from here. */
-function utcDayStart(at: Date): Date {
-  return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
-}
-
 /**
- * This caller's rings to this callee from the UTC day start of `ring.createdAt` up to and
- * including `ring` itself, so it is 1-based. `null` when the count cannot be read: the event
+ * This caller's rings to this callee in the rolling 24 hours ending at `ring.createdAt`, the ring
+ * itself included, so it is 1-based. `null` when the count cannot be read: the event
  * still sends, with the gap visible, rather than being lost.
  */
 async function attemptNumberToday(ring: MeetingRing): Promise<number | null> {
@@ -85,8 +80,7 @@ async function attemptNumberToday(ring: MeetingRing): Promise<number | null> {
     return await meetingRingsRepository.countCallerRingsToCallee({
       callerUserId: ring.callerUserId,
       calleeUserId: ring.calleeUserId,
-      from: utcDayStart(ring.createdAt),
-      to: ring.createdAt,
+      endingAt: ring.createdAt,
     });
   } catch (error) {
     log.warn(

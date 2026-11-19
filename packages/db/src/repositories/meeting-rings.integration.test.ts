@@ -1020,8 +1020,8 @@ describe('meetingRingsRepository — reads', () => {
   });
 
   describe('countCallerRingsToCallee (BAL-651)', () => {
-    const dayStart = new Date('2026-06-01T00:00:00.000Z');
     const ringAt = new Date('2026-06-01T15:00:00.000Z');
+    const windowStart = new Date(ringAt.getTime() - 24 * 60 * 60 * 1000);
 
     /** A fresh case for the same pair, so each seeded ring has its own one-ringing slot. */
     async function samePair(c: RingCase): Promise<RingCase> {
@@ -1051,13 +1051,12 @@ describe('meetingRingsRepository — reads', () => {
     const pairWindow = (c: RingCase) => ({
       callerUserId: c.callerUserId,
       calleeUserId: c.calleeUserId,
-      from: dayStart,
-      to: ringAt,
+      endingAt: ringAt,
     });
 
-    it('counts the pair’s rings of any status and case, both window ends included', async () => {
+    it('counts the pair’s rings of any status and case, both window ends included (exactly 24 h before counts)', async () => {
       const c = await ringCase();
-      await seedAt(c, dayStart, { status: 'unanswered' });
+      await seedAt(c, windowStart, { status: 'unanswered' });
       await seedAt(await samePair(c), new Date('2026-06-01T10:00:00.000Z'), {
         status: 'connected',
       });
@@ -1069,7 +1068,9 @@ describe('meetingRingsRepository — reads', () => {
     it('excludes the day before, after the ring, soft-deleted rings, another callee and the reverse direction', async () => {
       const c = await ringCase();
       await seedAt(c, ringAt);
-      await seedAt(await samePair(c), new Date(dayStart.getTime() - 1), { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date(windowStart.getTime() - 1), {
+        status: 'unanswered',
+      });
       await seedAt(await samePair(c), new Date(ringAt.getTime() + 1), { status: 'unanswered' });
       await seedAt(await samePair(c), new Date('2026-06-01T12:00:00.000Z'), {
         status: 'unanswered',

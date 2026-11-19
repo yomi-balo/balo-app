@@ -156,17 +156,16 @@ describe('trackRingEnded', () => {
     );
   });
 
-  it('counts this caller’s rings to this callee from the UTC day start up to the ring itself', async () => {
+  it('counts this caller’s rings to this callee in the rolling 24 hours ending at the ring', async () => {
     mocks.countCallerRingsToCallee.mockResolvedValue(3);
-    const lateInUtcDay = new Date('2026-11-16T23:59:30.000Z');
+    const createdAt = new Date('2026-11-16T23:59:30.000Z');
 
-    await trackRingEnded(ring({ createdAt: lateInUtcDay }));
+    await trackRingEnded(ring({ createdAt }));
 
     expect(mocks.countCallerRingsToCallee).toHaveBeenCalledWith({
       callerUserId: 'caller',
       calleeUserId: 'callee',
-      from: new Date('2026-11-16T00:00:00.000Z'),
-      to: lateInUtcDay,
+      endingAt: createdAt,
     });
     expect(mocks.trackServer).toHaveBeenCalledWith(
       'call_now_ring_ended',

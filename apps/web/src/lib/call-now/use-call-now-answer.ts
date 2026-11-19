@@ -109,6 +109,8 @@ export function useCallNowAnswer({
   /** Resolves `true` only when the room opened. */
   const commitAnswer = useCallback(
     async (ringId: string): Promise<boolean> => {
+      /** The funding step only re-answers once its top-up completed, and it is the only open gate. */
+      const afterTopUp = gateOpenRef.current;
       const result = await answerCallNowRingAction({ ringId });
       if (result.ok) {
         resolveGate('top_up');
@@ -147,12 +149,18 @@ export function useCallNowAnswer({
         toast.error(START_FAILURE_COPY[result.code]);
         return false;
       }
-      resolveGate('abandoned');
       if (result.code === 'ring_not_ringing' && engagementId !== undefined) {
-        toast(CALL_NOW_COPY.answerEndedToast(callerNameRef.current ?? FALLBACK_CALLER_NAME));
+        const callerName = callerNameRef.current ?? FALLBACK_CALLER_NAME;
+        resolveGate(afterTopUp ? 'top_up' : 'abandoned');
+        toast(
+          afterTopUp
+            ? CALL_NOW_COPY.answerEndedAfterTopUpToast(callerName)
+            : CALL_NOW_COPY.answerEndedToast(callerName)
+        );
         router.push(`/cases/${engagementId}`);
         return false;
       }
+      resolveGate('abandoned');
       onUnavailable();
       return false;
     },

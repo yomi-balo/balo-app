@@ -495,15 +495,22 @@ export function CallNowDialog({
     onBookTime?.();
   }, [resolveGate, onOpenChange, onBookTime]);
 
-  const handleBook = useCallback(() => {
-    track(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED, {
-      attempt_id: attemptId,
-      lens,
-      from: 'confirm_offline',
-      surface,
-    });
-    leaveForBooking();
-  }, [attemptId, lens, surface, leaveForBooking]);
+  /** Reports the funnel's book-instead step, then leaves for the booking. */
+  const bookInsteadFrom = useCallback(
+    (from: 'confirm_offline' | 'funding') => {
+      track(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED, {
+        attempt_id: attemptId,
+        lens,
+        from,
+        surface,
+      });
+      leaveForBooking();
+    },
+    [attemptId, lens, surface, leaveForBooking]
+  );
+
+  const handleBook = useCallback(() => bookInsteadFrom('confirm_offline'), [bookInsteadFrom]);
+  const handleFundingBook = useCallback(() => bookInsteadFrom('funding'), [bookInsteadFrom]);
 
   const handleFundingBack = useCallback(() => setStep('confirm'), []);
   const handleFunded = useCallback(
@@ -515,9 +522,11 @@ export function CallNowDialog({
     [attempt, handleFailure]
   );
 
-  // The funding step's "Book a time" is a way out of the gate, not the offline confirm's steer, so
-  // it leaves for the booking without a `BOOK_INSTEAD_CLICKED`.
-  const bookInstead = useMemo(() => (canBook ? leaveForBooking : null), [canBook, leaveForBooking]);
+  // The funding step's "Book a time" is a way out of the gate, reported as `from: 'funding'`.
+  const bookInstead = useMemo(
+    () => (canBook ? handleFundingBook : null),
+    [canBook, handleFundingBook]
+  );
 
   const inFunding = step === 'funding' && funding !== null;
   const title = CALL_NOW_COPY.confirmTitle(calleeLabel);

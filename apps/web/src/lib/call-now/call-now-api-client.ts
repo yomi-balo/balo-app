@@ -10,22 +10,11 @@ import type {
 import {
   getBaloApiJson,
   postBaloApiJson,
-  postBaloApiJsonWithFailureDetail,
   readInstant,
   readString,
-  type BaloApiDetailedResult,
   type BaloApiResult,
 } from '@/lib/api/balo-api-client';
 import type { CallNowRingRead, CallNowStartRead, CallNowViewRead } from './call-now-types';
-
-/**
- * What a refused start or answer carries beyond its code: the api's top-up figure on a funding
- * refusal (`409 { error, code, suggestedTopUpMinor }`), `null` on any other refusal or when the
- * api sent none.
- */
-export interface CallNowFailureDetail {
-  readonly suggestedTopUpMinor: number | null;
-}
 
 /**
  * The server-only web→api hop for Call now (BAL-649/650/652), on the shared `balo-api-client`
@@ -65,12 +54,6 @@ function readBoolean(body: Record<string, unknown>, key: string): boolean | unde
 
 function readPresence(body: Record<string, unknown>): CallNowPresence {
   return body.calleePresenceAtStart === 'online' ? 'online' : 'offline';
-}
-
-function readFailureDetail(body: Record<string, unknown>): CallNowFailureDetail {
-  const figure = body.suggestedTopUpMinor;
-  const valid = typeof figure === 'number' && Number.isSafeInteger(figure) && figure > 0;
-  return { suggestedTopUpMinor: valid ? figure : null };
 }
 
 function readReachedBy(body: Record<string, unknown>): CallRingReach {
@@ -197,14 +180,13 @@ export function getCallNowView(engagementId: string): Promise<BaloApiResult<Call
 export function postStartCallNow(
   engagementId: string,
   options: { inPlaceOfMeetingId?: string; attemptId: string }
-): Promise<BaloApiDetailedResult<CallNowStartRead, CallNowFailureDetail>> {
+): Promise<BaloApiResult<CallNowStartRead>> {
   const { inPlaceOfMeetingId, attemptId } = options;
   const body = inPlaceOfMeetingId === undefined ? {} : { inPlaceOfMeetingId };
-  return postBaloApiJsonWithFailureDetail(
+  return postBaloApiJson(
     `/cases/${encodeURIComponent(engagementId)}/call-now?attemptId=${encodeURIComponent(attemptId)}`,
     body,
     parseStart,
-    readFailureDetail,
     'Call now start'
   );
 }
@@ -221,14 +203,6 @@ export function postStopRing(ringId: string): Promise<BaloApiResult<{ status: Ca
   return postBaloApiJson(ringPath(ringId, 'stop'), {}, parseStatusBody, 'Call now stop');
 }
 
-export function postAnswerRing(
-  ringId: string
-): Promise<BaloApiDetailedResult<MemberJoinResponse, CallNowFailureDetail>> {
-  return postBaloApiJsonWithFailureDetail(
-    ringPath(ringId, 'answer'),
-    {},
-    parseJoinGrant,
-    readFailureDetail,
-    'Call now answer'
-  );
+export function postAnswerRing(ringId: string): Promise<BaloApiResult<MemberJoinResponse>> {
+  return postBaloApiJson(ringPath(ringId, 'answer'), {}, parseJoinGrant, 'Call now answer');
 }

@@ -75,6 +75,9 @@ export const CALL_NOW_COPY = {
   /** NEW — a Join or an answer that reached a ring which has already ended. */
   answerEndedToast: (name: string): string =>
     `${name}’s call has ended — nothing was charged. You can call them back from the case.`,
+  /** NEW — the ring lapsed while the callee was topping up: the credit is in, no call happened. */
+  answerEndedAfterTopUpToast: (name: string): string =>
+    `Your credit was added. ${name}’s call ended before it connected — nothing was charged for the call. You can call them back from the case.`,
   /** NEW — the caller's room lost track of the ring (the ring read keeps failing). */
   ringLostToast: 'We lost track of this call — nothing was charged. Try again from the case.',
   /** NEW — credit was added, but the call still could not start. */

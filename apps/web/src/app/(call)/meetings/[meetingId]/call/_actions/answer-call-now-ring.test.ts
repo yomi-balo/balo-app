@@ -36,7 +36,7 @@ const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const GRANT = { roomUrl: 'https://balo.daily.co/x', token: 'jwt', isOwner: false };
 
 function refusal(status: number, code: string): Record<string, unknown> {
-  return { ok: false, status, code, detail: { reason: null, suggestedTopUpMinor: null } };
+  return { ok: false, status, code };
 }
 
 beforeEach(() => {
@@ -128,7 +128,7 @@ describe('answerCallNowRingAction', () => {
       ok: false,
       status: 409,
       code: 'booking_unfunded',
-      detail: { suggestedTopUpMinor: 4500 },
+      suggestedTopUpMinor: 4500,
     });
 
     const result = await answerCallNowRingAction({ ringId: RING_ID });

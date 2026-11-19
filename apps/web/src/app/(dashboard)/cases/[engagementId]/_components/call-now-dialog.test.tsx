@@ -625,16 +625,18 @@ describe('CallNowDialog', () => {
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
 
-    it('Book a time from the funding step closes and opens booking', async () => {
+    it('⚠ Book a time from the funding step reports book-instead from funding, once', async () => {
       const { onBookTime, onOpenChange } = await openFunding();
       await userEvent.click(screen.getByRole('button', { name: 'Book a time' }));
       expect(onOpenChange).toHaveBeenCalledWith(false);
       expect(onBookTime).toHaveBeenCalledTimes(1);
       expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
-      expect(track).not.toHaveBeenCalledWith(
-        CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED,
-        expect.anything()
-      );
+      const bookInstead = vi
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED);
+      expect(bookInstead).toEqual([
+        [CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED, { ...BASE_EVENT, lens: 'client', from: 'funding' }],
+      ]);
       expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, {
         via: 'abandoned',
       });

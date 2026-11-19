@@ -155,8 +155,11 @@ export interface CallNowEventMap {
     via: 'not_now' | 'close' | 'stop_calling';
   };
   [CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED]: CallNowAttemptProperties & {
-    /** `no_answer` covers every ended ring that did not connect, declined included. */
-    from: 'confirm_offline' | 'no_answer';
+    /**
+     * `no_answer` covers every ended ring that did not connect, declined included; `funding` is
+     * the credit step's own "Book a time" exit.
+     */
+    from: 'confirm_offline' | 'no_answer' | 'funding';
   };
 }
 
@@ -184,9 +187,9 @@ export interface CallNowServerEventMap {
     /** BAL-651 — the ring rode a booking already in place today (`placement = 'in_place'`). */
     in_place_of_booking: boolean;
     /**
-     * BAL-651 — 1-based: this caller's rings to this callee from the start of the ring's UTC day
-     * up to and including this ring, whatever their status or case. The day is the UTC day, not
-     * the caller's local one. `null` when the count could not be read; the event still sends.
+     * BAL-651 — 1-based: this caller's rings to this callee in the rolling 24 hours ending at
+     * this ring's own `createdAt` (both ends inclusive), this ring included, whatever their
+     * status or case. `null` when the count could not be read; the event still sends.
      */
     attempt_number_today: number | null;
     /** The CALLER's user id. */

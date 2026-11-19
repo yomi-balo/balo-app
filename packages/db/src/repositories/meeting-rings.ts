@@ -40,6 +40,9 @@ import { isUniqueViolation } from './experts';
 import { assertEveryEdgeLegal, END_MEETING_FROM, IN_PROGRESS_FROM } from './meetings';
 
 /** The partial unique index that allows at most one `ringing` ring per case. */
+/** The window `countCallerRingsToCallee` looks back over. */
+const RING_COUNT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const ONE_RINGING_PER_ENGAGEMENT_IDX = 'meeting_ring_one_ringing_per_engagement_idx';
 
 /**
@@ -555,13 +558,14 @@ export const meetingRingsRepository = {
   },
 
   /**
-   * BAL-651 — how many live rings `callerUserId` placed to `calleeUserId` with `created_at` in
-   * `[from, to]`, both ends INCLUSIVE, whatever their status or case. Feeds
-   * `call_now_ring_ended.attempt_number_today`, where `to` is the ring's own `created_at`, so the
-   * ring counts itself. Rides `meeting_ring_caller_idx`.
+   * BAL-651 — how many live rings `callerUserId` placed to `calleeUserId` in the rolling 24 hours
+   * ending at `endingAt`: `created_at` in `[endingAt − 24 h, endingAt]`, both ends INCLUSIVE,
+   * whatever their status or case. Feeds `call_now_ring_ended.attempt_number_today`, where
+   * `endingAt` is the ring's own `created_at`, so the ring counts itself. Rides
+   * `meeting_ring_caller_idx`.
    */
   async countCallerRingsToCallee(
-    input: { callerUserId: string; calleeUserId: string; from: Date; to: Date },
+    input: { callerUserId: string; calleeUserId: string; endingAt: Date },
     exec: DbExecutor = db
   ): Promise<number> {
     const [row] = await exec
@@ -571,8 +575,8 @@ export const meetingRingsRepository = {
         and(
           eq(meetingRings.callerUserId, input.callerUserId),
           eq(meetingRings.calleeUserId, input.calleeUserId),
-          gte(meetingRings.createdAt, input.from),
-          lte(meetingRings.createdAt, input.to),
+          gte(meetingRings.createdAt, new Date(input.endingAt.getTime() - RING_COUNT_WINDOW_MS)),
+          lte(meetingRings.createdAt, input.endingAt),
           isNull(meetingRings.deletedAt)
         )
       );

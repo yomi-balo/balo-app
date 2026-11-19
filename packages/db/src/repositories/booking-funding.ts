@@ -56,7 +56,9 @@ export interface BookingFundingSnapshotInput {
   /**
    * A meeting left out of the reservable set — the Call now meeting the client is committing to,
    * which must not reserve against its own check. Reaches BOTH finder reads, so the verdict and the
-   * top-up figure agree. Never passed by the web gate or the card-removal snapshot.
+   * top-up figure agree. The api passes it for a start or answer; the web gate passes it too on the
+   * answer path, resolved server-side from the ring id (never taken from the browser). The
+   * card-removal snapshot never passes it.
    */
   readonly excludeMeetingId?: string;
 }
