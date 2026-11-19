@@ -31,6 +31,10 @@
  * ⚠⚠ DELIBERATELY NOT HERE: calendar projection, calendar invites, `booking.confirmed`. A Call now
  * meeting is a call in progress, not a booking.
  *
+ * ⚠ EVERY REFUSAL AFTER STEP 1 fires `call_now_refused` (BAL-651): the side is known only once the
+ * caller is authorized, so `case_not_found` never does. The reason is the result's own code, with
+ * `call_now_unavailable` refined to its display reason.
+ *
  * ⚠ THE `refusal` NEVER LEAVES THE API. The route answers only the display `reason`, so the
  * wire is not an oracle for why a person is unavailable.
  */
@@ -47,6 +51,7 @@ import {
   type CallNowDisplayReason,
   type CallNowRefusal,
   type CallRingPlacement,
+  type CallSide,
 } from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import { resolveCallNowRingWindows, ringExpiresAt } from '../../config/call-now-timers.js';
@@ -58,7 +63,7 @@ import {
 import { provisionCallNowVenue } from '../meetings/provision-meeting.js';
 import { authorizeCallNow } from './authorize-call-now.js';
 import type { CalleePresence } from './callee-presence.js';
-import { publishCallEvent } from './call-now-events.js';
+import { publishCallEvent, trackCallNowRefused } from './call-now-events.js';
 import { loadCallNowGates } from './call-now-gates.js';
 import { endRing } from './end-ring.js';
 import { rebuildAvailabilityBestEffort } from './post-commit.js';
@@ -105,6 +110,11 @@ export interface StartCallNowInput {
   engagementId: string;
   userId: string;
   inPlaceOfMeetingId?: string;
+  /**
+   * BAL-651 — the web funnel's per-tap attempt id, persisted on the ring for
+   * `call_now_ring_ended`. Analytics only: absent or invalid never refuses a start.
+   */
+  attemptId?: string;
   now?: Date;
   log: FastifyBaseLogger;
   /**
@@ -217,13 +227,118 @@ async function writeRing(input: WriteRingInput): Promise<WriteRingResult> {
 
 export async function startCallNow(input: StartCallNowInput): Promise<StartCallNowResult> {
   const { engagementId, userId } = input;
-  const now = input.now ?? new Date();
-  const provision = input.deps?.provision ?? provisionCallNowVenue;
 
   const authorized = await authorizeCallNow({ engagementId, userId });
   if (!authorized.ok) {
     return { ok: false, code: 'case_not_found' };
   }
+  const result = await startAuthorized(input, authorized);
+  // BAL-651 — the side is known only once authorized, so `case_not_found` never reaches here.
+  if (!result.ok && result.code !== 'case_not_found') {
+    trackCallNowRefused({
+      side: authorized.side,
+      userId,
+      result:
+        result.code === 'call_now_unavailable'
+          ? { code: result.code, reason: result.reason }
+          : { code: result.code },
+    });
+  }
+  return result;
+}
+
+/**
+ * The client's funding check over the 15-minute window, or `null` when it passes. A refusal spends
+ * nothing: it runs before the callee meter and before any write.
+ */
+async function refuseIfUnfunded(
+  input: StartCallNowInput,
+  caseRow: { companyId: string; expertProfileId: string },
+  now: Date
+): Promise<StartCallNowResult | null> {
+  const funding = await checkCaseBookingFunding({
+    companyId: caseRow.companyId,
+    expertProfileId: caseRow.expertProfileId,
+    scheduledStart: now,
+    scheduledEnd: new Date(now.getTime() + CALL_NOW_SCHEDULED_MINUTES * MS_PER_MINUTE),
+    now,
+  });
+  if (funding.ok) {
+    return null;
+  }
+  log.info(
+    { engagementId: input.engagementId, userId: input.userId, code: funding.code },
+    'Call now start refused — funding'
+  );
+  return { ok: false, code: funding.code, suggestedTopUpMinor: funding.suggestedTopUpMinor };
+}
+
+function callingPartyFor(
+  side: CallSide,
+  caseRow: { companyId: string; expertProfileId: string }
+): CallNowCallingParty {
+  return side === 'client'
+    ? { kind: 'company', id: caseRow.companyId }
+    : { kind: 'expert_profile', id: caseRow.expertProfileId };
+}
+
+/** Give back the SMS cap slot a ring spent when its write failed or threw. */
+async function giveBackSmsSlot(
+  reach: { reachedBy: 'sms' | 'app' },
+  callerUserId: string,
+  calleeUserId: string
+): Promise<void> {
+  if (reach.reachedBy === 'sms') {
+    await releaseCallSmsSlot(callerUserId, calleeUserId);
+  }
+}
+
+/** The ring is committed: schedule its expiry (best-effort), announce it and log the start. */
+async function announceStartedRing(input: {
+  ring: MeetingRing;
+  meetingId: string;
+  expiresAt: Date;
+  now: Date;
+  side: CallSide;
+  engagementId: string;
+}): Promise<void> {
+  const { ring, meetingId, expiresAt, now, side, engagementId } = input;
+  try {
+    await enqueueCallNowRingExpiry(ring.id, expiresAt, now);
+  } catch (error) {
+    log.warn(
+      {
+        ringId: ring.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Call now ring expiry could not be enqueued — the lifecycle sweep will end the ring'
+    );
+  }
+
+  await publishCallEvent('call.ringing', ring);
+  log.info(
+    {
+      ringId: ring.id,
+      meetingId,
+      engagementId,
+      placement: ring.placement,
+      callerSide: side,
+      reachedBy: ring.reachedBy,
+    },
+    'Call now ring started'
+  );
+}
+
+type AuthorizedCase = Extract<Awaited<ReturnType<typeof authorizeCallNow>>, { ok: true }>;
+
+/** Everything after authorization: the gates, funding, the write and the post-commit telling. */
+async function startAuthorized(
+  input: StartCallNowInput,
+  authorized: AuthorizedCase
+): Promise<StartCallNowResult> {
+  const { engagementId, userId } = input;
+  const now = input.now ?? new Date();
+  const provision = input.deps?.provision ?? provisionCallNowVenue;
   const { side, caseRow, mayRing } = authorized;
   if (side === 'expert' && input.inPlaceOfMeetingId !== undefined) {
     return { ok: false, code: 'in_place_not_allowed' };
@@ -266,23 +381,13 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
   }
 
   if (side === 'client' && placement.placement === 'new_meeting') {
-    const funding = await checkCaseBookingFunding({
-      companyId: caseRow.companyId,
-      expertProfileId: caseRow.expertProfileId,
-      scheduledStart: now,
-      scheduledEnd: new Date(now.getTime() + CALL_NOW_SCHEDULED_MINUTES * MS_PER_MINUTE),
-      now,
-    });
-    if (!funding.ok) {
-      log.info({ engagementId, userId, code: funding.code }, 'Call now start refused — funding');
-      return { ok: false, code: funding.code, suggestedTopUpMinor: funding.suggestedTopUpMinor };
+    const refused = await refuseIfUnfunded(input, caseRow, now);
+    if (refused !== null) {
+      return refused;
     }
   }
 
-  const callingParty: CallNowCallingParty =
-    side === 'client'
-      ? { kind: 'company', id: caseRow.companyId }
-      : { kind: 'expert_profile', id: caseRow.expertProfileId };
+  const callingParty = callingPartyFor(side, caseRow);
   if (await input.meterCallee(gates.callee.userId, callingParty)) {
     return { ok: false, code: 'rate_limited' };
   }
@@ -307,6 +412,8 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
         callerSide: side,
         reachedBy: reach.reachedBy,
         expiresAt,
+        attemptId: input.attemptId ?? null,
+        calleeOnlineAtStart: gates.calleeOnline,
       },
       now,
       log: input.log,
@@ -314,46 +421,18 @@ export async function startCallNow(input: StartCallNowInput): Promise<StartCallN
       releaseCallee: () => input.releaseCallee(callee.userId, callingParty),
     });
   } catch (error) {
-    if (reach.reachedBy === 'sms') {
-      await releaseCallSmsSlot(userId, callee.userId);
-    }
+    await giveBackSmsSlot(reach, userId, callee.userId);
     throw error;
   }
   if (!written.ok) {
-    if (reach.reachedBy === 'sms') {
-      await releaseCallSmsSlot(userId, callee.userId);
-    }
+    await giveBackSmsSlot(reach, userId, callee.userId);
     return written.result;
   }
   const { ring, meetingId } = written;
   if (reach.reachedBy === 'app' && reach.suppressedBy !== null) {
     trackCallSmsSuppressed(ring, reach.suppressedBy);
   }
-
-  try {
-    await enqueueCallNowRingExpiry(ring.id, expiresAt, now);
-  } catch (error) {
-    log.warn(
-      {
-        ringId: ring.id,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      'Call now ring expiry could not be enqueued — the lifecycle sweep will end the ring'
-    );
-  }
-
-  await publishCallEvent('call.ringing', ring);
-  log.info(
-    {
-      ringId: ring.id,
-      meetingId,
-      engagementId,
-      placement: ring.placement,
-      callerSide: side,
-      reachedBy: ring.reachedBy,
-    },
-    'Call now ring started'
-  );
+  await announceStartedRing({ ring, meetingId, expiresAt, now, side, engagementId });
 
   return { ok: true, ringId: ring.id, meetingId, placement: ring.placement, expiresAt };
 }

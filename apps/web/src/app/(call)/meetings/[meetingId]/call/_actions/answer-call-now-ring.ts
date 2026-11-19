@@ -21,6 +21,10 @@ import { log } from '@/lib/logging';
  * `engagementId` rides on the two refusals the room answers by going back to the case or by asking
  * for credit; `expertProfileId` rides on `funding` only, for the funding step's pre-flight request.
  * Both are read from the viewer's own ring read and case access.
+ *
+ * ⚠ NOTHING THE API SAID ABOUT MONEY REACHES THE BROWSER. The api's top-up figure is dropped here,
+ * and the ring's meeting id is never sent either: the pre-flight takes the ring id and resolves the
+ * meeting to exclude on the server, so the funding step quotes its own, billing-rights-aware figure.
  */
 export type AnswerCallNowRingFailureCode =
   | 'impersonation_refused'

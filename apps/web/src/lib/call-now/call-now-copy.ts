@@ -12,6 +12,13 @@ import { CALL_NOW_SCHEDULED_MINUTES } from '@balo/shared/meetings';
 
 export const CALL_NOW_COPY = {
   entry: 'Call now',
+  /** The party card's presence badge. */
+  online: 'Online',
+  /** The funding step's way back to the confirm. */
+  back: 'Back',
+  /** `From A$x.xx/min · 15-minute minimum`; the rate is the starting price, never a quote. */
+  rateLine: (perMinute: string): string =>
+    `From ${perMinute}/min · ${CALL_NOW_SCHEDULED_MINUTES}-minute minimum`,
   busy: (name: string): string => `${name} is in another call`,
   lateNight: (name: string, time: string): string =>
     `It’s ${time} for ${name} — book a time instead`,
@@ -39,6 +46,8 @@ export const CALL_NOW_COPY = {
   stop: 'Stop calling',
   noAnswerTitle: (name: string): string => `No answer from ${name}`,
   declinedTitle: (name: string): string => `${name} can’t talk right now`,
+  declinedClient: 'Nothing was charged.',
+  declinedExpert: 'Nothing was counted or charged.',
   noAnswerClient: (name: string): string =>
     `Nothing was charged. ${name} will see that you called.`,
   noAnswerExpert: (name: string): string =>
@@ -74,6 +83,15 @@ export const CALL_NOW_COPY = {
   answerTitle: (name: string): string => `${name} is calling`,
   /** NEW */
   answerAction: 'Answer',
+  /** NEW — a colleague of the person being called, waiting in the room for the call to connect. */
+  waitConnectTitle: 'Waiting for the call to connect',
+  /** NEW */
+  waitConnectBody:
+    'This call is for someone else at your company. It opens here as soon as it connects.',
+  /** NEW — the neutral wait while a read that decides who the viewer is to the call is retried. */
+  connectingTitle: 'Connecting…',
+  /** NEW */
+  connectingBody: 'We’re getting your call ready. This page updates on its own.',
 } as const;
 
 /** Why a start or an answer failed, as one sentence the toast can show. */
@@ -92,7 +110,7 @@ export const START_FAILURE_COPY: Readonly<Record<CallNowFailureCode, string>> = 
   in_place_not_eligible: 'Today’s consultation can’t be used for this call any more.',
   funding_unavailable: 'We couldn’t check your credit just now. Try again in a moment.',
   venue_unavailable: 'We couldn’t set up the call room. Try again in a moment.',
-  rate_limited: 'You’ve called a few times — try again in a minute.',
+  rate_limited: 'You’ve called a few times — try again in 10 minutes.',
   session_expired: 'Please sign in again.',
   failed: 'Something went wrong. Try again.',
 };

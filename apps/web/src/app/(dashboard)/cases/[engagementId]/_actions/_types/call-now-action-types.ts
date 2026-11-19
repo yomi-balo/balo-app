@@ -16,6 +16,14 @@ export type StartCallNowFailureCode =
   | 'rate_limited'
   | 'failed';
 
+/** Every failure that carries no funding detail: one toast sentence each. */
+export type StartCallNowPlainFailureCode = Exclude<StartCallNowFailureCode, 'funding'>;
+
 export type StartCallNowResult =
   | { ok: true; meetingId: string; ringId: string }
-  | { ok: false; code: StartCallNowFailureCode; fundingCode?: CallNowFundingCode };
+  | {
+      ok: false;
+      code: 'funding';
+      fundingCode: CallNowFundingCode;
+    }
+  | { ok: false; code: StartCallNowPlainFailureCode };

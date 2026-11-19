@@ -15,6 +15,7 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import { cn } from '@/lib/utils';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import type { BookingFlowExpert } from '@/components/booking';
 import type { ProductTaxonomy } from '@/lib/search/taxonomy';
@@ -77,7 +78,7 @@ interface CasePartyCardProps {
    */
   callNow?: CaseCallNowView | null;
   /** Opens the Call now confirm. */
-  onCallNow?: () => void;
+  onCallNow?: (attemptId: string) => void;
 }
 
 export function CasePartyCard({
@@ -157,7 +158,7 @@ export function CasePartyCard({
           {callNow?.onlineBadge === true && (
             <p className="text-success mt-1 inline-flex items-center gap-1.5 text-xs">
               <span aria-hidden="true" className="bg-success size-[7px] rounded-full" />
-              Online
+              {CALL_NOW_COPY.online}
             </p>
           )}
         </div>

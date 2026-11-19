@@ -32,6 +32,7 @@ const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const USER_ID = '11111111-2222-4333-8444-555555555555';
 const ENGAGEMENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const GRANT = { roomUrl: 'https://balo.daily.co/x', token: 'jwt', isOwner: false };
 
 function refusal(status: number, code: string): Record<string, unknown> {
@@ -43,7 +44,10 @@ beforeEach(() => {
   mockRequireOnboardedUser.mockResolvedValue({ id: USER_ID });
   mockCredentialLive.mockResolvedValue(true);
   mockPostAnswerRing.mockResolvedValue({ ok: true, data: GRANT });
-  mockGetCallNowRing.mockResolvedValue({ ok: true, data: { engagementId: ENGAGEMENT_ID } });
+  mockGetCallNowRing.mockResolvedValue({
+    ok: true,
+    data: { engagementId: ENGAGEMENT_ID, meetingId: MEETING_ID },
+  });
   mockResolveCaseAccess.mockResolvedValue({
     engagementId: ENGAGEMENT_ID,
     expertProfileId: EXPERT_PROFILE_ID,
@@ -118,6 +122,21 @@ describe('answerCallNowRingAction', () => {
       expect(mockResolveCaseAccess).toHaveBeenCalledWith(ENGAGEMENT_ID, USER_ID);
     }
   );
+
+  it('⚠ a funding refusal carries neither the ring’s meeting nor the api’s top-up figure', async () => {
+    mockPostAnswerRing.mockResolvedValue({
+      ok: false,
+      status: 409,
+      code: 'booking_unfunded',
+      detail: { suggestedTopUpMinor: 4500 },
+    });
+
+    const result = await answerCallNowRingAction({ ringId: RING_ID });
+
+    expect(result).toMatchObject({ code: 'funding', expertProfileId: EXPERT_PROFILE_ID });
+    expect(result).not.toHaveProperty('suggestedTopUpMinor');
+    expect(result).not.toHaveProperty('meetingId');
+  });
 
   it('a funding refusal whose case cannot be read is unavailable, never a half-built request', async () => {
     mockPostAnswerRing.mockResolvedValue(refusal(409, 'booking_unfunded'));

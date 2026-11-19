@@ -6,6 +6,8 @@ const {
   mockFindUser,
   mockFindMeeting,
   mockFactsByMeetingIds,
+  mockMeetingOrigin,
+  mockListRingFacts,
   mockPublish,
   mockTrackServer,
   mockLogError,
@@ -27,6 +29,8 @@ const {
     mockFindUser: vi.fn(),
     mockFindMeeting: vi.fn(),
     mockFactsByMeetingIds: vi.fn(),
+    mockMeetingOrigin: vi.fn(),
+    mockListRingFacts: vi.fn(),
     mockPublish: vi.fn(),
     mockTrackServer: vi.fn(),
     mockLogError: vi.fn(),
@@ -65,10 +69,12 @@ vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindUser },
   meetingsRepository: { findById: mockFindMeeting },
   meetingPresenceRepository: { factsByMeetingIds: mockFactsByMeetingIds },
+  meetingRingsRepository: { listFactsForMeetings: mockListRingFacts },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
     `overdraft_settlement:${input.sessionId}`,
 }));
+vi.mock('../call-now/meeting-origin.js', () => ({ meetingOrigin: mockMeetingOrigin }));
 vi.mock('../credit/receivable-coverage.js', () => ({ clearCoveredHold: mockClearCoveredHold }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -143,6 +149,7 @@ const SETTLEABLE = {
   expertProfileId: 'expert_1',
   overdraftSettledMinor: 1_200,
   openedBy: 'client',
+  meetingId: 'meeting_1',
 } as const;
 
 /** A hold status whose top-up figure is `amountToClearMinor`. */
@@ -161,6 +168,7 @@ function holdStatus(overrides: Record<string, unknown> = {}): Record<string, unk
 beforeEach(() => {
   vi.clearAllMocks();
   mockTransaction.mockImplementation(async (fn: (t: unknown) => unknown) => fn(TX));
+  mockMeetingOrigin.mockResolvedValue('booked');
   mockFindProfileById.mockResolvedValue({ userId: 'expert_user_1' });
   mockFindUser.mockResolvedValue({ firstName: 'Jordan', lastName: 'Ellis' });
   mockGetMemberRole.mockResolvedValue('member');
@@ -247,6 +255,44 @@ describe('notify helpers', () => {
         overdraft_settled_minor: 1_200,
         opened_by: 'client',
       })
+    );
+  });
+
+  it('publishSessionSettled reports the meeting origin (BAL-651), looked up by the session meeting', async () => {
+    mockMeetingOrigin.mockResolvedValueOnce('call_now');
+    await publishSessionSettled(SETTLEABLE, NOW);
+    expect(mockMeetingOrigin).toHaveBeenCalledWith('meeting_1');
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ origin: 'call_now' })
+    );
+  });
+
+  it('publishSessionSettled still publishes the receipt when the origin read fails (BAL-651)', async () => {
+    const actual = await vi.importActual<typeof import('../call-now/meeting-origin.js')>(
+      '../call-now/meeting-origin.js'
+    );
+    mockMeetingOrigin.mockImplementationOnce(actual.meetingOrigin);
+    mockListRingFacts.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(publishSessionSettled(SETTLEABLE, NOW)).resolves.toBeUndefined();
+
+    expect(mockPublish).toHaveBeenCalledWith(
+      'session.settled',
+      expect.objectContaining({ sessionId: SETTLEABLE.id })
+    );
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ origin: 'booked' })
+    );
+  });
+
+  it('publishSessionSettled asks for the origin of a session with no meeting (BAL-651)', async () => {
+    await publishSessionSettled({ ...SETTLEABLE, meetingId: null }, NOW);
+    expect(mockMeetingOrigin).toHaveBeenCalledWith(null);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ origin: 'booked' })
     );
   });
 
@@ -1027,6 +1073,7 @@ describe('publishSettlementFailure (BAL-474 — never throttled, wallet grain)',
         companyId: 'company_1',
         walletId: 'wallet_1',
         openedBy: 'system',
+        meetingId: null,
       },
       reason: 'declined',
       amountMinor: 900,
@@ -1058,6 +1105,65 @@ describe('publishSettlementFailure (BAL-474 — never throttled, wallet grain)',
     expect(mockStampDailyDunning).not.toHaveBeenCalled();
   });
 
+  it('reports the meeting origin on the failure analytics too (BAL-651)', async () => {
+    mockReadHoldStatus.mockResolvedValue(holdStatus());
+    mockMeetingOrigin.mockResolvedValueOnce('call_now');
+    await publishSettlementFailure({
+      session: {
+        id: 'session_1',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        openedBy: 'client',
+        meetingId: 'meeting_1',
+      },
+      reason: 'declined',
+      amountMinor: 900,
+      receivableId: 'receivable_1',
+      now: NOW,
+    });
+    expect(mockMeetingOrigin).toHaveBeenCalledWith('meeting_1');
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ outcome: 'fail', origin: 'call_now' })
+    );
+  });
+
+  it('still opens the receivable and publishes the dunning notice when the origin read fails (BAL-651)', async () => {
+    const actual = await vi.importActual<typeof import('../call-now/meeting-origin.js')>(
+      '../call-now/meeting-origin.js'
+    );
+    mockMeetingOrigin.mockImplementationOnce(actual.meetingOrigin);
+    mockListRingFacts.mockRejectedValueOnce(new Error('db down'));
+    mockReadHoldStatus.mockResolvedValue(holdStatus({ amountToClearMinor: 900 }));
+
+    await publishSettlementFailure({
+      session: {
+        id: 'session_1',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        openedBy: 'client',
+        meetingId: 'meeting_1',
+      },
+      reason: 'declined',
+      amountMinor: 900,
+      receivableId: 'receivable_1',
+      now: NOW,
+    });
+
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'session_settled',
+      expect.objectContaining({ outcome: 'fail', origin: 'booked' })
+    );
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'receivable_opened',
+      expect.objectContaining({ amount_minor: 900 })
+    );
+    expect(mockPublish).toHaveBeenCalledWith(
+      'session.settlement_failed',
+      expect.objectContaining({ correlationId: 'hold_dunning:receivable_1' })
+    );
+  });
+
   it('maps a requires_action outcome + receivable reason', async () => {
     mockReadHoldStatus.mockResolvedValue(holdStatus());
     await publishSettlementFailure({
@@ -1066,6 +1172,7 @@ describe('publishSettlementFailure (BAL-474 — never throttled, wallet grain)',
         companyId: 'company_1',
         walletId: 'wallet_1',
         openedBy: 'client',
+        meetingId: null,
       },
       reason: 'requires_action',
       amountMinor: 900,
@@ -1091,6 +1198,7 @@ describe('publishSettlementFailure (BAL-474 — never throttled, wallet grain)',
           companyId: 'company_1',
           walletId: 'wallet_1',
           openedBy: 'client',
+          meetingId: null,
         },
         reason: 'declined',
         amountMinor: 900,

@@ -14,6 +14,7 @@
  * only this package's own sources, including its `typecheck` script.
  */
 import type {
+  CallNowFacts,
   MeetingBookingContextType,
   MeetingContextTypeWithHolder,
   MeetingEndRefusalReason,
@@ -328,6 +329,11 @@ export interface MeetingServerEventMap {
       | null;
     /** `meetings.ended_by`. ⚠ EVERY system rule reports `system_idle`; `outcome` separates them. */
     ended_by: 'client_principal' | 'expert_host' | 'system_idle';
+    /**
+     * BAL-651 — `call_now` when a Call now ring created the meeting, `booked` otherwise (a ring
+     * that rode a booking in place leaves it `booked`). Derived from the ring rows, never stored.
+     */
+    origin: CallNowFacts['origin'];
     /** The acting user on a human End; the MEETING id on every system path. */
     distinct_id: string;
   };

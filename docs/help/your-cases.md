@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 1
 published: true
-updated: 2026-11-06
+updated: 2026-11-19
 related: [booking-a-consultation, joining-a-call, turning-a-case-into-a-project]
 ---
 
@@ -29,7 +29,9 @@ Your next consultation is promoted to a ticket at the top of the list, with the 
 how long it runs. **Join call** appears 3 minutes before it starts and takes you straight into
 the call — you're already signed in, so there's no name or email step. Outside that window the
 ticket says when Join opens instead. Join stays available until 30 minutes after the scheduled
-end, or until the call itself ends, whichever comes first.
+end, or until the call itself ends, whichever comes first. A call started without a booking is
+marked **Unscheduled call** in the case's list of consultations, and **Join** opens the call room
+straight away while it's ringing.
 
 Every other open case shows as a card with what's happening next on it:
 

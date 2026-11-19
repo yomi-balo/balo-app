@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const { mockGet, mockPost } = vi.hoisted(() => ({
+const { mockGet, mockPost, mockPostDetailed } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPost: vi.fn(),
+  mockPostDetailed: vi.fn(),
 }));
 
 vi.mock('@/lib/api/balo-api-client', async (importOriginal) => {
@@ -13,6 +14,7 @@ vi.mock('@/lib/api/balo-api-client', async (importOriginal) => {
     ...actual,
     getBaloApiJson: mockGet,
     postBaloApiJson: mockPost,
+    postBaloApiJsonWithFailureDetail: mockPostDetailed,
   };
 });
 
@@ -37,6 +39,8 @@ const RING = {
   awaitsAnswer: false,
   meetingEnded: false,
   reachedBy: 'sms',
+  attemptId: 'attempt-1',
+  calleePresenceAtStart: 'online',
 };
 
 beforeEach(() => {
@@ -99,6 +103,19 @@ describe('parseRingRead', () => {
       awaitsAnswer: false,
       meetingEnded: false,
       reachedBy: 'sms',
+      attemptId: 'attempt-1',
+      calleePresenceAtStart: 'online',
+    });
+  });
+
+  it('defaults a missing attempt id to null and a missing presence to offline (deploy skew)', () => {
+    const old: Record<string, unknown> = { ...RING };
+    delete old.attemptId;
+    delete old.calleePresenceAtStart;
+    expect(parseRingRead(old)).toMatchObject({ attemptId: null, calleePresenceAtStart: 'offline' });
+    expect(parseRingRead({ ...RING, attemptId: null, calleePresenceAtStart: null })).toMatchObject({
+      attemptId: null,
+      calleePresenceAtStart: 'offline',
     });
   });
 
@@ -132,18 +149,25 @@ describe('the hops', () => {
   });
 
   it('starts with an empty body, or with the in-place meeting when one is chosen', async () => {
-    mockPost.mockResolvedValue({ ok: true, data: {} });
-    await postStartCallNow('eng-1', {});
-    await postStartCallNow('eng-1', { inPlaceOfMeetingId: 'm-1' });
-    expect(mockPost.mock.calls[0]?.[0]).toBe('/cases/eng-1/call-now');
-    expect(mockPost.mock.calls[0]?.[1]).toEqual({});
-    expect(mockPost.mock.calls[1]?.[1]).toEqual({ inPlaceOfMeetingId: 'm-1' });
+    mockPostDetailed.mockResolvedValue({ ok: true, data: {} });
+    await postStartCallNow('eng-1', { attemptId: 'a-1' });
+    await postStartCallNow('eng-1', { inPlaceOfMeetingId: 'm-1', attemptId: 'a-1' });
+    expect(mockPostDetailed.mock.calls[0]?.[1]).toEqual({});
+    expect(mockPostDetailed.mock.calls[1]?.[1]).toEqual({ inPlaceOfMeetingId: 'm-1' });
+  });
+
+  it('sends the attempt id as a query parameter and never in the strict body', async () => {
+    mockPostDetailed.mockResolvedValue({ ok: true, data: {} });
+    await postStartCallNow('eng/1', { inPlaceOfMeetingId: 'm-1', attemptId: 'a b' });
+    const [path, body] = mockPostDetailed.mock.calls[0] ?? [];
+    expect(path).toBe('/cases/eng%2F1/call-now?attemptId=a%20b');
+    expect(JSON.stringify(body)).not.toContain('attemptId');
   });
 
   it('parses a start body', async () => {
-    mockPost.mockResolvedValue({ ok: true, data: {} });
-    await postStartCallNow('eng-1', {});
-    const [, , parse] = mockPost.mock.calls[0] ?? [];
+    mockPostDetailed.mockResolvedValue({ ok: true, data: {} });
+    await postStartCallNow('eng-1', { attemptId: 'a-1' });
+    const [, , parse] = mockPostDetailed.mock.calls[0] ?? [];
     expect(
       parse({
         ringId: 'r',
@@ -160,6 +184,20 @@ describe('the hops', () => {
     expect(parse({ ringId: 'r' })).toBeNull();
   });
 
+  it('reads the api’s top-up figure on a refused start or answer, and null otherwise', async () => {
+    mockPostDetailed.mockResolvedValue({ ok: true, data: {} });
+    await postStartCallNow('eng-1', { attemptId: 'a-1' });
+    await postAnswerRing('ring-1');
+    for (const call of mockPostDetailed.mock.calls) {
+      const readFailure = call[3];
+      expect(readFailure({ suggestedTopUpMinor: 4500 })).toEqual({ suggestedTopUpMinor: 4500 });
+      expect(readFailure({ suggestedTopUpMinor: null })).toEqual({ suggestedTopUpMinor: null });
+      expect(readFailure({ suggestedTopUpMinor: -1 })).toEqual({ suggestedTopUpMinor: null });
+      expect(readFailure({ suggestedTopUpMinor: '4500' })).toEqual({ suggestedTopUpMinor: null });
+      expect(readFailure({})).toEqual({ suggestedTopUpMinor: null });
+    }
+  });
+
   it('reads and acts on a ring by its encoded id', async () => {
     mockGet.mockResolvedValue({ ok: true, data: {} });
     mockPost.mockResolvedValue({ ok: true, data: {} });
@@ -174,9 +212,9 @@ describe('the hops', () => {
   });
 
   it('answers a ring and accepts only a join grant', async () => {
-    mockPost.mockResolvedValue({ ok: true, data: {} });
+    mockPostDetailed.mockResolvedValue({ ok: true, data: {} });
     await postAnswerRing('ring-1');
-    const [path, , parse] = mockPost.mock.calls[0] ?? [];
+    const [path, , parse] = mockPostDetailed.mock.calls[0] ?? [];
     expect(path).toBe('/call-now/rings/ring-1/answer');
     expect(parse({ roomUrl: 'https://x.daily.co/r', token: 't', isOwner: false })).toMatchObject({
       roomUrl: 'https://x.daily.co/r',

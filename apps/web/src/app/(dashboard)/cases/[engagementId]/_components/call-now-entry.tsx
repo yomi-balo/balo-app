@@ -7,6 +7,7 @@ import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
 import { callNowPresence } from '@/lib/call-now/call-now-presence';
 import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
+import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 
 /**
  * BAL-651 — the party card's Call now entry. Renders from the loader's `CaseCallNowView` alone:
@@ -21,7 +22,8 @@ interface CallNowEntryProps {
   callNow: CaseCallNowView;
   /** Which side is looking, for the click event. Presentation only. */
   lens: 'client' | 'expert';
-  onCallNow: () => void;
+  /** Opens the confirm with the attempt id minted by this tap, so every later event joins to it. */
+  onCallNow: (attemptId: string) => void;
 }
 
 /** The callee's local time, `null` when the zone is absent or not one the runtime knows. */
@@ -55,14 +57,19 @@ export function CallNowEntry({
   onCallNow,
 }: Readonly<CallNowEntryProps>): React.JSX.Element | null {
   const { confirm } = callNow;
+  const surface = useCallNowSurface();
   const handleClick = useCallback(() => {
-    track(CALL_NOW_EVENTS.ENTRY_CLICKED, {
+    const attemptId = crypto.randomUUID();
+    track(CALL_NOW_EVENTS.CLICKED, {
+      attempt_id: attemptId,
       lens,
-      presence: callNowPresence(confirm),
+      callee_presence: callNowPresence(callNow),
       has_booking_today: confirm?.kind === 'client_terms' && confirm.inPlaceCandidate !== null,
+      surface,
+      entry: 'party_card',
     });
-    onCallNow();
-  }, [lens, confirm, onCallNow]);
+    onCallNow(attemptId);
+  }, [lens, callNow, confirm, surface, onCallNow]);
 
   if (callNow.entry === 'busy') {
     return <QuietLine>{CALL_NOW_COPY.busy(callNow.calleeLabel)}</QuietLine>;

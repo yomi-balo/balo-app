@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CALL_NOW_EVENTS } from '@balo/analytics/events';
 import { track } from '@/lib/analytics';
@@ -17,25 +17,33 @@ import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
 const {
   mockJoinAsMemberAction,
   mockAnswerCallNowRingAction,
+  mockReadAnswerView,
   mockUseCallNowRing,
   mockStop,
   mockPush,
   mockToast,
   mockToastSuccess,
   mockToastError,
-} = vi.hoisted(() => ({
-  mockJoinAsMemberAction: vi.fn(),
-  mockAnswerCallNowRingAction: vi.fn(),
-  mockUseCallNowRing: vi.fn(),
-  mockStop: vi.fn(),
-  mockPush: vi.fn(),
-  mockToast: vi.fn(),
-  mockToastSuccess: vi.fn(),
-  mockToastError: vi.fn(),
-}));
+  mockRouter,
+} = vi.hoisted(() => {
+  const push = vi.fn();
+  return {
+    mockPush: push,
+    // One identity for every render: an effect keyed on the router must not re-fire per render.
+    mockRouter: { push, replace: vi.fn() },
+    mockJoinAsMemberAction: vi.fn(),
+    mockAnswerCallNowRingAction: vi.fn(),
+    mockReadAnswerView: vi.fn(),
+    mockUseCallNowRing: vi.fn(),
+    mockStop: vi.fn(),
+    mockToast: vi.fn(),
+    mockToastSuccess: vi.fn(),
+    mockToastError: vi.fn(),
+  };
+});
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: vi.fn() }),
+  useRouter: () => mockRouter,
 }));
 vi.mock('sonner', () => ({
   toast: Object.assign(mockToast, { success: mockToastSuccess, error: mockToastError }),
@@ -45,6 +53,12 @@ vi.mock('@/app/join/_actions/join-as-member', () => ({
 }));
 vi.mock('../_actions/answer-call-now-ring', () => ({
   answerCallNowRingAction: mockAnswerCallNowRingAction,
+}));
+vi.mock('../_actions/read-call-now-answer-view', () => ({
+  readCallNowAnswerViewAction: mockReadAnswerView,
+}));
+vi.mock('@/lib/call-now/use-call-now-surface', () => ({
+  useCallNowSurface: () => 'desktop',
 }));
 vi.mock('@/lib/call-now/use-call-now-ring', () => ({
   useCallNowRing: (ring: unknown) => mockUseCallNowRing(ring),
@@ -82,7 +96,13 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
 vi.mock('@/components/balo/call-now/call-now-funding-step', () => ({
   CallNowFundingStep: (props: {
     callerLens: string;
-    request: { expertProfileId: string; caseChoice: { kind: string; engagementId?: string } };
+    fundingCode: string;
+    context?: string;
+    request: {
+      expertProfileId: string;
+      ringId?: string;
+      caseChoice: { kind: string; engagementId?: string };
+    };
     onFunded: () => Promise<boolean>;
     onBack: () => void;
     onBookInstead: (() => void) | null;
@@ -90,6 +110,11 @@ vi.mock('@/components/balo/call-now/call-now-funding-step', () => ({
     <div
       data-testid="funding-step"
       data-caller-lens={props.callerLens}
+      data-funding-code={props.fundingCode}
+      data-context={props.context ?? ''}
+      data-ring={props.request.ringId ?? ''}
+      data-has-suggested={String('suggestedTopUpMinor' in props)}
+      data-has-exclude={String('excludeMeetingId' in props.request)}
       data-expert={props.request.expertProfileId}
       data-engagement={props.request.caseChoice.engagementId ?? ''}
     >
@@ -117,6 +142,10 @@ const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const ENGAGEMENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+const ATTEMPT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const AWAIT_RETRY_MS = 5_000;
+const RATE_LINE = 'From A$3.75/min · 15-minute minimum';
+const ANSWER_VIEW = { kind: 'answer', callerName: 'Dana', rateLine: RATE_LINE };
 
 const GRANT = {
   roomUrl: 'https://balo.daily.co/x',
@@ -136,6 +165,8 @@ const CALLER: CallNowCallerView = {
   status: 'ringing',
   expiresAtIso: '2026-09-02T10:00:45.000Z',
   reachedBy: 'sms',
+  attemptId: ATTEMPT_ID,
+  calleePresence: 'online',
 };
 
 interface RingState {
@@ -176,6 +207,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: GRANT });
   mockStop.mockResolvedValue({ ok: true, status: 'stopped' });
+  mockReadAnswerView.mockResolvedValue(ANSWER_VIEW);
   ringState({ status: null, remainingSeconds: null });
 });
 
@@ -228,7 +260,25 @@ describe('CallClient — Stop calling', () => {
     await user.click(await screen.findByRole('button', { name: 'probe stop' }));
 
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith(CALL_NOW_COPY.stoppedToast));
-    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: 'calling' });
+    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, {
+      attempt_id: ATTEMPT_ID,
+      lens: 'client',
+      callee_presence: 'online',
+      step: 'calling',
+      via: 'stop_calling',
+      surface: 'desktop',
+    });
+  });
+
+  it('a ring with no persisted attempt id stops without an abandon event', async () => {
+    ringState();
+    renderClient({ ...CALLER, attemptId: null });
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'probe stop' }));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith(CALL_NOW_COPY.stoppedToast));
+    expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
   });
 
   it('⚠ a stop that loses a race to a connect says nothing and stays in the room', async () => {
@@ -241,7 +291,7 @@ describe('CallClient — Stop calling', () => {
 
     await waitFor(() => expect(mockStop).toHaveBeenCalledTimes(1));
     expect(mockToastSuccess).not.toHaveBeenCalled();
-    expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, expect.anything());
+    expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
     expect(mockPush).not.toHaveBeenCalled();
   });
 
@@ -328,6 +378,14 @@ function resolvedGateEvents(): unknown[][] {
     .mock.calls.filter(([event]) => event === CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED);
 }
 
+const FUNDING_REFUSAL = {
+  ok: false,
+  code: 'funding',
+  fundingCode: 'booking_unfunded',
+  engagementId: ENGAGEMENT_ID,
+  expertProfileId: EXPERT_PROFILE_ID,
+};
+
 describe('CallClient — the answer commit', () => {
   const ANSWER_REQUIRED = { success: false, reason: 'answer_required', ringId: RING_ID };
 
@@ -342,12 +400,31 @@ describe('CallClient — the answer commit', () => {
     renderClient();
 
     expect(
-      await screen.findByRole('heading', { name: CALL_NOW_COPY.answerTitle('Your expert') })
+      await screen.findByRole('heading', { name: CALL_NOW_COPY.answerTitle('Dana') })
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: CALL_NOW_COPY.answerAction })).toBeEnabled();
     expect(mockAnswerCallNowRingAction).not.toHaveBeenCalled();
     expect(screen.queryByTestId('surface')).toBeNull();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('⚠ the Answer notice names the caller, quotes the rate and the minimum, and never says "Your expert"', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    renderClient();
+
+    await screen.findByRole('heading', { name: CALL_NOW_COPY.answerTitle('Dana') });
+
+    expect(mockReadAnswerView).toHaveBeenCalledWith({ ringId: RING_ID, meetingId: MEETING_ID });
+    expect(screen.getByText(CALL_NOW_COPY.clientTerms(RATE_LINE))).toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/Your expert/);
+  });
+
+  it('a rate that cannot be quoted still shows the timer line', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockReadAnswerView.mockResolvedValue({ kind: 'answer', callerName: 'Dana', rateLine: null });
+    renderClient();
+
+    expect(await screen.findByText(CALL_NOW_COPY.clientTermsNoRate)).toBeInTheDocument();
   });
 
   it('⚠ the Answer click commits the ring once and opens the room — never the case', async () => {
@@ -382,6 +459,26 @@ describe('CallClient — the answer commit', () => {
     expect(screen.queryByTestId('surface')).toBeNull();
   });
 
+  it('⚠ the funding step speaks answering and names the ring, never a meeting or a figure', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockAnswerCallNowRingAction.mockResolvedValue({
+      ok: false,
+      code: 'funding',
+      fundingCode: 'booking_reserved',
+      engagementId: ENGAGEMENT_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+    renderClient();
+    await clickAnswer();
+
+    const step = await screen.findByTestId('funding-step');
+    expect(step).toHaveAttribute('data-funding-code', 'booking_reserved');
+    expect(step).toHaveAttribute('data-context', 'answer');
+    expect(step).toHaveAttribute('data-ring', RING_ID);
+    expect(step).toHaveAttribute('data-has-suggested', 'false');
+    expect(step).toHaveAttribute('data-has-exclude', 'false');
+  });
+
   it('funded re-answers and opens the room', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
     mockAnswerCallNowRingAction.mockResolvedValueOnce({
@@ -404,12 +501,7 @@ describe('CallClient — the answer commit', () => {
 
   it('⚠ a top-up that lets the re-answer through resolves the funding gate once, as top_up', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
-    mockAnswerCallNowRingAction.mockResolvedValueOnce({
-      ok: false,
-      code: 'funding',
-      engagementId: ENGAGEMENT_ID,
-      expertProfileId: EXPERT_PROFILE_ID,
-    });
+    mockAnswerCallNowRingAction.mockResolvedValueOnce(FUNDING_REFUSAL);
     mockAnswerCallNowRingAction.mockResolvedValueOnce({ ok: true, grant: GRANT });
     renderClient();
     await clickAnswer();
@@ -424,12 +516,7 @@ describe('CallClient — the answer commit', () => {
 
   it('⚠ the call room never emits the gate-shown event (the step owns it)', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
-    mockAnswerCallNowRingAction.mockResolvedValue({
-      ok: false,
-      code: 'funding',
-      engagementId: ENGAGEMENT_ID,
-      expertProfileId: EXPERT_PROFILE_ID,
-    });
+    mockAnswerCallNowRingAction.mockResolvedValue(FUNDING_REFUSAL);
     renderClient();
     await clickAnswer();
     await screen.findByTestId('funding-step');
@@ -439,12 +526,7 @@ describe('CallClient — the answer commit', () => {
 
   it('funding Back and Book a time go to the case', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
-    mockAnswerCallNowRingAction.mockResolvedValue({
-      ok: false,
-      code: 'funding',
-      engagementId: ENGAGEMENT_ID,
-      expertProfileId: EXPERT_PROFILE_ID,
-    });
+    mockAnswerCallNowRingAction.mockResolvedValue(FUNDING_REFUSAL);
     renderClient();
     await clickAnswer();
     const user = userEvent.setup();
@@ -458,12 +540,7 @@ describe('CallClient — the answer commit', () => {
 
   it('⚠ leaving the funding gate reports it abandoned — once, not per exit', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
-    mockAnswerCallNowRingAction.mockResolvedValue({
-      ok: false,
-      code: 'funding',
-      engagementId: ENGAGEMENT_ID,
-      expertProfileId: EXPERT_PROFILE_ID,
-    });
+    mockAnswerCallNowRingAction.mockResolvedValue(FUNDING_REFUSAL);
     renderClient();
     await clickAnswer();
     const user = userEvent.setup();
@@ -487,17 +564,12 @@ describe('CallClient — the answer commit', () => {
     await clickAnswer();
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`));
-    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Your expert'));
+    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
   });
 
   it('⚠ a ring that ended while the top-up ran says so too, and reports the gate abandoned', async () => {
     mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
-    mockAnswerCallNowRingAction.mockResolvedValueOnce({
-      ok: false,
-      code: 'funding',
-      engagementId: ENGAGEMENT_ID,
-      expertProfileId: EXPERT_PROFILE_ID,
-    });
+    mockAnswerCallNowRingAction.mockResolvedValueOnce(FUNDING_REFUSAL);
     mockAnswerCallNowRingAction.mockResolvedValueOnce({
       ok: false,
       code: 'ring_not_ringing',
@@ -509,7 +581,7 @@ describe('CallClient — the answer commit', () => {
     await userEvent.setup().click(await screen.findByRole('button', { name: 'funded' }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/cases/${ENGAGEMENT_ID}`));
-    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Your expert'));
+    expect(mockToast).toHaveBeenCalledWith(CALL_NOW_COPY.answerEndedToast('Dana'));
     expect(resolvedGateEvents()).toEqual([
       [CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, { via: 'abandoned' }],
     ]);
@@ -539,5 +611,177 @@ describe('CallClient — the answer commit', () => {
       await screen.findByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE })
     ).toBeInTheDocument();
     expect(mockAnswerCallNowRingAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('CallClient — a transient failure on Answer (R7)', () => {
+  const ANSWER_REQUIRED = { success: false, reason: 'answer_required', ringId: RING_ID };
+
+  it.each(['failed', 'rate_limited', 'funding_unavailable'] as const)(
+    '⚠ %s toasts, keeps the Answer notice for a retry and never reports the gate abandoned',
+    async (code) => {
+      mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+      mockAnswerCallNowRingAction.mockResolvedValueOnce({ ok: false, code });
+      mockAnswerCallNowRingAction.mockResolvedValueOnce({ ok: true, grant: GRANT });
+      renderClient();
+      const user = userEvent.setup();
+
+      await user.click(await screen.findByRole('button', { name: CALL_NOW_COPY.answerAction }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(START_FAILURE_COPY[code]));
+      expect(
+        screen.getByRole('heading', { name: CALL_NOW_COPY.answerTitle('Dana') })
+      ).toBeVisible();
+      expect(screen.queryByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE })).toBeNull();
+      expect(resolvedGateEvents()).toEqual([]);
+      expect(mockPush).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: CALL_NOW_COPY.answerAction }));
+      expect(await screen.findByTestId('surface')).toBeInTheDocument();
+    }
+  );
+
+  it('⚠ a transient failure on the funded retry keeps the funding gate open, unreported', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockAnswerCallNowRingAction.mockResolvedValueOnce(FUNDING_REFUSAL);
+    mockAnswerCallNowRingAction.mockResolvedValueOnce({ ok: false, code: 'failed' });
+    renderClient();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: CALL_NOW_COPY.answerAction }));
+
+    await user.click(await screen.findByRole('button', { name: 'funded' }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(START_FAILURE_COPY.failed));
+    expect(screen.getByTestId('funding-step')).toBeInTheDocument();
+    expect(resolvedGateEvents()).toEqual([]);
+  });
+});
+
+describe('CallClient — a colleague waits for someone else’s call (R4)', () => {
+  const ANSWER_REQUIRED = { success: false, reason: 'answer_required', ringId: RING_ID };
+
+  /**
+   * The 5 s re-attempt timers, captured instead of run: fake timers would starve Testing Library's
+   * own waits. Every other timer is the real one.
+   */
+  let awaitTimers: Array<() => void> = [];
+
+  beforeEach(() => {
+    awaitTimers = [];
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (delay === AWAIT_RETRY_MS && typeof handler === 'function') {
+        awaitTimers.push(() => handler());
+        return 0;
+      }
+      return realSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function fireAwaitTimer(): Promise<void> {
+    const fire = awaitTimers.shift();
+    expect(fire).toBeDefined();
+    await act(async () => {
+      fire?.();
+    });
+  }
+
+  it('⚠ a wait answer shows the wait notice with no Answer button, re-attempts the join, then joins', async () => {
+    mockJoinAsMemberAction.mockResolvedValueOnce(ANSWER_REQUIRED);
+    mockJoinAsMemberAction.mockResolvedValueOnce({ success: true, grant: GRANT });
+    mockReadAnswerView.mockResolvedValue({ kind: 'wait' });
+    renderClient();
+
+    expect(
+      await screen.findByRole('heading', { name: CALL_NOW_COPY.waitConnectTitle })
+    ).toBeInTheDocument();
+    expect(screen.getByText(CALL_NOW_COPY.waitConnectBody)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: CALL_NOW_COPY.answerAction })).toBeNull();
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(1);
+    expect(mockAnswerCallNowRingAction).not.toHaveBeenCalled();
+
+    await fireAwaitTimer();
+
+    expect(await screen.findByTestId('surface')).toHaveAttribute('data-room-url', GRANT.roomUrl);
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(2);
+    expect(mockAnswerCallNowRingAction).not.toHaveBeenCalled();
+  });
+
+  it('⚠ each retry asks again: after a wait the real callee sees Answer', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockReadAnswerView.mockResolvedValueOnce({ kind: 'wait' });
+    mockReadAnswerView.mockResolvedValueOnce(ANSWER_VIEW);
+    renderClient();
+    await screen.findByRole('heading', { name: CALL_NOW_COPY.waitConnectTitle });
+
+    await fireAwaitTimer();
+
+    expect(
+      await screen.findByRole('heading', { name: CALL_NOW_COPY.answerTitle('Dana') })
+    ).toBeInTheDocument();
+    expect(mockReadAnswerView).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps waiting across consecutive wait answers', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockReadAnswerView.mockResolvedValue({ kind: 'wait' });
+    renderClient();
+    await screen.findByRole('heading', { name: CALL_NOW_COPY.waitConnectTitle });
+
+    await fireAwaitTimer();
+    await fireAwaitTimer();
+
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('heading', { name: CALL_NOW_COPY.waitConnectTitle })).toBeVisible();
+  });
+
+  it('a ring that ended while waiting falls into the unavailable card', async () => {
+    mockJoinAsMemberAction.mockResolvedValueOnce(ANSWER_REQUIRED);
+    mockJoinAsMemberAction.mockResolvedValueOnce({ success: false, reason: 'unavailable' });
+    mockReadAnswerView.mockResolvedValue({ kind: 'wait' });
+    renderClient();
+    await screen.findByRole('heading', { name: CALL_NOW_COPY.waitConnectTitle });
+
+    await fireAwaitTimer();
+
+    expect(
+      await screen.findByRole('heading', { name: MEMBER_JOIN_UNAVAILABLE_TITLE })
+    ).toBeInTheDocument();
+  });
+
+  it('⚠ the answer-view action throwing is the NEUTRAL connecting wait — never "someone else’s call"', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockReadAnswerView.mockRejectedValue(new Error('transport'));
+    renderClient();
+
+    // The body is unique to this wait; the title alone is shared with the join's own card.
+    expect(await screen.findByText(CALL_NOW_COPY.connectingBody)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: CALL_NOW_COPY.connectingTitle })).toBeVisible();
+    expect(screen.queryByText(CALL_NOW_COPY.waitConnectBody)).toBeNull();
+    expect(screen.queryByRole('button', { name: CALL_NOW_COPY.answerAction })).toBeNull();
+  });
+
+  it('⚠ a failed read retries on the next join attempt, and the real callee recovers to Answer', async () => {
+    mockJoinAsMemberAction.mockResolvedValue(ANSWER_REQUIRED);
+    mockReadAnswerView.mockResolvedValueOnce({ kind: 'retry' });
+    mockReadAnswerView.mockResolvedValueOnce(ANSWER_VIEW);
+    renderClient();
+    await screen.findByText(CALL_NOW_COPY.connectingBody);
+
+    await fireAwaitTimer();
+
+    expect(
+      await screen.findByRole('heading', { name: CALL_NOW_COPY.answerTitle('Dana') })
+    ).toBeInTheDocument();
+    expect(mockJoinAsMemberAction).toHaveBeenCalledTimes(2);
+    expect(mockReadAnswerView).toHaveBeenCalledTimes(2);
   });
 });

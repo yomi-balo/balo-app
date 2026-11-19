@@ -134,7 +134,14 @@ export async function connectRingIfRinging(input: {
   }
 
   await publishCallEvent('call.connected', ring);
-  trackRingEnded(ring);
+  // Analytics only (it counts the day's attempts): the connect has committed, so the caller must
+  // not wait on it. `trackRingEnded` never rejects; the catch is the belt on a floating promise.
+  trackRingEnded(ring).catch((error: unknown) => {
+    log.warn(
+      { ringId: ring.id, error: error instanceof Error ? error.message : String(error) },
+      'Call now ring-ended tracking failed'
+    );
+  });
   log.info(
     {
       ringId: ring.id,

@@ -1,6 +1,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   exists,
@@ -62,6 +63,13 @@ export interface StartRingInput {
   expiresAt: Date;
   /** The instant the ring starts, written to `created_at`. Defaults to the database clock. */
   now?: Date;
+  /**
+   * BAL-651 — the web client's per-tap attempt id, for `call_now_ring_ended` only. `null` when
+   * the request carried none or an invalid one. Never an authorization input.
+   */
+  attemptId: string | null;
+  /** BAL-651 — the presence gate's answer at the start, unmasked. Server analytics only. */
+  calleeOnlineAtStart: boolean;
 }
 
 /** A committed ring start. `expertProfileId` is whose availability to rebuild, if anyone's. */
@@ -149,6 +157,8 @@ async function insertRingTx(
       placement: input.placement,
       reachedBy: input.reachedBy,
       expiresAt: input.expiresAt,
+      attemptId: input.attemptId,
+      calleeOnlineAtStart: input.calleeOnlineAtStart,
       ...(input.now === undefined ? {} : { createdAt: input.now }),
     })
     .returning();
@@ -542,6 +552,31 @@ export const meetingRingsRepository = {
       )
       .limit(1);
     return row !== undefined;
+  },
+
+  /**
+   * BAL-651 — how many live rings `callerUserId` placed to `calleeUserId` with `created_at` in
+   * `[from, to]`, both ends INCLUSIVE, whatever their status or case. Feeds
+   * `call_now_ring_ended.attempt_number_today`, where `to` is the ring's own `created_at`, so the
+   * ring counts itself. Rides `meeting_ring_caller_idx`.
+   */
+  async countCallerRingsToCallee(
+    input: { callerUserId: string; calleeUserId: string; from: Date; to: Date },
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await exec
+      .select({ value: count() })
+      .from(meetingRings)
+      .where(
+        and(
+          eq(meetingRings.callerUserId, input.callerUserId),
+          eq(meetingRings.calleeUserId, input.calleeUserId),
+          gte(meetingRings.createdAt, input.from),
+          lte(meetingRings.createdAt, input.to),
+          isNull(meetingRings.deletedAt)
+        )
+      );
+    return row?.value ?? 0;
   },
 
   /**

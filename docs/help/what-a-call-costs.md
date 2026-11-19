@@ -5,8 +5,8 @@ audience: [client]
 category:
   client: credit-billing
 order: 3
-published: false
-updated: 2026-11-17
+published: true
+updated: 2026-11-19
 related: [booking-a-consultation, buying-credit, joining-a-call]
 ---
 
@@ -16,8 +16,8 @@ open case without a booking, a few simple rules decide what it costs.
 ## The 15-minute minimum
 
 An unscheduled call is billed for at least 15 minutes, the same as any consultation. After that,
-you're billed for the time you actually spend together, down to the minute. The expert's rate is
-shown before you confirm.
+you're billed for the time you actually spend together, down to the minute. The rate your expert
+starts from is shown before you confirm, for example "From A$4.20/min · 15-minute minimum".
 
 ## Nothing is charged unless you both join
 

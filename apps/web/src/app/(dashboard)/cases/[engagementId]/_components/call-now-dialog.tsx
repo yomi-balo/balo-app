@@ -21,9 +21,8 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { CallNowFundingStep } from '@/components/balo/call-now/call-now-funding-step';
-import { useIsMobile } from '@/hooks/use-mobile';
 import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
-import type { CallNowFundingGateResolution } from '@balo/analytics/events';
+import type { CallNowFundingGateResolution, CallNowAbandonStep } from '@balo/analytics/events';
 import type { BookingFundingRequest } from '@/lib/booking/actions/booking-funding-types';
 import {
   CALL_NOW_COPY,
@@ -32,8 +31,9 @@ import {
 } from '@/lib/call-now/call-now-copy';
 import { callNowFundingRequest } from '@/lib/call-now/call-now-funding';
 import { callNowPresence } from '@/lib/call-now/call-now-presence';
-import type { CallNowConfirmView } from '@/lib/call-now/call-now-types';
+import type { CallNowConfirmView, CallNowFundingCode } from '@/lib/call-now/call-now-types';
 import { callNowCallerPath } from '@/lib/call-now/ring-landing-path';
+import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 import { formatScheduledStartLabel } from '@/lib/meetings/format-scheduled-start';
 import { startCallNowAction } from '../_actions/start-call-now';
 import type { StartCallNowFailureCode } from '../_actions/_types/call-now-action-types';
@@ -58,7 +58,20 @@ type Step = 'confirm' | 'starting' | 'funding';
 /** Which button pair the confirm shows, from presence and whether booking is on offer. */
 type ActionMode = 'call' | 'book_first' | 'anyway_first';
 
+/** What the funding step needs from the refusal that opened it. */
+interface FundingState {
+  request: BookingFundingRequest;
+  fundingCode: CallNowFundingCode;
+}
+
 export interface CallNowDialogProps {
+  /** Minted by the entry tap; every event this dialog sends, and the start request, carry it. */
+  attemptId: string;
+  /**
+   * The loader's presence flag, for the events' `callee_presence`. On the expert arm it is `false`
+   * by construction: the api never reports a client's presence to an expert.
+   */
+  calleeOnline: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   calleeLabel: string;
@@ -324,6 +337,8 @@ function Shell({
 }
 
 export function CallNowDialog({
+  attemptId,
+  calleeOnline,
   open,
   onOpenChange,
   calleeLabel,
@@ -331,16 +346,19 @@ export function CallNowDialog({
   onBookTime,
 }: Readonly<CallNowDialogProps>): React.JSX.Element {
   const router = useRouter();
-  const isMobile = useIsMobile(768);
+  const surface = useCallNowSurface();
+  const isMobile = surface === 'mobile';
   const [step, setStep] = useState<Step>('confirm');
   const [replace, setReplace] = useState(true);
-  const [fundingRequest, setFundingRequest] = useState<BookingFundingRequest | null>(null);
+  const [funding, setFunding] = useState<FundingState | null>(null);
   const [fundingBusy, setFundingBusy] = useState(false);
   const replaceRef = useRef(true);
   const gateShownRef = useRef(false);
+  /** The attempt whose commit has been reported: one `call_now_confirmed` per attempt. */
+  const confirmedAttemptRef = useRef<string | null>(null);
 
   const lens = confirm.kind === 'client_terms' ? 'client' : 'expert';
-  const presence = callNowPresence(confirm);
+  const presence = callNowPresence({ calleeOnline });
   const candidate = confirm.kind === 'client_terms' ? confirm.inPlaceCandidate : null;
   const candidateTime =
     candidate === null ? null : formatScheduledStartLabel(candidate.scheduledStartIso);
@@ -351,7 +369,7 @@ export function CallNowDialog({
     setStep('confirm');
     setReplace(true);
     replaceRef.current = true;
-    setFundingRequest(null);
+    setFunding(null);
     setFundingBusy(false);
     gateShownRef.current = false;
   }, [open]);
@@ -390,15 +408,11 @@ export function CallNowDialog({
       const inPlace = candidate !== null && replaceRef.current;
       const result = await startCallNowAction({
         engagementId: confirm.engagementId,
+        attemptId,
         ...(inPlace ? { inPlaceOfMeetingId: candidate.meetingId } : {}),
       });
 
       if (result.ok) {
-        track(CALL_NOW_EVENTS.DIALOG_CONFIRMED, {
-          lens,
-          presence,
-          in_place_of_booking: inPlace,
-        });
         resolveGate(inPlace ? 'booking_in_place' : 'top_up');
         router.push(callNowCallerPath(result.meetingId, result.ringId));
         return true;
@@ -406,32 +420,61 @@ export function CallNowDialog({
 
       if (result.code === 'funding' && confirm.kind === 'client_terms' && !fromFunding) {
         gateShownRef.current = true;
-        setFundingRequest(
-          callNowFundingRequest({
+        setFunding({
+          request: callNowFundingRequest({
             expertProfileId: confirm.expertProfileId,
             engagementId: confirm.engagementId,
             nowMs: Date.now(),
-          })
-        );
+          }),
+          fundingCode: result.fundingCode,
+        });
         setStep('funding');
         return false;
       }
       handleFailure(result.code, fromFunding);
       return false;
     },
-    [candidate, confirm, lens, presence, router, handleFailure, resolveGate]
+    [attemptId, candidate, confirm, router, handleFailure, resolveGate]
   );
 
+  // R3: the commit is the click, so it is tracked before the start resolves, and a funded retry
+  // (`attempt(true)`) is the same commit and tracks nothing more. It is also tracked once per
+  // attempt: going Back from the funding step and committing again sends no second event.
+  // `call_anyway` is the commit from the offline confirm; every other button reads "Call now".
   const handleCall = useCallback(() => {
+    if (confirmedAttemptRef.current !== attemptId) {
+      confirmedAttemptRef.current = attemptId;
+      track(CALL_NOW_EVENTS.CONFIRMED, {
+        attempt_id: attemptId,
+        lens,
+        callee_presence: presence,
+        choice: resolveActionMode(confirm, canBook) === 'call' ? 'call_now' : 'call_anyway',
+        in_place_of_booking: candidate !== null && replaceRef.current,
+        surface,
+      });
+    }
     setStep('starting');
     attempt(false).catch(() => handleFailure('failed'));
-  }, [attempt, handleFailure]);
+  }, [attemptId, lens, presence, confirm, canBook, candidate, surface, attempt, handleFailure]);
 
-  const abandonAndClose = useCallback(() => {
-    track(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: step === 'funding' ? 'funding' : 'confirm' });
-    resolveGate('abandoned');
-    onOpenChange(false);
-  }, [step, onOpenChange, resolveGate]);
+  const abandonAndClose = useCallback(
+    (via: 'not_now' | 'close') => {
+      const abandonStep: CallNowAbandonStep = step === 'funding' ? 'funding' : 'confirm';
+      track(CALL_NOW_EVENTS.ABANDONED, {
+        attempt_id: attemptId,
+        lens,
+        callee_presence: presence,
+        step: abandonStep,
+        via,
+        surface,
+      });
+      resolveGate('abandoned');
+      onOpenChange(false);
+    },
+    [attemptId, lens, presence, step, surface, onOpenChange, resolveGate]
+  );
+
+  const handleNotNow = useCallback(() => abandonAndClose('not_now'), [abandonAndClose]);
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -440,17 +483,27 @@ export function CallNowDialog({
         return;
       }
       if (step === 'starting' || fundingBusy) return;
-      abandonAndClose();
+      abandonAndClose('close');
     },
     [step, fundingBusy, onOpenChange, abandonAndClose]
   );
 
   // Booking instead is not an abandoned attempt: the viewer carries on to the booking.
-  const handleBook = useCallback(() => {
+  const leaveForBooking = useCallback(() => {
     resolveGate('abandoned');
     onOpenChange(false);
     onBookTime?.();
   }, [resolveGate, onOpenChange, onBookTime]);
+
+  const handleBook = useCallback(() => {
+    track(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED, {
+      attempt_id: attemptId,
+      lens,
+      from: 'confirm_offline',
+      surface,
+    });
+    leaveForBooking();
+  }, [attemptId, lens, surface, leaveForBooking]);
 
   const handleFundingBack = useCallback(() => setStep('confirm'), []);
   const handleFunded = useCallback(
@@ -462,9 +515,11 @@ export function CallNowDialog({
     [attempt, handleFailure]
   );
 
-  const bookInstead = useMemo(() => (canBook ? handleBook : null), [canBook, handleBook]);
+  // The funding step's "Book a time" is a way out of the gate, not the offline confirm's steer, so
+  // it leaves for the booking without a `BOOK_INSTEAD_CLICKED`.
+  const bookInstead = useMemo(() => (canBook ? leaveForBooking : null), [canBook, leaveForBooking]);
 
-  const inFunding = step === 'funding' && fundingRequest !== null;
+  const inFunding = step === 'funding' && funding !== null;
   const title = CALL_NOW_COPY.confirmTitle(calleeLabel);
 
   return (
@@ -484,8 +539,9 @@ export function CallNowDialog({
     >
       {inFunding ? (
         <CallNowFundingStep
-          request={fundingRequest}
+          request={funding.request}
           callerLens="client"
+          fundingCode={funding.fundingCode}
           onFunded={handleFunded}
           onBack={handleFundingBack}
           onBookInstead={bookInstead}
@@ -515,7 +571,7 @@ export function CallNowDialog({
             mode={resolveActionMode(confirm, canBook)}
             starting={step === 'starting'}
             onCall={handleCall}
-            onNotNow={abandonAndClose}
+            onNotNow={handleNotNow}
             onBook={handleBook}
           />
         </>

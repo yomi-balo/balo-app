@@ -78,6 +78,7 @@ const OTHER_USER = '22222222-2222-4222-8222-222222222222';
 const ENGAGEMENT_ID = '33333333-3333-4333-8333-333333333333';
 const MEETING_ID = '44444444-4444-4444-8444-444444444444';
 const RING_ID = '88888888-8888-4888-8888-888888888888';
+const ATTEMPT_ID = '99999999-9999-4999-8999-999999999999';
 const AUTH = { authorization: 'Bearer t' };
 const EXPIRES = new Date('2026-11-16T10:00:45.000Z');
 
@@ -92,6 +93,8 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     placement: 'new_meeting',
     callerSide: 'client',
     reachedBy: 'app',
+    attemptId: ATTEMPT_ID,
+    calleeOnlineAtStart: false,
     expiresAt: EXPIRES,
     ...overrides,
   };
@@ -338,6 +341,78 @@ describe('call-now routes (BAL-649)', () => {
           releaseCallee: expect.any(Function),
         })
       );
+    });
+
+    describe('?attemptId (BAL-651)', () => {
+      const started = {
+        ok: true,
+        ringId: RING_ID,
+        meetingId: MEETING_ID,
+        placement: 'new_meeting',
+        expiresAt: EXPIRES,
+      };
+
+      it('threads a valid attempt id to the service', async () => {
+        mocks.startCallNow.mockResolvedValue(started);
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `${url}?attemptId=${ATTEMPT_ID}`,
+          headers: AUTH,
+          payload: {},
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(mocks.startCallNow).toHaveBeenCalledWith(
+          expect.objectContaining({ attemptId: ATTEMPT_ID })
+        );
+      });
+
+      it('drops a malformed attempt id to undefined, never a 400', async () => {
+        mocks.startCallNow.mockResolvedValue(started);
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `${url}?attemptId=not-a-uuid`,
+          headers: AUTH,
+          payload: {},
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(mocks.startCallNow).toHaveBeenCalledWith(
+          expect.objectContaining({ attemptId: undefined })
+        );
+      });
+
+      it('ignores an unknown query parameter', async () => {
+        mocks.startCallNow.mockResolvedValue(started);
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `${url}?side=expert`,
+          headers: AUTH,
+          payload: {},
+        });
+
+        expect(res.statusCode).toBe(201);
+      });
+
+      it('sends no attempt id when the query carries none (an older web build)', async () => {
+        mocks.startCallNow.mockResolvedValue(started);
+
+        await post();
+
+        expect(mocks.startCallNow).toHaveBeenCalledWith(
+          expect.objectContaining({ attemptId: undefined })
+        );
+      });
+
+      it('keeps the body strict: an attempt id in the body is a 400', async () => {
+        const res = await post({ attemptId: ATTEMPT_ID });
+
+        expect(res.statusCode).toBe(400);
+        expect(mocks.startCallNow).not.toHaveBeenCalled();
+      });
     });
 
     it('threads `inPlaceOfMeetingId` to the service', async () => {
@@ -699,7 +774,47 @@ describe('call-now routes (BAL-649)', () => {
         reachedBy: 'app',
         awaitsAnswer: false,
         meetingEnded: false,
+        attemptId: ATTEMPT_ID,
+        calleePresenceAtStart: 'offline',
       });
+    });
+
+    it('carries the attempt id and an online start to a client caller only', async () => {
+      mocks.findById.mockResolvedValue(ring({ calleeOnlineAtStart: true }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ attemptId: ATTEMPT_ID, calleePresenceAtStart: 'online' });
+    });
+
+    it('masks an expert caller’s callee presence to offline, whatever the stored value', async () => {
+      mocks.findById.mockResolvedValue(ring({ callerSide: 'expert', calleeOnlineAtStart: true }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ attemptId: ATTEMPT_ID, calleePresenceAtStart: 'offline' });
+    });
+
+    it('hands the callee neither the attempt id nor the presence', async () => {
+      mocks.findById.mockResolvedValue(
+        ring({ callerUserId: OTHER_USER, calleeUserId: USER_ID, calleeOnlineAtStart: true })
+      );
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({
+        role: 'callee',
+        attemptId: null,
+        calleePresenceAtStart: null,
+      });
+    });
+
+    it('answers a null attempt id for a ring started before the column existed', async () => {
+      mocks.findById.mockResolvedValue(ring({ attemptId: null, calleeOnlineAtStart: null }));
+
+      const res = await app.inject({ method: 'GET', url, headers: AUTH });
+
+      expect(res.json()).toMatchObject({ attemptId: null, calleePresenceAtStart: 'offline' });
     });
 
     it('carries how the callee was reached', async () => {

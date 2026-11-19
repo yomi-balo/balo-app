@@ -2356,6 +2356,8 @@ describe('meetingPresenceRepository.isUserInLiveMeeting (BAL-649)', () => {
       calleeUserId: expert.userId,
       callerSide: 'client',
       reachedBy: 'app',
+      attemptId: null,
+      calleeOnlineAtStart: false,
       expiresAt: new Date(now.getTime() + 45_000),
       now,
       scheduledStart: now,

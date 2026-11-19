@@ -4,7 +4,11 @@ import { render, screen } from '@/test/utils';
 import { track, EXPERT_PROFILE_EVENTS, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
+import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
 import { CasePartyCard } from './case-party-card';
+
+// The real entry reads `window.matchMedia` (absent in jsdom) through the surface hook.
+vi.mock('@/lib/call-now/use-call-now-surface', () => ({ useCallNowSurface: () => 'desktop' }));
 
 // BAL-400 — CasePartyCard now mounts `CaseSlotQuickPick` (which calls the real availability
 // fetch) whenever `lens==='client' && isOpen`. That component has its own test file; here it's
@@ -85,6 +89,7 @@ describe('CasePartyCard — Call now', () => {
     entry: 'button',
     calleeLabel: 'Amara',
     onlineBadge: true,
+    calleeOnline: true,
     calleeTimeZone: null,
     confirm: { kind: 'expert_notice', engagementId: 'engagement-1' },
   };
@@ -94,15 +99,16 @@ describe('CasePartyCard — Call now', () => {
     const onCallNow = vi.fn();
     renderCard({ callNow: BUTTON_VIEW, onCallNow });
 
-    expect(screen.getByText('Online')).toBeInTheDocument();
+    expect(screen.getByText(CALL_NOW_COPY.online)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
     expect(onCallNow).toHaveBeenCalledTimes(1);
+    expect(onCallNow).toHaveBeenCalledWith(expect.any(String));
   });
 
   it('renders neither the entry nor the Online word when there is no view', () => {
     renderCard({ callNow: null, onCallNow: vi.fn() });
     expect(screen.queryByRole('button', { name: /^Call .* now$/ })).not.toBeInTheDocument();
-    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+    expect(screen.queryByText(CALL_NOW_COPY.online)).not.toBeInTheDocument();
   });
 
   it('shows the quiet line instead of a button when the callee is busy', () => {
@@ -111,7 +117,7 @@ describe('CasePartyCard — Call now', () => {
       onCallNow: vi.fn(),
     });
     expect(screen.getByText('Amara is in another call')).toBeInTheDocument();
-    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+    expect(screen.queryByText(CALL_NOW_COPY.online)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Call Amara now' })).not.toBeInTheDocument();
   });
 

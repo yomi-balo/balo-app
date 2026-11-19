@@ -333,6 +333,9 @@ export {
   type CallNowFundingGateReason,
   type CallNowFundingGateResolution,
   type CallNowPresence,
+  type CallNowSurface,
+  type CallNowAbandonStep,
+  type CallNowRefusedReason,
 } from './call-now';
 export {
   GUEST_SERVER_EVENTS,

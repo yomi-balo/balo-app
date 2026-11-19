@@ -56,9 +56,12 @@ vi.mock('next/navigation', () => ({
 
 // BAL-651 — the real dialog reads `window.matchMedia` (absent in jsdom) and has its own suite
 // (`call-now-dialog.test.tsx`). This stand-in proves only what the surface hands it.
+vi.mock('@/lib/call-now/use-call-now-surface', () => ({ useCallNowSurface: () => 'desktop' }));
 vi.mock('./call-now-dialog', () => ({
   CallNowDialog: (
     props: Readonly<{
+      attemptId: string;
+      calleeOnline: boolean;
       open: boolean;
       calleeLabel: string;
       onOpenChange: (open: boolean) => void;
@@ -68,6 +71,8 @@ vi.mock('./call-now-dialog', () => ({
     props.open ? (
       <div data-testid="call-now-dialog-stub">
         <span>callee: {props.calleeLabel}</span>
+        <span>attempt: {props.attemptId}</span>
+        <span>online: {String(props.calleeOnline)}</span>
         <span>book: {props.onBookTime === null ? 'none' : 'available'}</span>
         <button type="button" onClick={() => props.onOpenChange(false)}>
           stub close
@@ -1736,6 +1741,7 @@ describe('CaseSurface — Call now (BAL-651)', () => {
     entry: 'button',
     calleeLabel: 'Amara',
     onlineBadge: true,
+    calleeOnline: true,
     calleeTimeZone: null,
     confirm: {
       kind: 'client_terms',
@@ -1771,9 +1777,24 @@ describe('CaseSurface — Call now (BAL-651)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
     expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+    expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('online: true');
 
     await user.click(screen.getByRole('button', { name: 'stub close' }));
     expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+  });
+
+  it('hands the dialog the attempt id the entry tap minted, and a new one on the next tap', async () => {
+    const user = userEvent.setup();
+    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+    const entry = screen.getByRole('button', { name: 'Call Amara now' });
+
+    await user.click(entry);
+    const first = screen.getByTestId('call-now-dialog-stub').textContent;
+    expect(first).toMatch(/attempt: [0-9a-f-]{36}/);
+
+    await user.click(screen.getByRole('button', { name: 'stub close' }));
+    await user.click(entry);
+    expect(screen.getByTestId('call-now-dialog-stub').textContent).not.toBe(first);
   });
 
   it('the confirm’s Book a time asks the quick-pick for the call_now follow-up', async () => {

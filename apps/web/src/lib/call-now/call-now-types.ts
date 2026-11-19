@@ -1,3 +1,4 @@
+import type { CallNowPresence } from '@balo/analytics/events';
 import type {
   CallNowDisplayReason,
   CallRingPlacement,
@@ -16,7 +17,7 @@ export type CallNowConfirmView =
       engagementId: string;
       expertProfileId: string;
       calleeOnline: boolean;
-      /** `A$x.xx/min · 15-minute minimum`, or `null` when the expert has no rate. */
+      /** `From A$x.xx/min · 15-minute minimum`, or `null` when the expert has no rate. */
       rateLine: string | null;
       inPlaceCandidate: { meetingId: string; scheduledStartIso: string } | null;
       /** The expert can be booked in the page, so "Book a time" has somewhere to go. */
@@ -31,6 +32,11 @@ export interface CaseCallNowView {
   calleeLabel: string;
   /** The "Online" indicator, client lens only. */
   onlineBadge: boolean;
+  /**
+   * The api's `calleeOnline`, on both arms: the analytics `callee_presence`. On the expert arm the
+   * api never reports real client presence, so this is `false` by construction.
+   */
+  calleeOnline: boolean;
   /** Set only for `outside_hours`, so the line can name the callee's local time. */
   calleeTimeZone: string | null;
   /** Non-null exactly when `entry === 'button'`. */
@@ -48,7 +54,23 @@ export interface CallNowCallerView {
   status: CallRingStatus;
   expiresAtIso: string;
   reachedBy: CallRingReach;
+  /** The entry tap's attempt id, or `null` for a ring started before attempt ids were persisted. */
+  attemptId: string | null;
+  /** The callee's presence when the call started; always `offline` for an expert caller. */
+  calleePresence: CallNowPresence;
 }
+
+/**
+ * What the call room shows a callee who must answer: the caller's name and, for a client callee,
+ * the rate line. `wait` is someone else at the company (a colleague, a viewer who lost the case, a
+ * ring that is not theirs). `retry` is a read that FAILED, so the viewer may well be the real
+ * callee: the room shows a neutral "Connecting…" and asks again rather than telling them the call
+ * is for someone else.
+ */
+export type CallNowAnswerView =
+  | { kind: 'answer'; callerName: string; rateLine: string | null }
+  | { kind: 'wait' }
+  | { kind: 'retry' };
 
 /** The funding refusals a start or an answer can answer with, as the api names them. */
 export type CallNowFundingCode = 'account_on_hold' | 'booking_unfunded' | 'booking_reserved';
@@ -74,6 +96,10 @@ export interface CallNowRingRead {
   awaitsAnswer: boolean;
   meetingEnded: boolean;
   reachedBy: CallRingReach;
+  /** `null` for the callee, and for a ring started before attempt ids were persisted. */
+  attemptId: string | null;
+  /** `offline` when the api sent none (an older api) or the caller is an expert. */
+  calleePresenceAtStart: CallNowPresence;
 }
 
 export interface CallNowStartRead {

@@ -1,4 +1,4 @@
-import { pgTable, uuid, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, timestamp, boolean, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import {
   meetingRingStatusEnum,
@@ -77,6 +77,17 @@ export const meetingRings = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     // When the ring left `ringing` (connected, unanswered, declined or stopped).
     endedAt: timestamp('ended_at', { withTimezone: true }),
+
+    // BAL-651 — ANALYTICS CORRELATION ONLY, never an authorization input and never a lookup key
+    // (hence no index, no FK). Both are written once, by the start, and read back only to emit
+    // `call_now_ring_ended`, which often fires from the expiry job long after the start request,
+    // so the row is the only carrier. Both are NULL on a ring started before they existed.
+    //   · `attempt_id`: the web client's per-tap id, joining the client funnel to the outcome.
+    //     NULL also when the caller sent none or an invalid one: analytics never blocks a call.
+    //   · `callee_online_at_start`: the presence gate's answer at the start, UNMASKED. It is
+    //     server analytics only; a ring read must never hand it to an expert caller as-is.
+    attemptId: uuid('attempt_id'),
+    calleeOnlineAtStart: boolean('callee_online_at_start'),
 
     ...timestamps,
     ...softDelete,

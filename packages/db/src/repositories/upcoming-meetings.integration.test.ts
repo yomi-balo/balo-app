@@ -458,6 +458,8 @@ describe('upcomingMeetingsRepository.listForCompany — Call now (BAL-651)', () 
         calleeUserId: callee.id,
         callerSide: 'client',
         reachedBy: 'app',
+        attemptId: null,
+        calleeOnlineAtStart: false,
         expiresAt: new Date(now + 45_000),
         scheduledStart: new Date(now),
         scheduledEnd: new Date(now + 15 * 60_000),

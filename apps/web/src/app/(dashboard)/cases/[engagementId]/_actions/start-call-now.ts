@@ -9,7 +9,10 @@ import { isExpiredCredentialFailure, viewerApiCredentialIsLive } from '@/lib/api
 import { postStartCallNow } from '@/lib/call-now/call-now-api-client';
 import { isCallNowFundingCode } from '@/lib/call-now/call-now-funding';
 import { errorMessage, log } from '@/lib/logging';
-import type { StartCallNowFailureCode, StartCallNowResult } from './_types/call-now-action-types';
+import type {
+  StartCallNowPlainFailureCode,
+  StartCallNowResult,
+} from './_types/call-now-action-types';
 
 /**
  * BAL-651 — START A CALL NOW FROM THE CASE SURFACE. A thin, authenticated hop onto
@@ -17,16 +20,24 @@ import type { StartCallNowFailureCode, StartCallNowResult } from './_types/call-
  * funding), so this action only refuses what web must (an impersonated session, a dead
  * credential) and translates the api's literal into a code the dialog can act on.
  *
+ * ⚠ A FUNDING REFUSAL CARRIES THE CODE ONLY. The api's top-up figure is never forwarded to the
+ * browser: the funding step reads its own figure from the pre-flight, which is billing-rights aware.
+ *
  * ⚠ NO LENS, ROLE OR `activeMode` READ HERE. Who may ring whom is the api's decision; the
  * dialog's two arms are chosen from the loader's view, not from anything in this module.
  */
 
 const startCallNowSchema = z
-  .object({ engagementId: z.uuid(), inPlaceOfMeetingId: z.uuid().optional() })
+  .object({
+    engagementId: z.uuid(),
+    inPlaceOfMeetingId: z.uuid().optional(),
+    /** The entry tap's id, minted client-side; the api persists it on the ring. */
+    attemptId: z.uuid(),
+  })
   .strict();
 
 /** The api literals that map one-to-one onto a failure code. */
-const LITERAL_FAILURE: Readonly<Record<string, StartCallNowFailureCode>> = {
+const LITERAL_FAILURE: Readonly<Record<string, StartCallNowPlainFailureCode>> = {
   call_now_unavailable: 'unavailable',
   case_not_found: 'unavailable',
   in_place_not_allowed: 'invalid',
@@ -35,7 +46,7 @@ const LITERAL_FAILURE: Readonly<Record<string, StartCallNowFailureCode>> = {
   booking_funding_unavailable: 'funding_unavailable',
 };
 
-function failureCodeFor(status: number, code: string): StartCallNowFailureCode | null {
+function failureCodeFor(status: number, code: string): StartCallNowPlainFailureCode | null {
   if (isExpiredCredentialFailure(status, code)) return 'session_expired';
   if (status === 429) return 'rate_limited';
   return LITERAL_FAILURE[code] ?? null;
@@ -49,7 +60,7 @@ export async function startCallNowAction(input: unknown): Promise<StartCallNowRe
     log.warn('Call now start failed validation', { userId: user.id });
     return { ok: false, code: 'invalid' };
   }
-  const { engagementId, inPlaceOfMeetingId } = parsed.data;
+  const { engagementId, inPlaceOfMeetingId, attemptId } = parsed.data;
 
   // ⚠ BEFORE the credential pre-flight, which an impersonated session always fails (it holds no
   // access token by design) and would misreport as an expired session.
@@ -71,7 +82,7 @@ export async function startCallNowAction(input: unknown): Promise<StartCallNowRe
   try {
     const result = await postStartCallNow(
       engagementId,
-      inPlaceOfMeetingId === undefined ? {} : { inPlaceOfMeetingId }
+      inPlaceOfMeetingId === undefined ? { attemptId } : { inPlaceOfMeetingId, attemptId }
     );
     if (result.ok) {
       log.info('Call now started', {
@@ -83,7 +94,11 @@ export async function startCallNowAction(input: unknown): Promise<StartCallNowRe
     }
 
     if (isCallNowFundingCode(result.code)) {
-      return { ok: false, code: 'funding', fundingCode: result.code };
+      return {
+        ok: false,
+        code: 'funding',
+        fundingCode: result.code,
+      };
     }
     const known = failureCodeFor(result.status, result.code);
     if (known !== null) return { ok: false, code: known };

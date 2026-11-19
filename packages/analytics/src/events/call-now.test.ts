@@ -3,12 +3,15 @@ import {
   CALL_NOW_EVENTS,
   CALL_NOW_SERVER_EVENTS,
   type CallNowEventMap,
+  type CallNowPresence,
+  type CallNowRefusedReason,
   type CallNowServerEventMap,
 } from './call-now';
 
 describe('CALL_NOW_SERVER_EVENTS', () => {
   it('exposes exactly the call-now server events', () => {
     expect(Object.keys(CALL_NOW_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'REFUSED',
       'RING_ENDED',
       'SMS_SENT',
       'SMS_SUPPRESSED',
@@ -19,6 +22,7 @@ describe('CALL_NOW_SERVER_EVENTS', () => {
     expect(CALL_NOW_SERVER_EVENTS.RING_ENDED).toBe('call_now_ring_ended');
     expect(CALL_NOW_SERVER_EVENTS.SMS_SENT).toBe('call_sms_sent');
     expect(CALL_NOW_SERVER_EVENTS.SMS_SUPPRESSED).toBe('call_sms_suppressed');
+    expect(CALL_NOW_SERVER_EVENTS.REFUSED).toBe('call_now_refused');
   });
 
   it('uses snake_case event values with the feature prefix', () => {
@@ -35,6 +39,10 @@ describe('CALL_NOW_SERVER_EVENTS', () => {
       reached_by: 'app',
       placement: 'new_meeting',
       meeting_id: 'meeting-1',
+      attempt_id: 'attempt-1',
+      callee_presence_at_start: 'online',
+      in_place_of_booking: false,
+      attempt_number_today: 1,
       distinct_id: 'user-1',
     };
     const outcomes = (['connected', 'no_answer', 'declined', 'stopped'] as const).map(
@@ -73,14 +81,65 @@ describe('CALL_NOW_SERVER_EVENTS', () => {
     expect(suppressed).toMatchObject({ audience: 'client', reason: 'not_opted_in' });
     expect(reasons).toHaveLength(5);
   });
+
+  it('types the ring end’s BAL-651 attempt props, each nullable one accepting null', () => {
+    const preAttempt: CallNowServerEventMap['call_now_ring_ended'] = {
+      outcome: 'no_answer',
+      ring_seconds: 45,
+      caller_lens: 'expert',
+      reached_by: 'sms',
+      placement: 'in_place',
+      meeting_id: 'meeting-1',
+      attempt_id: null,
+      callee_presence_at_start: 'offline',
+      in_place_of_booking: true,
+      attempt_number_today: null,
+      distinct_id: 'user-1',
+    };
+
+    expect(preAttempt).toMatchObject({
+      attempt_id: null,
+      callee_presence_at_start: 'offline',
+      in_place_of_booking: true,
+      attempt_number_today: null,
+    });
+  });
+
+  it('types `call_now_refused` with the caller lens and every refusal reason', () => {
+    const reasons = (
+      [
+        'busy',
+        'outside_hours',
+        'call_now_unavailable',
+        'in_place_not_allowed',
+        'in_place_not_eligible',
+        'venue_unavailable',
+        'rate_limited',
+        'account_on_hold',
+        'booking_unfunded',
+        'booking_reserved',
+        'booking_funding_unavailable',
+      ] as const
+    ).map((reason): CallNowServerEventMap['call_now_refused'] => ({
+      caller_lens: 'client',
+      reason,
+      distinct_id: 'caller-1',
+    }));
+    // @ts-expect-error — `case_not_found` precedes authorization, so it is never a refusal reason.
+    const preAuth: CallNowRefusedReason = 'case_not_found';
+
+    expect(new Set(reasons.map((p) => p.reason)).size).toBe(11);
+    expect(preAuth).toBe('case_not_found');
+  });
 });
 
 describe('CALL_NOW_EVENTS', () => {
-  it('exposes exactly the BAL-650 funding-gate client events', () => {
+  it('exposes exactly the client events: the funding gate and the caller funnel', () => {
     expect(Object.keys(CALL_NOW_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
-      'ATTEMPT_ABANDONED',
-      'DIALOG_CONFIRMED',
-      'ENTRY_CLICKED',
+      'ABANDONED',
+      'BOOK_INSTEAD_CLICKED',
+      'CLICKED',
+      'CONFIRMED',
       'FUNDING_GATE_RESOLVED',
       'FUNDING_GATE_SHOWN',
     ]);
@@ -89,9 +148,83 @@ describe('CALL_NOW_EVENTS', () => {
   it('maps each constant to its exact snake_case event name', () => {
     expect(CALL_NOW_EVENTS.FUNDING_GATE_SHOWN).toBe('call_now_funding_gate_shown');
     expect(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED).toBe('call_now_funding_gate_resolved');
-    expect(CALL_NOW_EVENTS.ENTRY_CLICKED).toBe('call_now_entry_clicked');
-    expect(CALL_NOW_EVENTS.DIALOG_CONFIRMED).toBe('call_now_dialog_confirmed');
-    expect(CALL_NOW_EVENTS.ATTEMPT_ABANDONED).toBe('call_now_attempt_abandoned');
+    expect(CALL_NOW_EVENTS.CLICKED).toBe('call_now_clicked');
+    expect(CALL_NOW_EVENTS.CONFIRMED).toBe('call_now_confirmed');
+    expect(CALL_NOW_EVENTS.ABANDONED).toBe('call_now_abandoned');
+    expect(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED).toBe('call_now_book_instead_clicked');
+  });
+
+  it('types the four funnel events with the ticket’s exact properties', () => {
+    const clicked: CallNowEventMap['call_now_clicked'] = {
+      attempt_id: 'attempt-1',
+      lens: 'client',
+      callee_presence: 'offline',
+      has_booking_today: true,
+      surface: 'desktop',
+      entry: 'party_card',
+    };
+    const confirmed: CallNowEventMap['call_now_confirmed'] = {
+      attempt_id: 'attempt-1',
+      lens: 'client',
+      callee_presence: 'offline',
+      choice: 'call_anyway',
+      in_place_of_booking: false,
+      surface: 'mobile',
+    };
+    const abandoned: CallNowEventMap['call_now_abandoned'] = {
+      attempt_id: 'attempt-1',
+      lens: 'expert',
+      callee_presence: 'offline',
+      step: 'calling',
+      via: 'stop_calling',
+      surface: 'desktop',
+    };
+    const bookInstead: CallNowEventMap['call_now_book_instead_clicked'] = {
+      attempt_id: 'attempt-1',
+      lens: 'client',
+      from: 'confirm_offline',
+      surface: 'desktop',
+    };
+
+    expect(Object.keys(clicked).sort((a, b) => a.localeCompare(b))).toEqual([
+      'attempt_id',
+      'callee_presence',
+      'entry',
+      'has_booking_today',
+      'lens',
+      'surface',
+    ]);
+    expect(Object.keys(confirmed).sort((a, b) => a.localeCompare(b))).toEqual([
+      'attempt_id',
+      'callee_presence',
+      'choice',
+      'in_place_of_booking',
+      'lens',
+      'surface',
+    ]);
+    expect(Object.keys(abandoned).sort((a, b) => a.localeCompare(b))).toEqual([
+      'attempt_id',
+      'callee_presence',
+      'lens',
+      'step',
+      'surface',
+      'via',
+    ]);
+    expect(Object.keys(bookInstead).sort((a, b) => a.localeCompare(b))).toEqual([
+      'attempt_id',
+      'from',
+      'lens',
+      'surface',
+    ]);
+  });
+
+  it('`callee_presence` is online or offline only — there is no `unknown` arm', () => {
+    const values: CallNowPresence[] = ['online', 'offline'];
+    // @ts-expect-error — the expert arm reports the loader's `false` as `offline`, never `unknown`.
+    const unknown: CallNowPresence = 'unknown';
+
+    expect(values).toEqual(['online', 'offline']);
+    expect(unknown).toBe('unknown');
   });
 
   it('uses snake_case event values with the feature prefix', () => {

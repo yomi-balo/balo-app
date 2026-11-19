@@ -151,6 +151,12 @@ export interface EnforceBookingFundingInput {
   readonly activeCompanyId: string | null;
   /** See the module docblock: `'defer'` lets a covered hold through to the API's heal. */
   readonly onCoveredHold: 'defer' | 'refuse';
+  /**
+   * A meeting whose own reservation the snapshot must not count against itself: the ring's meeting,
+   * when a callee answers a call already reserved on their balance. Passed only by the read-only
+   * call pre-flight; the booking gate's `enforceBookingFunding` callers never set it.
+   */
+  readonly excludeMeetingId?: string;
 }
 
 /** The read and the verdict over it, before any side effect has run. */
@@ -178,6 +184,7 @@ async function resolveFundingVerdict(
       companyId: input.companyId,
       expertProfileId: input.expertProfileId,
       now: asOf,
+      excludeMeetingId: input.excludeMeetingId,
     });
     const window = {
       scheduledStart: new Date(input.slot.startIso),

@@ -30,6 +30,7 @@ vi.mock('@/components/balo/call-now/call-now-funding-step', () => ({
   CallNowFundingStep: (props: {
     request: unknown;
     callerLens: string;
+    fundingCode: string;
     onFunded: () => Promise<boolean>;
     onBack: () => void;
     onBookInstead: (() => void) | null;
@@ -74,6 +75,11 @@ const EXPERT: CallNowConfirmView = { kind: 'expert_notice', engagementId: ENGAGE
 
 const OK: StartCallNowResult = { ok: true, meetingId: MEETING_ID, ringId: RING_ID };
 
+const ATTEMPT_ID = 'a1111111-1111-4111-8111-111111111111';
+
+/** The properties every caller funnel event carries, for the default (desktop, client) render. */
+const BASE_EVENT = { attempt_id: ATTEMPT_ID, surface: 'desktop' } as const;
+
 function renderDialog(
   confirm: CallNowConfirmView = CLIENT,
   over: { onBookTime?: (() => void) | null; onOpenChange?: (open: boolean) => void } = {}
@@ -82,6 +88,8 @@ function renderDialog(
   const onBookTime = over.onBookTime === undefined ? vi.fn() : over.onBookTime;
   render(
     <CallNowDialog
+      attemptId={ATTEMPT_ID}
+      calleeOnline={confirm.kind === 'client_terms' && confirm.calleeOnline}
       open
       onOpenChange={onOpenChange}
       calleeLabel={confirm.kind === 'client_terms' ? 'Amara' : 'Northwind Industrial'}
@@ -175,23 +183,29 @@ describe('CallNowDialog', () => {
 
       expect(mockStart).toHaveBeenCalledWith({
         engagementId: ENGAGEMENT_ID,
+        attemptId: ATTEMPT_ID,
         inPlaceOfMeetingId: IN_PLACE_ID,
       });
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.DIALOG_CONFIRMED, {
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CONFIRMED, {
+        ...BASE_EVENT,
         lens: 'client',
-        presence: 'online',
+        callee_presence: 'online',
+        choice: 'call_now',
         in_place_of_booking: true,
       });
     });
 
-    it('sends an empty body once unticked', async () => {
+    it('sends no meeting id once unticked', async () => {
       renderDialog(WITH_CANDIDATE);
       await userEvent.click(screen.getByRole('checkbox'));
       await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
 
-      expect(mockStart).toHaveBeenCalledWith({ engagementId: ENGAGEMENT_ID });
+      expect(mockStart).toHaveBeenCalledWith({
+        engagementId: ENGAGEMENT_ID,
+        attemptId: ATTEMPT_ID,
+      });
       expect(track).toHaveBeenCalledWith(
-        CALL_NOW_EVENTS.DIALOG_CONFIRMED,
+        CALL_NOW_EVENTS.CONFIRMED,
         expect.objectContaining({ in_place_of_booking: false })
       );
     });
@@ -199,6 +213,8 @@ describe('CallNowDialog', () => {
     it('is absent with no candidate and on the expert arm', () => {
       const { unmount } = render(
         <CallNowDialog
+          attemptId={ATTEMPT_ID}
+          calleeOnline
           open
           onOpenChange={vi.fn()}
           calleeLabel="Amara"
@@ -221,22 +237,70 @@ describe('CallNowDialog', () => {
       await waitFor(() =>
         expect(mockPush).toHaveBeenCalledWith(`/meetings/${MEETING_ID}/call?ring=${RING_ID}`)
       );
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.DIALOG_CONFIRMED, {
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CONFIRMED, {
+        ...BASE_EVENT,
         lens: 'client',
-        presence: 'online',
+        callee_presence: 'online',
+        choice: 'call_now',
         in_place_of_booking: false,
       });
     });
 
-    it('tracks the expert lens on the expert arm', async () => {
+    it('tracks the expert lens and the loader’s offline presence on the expert arm', async () => {
       renderDialog(EXPERT);
       await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
       await waitFor(() => expect(mockPush).toHaveBeenCalled());
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.DIALOG_CONFIRMED, {
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CONFIRMED, {
+        ...BASE_EVENT,
         lens: 'expert',
-        presence: 'unknown',
+        callee_presence: 'offline',
+        choice: 'call_now',
         in_place_of_booking: false,
       });
+    });
+
+    it('tracks Call anyway as the commit from the offline confirm', async () => {
+      renderDialog({ ...CLIENT, calleeOnline: false });
+      await userEvent.click(screen.getByRole('button', { name: 'Call anyway' }));
+      await waitFor(() => expect(mockPush).toHaveBeenCalled());
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CONFIRMED, {
+        ...BASE_EVENT,
+        lens: 'client',
+        callee_presence: 'offline',
+        choice: 'call_anyway',
+        in_place_of_booking: false,
+      });
+    });
+
+    it('tracks the commit on the click, before the start action resolves', async () => {
+      mockStart.mockReturnValue(new Promise<StartCallNowResult>(() => undefined));
+      renderDialog();
+      await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
+
+      expect(mockStart).toHaveBeenCalledTimes(1);
+      expect(track).toHaveBeenCalledWith(
+        CALL_NOW_EVENTS.CONFIRMED,
+        expect.objectContaining({ attempt_id: ATTEMPT_ID })
+      );
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    it('tracks the commit even when the start is then refused', async () => {
+      mockStart.mockResolvedValue({ ok: false, code: 'venue_unavailable' });
+      renderDialog();
+      await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CONFIRMED, expect.anything());
+    });
+
+    it('reports the mobile surface on a phone', async () => {
+      mockIsMobile.mockReturnValue(true);
+      renderDialog();
+      await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
+      expect(track).toHaveBeenCalledWith(
+        CALL_NOW_EVENTS.CONFIRMED,
+        expect.objectContaining({ surface: 'mobile' })
+      );
     });
 
     it('marks the Call now button busy and announces the call while starting', async () => {
@@ -272,7 +336,7 @@ describe('CallNowDialog', () => {
       expect(screen.getByRole('button', { name: 'Not now' })).toBeDisabled();
       await userEvent.keyboard('{Escape}');
       expect(onOpenChange).not.toHaveBeenCalledWith(false);
-      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, expect.anything());
+      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
 
       resolve(OK);
       await waitFor(() => expect(mockPush).toHaveBeenCalled());
@@ -320,18 +384,39 @@ describe('CallNowDialog', () => {
   });
 
   describe('leaving', () => {
-    it('Not now tracks the confirm abandon and closes', async () => {
+    it('Not now tracks the confirm abandon via not_now and closes', async () => {
       const { onOpenChange } = renderDialog();
       await userEvent.click(screen.getByRole('button', { name: 'Not now' }));
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: 'confirm' });
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, {
+        ...BASE_EVENT,
+        lens: 'client',
+        callee_presence: 'online',
+        step: 'confirm',
+        via: 'not_now',
+      });
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
 
-    it('the close control counts as Not now', async () => {
+    it('the close control tracks the abandon via close', async () => {
       const { onOpenChange } = renderDialog();
       await userEvent.click(screen.getByRole('button', { name: 'Close' }));
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: 'confirm' });
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, {
+        ...BASE_EVENT,
+        lens: 'client',
+        callee_presence: 'online',
+        step: 'confirm',
+        via: 'close',
+      });
       expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('Escape counts as close', async () => {
+      renderDialog();
+      await userEvent.keyboard('{Escape}');
+      expect(track).toHaveBeenCalledWith(
+        CALL_NOW_EVENTS.ABANDONED,
+        expect.objectContaining({ via: 'close' })
+      );
     });
 
     it('Book a time closes the dialog and asks the surface to open booking', async () => {
@@ -342,10 +427,15 @@ describe('CallNowDialog', () => {
       expect(mockStart).not.toHaveBeenCalled();
     });
 
-    it('Book a time is not an abandoned attempt', async () => {
+    it('Book a time on the offline confirm tracks the book-instead click and no abandon', async () => {
       renderDialog({ ...CLIENT, calleeOnline: false });
       await userEvent.click(screen.getByRole('button', { name: 'Book a time' }));
-      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, expect.anything());
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED, {
+        ...BASE_EVENT,
+        lens: 'client',
+        from: 'confirm_offline',
+      });
+      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
     });
   });
 
@@ -369,6 +459,8 @@ describe('CallNowDialog', () => {
 
       const [props] = fundingProps.mock.calls.at(-1) ?? [];
       expect(props.callerLens).toBe('client');
+      expect(props.fundingCode).toBe('booking_unfunded');
+      expect(props).not.toHaveProperty('suggestedTopUpMinor');
       expect(props.request).toMatchObject({
         expertProfileId: 'p-1',
         slot: { durationMinutes: 15 },
@@ -391,6 +483,35 @@ describe('CallNowDialog', () => {
       expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, {
         via: 'top_up',
       });
+    });
+
+    it('tracks one commit for the whole attempt: the funded retry tracks no second CONFIRMED', async () => {
+      await openFunding();
+      await userEvent.click(screen.getByRole('button', { name: 'funded' }));
+      await waitFor(() => expect(mockPush).toHaveBeenCalled());
+
+      const confirmed = vi
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === CALL_NOW_EVENTS.CONFIRMED);
+      expect(confirmed).toHaveLength(1);
+      expect(mockStart).toHaveBeenLastCalledWith({
+        engagementId: ENGAGEMENT_ID,
+        attemptId: ATTEMPT_ID,
+      });
+    });
+
+    it('⚠ funding → Back → commit again sends no second CONFIRMED for the same attempt', async () => {
+      await openFunding();
+      await userEvent.click(screen.getByRole('button', { name: 'Back' }));
+      mockStart.mockResolvedValueOnce(FUNDING);
+      await userEvent.click(screen.getByRole('button', { name: 'Call now' }));
+      await screen.findByTestId('funding-step');
+
+      const confirmed = vi
+        .mocked(track)
+        .mock.calls.filter(([event]) => event === CALL_NOW_EVENTS.CONFIRMED);
+      expect(confirmed).toHaveLength(1);
+      expect(mockStart).toHaveBeenCalledTimes(2);
     });
 
     it('does not reopen the gate when the retry is refused on funding again', async () => {
@@ -443,7 +564,10 @@ describe('CallNowDialog', () => {
         .mocked(track)
         .mock.calls.filter(([event]) => event === CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED);
       expect(resolved).toEqual([[CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, { via: 'abandoned' }]]);
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: 'confirm' });
+      expect(track).toHaveBeenCalledWith(
+        CALL_NOW_EVENTS.ABANDONED,
+        expect.objectContaining({ step: 'confirm', via: 'not_now' })
+      );
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
 
@@ -461,7 +585,7 @@ describe('CallNowDialog', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Back' }));
 
       expect(screen.getByRole('button', { name: 'Call now' })).toBeInTheDocument();
-      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, expect.anything());
+      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
     });
 
     it('tracks booking_in_place when the retry from the confirm goes through in place', async () => {
@@ -476,6 +600,7 @@ describe('CallNowDialog', () => {
       await waitFor(() => expect(mockPush).toHaveBeenCalled());
       expect(mockStart).toHaveBeenLastCalledWith({
         engagementId: ENGAGEMENT_ID,
+        attemptId: ATTEMPT_ID,
         inPlaceOfMeetingId: IN_PLACE_ID,
       });
       expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, {
@@ -487,7 +612,13 @@ describe('CallNowDialog', () => {
       const { onOpenChange } = await openFunding();
       await userEvent.click(screen.getByRole('button', { name: 'Close' }));
 
-      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, { step: 'funding' });
+      expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, {
+        ...BASE_EVENT,
+        lens: 'client',
+        callee_presence: 'online',
+        step: 'funding',
+        via: 'close',
+      });
       expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, {
         via: 'abandoned',
       });
@@ -499,7 +630,11 @@ describe('CallNowDialog', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Book a time' }));
       expect(onOpenChange).toHaveBeenCalledWith(false);
       expect(onBookTime).toHaveBeenCalledTimes(1);
-      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ATTEMPT_ABANDONED, expect.anything());
+      expect(track).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.ABANDONED, expect.anything());
+      expect(track).not.toHaveBeenCalledWith(
+        CALL_NOW_EVENTS.BOOK_INSTEAD_CLICKED,
+        expect.anything()
+      );
       expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_RESOLVED, {
         via: 'abandoned',
       });

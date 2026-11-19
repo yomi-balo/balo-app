@@ -26,7 +26,7 @@ vi.mock('@/lib/call-now/call-now-api-client', () => ({ getCallNowRing: mockGetCa
 vi.mock('@/lib/cases/resolve-case-access', () => ({ resolveCaseAccess: mockResolveCaseAccess }));
 vi.mock('@/lib/logging', () => ({ log: mockLog }));
 
-import { loadCallNowCallerView } from './load-call-now-caller-view';
+import { loadCallNowCallerView, readExpertFirstName } from './load-call-now-caller-view';
 
 const RING_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
@@ -34,6 +34,7 @@ const USER_ID = '11111111-2222-4333-8444-555555555555';
 const ENGAGEMENT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const COMPANY_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+const ATTEMPT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const EXPIRES = '2026-11-19T10:00:45.000Z';
 
 const INPUT = { ringId: RING_ID, meetingId: MEETING_ID, userId: USER_ID };
@@ -50,6 +51,8 @@ function ring(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     awaitsAnswer: false,
     meetingEnded: false,
     reachedBy: 'sms',
+    attemptId: ATTEMPT_ID,
+    calleePresenceAtStart: 'online',
     ...overrides,
   };
 }
@@ -91,6 +94,8 @@ describe('loadCallNowCallerView', () => {
       status: 'ringing',
       expiresAtIso: EXPIRES,
       reachedBy: 'sms',
+      attemptId: ATTEMPT_ID,
+      calleePresence: 'online',
       calleeLabel: 'Dana',
       bookInPage: true,
     });
@@ -130,6 +135,18 @@ describe('loadCallNowCallerView', () => {
       bookInPage: false,
     });
     expect(mockFindDisplayUser).not.toHaveBeenCalled();
+  });
+
+  it('passes a missing attempt id and an offline presence through unchanged', async () => {
+    mockGetCallNowRing.mockResolvedValue({
+      ok: true,
+      data: ring({ attemptId: null, calleePresenceAtStart: 'offline' }),
+    });
+
+    await expect(loadCallNowCallerView(INPUT)).resolves.toMatchObject({
+      attemptId: null,
+      calleePresence: 'offline',
+    });
   });
 
   it('expert lens: the client company, never bookable', async () => {
@@ -195,5 +212,21 @@ describe('loadCallNowCallerView', () => {
       'Call room could not load its ring view',
       expect.objectContaining({ ringId: RING_ID, meetingId: MEETING_ID, error: 'db down' })
     );
+  });
+});
+
+describe('readExpertFirstName', () => {
+  it('is the expert’s first name', async () => {
+    await expect(readExpertFirstName(EXPERT_PROFILE_ID)).resolves.toBe('Dana');
+    expect(mockFindDisplayProfile).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+  });
+
+  it('falls back to a capitalised neutral label, as it opens a sentence, when it cannot be read', async () => {
+    mockFindDisplayProfile.mockResolvedValue(undefined);
+    await expect(readExpertFirstName(EXPERT_PROFILE_ID)).resolves.toBe('Your expert');
+
+    mockFindDisplayProfile.mockResolvedValue({ id: EXPERT_PROFILE_ID, userId: 'expert-user' });
+    mockFindDisplayUser.mockResolvedValue(undefined);
+    await expect(readExpertFirstName(EXPERT_PROFILE_ID)).resolves.toBe('Your expert');
   });
 });

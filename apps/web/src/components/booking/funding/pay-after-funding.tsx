@@ -7,7 +7,7 @@ import type { StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements, useElements, useStripe } from '@stripe/react-stripe-js';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { track, BOOKING_EVENTS, CREDIT_EVENTS } from '@/lib/analytics';
+import { BOOKING_EVENTS, CREDIT_EVENTS, track } from '@/lib/analytics';
 import type { BookingFundingFailureReason } from '@balo/analytics/events';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
 import { PaymentMethodSection } from '@/components/billing/top-up/PaymentMethodSection';
@@ -19,9 +19,11 @@ import {
   CTA_GRADIENT,
   FundingFooter,
   FundingSection,
+  bookingFundingTracker,
+  creditSurfaceFor,
   useMountedRef,
 } from './funding-frame';
-import { PAY_AFTER_COPY, payAfterConsentLine } from './funding-copy';
+import { fundingCopyFor, type FundingContext, type PayAfterCopy } from './funding-copy';
 import type { RefusedFundingView } from './funding-disposition';
 import { MandateAwaiter } from './mandate-awaiter';
 import {
@@ -54,6 +56,8 @@ type PayAfterFundingProps = Pick<
   readonly wallet: BookingTopUpWallet;
   /** The method picker, rendered first inside the controls so both methods share one layout. */
   readonly methodPicker: React.ReactNode;
+  /** Whose wording and events this funds: a booking's (default) or a call's. */
+  readonly context?: FundingContext;
 };
 
 const FAILURE_REASON: Readonly<Record<PayAfterFailure, BookingFundingFailureReason>> = {
@@ -67,30 +71,31 @@ const FAILURE_REASON: Readonly<Record<PayAfterFailure, BookingFundingFailureReas
 };
 
 /** The line for a failure; once the mode has been switched, it also says the setting changed. */
-function failureCopy(reason: PayAfterFailure, modeSwitched: boolean): string {
-  if (reason === 'arm_failed') return PAY_AFTER_COPY.errors.setup_failed_saved;
-  const line = PAY_AFTER_COPY.errors[reason];
-  return modeSwitched && reason !== 'mode_failed' ? `${line} ${PAY_AFTER_COPY.switchedNote}` : line;
+function failureCopy(copy: PayAfterCopy, reason: PayAfterFailure, modeSwitched: boolean): string {
+  if (reason === 'arm_failed') return copy.errors.setup_failed_saved;
+  const line = copy.errors[reason];
+  return modeSwitched && reason !== 'mode_failed' ? `${line} ${copy.switchedNote}` : line;
 }
 
-function unconfirmedText(modeSwitched: boolean): string {
-  return modeSwitched
-    ? `${PAY_AFTER_COPY.unconfirmed} ${PAY_AFTER_COPY.switchedNote}`
-    : PAY_AFTER_COPY.unconfirmed;
+function unconfirmedText(copy: PayAfterCopy, modeSwitched: boolean): string {
+  return modeSwitched ? `${copy.unconfirmed} ${copy.switchedNote}` : copy.unconfirmed;
 }
 
-function stageText(stage: PayAfterStage, usingSavedCard: boolean, modeSwitched = false): string {
+function stageText(
+  copy: PayAfterCopy,
+  stage: PayAfterStage,
+  usingSavedCard: boolean,
+  modeSwitched = false
+): string {
   switch (stage) {
     case 'idle':
       return '';
     case 'unconfirmed':
-      return unconfirmedText(modeSwitched);
+      return unconfirmedText(copy, modeSwitched);
     case 'setting_up':
-      return usingSavedCard
-        ? PAY_AFTER_COPY.stage.setting_up_saved
-        : PAY_AFTER_COPY.stage.setting_up_new;
+      return usingSavedCard ? copy.stage.setting_up_saved : copy.stage.setting_up_new;
     default:
-      return PAY_AFTER_COPY.stage[stage];
+      return copy.stage[stage];
   }
 }
 
@@ -115,8 +120,11 @@ function PayAfterBody({
   onBusyChange,
   onInFlightChange,
   methodPicker,
+  context = 'booking',
   stripeConfigured,
 }: Readonly<PayAfterBodyProps>) {
+  const copy = fundingCopyFor(context);
+  const trackBooking = bookingFundingTracker(context);
   const stripe = useStripe();
   const elements = useElements();
   const companyName = view.company.name;
@@ -161,21 +169,26 @@ function PayAfterBody({
     if (slot !== null && (active === null || active === globalThis.document.body)) slot.focus();
   }, [stage]);
 
-  const handleSourceChange = useCallback((next: PaymentMethodSource) => {
-    setSource(next);
-    setError(null);
-    track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next, surface: 'booking' });
-  }, []);
+  const handleSourceChange = useCallback(
+    (next: PaymentMethodSource) => {
+      setSource(next);
+      setError(null);
+      track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next, surface: creditSurfaceFor(context) });
+    },
+    [context]
+  );
 
   const fail = useCallback(
     (reason: PayAfterFailure, reasonOverride?: BookingFundingFailureReason, silent = false) => {
       if (!silent)
-        track(BOOKING_EVENTS.FUNDING_FAILED, { reason: reasonOverride ?? FAILURE_REASON[reason] });
+        trackBooking(BOOKING_EVENTS.FUNDING_FAILED, {
+          reason: reasonOverride ?? FAILURE_REASON[reason],
+        });
       if (!mountedRef.current) return;
-      setError(silent ? null : failureCopy(reason, modeSwitchedRef.current));
+      setError(silent ? null : failureCopy(copy.payAfter, reason, modeSwitchedRef.current));
       setStage('idle');
     },
-    [mountedRef]
+    [mountedRef, trackBooking, copy.payAfter]
   );
 
   const runSetup = useCallback(async (): Promise<StepResult> => {
@@ -203,9 +216,12 @@ function PayAfterBody({
 
   const bookNow = useCallback(async () => {
     const savedCard = usedSavedCardRef.current;
-    toast.success(PAY_AFTER_COPY.switchedToast(companyName));
-    track(BOOKING_EVENTS.FUNDED, { method: 'pay_after', saved_card: savedCard });
-    track(CREDIT_EVENTS.MANDATE_CAPTURED, { low_balance_mode: 'keep_going', surface: 'booking' });
+    toast.success(copy.payAfter.switchedToast(companyName));
+    trackBooking(BOOKING_EVENTS.FUNDED, { method: 'pay_after', saved_card: savedCard });
+    track(CREDIT_EVENTS.MANDATE_CAPTURED, {
+      low_balance_mode: 'keep_going',
+      surface: creditSurfaceFor(context),
+    });
     setStage('booking');
     const funded: FundedVia = {
       method: 'pay_after',
@@ -219,9 +235,9 @@ function PayAfterBody({
       Sentry.captureException(error_, { tags: { feature: 'booking', step: 'funded_book' } });
     }
     if (booked) return;
-    track(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'booking_failed' });
+    trackBooking(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'booking_failed' });
     if (mountedRef.current) setStage('idle');
-  }, [companyName, wallet.savedCard, onFunded, mountedRef]);
+  }, [companyName, wallet.savedCard, onFunded, mountedRef, trackBooking, copy.payAfter, context]);
 
   const switchThenBook = useCallback(async (): Promise<void> => {
     if (!usedSavedCardRef.current) {
@@ -273,9 +289,9 @@ function PayAfterBody({
     [fail]
   );
   const handleUnconfirmed = useCallback(() => {
-    track(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'mandate_timeout' });
+    trackBooking(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'mandate_timeout' });
     if (mountedRef.current) setStage('unconfirmed');
-  }, [mountedRef]);
+  }, [mountedRef, trackBooking]);
   const handleCheckAgain = useCallback(() => {
     setAttempt((value) => value + 1);
     setStage('awaiting_mandate');
@@ -285,7 +301,7 @@ function PayAfterBody({
     handlePress().catch(() => undefined);
   }, [handlePress]);
 
-  const idleLabel = usingSavedCard || cardReady ? PAY_AFTER_COPY.ctaSaved : PAY_AFTER_COPY.ctaNew;
+  const idleLabel = usingSavedCard || cardReady ? copy.payAfter.ctaSaved : copy.payAfter.ctaNew;
   let cta: React.ReactNode;
   if (stage === 'unconfirmed') {
     cta = (
@@ -296,7 +312,7 @@ function PayAfterBody({
         disabled={ctaDisabled}
         onClick={handleCheckAgain}
       >
-        {PAY_AFTER_COPY.checkAgain}
+        {copy.payAfter.checkAgain}
       </Button>
     );
   } else if (stage === 'idle') {
@@ -314,19 +330,30 @@ function PayAfterBody({
   } else {
     cta = (
       <BusyButton
-        label={stageText(stage, usedSavedCardRef.current || cardReady, modeSwitchedRef.current)}
+        label={stageText(
+          copy.payAfter,
+          stage,
+          usedSavedCardRef.current || cardReady,
+          modeSwitchedRef.current
+        )}
       />
     );
   }
 
   return (
     <div className="space-y-3">
-      <FundingSection view={view} caseSaved={caseSaved} draftKept method="pay_after">
+      <FundingSection
+        view={view}
+        caseSaved={caseSaved}
+        draftKept
+        method="pay_after"
+        context={context}
+      >
         <div className="flex flex-col gap-[18px] p-4 sm:p-[18px]">
           <fieldset disabled={busy} className="m-0 min-w-0 space-y-[18px] border-0 p-0">
             {methodPicker}
             {cardReady ? (
-              <p className="text-sm leading-relaxed">{PAY_AFTER_COPY.cardSaved}</p>
+              <p className="text-sm leading-relaxed">{copy.payAfter.cardSaved}</p>
             ) : (
               <PaymentMethodSection
                 savedCard={wallet.savedCard}
@@ -335,7 +362,7 @@ function PayAfterBody({
               />
             )}
             <p className="text-muted-foreground text-xs leading-relaxed">
-              {payAfterConsentLine(
+              {copy.consentLine(
                 companyName,
                 usingSavedCard && !cardReady ? wallet.savedCard : null
               )}
@@ -351,11 +378,16 @@ function PayAfterBody({
 
       {stage === 'unconfirmed' && (
         <p className="text-muted-foreground bg-muted/50 rounded-lg px-3 py-2.5 text-sm leading-relaxed">
-          {unconfirmedText(modeSwitchedRef.current)}
+          {unconfirmedText(copy.payAfter, modeSwitchedRef.current)}
         </p>
       )}
       <div role="status" aria-live="polite" className="sr-only">
-        {stageText(stage, usedSavedCardRef.current || cardReady, modeSwitchedRef.current)}
+        {stageText(
+          copy.payAfter,
+          stage,
+          usedSavedCardRef.current || cardReady,
+          modeSwitchedRef.current
+        )}
       </div>
 
       <FundingFooter onBack={onBack} backDisabled={inFlight} slotRef={ctaSlotRef}>

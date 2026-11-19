@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Loader2, Wallet } from 'lucide-react';
-import type { CallNowFundingGateReason } from '@balo/analytics/events';
 import { companyWorkspaceKey } from '@balo/shared/workspaces';
 import { Button } from '@/components/ui/button';
 import { BookingFundingBlock } from '@/components/booking/funding/booking-funding-block';
@@ -13,12 +12,15 @@ import {
   resolveFundingDisposition,
   type RefusedFundingView,
 } from '@/components/booking/funding/funding-disposition';
+import type { FundingContext } from '@/components/booking/funding/funding-copy';
 import { useBookingFunding } from '@/components/booking/funding/use-booking-funding';
 import { bookingSwitchFailedCopy } from '@/components/booking/booking-error-panels';
 import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import type { BookingFundingRequest } from '@/lib/booking/actions/booking-funding-types';
 import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
 import { CALL_NOW_COPY, START_FAILURE_COPY } from '@/lib/call-now/call-now-copy';
+import { fundingGateReason } from '@/lib/call-now/call-now-funding';
+import type { CallNowFundingCode } from '@/lib/call-now/call-now-types';
 import type { CallSide } from '@balo/shared/meetings';
 
 export interface CallNowFundingStepProps {
@@ -26,6 +28,13 @@ export interface CallNowFundingStepProps {
   readonly request: BookingFundingRequest;
   /** The side that placed the call, for the gate-shown event. */
   readonly callerLens: CallSide;
+  /**
+   * Whose funding this is: `call` for the person placing the call, `answer` for the person
+   * answering one. Only the wording differs; both report through the call funding-gate events.
+   */
+  readonly context?: Extract<FundingContext, 'call' | 'answer'>;
+  /** The api's refusal code: the ONE source of the gate-shown event's `reason`. */
+  readonly fundingCode: CallNowFundingCode;
   /** Retries the start (or the answer) once credit is in. Resolves `true` when the call went ahead. */
   readonly onFunded: () => Promise<boolean>;
   readonly onBack: () => void;
@@ -35,13 +44,6 @@ export interface CallNowFundingStepProps {
   /** `true` only while a payment or the retried start is genuinely running. Optional. */
   readonly onInFlightChange?: (inFlight: boolean) => void;
 }
-
-/** The booking pre-flight's refusal arm, as the analytics reason the gate reports. */
-const REASON_BY_ARM: Readonly<Record<RefusedFundingView['arm'], CallNowFundingGateReason>> = {
-  setup: 'insufficient',
-  reserved: 'reserved_by_upcoming',
-  hold: 'account_on_hold',
-};
 
 function noopInFlight(): void {}
 
@@ -86,7 +88,7 @@ function ExitButtons({ onBack, onBookInstead }: Readonly<FundingActionsProps>) {
         className="min-h-11 w-full sm:w-auto"
         onClick={onBack}
       >
-        Back
+        {CALL_NOW_COPY.back}
       </Button>
     </>
   );
@@ -171,7 +173,7 @@ function FundingUnavailable({ onBack }: Readonly<{ onBack: () => void }>) {
         className="min-h-11 w-full sm:w-auto"
         onClick={onBack}
       >
-        Back
+        {CALL_NOW_COPY.back}
       </Button>
     </FundingFrame>
   );
@@ -187,6 +189,8 @@ function FundingUnavailable({ onBack }: Readonly<{ onBack: () => void }>) {
 export function CallNowFundingStep({
   request,
   callerLens,
+  context = 'call',
+  fundingCode,
   onFunded,
   onBack,
   onBookInstead,
@@ -205,15 +209,15 @@ export function CallNowFundingStep({
     });
   }, [view, onFunded]);
 
-  const refusedArm = view?.kind === 'refused' ? view.arm : null;
+  const refused = view?.kind === 'refused';
   useEffect(() => {
-    if (refusedArm === null || shownRef.current) return;
+    if (!refused || shownRef.current) return;
     shownRef.current = true;
     track(CALL_NOW_EVENTS.FUNDING_GATE_SHOWN, {
       caller_lens: callerLens,
-      reason: REASON_BY_ARM[refusedArm],
+      reason: fundingGateReason(fundingCode),
     });
-  }, [refusedArm, callerLens]);
+  }, [refused, callerLens, fundingCode]);
 
   const handleFunded = useCallback((): Promise<boolean> => {
     clearedRef.current = true;
@@ -242,6 +246,7 @@ export function CallNowFundingStep({
   }
   return (
     <BookingFundingBlock
+      context={context}
       view={view}
       caseSaved={null}
       draftKept={false}

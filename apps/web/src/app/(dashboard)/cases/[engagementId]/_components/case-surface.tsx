@@ -176,7 +176,13 @@ export function CaseSurface({
   // BAL-651 — Call now's confirm. "Book a time" there closes the dialog and asks the quick-pick
   // for the same in-page follow-up the party card's CTA uses.
   const [callNowOpen, setCallNowOpen] = useState(false);
-  const handleOpenCallNow = useCallback(() => setCallNowOpen(true), []);
+  // Minted by the entry tap and kept after the confirm closes, so the dialog stays mounted for its
+  // close animation. A new tap replaces it.
+  const [callNowAttemptId, setCallNowAttemptId] = useState<string | null>(null);
+  const handleOpenCallNow = useCallback((attemptId: string) => {
+    setCallNowAttemptId(attemptId);
+    setCallNowOpen(true);
+  }, []);
   const handleCallNowBookTime = useCallback(() => requestFollowUp('call_now'), [requestFollowUp]);
 
   // The call room's "Book a time" and the ended card land here with `?book=1`: read it once,
@@ -560,8 +566,10 @@ export function CaseSurface({
           />
         )}
 
-        {callNow !== null && callNow.confirm !== null && (
+        {callNow !== null && callNow.confirm !== null && callNowAttemptId !== null && (
           <CallNowDialog
+            attemptId={callNowAttemptId}
+            calleeOnline={callNow.calleeOnline}
             open={callNowOpen}
             onOpenChange={setCallNowOpen}
             calleeLabel={callNow.calleeLabel}

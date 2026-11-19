@@ -31,10 +31,13 @@ const MEETING_ID = 'm0000000-0000-4000-8000-000000000002';
 const RING_ID = 'r0000000-0000-4000-8000-000000000003';
 const IN_PLACE_ID = 'a0000000-0000-4000-8000-000000000004';
 
+const ATTEMPT_ID = 'a1111111-1111-4111-8111-111111111111';
+const BASE = { engagementId: ENGAGEMENT_ID, attemptId: ATTEMPT_ID };
+
 const USER = { id: 'u0000000-0000-4000-8000-000000000005' };
 
-function refusal(status: number, code: string) {
-  return { ok: false, status, code };
+function refusal(status: number, code: string, suggestedTopUpMinor: number | null = null) {
+  return { ok: false, status, code, detail: { suggestedTopUpMinor } };
 }
 
 describe('startCallNowAction', () => {
@@ -49,12 +52,12 @@ describe('startCallNowAction', () => {
   });
 
   it('starts the call and returns the ids, logging the business event', async () => {
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: true,
       meetingId: MEETING_ID,
       ringId: RING_ID,
     });
-    expect(mockPostStart).toHaveBeenCalledWith(ENGAGEMENT_ID, {});
+    expect(mockPostStart).toHaveBeenCalledWith(ENGAGEMENT_ID, { attemptId: ATTEMPT_ID });
     expect(vi.mocked(log.info)).toHaveBeenCalledWith('Call now started', {
       engagementId: ENGAGEMENT_ID,
       meetingId: MEETING_ID,
@@ -63,15 +66,20 @@ describe('startCallNowAction', () => {
   });
 
   it('sends the same-day meeting id when one is chosen', async () => {
-    await startCallNowAction({ engagementId: ENGAGEMENT_ID, inPlaceOfMeetingId: IN_PLACE_ID });
-    expect(mockPostStart).toHaveBeenCalledWith(ENGAGEMENT_ID, { inPlaceOfMeetingId: IN_PLACE_ID });
+    await startCallNowAction({ ...BASE, inPlaceOfMeetingId: IN_PLACE_ID });
+    expect(mockPostStart).toHaveBeenCalledWith(ENGAGEMENT_ID, {
+      inPlaceOfMeetingId: IN_PLACE_ID,
+      attemptId: ATTEMPT_ID,
+    });
   });
 
   it.each([
     ['a missing id', {}],
-    ['a non-uuid id', { engagementId: 'nope' }],
-    ['an unknown key', { engagementId: ENGAGEMENT_ID, extra: true }],
-    ['a non-uuid in-place id', { engagementId: ENGAGEMENT_ID, inPlaceOfMeetingId: 'x' }],
+    ['a non-uuid id', { ...BASE, engagementId: 'nope' }],
+    ['a missing attempt id', { engagementId: ENGAGEMENT_ID }],
+    ['a non-uuid attempt id', { ...BASE, attemptId: 'nope' }],
+    ['an unknown key', { ...BASE, extra: true }],
+    ['a non-uuid in-place id', { ...BASE, inPlaceOfMeetingId: 'x' }],
   ])('refuses %s as invalid without any api call', async (_label, input) => {
     await expect(startCallNowAction(input)).resolves.toEqual({ ok: false, code: 'invalid' });
     expect(mockPostStart).not.toHaveBeenCalled();
@@ -79,7 +87,7 @@ describe('startCallNowAction', () => {
 
   it('refuses an impersonated session before the credential pre-flight and the api', async () => {
     mockRequireUser.mockResolvedValue({ ...USER, isImpersonating: true });
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: false,
       code: 'impersonation_refused',
     });
@@ -89,7 +97,7 @@ describe('startCallNowAction', () => {
 
   it('answers session_expired when the credential is dead, with no api call', async () => {
     mockCredentialLive.mockResolvedValue(false);
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: false,
       code: 'session_expired',
     });
@@ -97,14 +105,12 @@ describe('startCallNowAction', () => {
   });
 
   it.each([['account_on_hold'], ['booking_unfunded'], ['booking_reserved']])(
-    'maps the 409 %s refusal to the funding step',
+    '⚠ maps the 409 %s refusal to the funding step with the code ONLY — the api’s figure never reaches the browser',
     async (fundingCode) => {
-      mockPostStart.mockResolvedValue(refusal(409, fundingCode));
-      await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
-        ok: false,
-        code: 'funding',
-        fundingCode,
-      });
+      mockPostStart.mockResolvedValue(refusal(409, fundingCode, 4500));
+      const result = await startCallNowAction(BASE);
+      expect(result).toEqual({ ok: false, code: 'funding', fundingCode });
+      expect(result).not.toHaveProperty('suggestedTopUpMinor');
     }
   );
 
@@ -119,7 +125,7 @@ describe('startCallNowAction', () => {
     [401, 'token_expired', 'session_expired'],
   ])('maps %i %s to %s', async (status, code, expected) => {
     mockPostStart.mockResolvedValue(refusal(status, code));
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: false,
       code: expected,
     });
@@ -127,7 +133,7 @@ describe('startCallNowAction', () => {
 
   it('warns and answers failed for a refusal it does not know', async () => {
     mockPostStart.mockResolvedValue(refusal(500, 'something_new'));
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: false,
       code: 'failed',
     });
@@ -139,7 +145,7 @@ describe('startCallNowAction', () => {
 
   it('logs the error and answers failed when the hop throws', async () => {
     mockPostStart.mockRejectedValue(new Error('network'));
-    await expect(startCallNowAction({ engagementId: ENGAGEMENT_ID })).resolves.toEqual({
+    await expect(startCallNowAction(BASE)).resolves.toEqual({
       ok: false,
       code: 'failed',
     });

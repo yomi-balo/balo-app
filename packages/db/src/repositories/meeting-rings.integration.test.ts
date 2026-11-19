@@ -65,6 +65,8 @@ function startInput(c: RingCase, overrides: Partial<StartRingInput> = {}): Start
     callerSide: 'client',
     reachedBy: 'app',
     expiresAt: new Date(Date.now() + RING_MS),
+    attemptId: null,
+    calleeOnlineAtStart: false,
     ...overrides,
   };
 }
@@ -218,6 +220,55 @@ describe('meetingRingsRepository.startWithNewMeeting', () => {
     const second = await ringNewMeeting(c);
     expect(second.ring.status).toBe('ringing');
     expect(second.meeting.id).not.toBe(first.meeting.id);
+  });
+
+  it('writes the attempt id and the callee’s presence at the start (BAL-651)', async () => {
+    const c = await ringCase();
+    const attemptId = randomUUID();
+
+    const started = await ringNewMeeting(c, { attemptId, calleeOnlineAtStart: true });
+
+    expect(started.ring).toMatchObject({ attemptId, calleeOnlineAtStart: true });
+    expect(await meetingRingsRepository.findById(started.ring.id)).toMatchObject({
+      attemptId,
+      calleeOnlineAtStart: true,
+    });
+  });
+
+  it('stores a missing attempt id as NULL and an offline callee as false', async () => {
+    const c = await ringCase();
+
+    const started = await ringNewMeeting(c, { attemptId: null, calleeOnlineAtStart: false });
+
+    expect(await meetingRingsRepository.findById(started.ring.id)).toMatchObject({
+      attemptId: null,
+      calleeOnlineAtStart: false,
+    });
+  });
+
+  it('a ring written by a build that predates the columns reads both as NULL (expand-only)', async () => {
+    const c = await ringCase();
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: c.engagementId }],
+    });
+
+    // Raw SQL on purpose: the previous build's INSERT names only the columns it declares, and a
+    // Drizzle insert from THIS schema would name the new ones too.
+    const inserted = await db.execute<{ id: string }>(sql`
+      INSERT INTO meeting_rings
+        (meeting_id, engagement_id, caller_user_id, callee_user_id, caller_side, placement, expires_at)
+      VALUES
+        (${meeting.id}, ${c.engagementId}, ${c.callerUserId}, ${c.calleeUserId}, 'client',
+         'in_place', ${new Date(Date.now() + RING_MS).toISOString()})
+      RETURNING id
+    `);
+    const [row] = inserted;
+    if (row === undefined) throw new Error('ring was not inserted');
+
+    expect(await meetingRingsRepository.findById(row.id)).toMatchObject({
+      attemptId: null,
+      calleeOnlineAtStart: null,
+    });
   });
 
   it('rethrows every other failure untouched — the caller-not-callee and expiry CHECKs', async () => {
@@ -966,6 +1017,87 @@ describe('meetingRingsRepository — reads', () => {
         since: new Date(0),
       })
     ).toBe(false);
+  });
+
+  describe('countCallerRingsToCallee (BAL-651)', () => {
+    const dayStart = new Date('2026-06-01T00:00:00.000Z');
+    const ringAt = new Date('2026-06-01T15:00:00.000Z');
+
+    /** A fresh case for the same pair, so each seeded ring has its own one-ringing slot. */
+    async function samePair(c: RingCase): Promise<RingCase> {
+      const { engagement } = await caseEngagementFactory({ expertProfileId: c.expertProfileId });
+      return { ...c, engagementId: engagement.id };
+    }
+
+    /** Ring on `c`, then force its `created_at` (and optionally status / soft delete). */
+    async function seedAt(
+      c: RingCase,
+      createdAt: Date,
+      overrides: { status?: 'connected' | 'unanswered'; deletedAt?: Date } = {}
+    ): Promise<void> {
+      const started = await ringNewMeeting(c);
+      await db
+        .update(meetingRings)
+        .set({
+          createdAt,
+          ...(overrides.status === undefined
+            ? {}
+            : { status: overrides.status, endedAt: createdAt }),
+          ...(overrides.deletedAt === undefined ? {} : { deletedAt: overrides.deletedAt }),
+        })
+        .where(eq(meetingRings.id, started.ring.id));
+    }
+
+    const pairWindow = (c: RingCase) => ({
+      callerUserId: c.callerUserId,
+      calleeUserId: c.calleeUserId,
+      from: dayStart,
+      to: ringAt,
+    });
+
+    it('counts the pair’s rings of any status and case, both window ends included', async () => {
+      const c = await ringCase();
+      await seedAt(c, dayStart, { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date('2026-06-01T10:00:00.000Z'), {
+        status: 'connected',
+      });
+      await seedAt(await samePair(c), ringAt);
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(3);
+    });
+
+    it('excludes the day before, after the ring, soft-deleted rings, another callee and the reverse direction', async () => {
+      const c = await ringCase();
+      await seedAt(c, ringAt);
+      await seedAt(await samePair(c), new Date(dayStart.getTime() - 1), { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date(ringAt.getTime() + 1), { status: 'unanswered' });
+      await seedAt(await samePair(c), new Date('2026-06-01T12:00:00.000Z'), {
+        status: 'unanswered',
+        deletedAt: new Date('2026-06-01T12:30:00.000Z'),
+      });
+      const otherCallee = await ringCase();
+      await seedAt(
+        { ...otherCallee, callerUserId: c.callerUserId },
+        new Date('2026-06-01T11:00:00.000Z'),
+        {
+          status: 'unanswered',
+        }
+      );
+      const reverse = await samePair(c);
+      await seedAt(
+        { ...reverse, callerUserId: c.calleeUserId, calleeUserId: c.callerUserId },
+        new Date('2026-06-01T11:00:00.000Z'),
+        { status: 'unanswered' }
+      );
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(1);
+    });
+
+    it('answers 0 for a pair with no rings', async () => {
+      const c = await ringCase();
+
+      expect(await meetingRingsRepository.countCallerRingsToCallee(pairWindow(c))).toBe(0);
+    });
   });
 
   describe('summarizeMissedCallWindow', () => {

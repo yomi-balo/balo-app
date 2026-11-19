@@ -49,6 +49,19 @@ export const MEMBER_TAIL = `${MEMBER_TAIL_LEAD} What you've typed stays on this 
 /** The same tail where no draft is written (a booking on a case that is already chosen). */
 export const MEMBER_TAIL_NO_DRAFT = MEMBER_TAIL_LEAD;
 
+/**
+ * What the funding block is funding. `booking` is the booking flow's own wording; `call` is Call
+ * now's (BAL-651 R8): it never says "book", and the funding events it fires are the call
+ * funding-gate's, not the booking's. `answer` is the callee's side of the same funding (a client
+ * answering an expert's call): the call wording, but the actions say "answer", never "call now".
+ */
+export type FundingContext = 'booking' | 'call' | 'answer';
+
+/** Whether the block is funding a call (placed or answered) rather than a booking. */
+export function isCallFunding(context: FundingContext): boolean {
+  return context !== 'booking';
+}
+
 /** The stage text the funding block announces and shows while a top-up runs. */
 export const FUNDING_STAGE_COPY = {
   processing: 'Processing payment…',
@@ -139,10 +152,26 @@ export const BOOKING_PAY_ERROR_COPY = {
     "There's a consultation running on the card on file, so it can't be swapped right now. Nothing was charged. Pay with the saved card, or try again after the call.",
 } as const;
 
+/** The button that retries once a landed payment has not yet shown in the balance. */
+const BOOKING_RETRY_LABEL = 'Book now';
+const CALL_RETRY_LABEL = 'Call now';
+/** NEW — the retry button on the answer path. */
+const ANSWER_RETRY_LABEL = 'Answer';
+
+const RETRY_LABELS: Readonly<Record<FundingContext, string>> = {
+  booking: BOOKING_RETRY_LABEL,
+  call: CALL_RETRY_LABEL,
+  answer: ANSWER_RETRY_LABEL,
+};
+
 /** The payment succeeded but the balance has not caught up yet. Never invites a second payment. */
-export function creditPendingCopy(companyName: string | null): string {
+export function creditPendingCopy(
+  companyName: string | null,
+  context: FundingContext = 'booking'
+): string {
   const co = companyLabels(companyName);
-  return `Your payment went through and is being added to ${co.mid} balance. Press Book now to finish — you won't be charged again.`;
+  const retry = RETRY_LABELS[context];
+  return `Your payment went through and is being added to ${co.mid} balance. Press ${retry} to finish — you won't be charged again.`;
 }
 
 /** After funding landed but the time was taken: what is kept is kept, and the line says so. */
@@ -204,27 +233,88 @@ export const PAY_AFTER_COPY = {
     `${CARD_BACKED_MODE_TITLE.keep_going} is on for ${partyName(companyName)}.`,
 } as const;
 
+type Widen<T> = T extends string
+  ? string
+  : T extends (...args: infer A) => infer R
+    ? (...args: A) => R
+    : { readonly [K in keyof T]: Widen<T[K]> };
+
+/** The shape of {@link PAY_AFTER_COPY}, with every literal widened so a context can override it. */
+export type PayAfterCopy = Widen<typeof PAY_AFTER_COPY>;
+
+const SETUP_FAILED_CALL_LINE =
+  "Your card couldn't be set up, so nothing was charged and the call hasn't started.";
+
+/** {@link PAY_AFTER_COPY} for a call: every string that names booking says the call instead. */
+const CALL_PAY_AFTER_COPY: PayAfterCopy = {
+  ...PAY_AFTER_COPY,
+  ctaSaved: 'Start the call, pay after',
+  ctaNew: 'Add card & call',
+  cardSaved: 'Your new card is saved. Press below to finish setting up and start the call.',
+  stage: { ...PAY_AFTER_COPY.stage, booking: 'Starting the call…' },
+  errors: {
+    ...PAY_AFTER_COPY.errors,
+    declined:
+      "Your card was declined, so nothing was charged and the call hasn't started. Try a different card or check with your bank.",
+    auth_failed:
+      "Your bank didn't confirm the card, so nothing was charged and the call hasn't started. Try again or use a different card.",
+    setup_failed:
+      "Your card couldn't be set up, so nothing was charged and the call hasn't started. What you've entered is still here.",
+    setup_failed_saved: `${SETUP_FAILED_CALL_LINE} ${SWITCHED_NOTE}`,
+    mode_failed:
+      "Your card is saved, but we couldn't switch the low-balance setting to Keep me going, so the call hasn't started. Nothing was charged. Try again.",
+  },
+  unconfirmed:
+    "We're still confirming your card with your bank. Nothing has been charged and the call hasn't started yet.",
+};
+
+const CONSENT_ACTS: Readonly<Record<FundingContext, string>> = {
+  booking: 'booking',
+  call: 'calling',
+  answer: 'answering',
+};
+
+/**
+ * NEW — {@link CALL_PAY_AFTER_COPY} for the person ANSWERING a call: the actions say "answer" and
+ * no string says "call now" or "starting the call".
+ */
+const ANSWER_PAY_AFTER_COPY: PayAfterCopy = {
+  ...CALL_PAY_AFTER_COPY,
+  ctaSaved: 'Answer, pay after',
+  ctaNew: 'Add card & answer',
+  cardSaved: 'Your new card is saved. Press below to finish setting up and answer.',
+  stage: { ...CALL_PAY_AFTER_COPY.stage, booking: 'Answering…' },
+};
+
 /**
  * The consent shown before the press. It describes what the booking changes and what the card is
  * charged for; it never says the setting is what makes the card chargeable.
  */
-export function payAfterConsentLine(companyName: string | null, card: SavedCard | null): string {
+export function payAfterConsentLine(
+  companyName: string | null,
+  card: SavedCard | null,
+  context: FundingContext = 'booking'
+): string {
   const co = companyLabels(companyName);
   const cardName = card === null ? 'this card' : describeSavedCard(card);
-  return `By booking, you switch ${co.mid} low-balance setting to ${CARD_BACKED_MODE_TITLE.keep_going} and let Balo charge ${cardName} for consultation time beyond the balance, after each call. Change it anytime in Billing settings.`;
+  const act = CONSENT_ACTS[context];
+  return `By ${act}, you switch ${co.mid} low-balance setting to ${CARD_BACKED_MODE_TITLE.keep_going} and let Balo charge ${cardName} for consultation time beyond the balance, after each call. Change it anytime in Billing settings.`;
 }
 
 /** The header band while "Pay after the call" is selected: no top-up figure, on either arm. */
-function payAfterBandCopy(view: RefusedFundingView): FundingBlockCopy {
+function payAfterBandCopy(view: RefusedFundingView, context: FundingContext): FundingBlockCopy {
+  const straightAway = isCallFunding(context)
+    ? 'the call starts straight away'
+    : 'this one books straight away';
   if (view.arm === 'reserved') {
     return {
       heading: 'Pay after the call for this one',
-      body: `Part of ${companyLabels(view.company.name).mid} balance is set aside for upcoming consultations. Choose a card to charge after the call and this one books straight away. Nothing is charged now.`,
+      body: `Part of ${companyLabels(view.company.name).mid} balance is set aside for upcoming consultations. Choose a card to charge after the call and ${straightAway}. Nothing is charged now.`,
     };
   }
   return {
     heading: 'Pay after the call',
-    body: 'Choose a card to charge after the call and this one books straight away. Nothing is charged now.',
+    body: `Choose a card to charge after the call and ${straightAway}. Nothing is charged now.`,
   };
 }
 
@@ -310,6 +400,37 @@ const COPY: Readonly<Record<RefusedFundingView['arm'], Readonly<Record<Audience,
 };
 
 /**
+ * The billing manager's copy for a call (BAL-651 R8): the booking table's strings with the booking
+ * wording replaced by the call's. Only the manager arm exists here — a member never reaches the
+ * block from a call, because the call funding step shows its own member panel.
+ */
+const CALL_MANAGER_COPY: Readonly<Record<RefusedFundingView['arm'], CopyFn>> = {
+  setup: ({ view, company }) =>
+    view.firstTime
+      ? {
+          heading: 'One setup step first',
+          body: `Calls are paid from ${company.mid} balance. Top up now and the call starts straight after.`,
+        }
+      : {
+          heading: `${company.start} balance needs a top-up for this call`,
+          body: 'Top up now and the call starts straight after.',
+        },
+  reserved: ({ balance }) => ({
+    heading: BALANCE_PANEL_COPY.reserved.heading.figure(balance),
+    body: `Part of ${balance.company.mid} balance is set aside for ${balance.count}, so there isn't enough left to start this call. A top-up of ${balance.amount} or more would make room for it. ${balance.company.start} balance still shows in full — nothing has been taken for the planned consultations yet.`,
+  }),
+  hold: ({ view, balance }) => {
+    const arm = holdArm(view);
+    const { heading } = BALANCE_PANEL_COPY.hold;
+    const body =
+      arm === 'fallback'
+        ? `An earlier hold is still on ${balance.company.mid} account, although the balance already covers it. It lifts automatically within a day, or at once with any top-up. Consultations that are already scheduled aren't affected.`
+        : `${balance.company.start} balance needs a top-up of ${balance.amount} or more before new calls can start. Consultations that are already scheduled aren't affected.`;
+    return { heading: (heading[arm] ?? heading.figure)(balance), body };
+  },
+};
+
+/**
  * The heading and body for the funding block, by arm and audience (a billing manager, or a
  * member who can only save the booking for later). `draftKept` says whether Save keeps the typed
  * details on this device, which a booking on an already-chosen case does not.
@@ -317,15 +438,16 @@ const COPY: Readonly<Record<RefusedFundingView['arm'], Readonly<Record<Audience,
 export function fundingBlockCopy(
   view: RefusedFundingView,
   draftKept = true,
-  method: BookingFundingMethodProperty = 'topup'
+  method: BookingFundingMethodProperty = 'topup',
+  context: FundingContext = 'booking'
 ): FundingBlockCopy {
-  if (method === 'pay_after') return payAfterBandCopy(view);
+  if (method === 'pay_after') return payAfterBandCopy(view, context);
   const company = companyLabels(view.company.name);
   const figureMinor =
     view.arm === 'reserved'
       ? (view.topUpNeededMinor ?? view.suggestedTopUpMinor ?? 0)
       : (view.topUpNeededMinor ?? 0);
-  const context: CopyContext = {
+  const copyContext: CopyContext = {
     view,
     company,
     draftKept,
@@ -336,5 +458,64 @@ export function fundingBlockCopy(
       count: upcomingConsultationsLabel(view.reservedBookingCount ?? 0),
     },
   };
-  return COPY[view.arm][view.canManageBilling ? 'manager' : 'member'](context);
+  if (isCallFunding(context) && view.canManageBilling) {
+    return CALL_MANAGER_COPY[view.arm](copyContext);
+  }
+  return COPY[view.arm][view.canManageBilling ? 'manager' : 'member'](copyContext);
+}
+
+/** Every context-dependent string the funding block shows, for one {@link FundingContext}. */
+export interface FundingCopyBundle {
+  readonly stage: Readonly<Record<keyof typeof FUNDING_STAGE_COPY, string>>;
+  readonly payAfter: PayAfterCopy;
+  readonly creditPending: (companyName: string | null) => string;
+  readonly consentLine: (companyName: string | null, card: SavedCard | null) => string;
+  readonly blockCopy: (
+    view: RefusedFundingView,
+    draftKept: boolean,
+    method: BookingFundingMethodProperty
+  ) => FundingBlockCopy;
+  /** The top-up button's idle label; `null` while "Other" holds nothing usable. */
+  readonly topUpLabel: (effectiveMinor: number | null) => string;
+  /** The button that retries once a landed payment has not shown in the balance yet. */
+  readonly creditRetryLabel: string;
+}
+
+const STAGE_COPY: Readonly<Record<FundingContext, FundingCopyBundle['stage']>> = {
+  booking: FUNDING_STAGE_COPY,
+  call: { ...FUNDING_STAGE_COPY, booking: 'Starting the call…' },
+  // NEW
+  answer: { ...FUNDING_STAGE_COPY, booking: 'Answering…' },
+};
+
+const PAY_AFTER_BY_CONTEXT: Readonly<Record<FundingContext, PayAfterCopy>> = {
+  booking: PAY_AFTER_COPY,
+  call: CALL_PAY_AFTER_COPY,
+  answer: ANSWER_PAY_AFTER_COPY,
+};
+
+const TOP_UP_NOUNS: Readonly<Record<FundingContext, string>> = {
+  booking: 'book',
+  call: 'call',
+  answer: 'answer',
+};
+
+function topUpLabelFor(noun: string): FundingCopyBundle['topUpLabel'] {
+  return (effectiveMinor) =>
+    effectiveMinor === null
+      ? `Top up & ${noun}`
+      : `Top up ${formatAudShort(effectiveMinor)} & ${noun}`;
+}
+
+/** The funding block's copy for a booking, for a call (BAL-651 R8), or for answering one. */
+export function fundingCopyFor(context: FundingContext): FundingCopyBundle {
+  return {
+    stage: STAGE_COPY[context],
+    payAfter: PAY_AFTER_BY_CONTEXT[context],
+    creditPending: (companyName) => creditPendingCopy(companyName, context),
+    consentLine: (companyName, card) => payAfterConsentLine(companyName, card, context),
+    blockCopy: (view, draftKept, method) => fundingBlockCopy(view, draftKept, method, context),
+    topUpLabel: topUpLabelFor(TOP_UP_NOUNS[context]),
+    creditRetryLabel: RETRY_LABELS[context],
+  };
 }

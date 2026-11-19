@@ -5,7 +5,7 @@ audience: [client]
 category:
   client: calls
 order: 3
-published: false
+published: true
 updated: 2026-11-19
 related: [booking-a-consultation, your-cases, joining-a-call, buying-credit]
 ---
@@ -29,8 +29,8 @@ If neither line is there and there's no button, Call now isn't available on this
 ## The confirm screen
 
 Choosing **Call now** opens **Call {name} now?** On a phone, it slides up from the bottom of the
-screen. It shows the expert's rate and the minimum, for example "A$4.20/min · 15-minute minimum.
-The timer starts when you're both in."
+screen. It shows the rate your expert starts from and the minimum, for example "From A$4.20/min ·
+15-minute minimum. The timer starts when you're both in."
 
 **When your expert is online**, the screen says: "{name} is online. We'll let them know you're
 calling and you'll wait in the call room. If {name} doesn't pick up, nothing is charged." Choose
@@ -69,6 +69,10 @@ charged while you wait — the timer starts once you're both in." If your expert
 instead, it says "We've texted {name}". A line underneath counts down: "We'll keep trying for {n}
 more seconds."
 
+Your expert gets a text when they aren't online, have a verified phone number and it's within their
+usual hours. Balo also limits how many texts one person can send another in a day. When a text goes
+out, the call keeps ringing for up to two minutes instead of under one.
+
 You can leave at any point with **Stop calling**. Nothing is charged and you go back to the case.
 
 When your expert picks up, you go straight into the call. See [Joining a call](/help/joining-a-call)
@@ -77,22 +81,33 @@ for what the call looks like and how it ends. The timer starts once you're both 
 ## If nobody answers
 
 If your expert doesn't pick up, you see **No answer from {name}**: "Nothing was charged. {name} will
-see that you called." If they can't talk right now, the heading reads "{name} can't talk right now"
-instead, with the same message.
+see that you called." A missed call shows up as a bell item for them straight away, and if you
+haven't spoken by then they get one email about ten minutes later. Several missed calls in a row
+share that one email.
+
+If they choose **Not now**, the heading reads "{name} can't talk right now" and the message is just
+"Nothing was charged." A call they turned down leaves no missed-call item or email. The same goes if
+you stop calling yourself.
 
 Choose **Book a time** to find a slot with them, or **Back to the case**. There's nothing to cancel.
 
 ## If your expert calls you
 
-Your expert can start a call too. While it's ringing, **Join** appears in the top bar on any page. If you've asked for text updates, Balo may also text you a link
-that opens the case.
+Your expert can start a call too. While it's ringing, **Join** appears in the top bar on any page.
+If you've asked for text updates, Balo may also text you a link that opens the case.
 
-Choosing **Join** takes you to the call page, which says **Your expert is calling**. You answer by choosing
-**Answer** there. Opening the page doesn't answer for you. Balo checks your company's credit when you
-choose **Answer**, so if a top-up is needed you'll see the same **Add credit to start this call**
-screen first (its **Back** takes you to the case). While the call is still ringing, it goes ahead as soon as the credit lands. If it has
-stopped ringing by then, nothing is charged and you can call your expert back from the case. From
-there it works like any other call.
+Choosing **Join** takes you to the call page, which says **{name} is calling** and shows the same
+"From" rate and minimum as the confirm screen. You answer by choosing **Answer** there. Opening the
+page doesn't answer for you. Balo checks your company's credit when you choose **Answer**, so if a
+top-up is needed you'll see the same **Add credit to start this call** screen first (its **Back**
+takes you to the case). While the call is still ringing, it goes ahead as soon as the credit lands.
+If it has stopped ringing by then, nothing is charged and you can call your expert back from the
+case. If answering fails for another reason, you see a message and **Answer** stays where it is, so
+you can try again. From there it works like any other call.
+
+Only the person being called answers. If a colleague at your company opens the call page, they see
+**Waiting for the call to connect** and the call opens for them as soon as it connects. If you miss
+the call, you get a bell item and, about ten minutes later, one email.
 
 ## Where the call shows up
 

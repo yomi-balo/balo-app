@@ -5,12 +5,19 @@ import { track, CALL_NOW_EVENTS } from '@/lib/analytics';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import { CallNowEntry } from './call-now-entry';
 
+const { mockSurface } = vi.hoisted(() => ({ mockSurface: vi.fn() }));
+vi.mock('@/lib/call-now/use-call-now-surface', () => ({
+  useCallNowSurface: () => mockSurface(),
+}));
+
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000001';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const CLIENT_BUTTON: CaseCallNowView = {
   entry: 'button',
   calleeLabel: 'Amara',
   onlineBadge: true,
+  calleeOnline: true,
   calleeTimeZone: null,
   confirm: {
     kind: 'client_terms',
@@ -27,12 +34,16 @@ const EXPERT_BUTTON: CaseCallNowView = {
   entry: 'button',
   calleeLabel: 'Northwind Industrial',
   onlineBadge: false,
+  calleeOnline: false,
   calleeTimeZone: null,
   confirm: { kind: 'expert_notice', engagementId: ENGAGEMENT_ID },
 };
 
 describe('CallNowEntry', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSurface.mockReturnValue('desktop');
+  });
 
   it('renders an outline Call now button named for the callee', () => {
     render(<CallNowEntry callNow={CLIENT_BUTTON} lens="client" onCallNow={vi.fn()} />);
@@ -41,23 +52,39 @@ describe('CallNowEntry', () => {
     expect(button).toHaveClass('min-h-11');
   });
 
-  it('tracks the click with presence and today-booking facts, then opens the confirm', async () => {
+  it('tracks the click with a fresh attempt id, then hands that id to the confirm', async () => {
     const onCallNow = vi.fn();
     render(<CallNowEntry callNow={CLIENT_BUTTON} lens="client" onCallNow={onCallNow} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Call Amara now' }));
 
-    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ENTRY_CLICKED, {
+    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.CLICKED, {
+      attempt_id: expect.stringMatching(UUID_PATTERN),
       lens: 'client',
-      presence: 'online',
+      callee_presence: 'online',
       has_booking_today: true,
+      surface: 'desktop',
+      entry: 'party_card',
     });
     expect(onCallNow).toHaveBeenCalledTimes(1);
+    const trackedProps = vi.mocked(track).mock.calls[0]?.[1] as { attempt_id: string } | undefined;
+    expect(onCallNow).toHaveBeenCalledWith(trackedProps?.attempt_id);
   });
 
-  it('reports an offline callee with no booking today', async () => {
+  it('mints a new attempt id on every tap', async () => {
+    const onCallNow = vi.fn();
+    render(<CallNowEntry callNow={CLIENT_BUTTON} lens="client" onCallNow={onCallNow} />);
+    const button = screen.getByRole('button', { name: 'Call Amara now' });
+    await userEvent.click(button);
+    await userEvent.click(button);
+    expect(onCallNow.mock.calls[0]?.[0]).not.toBe(onCallNow.mock.calls[1]?.[0]);
+  });
+
+  it('reports an offline callee on mobile with no booking today', async () => {
+    mockSurface.mockReturnValue('mobile');
     const callNow: CaseCallNowView = {
       ...CLIENT_BUTTON,
+      calleeOnline: false,
       confirm: {
         ...(CLIENT_BUTTON.confirm as Extract<
           NonNullable<CaseCallNowView['confirm']>,
@@ -69,21 +96,27 @@ describe('CallNowEntry', () => {
     };
     render(<CallNowEntry callNow={callNow} lens="client" onCallNow={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Call Amara now' }));
-    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ENTRY_CLICKED, {
-      lens: 'client',
-      presence: 'offline',
-      has_booking_today: false,
-    });
+    expect(track).toHaveBeenCalledWith(
+      CALL_NOW_EVENTS.CLICKED,
+      expect.objectContaining({
+        callee_presence: 'offline',
+        has_booking_today: false,
+        surface: 'mobile',
+      })
+    );
   });
 
-  it('tracks the expert arm with the expert lens', async () => {
+  it('tracks the expert arm with the expert lens and the loader’s offline presence', async () => {
     render(<CallNowEntry callNow={EXPERT_BUTTON} lens="expert" onCallNow={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Call Northwind Industrial now' }));
-    expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.ENTRY_CLICKED, {
-      lens: 'expert',
-      presence: 'unknown',
-      has_booking_today: false,
-    });
+    expect(track).toHaveBeenCalledWith(
+      CALL_NOW_EVENTS.CLICKED,
+      expect.objectContaining({
+        lens: 'expert',
+        callee_presence: 'offline',
+        has_booking_today: false,
+      })
+    );
   });
 
   it('shows the busy line and no button', () => {

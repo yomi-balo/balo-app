@@ -181,7 +181,14 @@ export async function endRing(input: EndRingInput): Promise<EndRingOutcome> {
 
   if (input.announce !== false) {
     await publishCallEvent(EVENT_FOR_END[to], ring);
-    trackRingEnded(ring);
+    // Analytics only (it counts the day's attempts): the end has committed, so the caller must
+    // not wait on it. `trackRingEnded` never rejects; the catch is the belt on a floating promise.
+    trackRingEnded(ring).catch((error: unknown) => {
+      log.warn(
+        { ringId: ring.id, error: error instanceof Error ? error.message : String(error) },
+        'Call now ring-ended tracking failed'
+      );
+    });
   }
   log.info(
     {

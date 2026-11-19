@@ -194,6 +194,8 @@ async function startRing(
     calleeUserId: scenario.expertUserId,
     callerSide: 'client',
     reachedBy: 'app',
+    attemptId: null,
+    calleeOnlineAtStart: false,
     expiresAt: plusMs(start, CALL_NOW_RING_MS),
     now: start,
     scheduledStart: start,

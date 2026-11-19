@@ -5,9 +5,12 @@ import type { CallNowViewRead } from './call-now-types';
 
 vi.mock('server-only', () => ({}));
 
-const mockFindRate = vi.fn();
-vi.mock('@balo/db', () => ({
-  expertsRepository: { findRateCentsById: (...a: unknown[]) => mockFindRate(...a) },
+// The rate line has its own suite (`call-now-rate-line.test.ts`); here it is a witness for what the
+// loader asks it and what it does with the answer.
+const RATE_LINE = 'From A$156.25/min · 15-minute minimum';
+const mockRateLine = vi.fn();
+vi.mock('./call-now-rate-line', () => ({
+  readCallNowRateLine: (...a: unknown[]) => mockRateLine(...a),
 }));
 
 const mockGetView = vi.fn();
@@ -118,7 +121,7 @@ describe('readCallNowView', () => {
 describe('loadCaseCallNow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFindRate.mockResolvedValue({ rateCents: 10000 });
+    mockRateLine.mockResolvedValue(RATE_LINE);
   });
 
   it('is null when the read failed', async () => {
@@ -142,32 +145,25 @@ describe('loadCaseCallNow', () => {
       entry: 'button',
       calleeLabel: 'Amara',
       onlineBadge: true,
+      calleeOnline: true,
       calleeTimeZone: null,
       confirm: {
         kind: 'client_terms',
         engagementId: ENGAGEMENT_ID,
         expertProfileId: PROFILE_ID,
         calleeOnline: true,
-        rateLine: 'A$125.00/min · 15-minute minimum',
+        rateLine: RATE_LINE,
         inPlaceCandidate: READ.inPlaceCandidate,
         bookInPage: true,
       },
     });
-    expect(mockFindRate).toHaveBeenCalledWith(PROFILE_ID);
+    expect(mockRateLine).toHaveBeenCalledWith(PROFILE_ID);
   });
 
-  it('has no rate line when the expert has no rate, or the read fails', async () => {
-    mockFindRate.mockResolvedValueOnce({ rateCents: null });
+  it('has no rate line when the rate read has nothing to quote', async () => {
+    mockRateLine.mockResolvedValueOnce(null);
     const none = await loadCaseCallNow({ view: clientView(), read: read() });
     expect(none?.confirm).toMatchObject({ rateLine: null });
-
-    mockFindRate.mockRejectedValueOnce(new Error('db down'));
-    const failed = await loadCaseCallNow({ view: clientView(), read: read() });
-    expect(failed?.confirm).toMatchObject({ rateLine: null });
-    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
-      'Call now rate read failed — confirm shows no rate',
-      expect.objectContaining({ error: 'db down' })
-    );
   });
 
   it('turns bookInPage off for a closed case or an unlisted expert', async () => {
@@ -187,20 +183,30 @@ describe('loadCaseCallNow', () => {
       read: read({ calleeOnline: false }),
     });
     expect(result?.onlineBadge).toBe(false);
+    expect(result?.calleeOnline).toBe(false);
   });
 
   it('builds the expert arm with no rate line key and no online badge', async () => {
-    const result = await loadCaseCallNow({ view: EXPERT_VIEW, read: read() });
+    const result = await loadCaseCallNow({
+      view: EXPERT_VIEW,
+      read: read({ calleeOnline: false }),
+    });
 
     expect(result).toEqual({
       entry: 'button',
       calleeLabel: 'Northwind Industrial',
       onlineBadge: false,
+      calleeOnline: false,
       calleeTimeZone: null,
       confirm: { kind: 'expert_notice', engagementId: ENGAGEMENT_ID },
     });
     expect(result?.confirm).not.toHaveProperty('rateLine');
-    expect(mockFindRate).not.toHaveBeenCalled();
+    expect(mockRateLine).not.toHaveBeenCalled();
+  });
+
+  it('carries the api’s presence flag through on the expert arm without showing a badge', async () => {
+    const result = await loadCaseCallNow({ view: EXPERT_VIEW, read: read({ calleeOnline: true }) });
+    expect(result).toMatchObject({ onlineBadge: false, calleeOnline: true });
   });
 
   it('maps busy to a quiet line with no confirm and no rate read', async () => {
@@ -213,10 +219,11 @@ describe('loadCaseCallNow', () => {
       entry: 'busy',
       calleeLabel: 'Amara',
       onlineBadge: true,
+      calleeOnline: true,
       calleeTimeZone: null,
       confirm: null,
     });
-    expect(mockFindRate).not.toHaveBeenCalled();
+    expect(mockRateLine).not.toHaveBeenCalled();
   });
 
   it('carries the callee zone only on outside_hours', async () => {

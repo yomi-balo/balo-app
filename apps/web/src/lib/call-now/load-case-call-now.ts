@@ -1,12 +1,10 @@
 import 'server-only';
 
-import { expertsRepository } from '@balo/db';
-import { CALL_NOW_SCHEDULED_MINUTES } from '@balo/shared/meetings';
-import { publicDisplayRatePerMinute } from '@balo/shared/pricing';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
 import { errorMessage, log } from '@/lib/logging';
 import { canBookInPage } from './book-in-page';
 import { getCallNowView } from './call-now-api-client';
+import { readCallNowRateLine } from './call-now-rate-line';
 import type {
   CallNowConfirmView,
   CallNowEntry,
@@ -66,22 +64,6 @@ export async function readCallNowView(engagementId: string): Promise<CallNowView
   }
 }
 
-/** `A$x.xx/min · 15-minute minimum`, or `null` when the expert has no rate to quote. */
-async function readRateLine(expertProfileId: string, engagementId: string): Promise<string | null> {
-  try {
-    const row = await expertsRepository.findRateCentsById(expertProfileId);
-    const perMinute = publicDisplayRatePerMinute(row?.rateCents ?? null);
-    if (perMinute === null) return null;
-    return `A$${perMinute.toFixed(2)}/min · ${CALL_NOW_SCHEDULED_MINUTES}-minute minimum`;
-  } catch (error) {
-    log.warn('Call now rate read failed — confirm shows no rate', {
-      engagementId,
-      error: errorMessage(error),
-    });
-    return null;
-  }
-}
-
 function entryFor(read: CallNowViewRead): CallNowEntry | null {
   if (read.canCallNow) return 'button';
   return read.reason;
@@ -99,7 +81,7 @@ async function buildConfirm(
     engagementId: view.engagementId,
     expertProfileId: view.expertProfileId,
     calleeOnline: read.calleeOnline,
-    rateLine: await readRateLine(view.expertProfileId, view.engagementId),
+    rateLine: await readCallNowRateLine(view.expertProfileId),
     inPlaceCandidate: read.inPlaceCandidate,
     bookInPage: canBookInPage({
       lens: view.lens,
@@ -123,6 +105,7 @@ export async function loadCaseCallNow(input: {
     entry,
     calleeLabel: view.conversation.counterpartyFirstName,
     onlineBadge: view.lens === 'client' && read.calleeOnline,
+    calleeOnline: read.calleeOnline,
     calleeTimeZone: entry === 'outside_hours' ? read.calleeTimeZone : null,
     confirm: entry === 'button' ? await buildConfirm(view, read) : null,
   };

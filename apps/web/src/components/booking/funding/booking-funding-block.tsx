@@ -8,7 +8,6 @@ import type { BookingFundingMethodProperty } from '@balo/analytics/events';
 import { track, BOOKING_EVENTS, CREDIT_EVENTS } from '@/lib/analytics';
 import type { StartPurchaseInput } from '@/lib/credit/actions';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
-import { formatAudShort } from '@/lib/credit/display-constants';
 import { PayAction, type PayActionFailureReason } from '@/components/billing/top-up/PayAction';
 import { PaymentMethodSection } from '@/components/billing/top-up/PaymentMethodSection';
 import { PromoField, type AppliedPromo } from '@/components/billing/top-up/PromoField';
@@ -25,15 +24,18 @@ import {
   CTA_GRADIENT,
   FundingFooter,
   FundingSection,
+  bookingFundingTracker,
+  creditSurfaceFor,
   useMountedRef,
 } from './funding-frame';
 import { FundingMethodPicker } from './funding-method-picker';
 import {
   BOOKING_PAY_ERROR_COPY,
   FUNDING_AUD_LINE,
-  FUNDING_STAGE_COPY,
   PAY_AFTER_COPY,
-  creditPendingCopy,
+  fundingCopyFor,
+  type FundingContext,
+  type FundingCopyBundle,
 } from './funding-copy';
 import { offersPayAfter, type RefusedFundingView } from './funding-disposition';
 import { PayAfterFunding } from './pay-after-funding';
@@ -69,6 +71,13 @@ export interface BookingFundingBlockProps {
    * but not in flight, and the client may close the dialog there.
    */
   readonly onInFlightChange: (inFlight: boolean) => void;
+  /**
+   * What this funds. `'booking'` (the default) is the booking flow. `'call'` is Call now (BAL-651):
+   * the manager arm speaks "call" rather than "book" and fires no `BOOKING_EVENTS.FUNDING_*`, since
+   * the call funding-gate events cover it. Only the manager arm is call-aware; the call funding
+   * step renders its own panel for a member.
+   */
+  readonly context?: FundingContext;
 }
 
 type Stage = 'pay' | 'awaiting_credit' | 'booking' | 'credit_unconfirmed';
@@ -93,10 +102,15 @@ function effectiveAmount(
 }
 
 /** What the polite live region says for the stage the block is in; empty while nothing runs. */
-function stageStatusText(stage: Stage, paying: boolean, companyName: string | null): string {
-  if (stage === 'pay') return paying ? FUNDING_STAGE_COPY.processing : '';
-  if (stage === 'credit_unconfirmed') return creditPendingCopy(companyName);
-  return FUNDING_STAGE_COPY[stage];
+function stageStatusText(
+  copy: FundingCopyBundle,
+  stage: Stage,
+  paying: boolean,
+  companyName: string | null
+): string {
+  if (stage === 'pay') return paying ? copy.stage.processing : '';
+  if (stage === 'credit_unconfirmed') return copy.creditPending(companyName);
+  return copy.stage[stage];
 }
 
 type MemberFundingProps = Pick<
@@ -159,6 +173,7 @@ type ManagerFundingProps = Pick<
   | 'onBack'
   | 'onBusyChange'
   | 'onInFlightChange'
+  | 'context'
 > & {
   readonly wallet: BookingTopUpWallet;
   readonly suggestedMinor: number;
@@ -181,8 +196,11 @@ function ManagerFunding({
   onBack,
   onBusyChange,
   onInFlightChange,
+  context = 'booking',
   methodPicker,
 }: Readonly<ManagerFundingProps>) {
+  const copy = fundingCopyFor(context);
+  const trackBooking = bookingFundingTracker(context);
   const companyName = view.company.name;
   const stripeConfigured = isStripeConfigured();
   const mountedRef = useMountedRef();
@@ -235,19 +253,25 @@ function ManagerFunding({
     `${payAmount}:${promo?.code ?? ''}:${source}`
   );
 
-  const handleSourceChange = useCallback((next: PaymentMethodSource) => {
-    setSource(next);
-    track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next, surface: 'booking' });
-  }, []);
+  const handleSourceChange = useCallback(
+    (next: PaymentMethodSource) => {
+      setSource(next);
+      track(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED, { to: next, surface: creditSurfaceFor(context) });
+    },
+    [context]
+  );
   const handleUseDifferentCard = useCallback(
     () => handleSourceChange('new_card'),
     [handleSourceChange]
   );
   const handleApplied = useCallback((applied: AppliedPromo) => setPromo(applied), []);
   const handleRemoved = useCallback(() => setPromo(null), []);
-  const handleFailure = useCallback((reason: PayActionFailureReason) => {
-    track(BOOKING_EVENTS.FUNDING_FAILED, { reason });
-  }, []);
+  const handleFailure = useCallback(
+    (reason: PayActionFailureReason) => {
+      trackBooking(BOOKING_EVENTS.FUNDING_FAILED, { reason });
+    },
+    [trackBooking]
+  );
 
   const buildStartInput = useCallback(
     (): StartPurchaseInput => ({
@@ -278,7 +302,7 @@ function ManagerFunding({
   const bookAfterCredit = useCallback(
     async (topUp: PendingTopUp, promoGranted: boolean) => {
       setStage('booking');
-      track(BOOKING_EVENTS.FUNDED, { method: 'topup', saved_card: topUp.savedCard });
+      trackBooking(BOOKING_EVENTS.FUNDED, { method: 'topup', saved_card: topUp.savedCard });
       let booked = false;
       try {
         booked = await onFunded({
@@ -291,7 +315,7 @@ function ManagerFunding({
       }
       if (booked) return;
       // `FUNDED` fired before the outcome was known; this closes it out as a failed booking.
-      track(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'booking_failed' });
+      trackBooking(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'booking_failed' });
       if (!mountedRef.current) return;
       // The credit has landed but the booking has not, and the block is still on screen: the
       // payment's key is spent, so the next press is a new attempt rather than a replay of it.
@@ -300,7 +324,7 @@ function ManagerFunding({
       setStage('pay');
       setPending(null);
     },
-    [onFunded, companyName, mountedRef, rotate]
+    [onFunded, companyName, mountedRef, rotate, trackBooking]
   );
 
   const handleCredited = useCallback(
@@ -312,15 +336,14 @@ function ManagerFunding({
   );
   const handleUnconfirmed = useCallback(() => {
     setStage('credit_unconfirmed');
-    track(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'credit_timeout' });
-  }, []);
+    trackBooking(BOOKING_EVENTS.FUNDING_FAILED, { reason: 'credit_timeout' });
+  }, [trackBooking]);
   const handleBookNow = useCallback(() => {
     setPollAttempt((attempt) => attempt + 1);
     setStage('awaiting_credit');
   }, []);
 
-  const idleLabel =
-    effectiveMinor === null ? 'Top up & book' : `Top up ${formatAudShort(effectiveMinor)} & book`;
+  const idleLabel = copy.topUpLabel(effectiveMinor);
 
   let cta: React.ReactNode;
   if (!stripeConfigured) {
@@ -343,9 +366,9 @@ function ManagerFunding({
         onUseDifferentCard={handleUseDifferentCard}
         onCardDeclined={rotate}
         idleLabel={idleLabel}
-        processingLabel={FUNDING_STAGE_COPY.processing}
+        processingLabel={copy.stage.processing}
         onProcessingChange={setPaying}
-        surface="booking"
+        surface={creditSurfaceFor(context)}
         beforeStart={onBeforePay}
         onFailure={handleFailure}
         errorCopy={BOOKING_PAY_ERROR_COPY}
@@ -360,27 +383,23 @@ function ManagerFunding({
         disabled={ctaDisabled}
         onClick={handleBookNow}
       >
-        Book now
+        {copy.creditRetryLabel}
       </Button>
     );
   } else {
     cta = (
       <BusyButton
-        label={
-          stage === 'awaiting_credit'
-            ? FUNDING_STAGE_COPY.awaiting_credit
-            : FUNDING_STAGE_COPY.booking
-        }
+        label={stage === 'awaiting_credit' ? copy.stage.awaiting_credit : copy.stage.booking}
       />
     );
   }
 
-  const statusText = stageStatusText(stage, paying, companyName);
+  const statusText = stageStatusText(copy, stage, paying, companyName);
 
   return (
     <TopUpElements initialAmountMinor={suggested}>
       <div className="space-y-3">
-        <FundingSection view={view} caseSaved={caseSaved} draftKept>
+        <FundingSection view={view} caseSaved={caseSaved} draftKept context={context}>
           <div className="flex flex-col gap-[18px] p-4 sm:p-[18px]">
             {stripeConfigured ? (
               <fieldset disabled={busy} className="m-0 min-w-0 space-y-[18px] border-0 p-0">
@@ -419,7 +438,7 @@ function ManagerFunding({
         </div>
         {stage === 'credit_unconfirmed' && (
           <p className="text-muted-foreground bg-muted/50 rounded-lg px-3 py-2.5 text-sm leading-relaxed">
-            {creditPendingCopy(companyName)}
+            {copy.creditPending(companyName)}
           </p>
         )}
 
@@ -455,7 +474,8 @@ type ManagerFundingMethodsProps = Omit<ManagerFundingProps, 'methodPicker'>;
  * remounts the other method's controls afresh.
  */
 function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
-  const { view, wallet, suggestedMinor, onFunded } = props;
+  const { view, wallet, suggestedMinor, onFunded, context = 'booking' } = props;
+  const trackBooking = bookingFundingTracker(context);
   const [method, setMethod] = useState<BookingFundingMethodProperty>('topup');
   const offered = offersPayAfter(view) && isStripeConfigured();
 
@@ -476,9 +496,9 @@ function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
       if (next === method) return;
       refocusPickerRef.current = true;
       setMethod(next);
-      track(BOOKING_EVENTS.FUNDING_METHOD_SELECTED, { method: next });
+      trackBooking(BOOKING_EVENTS.FUNDING_METHOD_SELECTED, { method: next });
     },
-    [method]
+    [method, trackBooking]
   );
 
   const methodPicker = offered ? (
@@ -486,6 +506,7 @@ function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
       method={method}
       onMethodChange={handleMethodChange}
       companyName={view.company.name}
+      context={context}
     />
   ) : undefined;
 
@@ -502,6 +523,7 @@ function ManagerFundingMethods(props: Readonly<ManagerFundingMethodsProps>) {
         onBusyChange={props.onBusyChange}
         onInFlightChange={props.onInFlightChange}
         methodPicker={methodPicker}
+        context={context}
       />
     );
   }
@@ -530,17 +552,19 @@ export function BookingFundingBlock({
   draftKept,
   onBusyChange,
   onInFlightChange,
+  context = 'booking',
 }: Readonly<BookingFundingBlockProps>): React.JSX.Element | null {
+  const trackBooking = bookingFundingTracker(context);
   const shownKey = `${view.arm}:${view.company.id}`;
   const shownKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (shownKeyRef.current === shownKey) return;
     shownKeyRef.current = shownKey;
-    track(BOOKING_EVENTS.FUNDING_SHOWN, {
+    trackBooking(BOOKING_EVENTS.FUNDING_SHOWN, {
       arm: view.arm,
       can_manage_billing: view.canManageBilling,
     });
-  }, [shownKey, view.arm, view.canManageBilling]);
+  }, [shownKey, view.arm, view.canManageBilling, trackBooking]);
 
   if (!view.canManageBilling) {
     return (
@@ -570,6 +594,7 @@ export function BookingFundingBlock({
       onBack={onBack}
       onBusyChange={onBusyChange}
       onInFlightChange={onInFlightChange}
+      context={context}
     />
   );
 }

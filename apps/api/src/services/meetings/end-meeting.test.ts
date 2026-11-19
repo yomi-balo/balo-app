@@ -15,6 +15,7 @@ const {
   mockHasOwnClientInterval,
   mockFindMeetingById,
   mockEndRingForHumanEnd,
+  mockMeetingOrigin,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockResolveEndAuthority: vi.fn(),
@@ -34,6 +35,8 @@ const {
   mockEndRingForHumanEnd: vi.fn(
     async (): Promise<{ kind: string; meeting?: Record<string, unknown> }> => ({ kind: 'no_ring' })
   ),
+  // BAL-651 — a booked meeting unless a test says a Call now ring created it.
+  mockMeetingOrigin: vi.fn(async (): Promise<'call_now' | 'booked'> => 'booked'),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -73,6 +76,7 @@ vi.mock('../../jobs/recording-capture.js', () => ({
   enqueueRecordingStop: mockEnqueueRecordingStop,
 }));
 vi.mock('../call-now/end-ring.js', () => ({ endRingForHumanEnd: mockEndRingForHumanEnd }));
+vi.mock('../call-now/meeting-origin.js', () => ({ meetingOrigin: mockMeetingOrigin }));
 // ⚠ `@balo/shared/meetings` is NOT mocked — the real `computeMeetingClocks` is what the
 // analytics numbers below assert, and it is the one definition of both spans.
 
@@ -439,9 +443,27 @@ describe('endMeeting (BAL-134 §5.4)', () => {
       participant_count: 2,
       outcome: null,
       ended_by: 'client_principal',
+      origin: 'booked',
       // ⚠ THE ACTING USER on a human end.
       distinct_id: USER_ID,
     });
+  });
+
+  it('reports origin `call_now` when a Call now ring created the meeting (BAL-651)', async () => {
+    mockMeetingOrigin.mockResolvedValueOnce('call_now');
+
+    await endMeeting({
+      meetingId: MEETING_ID,
+      userId: USER_ID,
+      teardown: fakeTeardown(),
+      now: NOW,
+    });
+
+    expect(mockMeetingOrigin).toHaveBeenCalledWith(MEETING_ID);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_ended',
+      expect.objectContaining({ origin: 'call_now' })
+    );
   });
 
   it('⚠ Rule A — presence is read at its TRUE instants: the two clocks stay start-clamped, and `billable_before_start_seconds` is the time TOGETHER before the start', async () => {

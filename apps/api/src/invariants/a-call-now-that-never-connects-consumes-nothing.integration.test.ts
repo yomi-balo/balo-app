@@ -332,6 +332,8 @@ async function startRing(
     calleeUserId: expertRings ? scenario.bookerUserId : scenario.expertUserId,
     callerSide: expertRings ? ('expert' as const) : ('client' as const),
     reachedBy: 'app' as const,
+    attemptId: null,
+    calleeOnlineAtStart: false,
     expiresAt: plusMs(start, CALL_NOW_RING_MS),
     now: start,
   };

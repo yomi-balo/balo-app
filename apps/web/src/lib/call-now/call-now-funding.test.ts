@@ -18,6 +18,20 @@ describe('callNowFundingRequest', () => {
   });
 });
 
+describe('callNowFundingRequest ringId', () => {
+  const base = { expertProfileId: 'ep-1', engagementId: 'eng-1', nowMs: 0 };
+
+  it('carries the ring id for the server to resolve, never a meeting id', () => {
+    const request = callNowFundingRequest({ ...base, ringId: 'r-1' });
+    expect(request.ringId).toBe('r-1');
+    expect(request).not.toHaveProperty('excludeMeetingId');
+  });
+
+  it('omits the key entirely when there is none', () => {
+    expect(callNowFundingRequest(base)).not.toHaveProperty('ringId');
+  });
+});
+
 describe('fundingGateReason', () => {
   it.each([
     ['account_on_hold', 'account_on_hold'],

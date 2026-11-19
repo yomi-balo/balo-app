@@ -10,7 +10,29 @@ import type { CallNowCallerView } from './call-now-types';
 
 /** Shown when the other side's name cannot be read. Neutral on both arms. */
 const FALLBACK_EXPERT_LABEL = 'your expert';
+/** The same fallback where it opens a sentence: "Your expert is calling", "Your expert’s call…". */
+const FALLBACK_EXPERT_SENTENCE_LABEL = 'Your expert';
 const FALLBACK_CLIENT_LABEL = 'the client';
+
+async function readExpertProfile(expertProfileId: string): Promise<{
+  profile: Awaited<ReturnType<typeof expertsRepository.findDisplayProfileById>>;
+  firstName: string | null;
+}> {
+  const profile = await expertsRepository.findDisplayProfileById(expertProfileId);
+  const expertUser =
+    profile === undefined ? undefined : await usersRepository.findDisplayById(profile.userId);
+  return { profile, firstName: expertUser?.firstName ?? null };
+}
+
+/**
+ * The expert's first name as the callee's Answer notice names them, with the neutral fallback when
+ * it cannot be read. It always OPENS a sentence there ("{name} is calling", "{name}’s call has
+ * ended"), so the fallback is capitalised; the caller's own label sits mid-sentence and is not.
+ */
+export async function readExpertFirstName(expertProfileId: string): Promise<string> {
+  const { firstName } = await readExpertProfile(expertProfileId);
+  return personDisplayName(firstName, null, FALLBACK_EXPERT_SENTENCE_LABEL);
+}
 
 /**
  * What the caller's call room shows for the ring in `?ring=`. The ring read is party-scoped by the
@@ -54,6 +76,8 @@ export async function loadCallNowCallerView(input: {
       status: ring.status,
       expiresAtIso: ring.expiresAt,
       reachedBy: ring.reachedBy,
+      attemptId: ring.attemptId,
+      calleePresence: ring.calleePresenceAtStart,
     } as const;
 
     if (access.lens === 'expert') {
@@ -65,12 +89,10 @@ export async function loadCallNowCallerView(input: {
       };
     }
 
-    const profile = await expertsRepository.findDisplayProfileById(access.expertProfileId);
-    const expertUser =
-      profile === undefined ? undefined : await usersRepository.findDisplayById(profile.userId);
+    const { profile, firstName } = await readExpertProfile(access.expertProfileId);
     return {
       ...base,
-      calleeLabel: personDisplayName(expertUser?.firstName ?? null, null, FALLBACK_EXPERT_LABEL),
+      calleeLabel: personDisplayName(firstName, null, FALLBACK_EXPERT_LABEL),
       bookInPage: canBookInPage({
         lens: access.lens,
         // An active engagement is an open case: closing it writes `completed`.

@@ -4,12 +4,13 @@ import { useCallback, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import type { BookingFundingMethodProperty } from '@balo/analytics/events';
 import { chipClass, nextRadioIndex } from './funding-amount-picker';
-import { PAY_AFTER_COPY } from './funding-copy';
+import { fundingCopyFor, type FundingContext } from './funding-copy';
 
 interface FundingMethodPickerProps {
   readonly method: BookingFundingMethodProperty;
   readonly onMethodChange: (method: BookingFundingMethodProperty) => void;
   readonly companyName: string | null;
+  readonly context?: FundingContext;
 }
 
 const METHOD_IDS: readonly BookingFundingMethodProperty[] = ['topup', 'pay_after'];
@@ -36,7 +37,9 @@ export function FundingMethodPicker({
   method,
   onMethodChange,
   companyName,
+  context = 'booking',
 }: Readonly<FundingMethodPickerProps>): React.JSX.Element {
+  const copy = fundingCopyFor(context).payAfter;
   const radioRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const selectedIndex = METHOD_IDS.indexOf(method);
 
@@ -56,20 +59,20 @@ export function FundingMethodPicker({
   const options = [
     {
       id: 'topup',
-      title: PAY_AFTER_COPY.topup.title,
-      description: PAY_AFTER_COPY.topup.description(companyName),
+      title: copy.topup.title,
+      description: copy.topup.description(companyName),
     },
     {
       id: 'pay_after',
-      title: PAY_AFTER_COPY.payAfter.title,
-      description: PAY_AFTER_COPY.payAfter.description,
+      title: copy.payAfter.title,
+      description: copy.payAfter.description,
     },
   ] as const;
 
   return (
     <div
       role="radiogroup"
-      aria-label={PAY_AFTER_COPY.methodGroupLabel}
+      aria-label={copy.methodGroupLabel}
       className="grid grid-cols-1 gap-2.5 sm:grid-cols-2"
     >
       {options.map((option, index) => {

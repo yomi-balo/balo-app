@@ -29,8 +29,21 @@ vi.mock('@/components/booking/funding/use-booking-funding', () => ({
   useBookingFunding: (...args: unknown[]) => mockUseFunding(...args),
 }));
 vi.mock('@/components/booking/funding/booking-funding-block', () => ({
-  BookingFundingBlock: ({ onFunded }: { onFunded: (via: unknown) => Promise<boolean> }) => (
-    <button type="button" onClick={() => void onFunded({ method: 'topup' })}>
+  BookingFundingBlock: ({
+    onFunded,
+    context,
+    view,
+  }: {
+    onFunded: (via: unknown) => Promise<boolean>;
+    context?: string;
+    view: { suggestedTopUpMinor: number | null };
+  }) => (
+    <button
+      type="button"
+      data-context={context}
+      data-suggested={String(view.suggestedTopUpMinor)}
+      onClick={() => void onFunded({ method: 'topup' })}
+    >
       pay inline
     </button>
   ),
@@ -50,6 +63,7 @@ function renderStep(overrides: Partial<React.ComponentProps<typeof CallNowFundin
   const props = {
     request: REQUEST,
     callerLens: 'client' as const,
+    fundingCode: 'booking_unfunded' as const,
     onFunded: vi.fn().mockResolvedValue(true),
     onBack: vi.fn(),
     onBookInstead: vi.fn(),
@@ -101,6 +115,7 @@ describe('CallNowFundingStep', () => {
     const props = {
       request: REQUEST,
       callerLens: 'client' as const,
+      fundingCode: 'booking_unfunded' as const,
       onFunded: vi.fn().mockResolvedValue(true),
       onBack: vi.fn(),
       onBookInstead: null,
@@ -127,11 +142,29 @@ describe('CallNowFundingStep', () => {
     expect(onFunded).toHaveBeenCalledTimes(1);
   });
 
-  it('emits the gate-shown event once, with the lens and the arm’s reason', () => {
-    withView(refusedView({ arm: 'reserved' }));
+  it('renders the block in the call context with the pre-flight’s own top-up figure', () => {
+    withView(refusedView({ suggestedTopUpMinor: 4_000 }));
+    renderStep();
+    const block = screen.getByRole('button', { name: 'pay inline' });
+    expect(block).toHaveAttribute('data-context', 'call');
+    expect(block).toHaveAttribute('data-suggested', '4000');
+  });
+
+  it('renders the block in the answer context on the answer path', () => {
+    withView(refusedView());
+    renderStep({ context: 'answer' });
+    expect(screen.getByRole('button', { name: 'pay inline' })).toHaveAttribute(
+      'data-context',
+      'answer'
+    );
+  });
+
+  it('emits the gate-shown event once, with the lens and the api code’s reason', () => {
+    withView(refusedView({ arm: 'setup' }));
     const props = {
       request: REQUEST,
       callerLens: 'expert' as const,
+      fundingCode: 'booking_reserved' as const,
       onFunded: vi.fn(),
       onBack: vi.fn(),
       onBookInstead: null,
@@ -148,11 +181,12 @@ describe('CallNowFundingStep', () => {
   });
 
   it.each([
-    ['setup', 'insufficient'],
-    ['hold', 'account_on_hold'],
-  ] as const)('reports the %s arm as %s', (arm, reason) => {
-    withView(refusedView({ arm }));
-    renderStep();
+    ['booking_unfunded', 'insufficient'],
+    ['booking_reserved', 'reserved_by_upcoming'],
+    ['account_on_hold', 'account_on_hold'],
+  ] as const)('reports the api code %s as %s whatever arm the pre-flight read', (code, reason) => {
+    withView(refusedView({ arm: 'setup' }));
+    renderStep({ fundingCode: code });
 
     expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.FUNDING_GATE_SHOWN, {
       caller_lens: 'client',
@@ -259,6 +293,7 @@ describe('CallNowFundingStep', () => {
         <CallNowFundingStep
           request={REQUEST}
           callerLens="client"
+          fundingCode="booking_unfunded"
           onFunded={vi.fn()}
           onBack={vi.fn()}
           onBookInstead={vi.fn()}

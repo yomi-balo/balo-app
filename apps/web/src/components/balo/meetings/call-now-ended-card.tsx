@@ -1,10 +1,13 @@
 'use client';
 
+import { useCallback } from 'react';
 import Link from 'next/link';
 import { CircleSlash } from 'lucide-react';
 import type { CallSide } from '@balo/shared/meetings';
 import { Button } from '@/components/ui/button';
 import { CALL_NOW_COPY } from '@/lib/call-now/call-now-copy';
+import { trackCallNowBookInstead } from '@/lib/call-now/use-call-now-caller-room';
+import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 import { MeetingAvatar } from './meeting-avatar';
 
 export interface CallNowEndedCardProps {
@@ -16,14 +19,34 @@ export interface CallNowEndedCardProps {
   /** The client can book the expert in the case page, so "Book a time" has somewhere to go. */
   readonly bookInPage: boolean;
   readonly engagementId: string;
+  /**
+   * The entry tap's attempt id, for the book-instead event. `null` for a ring started before attempt
+   * ids were persisted: the card then tracks nothing.
+   */
+  readonly attemptId: string | null;
   readonly headingRef?: React.Ref<HTMLHeadingElement>;
+}
+
+/** Declined leaves no missed-call item, so only the unanswered body says the call will be seen. */
+function endedBody(
+  outcome: CallNowEndedCardProps['outcome'],
+  copyArm: CallSide,
+  calleeLabel: string
+): string {
+  if (outcome === 'declined') {
+    return copyArm === 'client' ? CALL_NOW_COPY.declinedClient : CALL_NOW_COPY.declinedExpert;
+  }
+  return copyArm === 'client'
+    ? CALL_NOW_COPY.noAnswerClient(calleeLabel)
+    : CALL_NOW_COPY.noAnswerExpert(calleeLabel);
 }
 
 /**
  * The caller's end state when a Call now ring ran out or was declined, in the call room's own
  * shell. It replaces the frame, so it wins over any ended notice. A quiet fact, not a failure:
- * nothing was charged, the other side will see the call, and the caller is offered the one useful
- * next step. There is no "Cancel": nothing is left to cancel.
+ * nothing was charged and the caller is offered the one useful next step. Only an unanswered call
+ * says the other side will see it: a declined one leaves no missed-call item behind. There is no
+ * "Cancel": nothing is left to cancel.
  */
 export function CallNowEndedCard({
   outcome,
@@ -31,16 +54,19 @@ export function CallNowEndedCard({
   copyArm,
   bookInPage,
   engagementId,
+  attemptId,
   headingRef,
 }: Readonly<CallNowEndedCardProps>): React.JSX.Element {
+  const surface = useCallNowSurface();
+  const handleBookInstead = useCallback((): void => {
+    trackCallNowBookInstead({ attemptId, callerSide: copyArm, surface });
+  }, [attemptId, copyArm, surface]);
+
   const title =
     outcome === 'declined'
       ? CALL_NOW_COPY.declinedTitle(calleeLabel)
       : CALL_NOW_COPY.noAnswerTitle(calleeLabel);
-  const body =
-    copyArm === 'client'
-      ? CALL_NOW_COPY.noAnswerClient(calleeLabel)
-      : CALL_NOW_COPY.noAnswerExpert(calleeLabel);
+  const body = endedBody(outcome, copyArm, calleeLabel);
   const casePath = `/cases/${engagementId}`;
 
   return (
@@ -71,7 +97,9 @@ export function CallNowEndedCard({
       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row-reverse">
         {copyArm === 'client' && bookInPage ? (
           <Button asChild className="min-h-11 w-full sm:w-auto">
-            <Link href={`${casePath}?book=1`}>{CALL_NOW_COPY.bookInstead}</Link>
+            <Link href={`${casePath}?book=1`} onClick={handleBookInstead}>
+              {CALL_NOW_COPY.bookInstead}
+            </Link>
           </Button>
         ) : null}
         <Button asChild variant="outline" className="min-h-11 w-full sm:w-auto">

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { CallNowPresence } from '@balo/analytics/events';
 import type {
   CallRingPlacement,
   CallRingReach,
@@ -9,11 +10,22 @@ import type {
 import {
   getBaloApiJson,
   postBaloApiJson,
+  postBaloApiJsonWithFailureDetail,
   readInstant,
   readString,
+  type BaloApiDetailedResult,
   type BaloApiResult,
 } from '@/lib/api/balo-api-client';
 import type { CallNowRingRead, CallNowStartRead, CallNowViewRead } from './call-now-types';
+
+/**
+ * What a refused start or answer carries beyond its code: the api's top-up figure on a funding
+ * refusal (`409 { error, code, suggestedTopUpMinor }`), `null` on any other refusal or when the
+ * api sent none.
+ */
+export interface CallNowFailureDetail {
+  readonly suggestedTopUpMinor: number | null;
+}
 
 /**
  * The server-only web→api hop for Call now (BAL-649/650/652), on the shared `balo-api-client`
@@ -21,7 +33,8 @@ import type { CallNowRingRead, CallNowStartRead, CallNowViewRead } from './call-
  *
  * ⚠ SKEW-TOLERANT PARSE. Vercel can be live before Railway, so a field the newer api adds is
  * defaulted when absent: `calleeOnline` → `false`, `calleeTimeZone` → `null`, `reachedBy` →
- * `'app'`. A body missing a field the api has always sent is malformed.
+ * `'app'`, `attemptId` → `null`, `calleePresenceAtStart` → `'offline'`. A body missing a field the
+ * api has always sent is malformed.
  */
 
 const RING_STATUSES: ReadonlySet<string> = new Set<CallRingStatus>([
@@ -48,6 +61,16 @@ function isRingPlacement(value: unknown): value is CallRingPlacement {
 function readBoolean(body: Record<string, unknown>, key: string): boolean | undefined {
   const value = body[key];
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function readPresence(body: Record<string, unknown>): CallNowPresence {
+  return body.calleePresenceAtStart === 'online' ? 'online' : 'offline';
+}
+
+function readFailureDetail(body: Record<string, unknown>): CallNowFailureDetail {
+  const figure = body.suggestedTopUpMinor;
+  const valid = typeof figure === 'number' && Number.isSafeInteger(figure) && figure > 0;
+  return { suggestedTopUpMinor: valid ? figure : null };
 }
 
 function readReachedBy(body: Record<string, unknown>): CallRingReach {
@@ -119,6 +142,8 @@ export function parseRingRead(body: unknown): CallNowRingRead | undefined {
     awaitsAnswer,
     meetingEnded,
     reachedBy: readReachedBy(record),
+    attemptId: readString(record, 'attemptId') ?? null,
+    calleePresenceAtStart: readPresence(record),
   };
 }
 
@@ -164,15 +189,22 @@ export function getCallNowView(engagementId: string): Promise<BaloApiResult<Call
   );
 }
 
+/**
+ * Start a call. `attemptId` rides as a QUERY parameter, never in the body: the api's body schema is
+ * strict, so a new web build calling a not-yet-deployed api would 400 every start if it were a
+ * body field, whereas an unknown query parameter is ignored.
+ */
 export function postStartCallNow(
   engagementId: string,
-  options: { inPlaceOfMeetingId?: string }
-): Promise<BaloApiResult<CallNowStartRead>> {
-  const body = options.inPlaceOfMeetingId === undefined ? {} : options;
-  return postBaloApiJson(
-    `/cases/${encodeURIComponent(engagementId)}/call-now`,
+  options: { inPlaceOfMeetingId?: string; attemptId: string }
+): Promise<BaloApiDetailedResult<CallNowStartRead, CallNowFailureDetail>> {
+  const { inPlaceOfMeetingId, attemptId } = options;
+  const body = inPlaceOfMeetingId === undefined ? {} : { inPlaceOfMeetingId };
+  return postBaloApiJsonWithFailureDetail(
+    `/cases/${encodeURIComponent(engagementId)}/call-now?attemptId=${encodeURIComponent(attemptId)}`,
     body,
     parseStart,
+    readFailureDetail,
     'Call now start'
   );
 }
@@ -189,6 +221,14 @@ export function postStopRing(ringId: string): Promise<BaloApiResult<{ status: Ca
   return postBaloApiJson(ringPath(ringId, 'stop'), {}, parseStatusBody, 'Call now stop');
 }
 
-export function postAnswerRing(ringId: string): Promise<BaloApiResult<MemberJoinResponse>> {
-  return postBaloApiJson(ringPath(ringId, 'answer'), {}, parseJoinGrant, 'Call now answer');
+export function postAnswerRing(
+  ringId: string
+): Promise<BaloApiDetailedResult<MemberJoinResponse, CallNowFailureDetail>> {
+  return postBaloApiJsonWithFailureDetail(
+    ringPath(ringId, 'answer'),
+    {},
+    parseJoinGrant,
+    readFailureDetail,
+    'Call now answer'
+  );
 }

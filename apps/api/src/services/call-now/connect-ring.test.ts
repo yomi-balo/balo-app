@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   findRingingForMeeting: vi.fn(),
   connect: vi.fn(),
+  countCallerRingsToCallee: vi.fn(),
   enqueueRebuild: vi.fn(),
   enqueueAmend: vi.fn(),
   reportAmendFailure: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@balo/db', () => ({
   meetingRingsRepository: {
     findRingingForMeeting: mocks.findRingingForMeeting,
     connect: mocks.connect,
+    countCallerRingsToCallee: mocks.countCallerRingsToCallee,
   },
 }));
 vi.mock('../../jobs/availability-cache.js', () => ({
@@ -104,6 +106,7 @@ function connected(placement: 'new_meeting' | 'in_place', expertProfileId: strin
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.countCallerRingsToCallee.mockResolvedValue(2);
   mocks.findRingingForMeeting.mockResolvedValue({ id: RING_ID });
   mocks.connect.mockResolvedValue(connected('in_place', EXPERT_PROFILE_ID));
   mocks.enqueueRebuild.mockResolvedValue(undefined);
@@ -171,10 +174,26 @@ describe('connectRingIfRinging (AC6)', () => {
       'call.connected',
       expect.objectContaining({ ringId: RING_ID, meetingId: MEETING_ID, callerUserId: CALLER })
     );
+    await vi.waitFor(() => expect(mocks.trackServer).toHaveBeenCalled());
     expect(mocks.trackServer).toHaveBeenCalledWith(
       'call_now_ring_ended',
-      expect.objectContaining({ outcome: 'connected', placement: 'in_place', ring_seconds: 30 })
+      expect.objectContaining({
+        outcome: 'connected',
+        placement: 'in_place',
+        ring_seconds: 30,
+        in_place_of_booking: true,
+        attempt_number_today: 2,
+      })
     );
+  });
+
+  it('⚠ does not wait on ring-ended tracking: a stalled attempt count never delays the connect', async () => {
+    mocks.countCallerRingsToCallee.mockReturnValue(new Promise(() => undefined));
+
+    await expect(connectRingIfRinging({ meeting: MEETING, now: NOW })).resolves.toMatchObject({
+      connected: true,
+    });
+    expect(mocks.trackServer).not.toHaveBeenCalled();
   });
 
   it('logs the connect with the moved start', async () => {

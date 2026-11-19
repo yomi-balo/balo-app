@@ -5,12 +5,31 @@ import { motion, useReducedMotion } from 'motion/react';
 import { ChevronLeft, Loader2, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { BookingFundingMethodProperty } from '@balo/analytics/events';
+import type { BookingFundingMethodProperty, CreditSurfaceProperty } from '@balo/analytics/events';
+import { track } from '@/lib/analytics';
 import { caseSavedCopy, type CaseSavedNote } from '../booking-error-panels';
-import { fundingBlockCopy } from './funding-copy';
+import { fundingCopyFor, isCallFunding, type FundingContext } from './funding-copy';
 import type { RefusedFundingView } from './funding-disposition';
 
 export const CTA_GRADIENT = 'from-primary bg-gradient-to-br to-violet-600 text-white';
+
+function trackNothing(): void {}
+
+/**
+ * The tracker for the `BOOKING_EVENTS.FUNDING_*` family. A call funds through this same block but
+ * reports through the call funding-gate events, so in the `call` context these events are not sent.
+ */
+export function bookingFundingTracker(context: FundingContext): typeof track {
+  return isCallFunding(context) ? trackNothing : track;
+}
+
+/**
+ * The `surface` the credit events (`CREDIT_EVENTS.*`) carry: `call` for funding a call (placed or
+ * answered), `booking` for a booking. The credit events always fire; only their surface differs.
+ */
+export function creditSurfaceFor(context: FundingContext): CreditSurfaceProperty {
+  return isCallFunding(context) ? 'call' : 'booking';
+}
 
 /** Tracks whether the component is still mounted, for state updates after an awaited booking. */
 export function useMountedRef(): React.RefObject<boolean> {
@@ -30,6 +49,8 @@ interface FundingSectionProps {
   readonly draftKept: boolean;
   /** The selected method, for the header band; the top-up band is the default. */
   readonly method?: BookingFundingMethodProperty;
+  /** Whose wording the band uses; the booking's by default. */
+  readonly context?: FundingContext;
   readonly children?: React.ReactNode;
 }
 
@@ -39,11 +60,12 @@ export function FundingSection({
   caseSaved,
   draftKept,
   method,
+  context = 'booking',
   children,
 }: Readonly<FundingSectionProps>) {
   const headingId = useId();
   const reduceMotion = useReducedMotion();
-  const copy = fundingBlockCopy(view, draftKept, method);
+  const copy = fundingCopyFor(context).blockCopy(view, draftKept, method ?? 'topup');
   return (
     <motion.section
       aria-labelledby={headingId}

@@ -12,9 +12,16 @@ export function callNowFundingRequest(input: {
   expertProfileId: string;
   engagementId: string;
   nowMs: number;
+  /**
+   * The ring a callee is answering. The server resolves it to the ring's own meeting (when the
+   * viewer is that ring's callee) so a call already reserved on their balance is not counted
+   * against itself, exactly as the api's answer check does. The browser never names a meeting.
+   */
+  ringId?: string;
 }): BookingFundingRequest {
-  const { expertProfileId, engagementId, nowMs } = input;
+  const { expertProfileId, engagementId, nowMs, ringId } = input;
   return {
+    ...(ringId === undefined ? {} : { ringId }),
     expertProfileId,
     slot: {
       startIso: new Date(nowMs).toISOString(),

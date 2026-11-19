@@ -30,6 +30,26 @@ describe('CALL_NOW_COPY', () => {
     expect(CALL_NOW_COPY.clientTerms('A$4.20/min · 15-minute minimum')).toContain('A$4.20/min');
   });
 
+  it('prices from the starting rate with the minimum, and the 10-minute rate-limit window', () => {
+    expect(CALL_NOW_COPY.rateLine('A$4.20')).toBe('From A$4.20/min · 15-minute minimum');
+    expect(START_FAILURE_COPY.rate_limited).toContain('10 minutes');
+  });
+
+  it('keeps the presence badge, the way back and the wait notice in the copy module', () => {
+    expect(CALL_NOW_COPY.online).toBe('Online');
+    expect(CALL_NOW_COPY.back).toBe('Back');
+    expect(CALL_NOW_COPY.waitConnectTitle).toBe('Waiting for the call to connect');
+    expect(CALL_NOW_COPY.waitConnectBody).toContain('opens here as soon as it connects');
+  });
+
+  it('does not promise a declined call will be seen, and carries no money', () => {
+    for (const body of [CALL_NOW_COPY.declinedClient, CALL_NOW_COPY.declinedExpert]) {
+      expect(body).not.toContain('will see that you called');
+      expect(body).not.toMatch(/A\$|\/min/);
+    }
+    expect(CALL_NOW_COPY.noAnswerClient('Sandy')).toContain('will see that you called');
+  });
+
   it('states the ring countdown from the seconds it is given', () => {
     expect(CALL_NOW_COPY.ringRemaining(30)).toBe('We’ll keep trying for 30 more seconds.');
   });
