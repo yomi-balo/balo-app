@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Job } from 'bullmq';
 import type { DeliveryPayload } from './types.js';
 
@@ -45,6 +45,7 @@ const mockTrackServer = vi.fn();
 vi.mock('@balo/analytics/server', () => ({
   trackServer: (...args: unknown[]) => mockTrackServer(...args),
   CALL_NOW_SERVER_EVENTS: { SMS_SENT: 'call_sms_sent' },
+  MEETING_SERVER_EVENTS: { WAITING_SMS_SENT: 'waiting_sms_sent' },
   NOTIFICATION_SERVER_EVENTS: {
     SMS_SENT: 'notification_sms_sent',
     SMS_FAILED: 'notification_sms_failed',
@@ -527,6 +528,106 @@ describe('processSmsJob', () => {
         (call) => (call[1] as { keyPrefix: string }).keyPrefix
       );
       expect(prefixes).not.toContain('ratelimit:call-now-sms');
+    });
+  });
+  // -- BAL-654: waiting-party SMS -------------------------------------------
+
+  describe('waiting-party SMS', () => {
+    const START_ISO = '2026-11-19T10:00:00.000Z';
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-19T10:01:05.000Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function waitingJob(overrides: Partial<DeliveryPayload> = {}): Job<DeliveryPayload> {
+      return makeJob({
+        template: 'meeting-waiting-sms-client',
+        event: 'meeting.waiting_for_client',
+        recipientSide: 'client',
+        payload: { correlationId: 'corr-1', meetingId: 'meeting-1', scheduledStartIso: START_ISO },
+        ...overrides,
+      });
+    }
+
+    it('emits waiting_sms_sent with the recipient audience and the lag from the start', async () => {
+      await processSmsJob(waitingJob());
+
+      expect(mockTrackServer).toHaveBeenCalledWith('waiting_sms_sent', {
+        meeting_id: 'meeting-1',
+        audience: 'client',
+        seconds_after_start: 65,
+        distinct_id: 'meeting-1',
+      });
+    });
+
+    it('reports the expert audience for the expert event', async () => {
+      await processSmsJob(
+        waitingJob({
+          template: 'meeting-waiting-sms-expert',
+          event: 'meeting.waiting_for_expert',
+          recipientSide: 'expert',
+        })
+      );
+
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'waiting_sms_sent',
+        expect.objectContaining({ audience: 'expert' })
+      );
+    });
+
+    it('emits nothing for an unrelated SMS', async () => {
+      await processSmsJob(makeJob());
+
+      expect(mockTrackServer).not.toHaveBeenCalledWith('waiting_sms_sent', expect.anything());
+    });
+
+    it.each(['meetingId', 'scheduledStartIso'])(
+      'skips the emit when %s is not a string',
+      async (key) => {
+        await processSmsJob(
+          waitingJob({
+            payload: {
+              correlationId: 'corr-1',
+              meetingId: 'meeting-1',
+              scheduledStartIso: START_ISO,
+              [key]: 7,
+            },
+          })
+        );
+
+        expect(mockTrackServer).not.toHaveBeenCalledWith('waiting_sms_sent', expect.anything());
+      }
+    );
+
+    it('emits nothing when the SMS is skipped or Brevo fails', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', phone: null });
+      await processSmsJob(waitingJob());
+      expect(mockTrackServer).not.toHaveBeenCalledWith('waiting_sms_sent', expect.anything());
+
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        phone: '+61412345678',
+        phoneVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        clientSmsOptedInAt: new Date('2026-02-01T00:00:00.000Z'),
+      });
+      mockSendTransacSms.mockRejectedValueOnce(new Error('brevo down'));
+      await expect(processSmsJob(waitingJob())).rejects.toThrow('brevo down');
+      expect(mockTrackServer).not.toHaveBeenCalledWith('waiting_sms_sent', expect.anything());
+    });
+
+    it('never re-queues the send when the tracker throws', async () => {
+      mockTrackServer.mockImplementation((event: string) => {
+        if (event === 'waiting_sms_sent') throw new Error('posthog down');
+      });
+
+      await expect(processSmsJob(waitingJob())).resolves.toBeUndefined();
+      expect(mockSendTransacSms).toHaveBeenCalledOnce();
+      mockTrackServer.mockReset();
     });
   });
 });

@@ -3,21 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockMeetingFindById,
   mockListByMeeting,
+  mockListRings,
   mockResolveRecipients,
   mockScheduleNotification,
   mockTrackServer,
   mockWarn,
   mockInfo,
   mockResolveSubject,
+  mockFindByDedupeKey,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
+  mockListRings: vi.fn(),
   mockResolveRecipients: vi.fn(),
   mockScheduleNotification: vi.fn(),
   mockTrackServer: vi.fn(),
   mockWarn: vi.fn(),
   mockInfo: vi.fn(),
   mockResolveSubject: vi.fn(),
+  mockFindByDedupeKey: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -26,7 +30,9 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
   meetingPresenceRepository: { listByMeeting: mockListByMeeting },
+  meetingRingsRepository: { listForMeeting: mockListRings },
   clientPartyRecipientsRepository: { resolveClientPartyRecipients: mockResolveRecipients },
+  scheduledNotificationsRepository: { findByDedupeKey: mockFindByDedupeKey },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -59,6 +65,11 @@ import {
   MEETING_EXPERT_ABSENT_RECHECK,
 } from './meeting-absence.js';
 import type { ScheduledNotification } from '@balo/db';
+
+beforeEach(() => {
+  mockFindByDedupeKey.mockResolvedValue([]);
+  mockListRings.mockResolvedValue([]);
+});
 
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
 const COMPANY_ID = '33333333-3333-4333-8333-333333333333';
@@ -303,6 +314,39 @@ describe('meetingClientAbsentRecheck (BAL-134 §6.3)', () => {
 
     expect(result.publish).toBe(true);
     expect(result.publish && result.payload.correlationId).toBe(CORRELATION_ID);
+  });
+
+  describe('an unanswered in-place ring leaves no attendance behind', () => {
+    const CALL_NOW_ATTEMPT_PRESENCE = [
+      { party: 'client', joinedAt: at(-30), leftAt: at(-28) },
+      { party: 'expert', joinedAt: START, leftAt: null },
+    ];
+
+    it('still nudges when the client only joined during an unanswered in-place ring', async () => {
+      mockListRings.mockResolvedValue([
+        {
+          placement: 'in_place',
+          status: 'unanswered',
+          createdAt: at(-30),
+          expiresAt: at(-29),
+          endedAt: at(-29),
+        },
+      ]);
+      mockListByMeeting.mockResolvedValue(CALL_NOW_ATTEMPT_PRESENCE);
+
+      const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+      expect(result.publish).toBe(true);
+    });
+
+    it('skips client_joined_before_nudge when no ring explains that presence', async () => {
+      mockListByMeeting.mockResolvedValue(CALL_NOW_ATTEMPT_PRESENCE);
+
+      expect(await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).toEqual({
+        publish: false,
+        reason: 'client_joined_before_nudge',
+      });
+    });
   });
 
   /**
@@ -805,5 +849,158 @@ describe('BAL-410 D3 — an armed promise self-skips once its meeting is CANCELL
     // ⚠ AND THE MEMBERSHIP READ NEVER RUNS — the terminal check short-circuits before it, so a
     // cancelled meeting costs no recipient resolution at all.
     expect(mockResolveRecipients).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⚠⚠ BAL-654 — THE RE-ARM DEFECT. The dedupe key folds only onto PENDING rows, so
+ * once a promise has fired the next sweep tick's `first_wins` call schedules a fresh one, and the
+ * nudge / ops alert re-fired every minute while its condition held. An arm site must therefore
+ * read the key's history and arm nothing once it is DECIDED, and the recheck must skip a second
+ * promise whose sibling already decided.
+ */
+describe('BAL-134 promises are decided ONCE per meeting', () => {
+  const sibling = (status: string, skipReason: string | null = null): ScheduledNotification =>
+    ({ id: 'row-0', status, skipReason }) as unknown as ScheduledNotification;
+
+  const expertInput = {
+    meetingId: MEETING_ID,
+    scheduledStart: START,
+    absenceAnchor: START,
+    contextType: 'case',
+    timers: DEFAULT_MEETING_TIMERS,
+  };
+  const clientInput = {
+    meetingId: MEETING_ID,
+    companyId: COMPANY_ID,
+    scheduledStart: START,
+    clockStart: START,
+    waitingPartyName: null,
+    timers: DEFAULT_MEETING_TIMERS,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByDedupeKey.mockResolvedValue([]);
+    mockScheduleNotification.mockResolvedValue({ outcome: 'scheduled' });
+    mockResolveSubject.mockResolvedValue({ isActive: true, closedAt: null });
+    mockMeetingFindById.mockResolvedValue(meeting());
+  });
+
+  it('⚠ a FAILED ops alert is re-armed — one failed delivery must not silence it for good', async () => {
+    mockFindByDedupeKey.mockResolvedValue([sibling('failed')]);
+
+    await scheduleExpertAbsentAlert(expertInput);
+
+    expect(mockScheduleNotification).toHaveBeenCalledOnce();
+  });
+
+  it.each(['published', 'claimed'])(
+    'the ops alert is NOT re-armed once a %s row exists for its key',
+    async (status) => {
+      mockFindByDedupeKey.mockResolvedValue([sibling(status)]);
+
+      await scheduleExpertAbsentAlert(expertInput);
+
+      expect(mockFindByDedupeKey).toHaveBeenCalledWith(expertAbsentKey(MEETING_ID));
+      expect(mockScheduleNotification).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['published', 'claimed', 'failed'])(
+    'the client nudge is NOT re-armed once a %s row exists for its key',
+    async (status) => {
+      mockFindByDedupeKey.mockResolvedValue([sibling(status)]);
+
+      await scheduleClientAbsentNudge(clientInput);
+
+      expect(mockFindByDedupeKey).toHaveBeenCalledWith(clientAbsentKey(MEETING_ID));
+      expect(mockScheduleNotification).not.toHaveBeenCalled();
+    }
+  );
+
+  it('the ops alert re-arms after a venue skip, and not after a final skip', async () => {
+    mockFindByDedupeKey.mockResolvedValue([sibling('skipped', 'venue_unavailable')]);
+    await scheduleExpertAbsentAlert(expertInput);
+    expect(mockScheduleNotification).toHaveBeenCalledOnce();
+
+    mockScheduleNotification.mockClear();
+    mockFindByDedupeKey.mockResolvedValue([sibling('skipped', 'expert_joined_before_alert')]);
+    await scheduleExpertAbsentAlert(expertInput);
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+  });
+
+  it('the client nudge re-arms after the expert left, and not after a final skip', async () => {
+    mockFindByDedupeKey.mockResolvedValue([sibling('skipped', 'expert_left_before_nudge')]);
+    await scheduleClientAbsentNudge(clientInput);
+    expect(mockScheduleNotification).toHaveBeenCalledOnce();
+
+    mockScheduleNotification.mockClear();
+    mockFindByDedupeKey.mockResolvedValue([sibling('skipped', 'client_joined_before_nudge')]);
+    await scheduleClientAbsentNudge(clientInput);
+    expect(mockScheduleNotification).not.toHaveBeenCalled();
+  });
+
+  it('a pending or cancelled history does not block arming', async () => {
+    mockFindByDedupeKey.mockResolvedValue([sibling('pending'), sibling('cancelled')]);
+
+    await scheduleExpertAbsentAlert(expertInput);
+
+    expect(mockScheduleNotification).toHaveBeenCalledOnce();
+  });
+
+  it('the expert-absent recheck skips `already_decided` when a sibling published, ignoring its own row', async () => {
+    mockListByMeeting.mockResolvedValue([]);
+    mockFindByDedupeKey.mockResolvedValue([
+      { id: 'row-1', status: 'claimed', skipReason: null },
+      sibling('published'),
+    ]);
+
+    const result = await meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }));
+
+    expect(result).toEqual({ publish: false, reason: 'already_decided' });
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('the expert-absent recheck publishes when only its own claimed row is in the history', async () => {
+    mockListByMeeting.mockResolvedValue([]);
+    mockFindByDedupeKey.mockResolvedValue([{ id: 'row-1', status: 'claimed', skipReason: null }]);
+
+    const result = await meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }));
+
+    expect(result.publish).toBe(true);
+  });
+
+  it('the expert-absent recheck is not blocked by a FAILED sibling', async () => {
+    mockListByMeeting.mockResolvedValue([]);
+    mockFindByDedupeKey.mockResolvedValue([sibling('failed')]);
+
+    const result = await meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }));
+
+    expect(result.publish).toBe(true);
+  });
+
+  it('the client-absent recheck skips `already_decided` when a sibling published', async () => {
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+    mockFindByDedupeKey.mockResolvedValue([sibling('published')]);
+
+    const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+    expect(result).toEqual({ publish: false, reason: 'already_decided' });
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
+  });
+
+  it('the client-absent recheck publishes when the history is a rearmable skip', async () => {
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+    mockResolveRecipients.mockResolvedValue({
+      recipientUserIds: ['user-a'],
+      includedBookingMember: false,
+      bookerAddedBeyondAdmins: false,
+    });
+    mockFindByDedupeKey.mockResolvedValue([sibling('skipped', 'expert_left_before_nudge')]);
+
+    const result = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+
+    expect(result.publish).toBe(true);
   });
 });

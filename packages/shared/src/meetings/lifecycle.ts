@@ -184,6 +184,13 @@ export interface PresenceFacts {
   readonly lastLeftAt: Date | null;
   /** The FIRST expert join. `null` when no expert ever joined. */
   readonly expertFirstJoinedAt: Date | null;
+  /**
+   * Is a `client` interval OPEN right now? `observer` excluded, exactly as for
+   * {@link clientSideEverPresent}: a client-side colleague or guest counts, a staffer does not.
+   */
+  readonly clientSideOpen: boolean;
+  /** The FIRST `client` join (`observer` excluded). `null` when no client-side occupant ever joined. */
+  readonly clientSideFirstJoinedAt: Date | null;
 }
 
 /** One interval's endpoints in ms — `null` when either is unusable. See {@link summarisePresence}. */
@@ -229,7 +236,7 @@ function earlierOf(current: number | null, candidate: number): number {
  *
  * ⚠ THE PER-INTERVAL WORK IS SPLIT OUT ({@link finiteEndpoints}, {@link laterOf},
  * {@link earlierOf}) TO KEEP THIS UNDER SonarCloud's cognitive-complexity ceiling — the
- * accumulate-six-facts-in-one-pass shape trips `sonarjs/cognitive-complexity` when the null
+ * accumulate-eight-facts-in-one-pass shape trips `sonarjs/cognitive-complexity` when the null
  * handling is inlined. The semantics are unchanged; the fold is still one pass and still
  * order-independent.
  */
@@ -240,6 +247,8 @@ export function summarisePresence(intervals: readonly LifecyclePresenceInterval[
   let anyOpen = false;
   let lastLeftMs: number | null = null;
   let expertFirstJoinedMs: number | null = null;
+  let clientSideOpen = false;
+  let clientSideFirstJoinedMs: number | null = null;
 
   for (const interval of intervals) {
     const endpoints = finiteEndpoints(interval);
@@ -260,6 +269,8 @@ export function summarisePresence(intervals: readonly LifecyclePresenceInterval[
       expertFirstJoinedMs = earlierOf(expertFirstJoinedMs, joinedMs);
     } else if (interval.party === 'client') {
       clientSideEverPresent = true;
+      clientSideOpen = clientSideOpen || leftMs === null;
+      clientSideFirstJoinedMs = earlierOf(clientSideFirstJoinedMs, joinedMs);
     }
   }
 
@@ -270,6 +281,9 @@ export function summarisePresence(intervals: readonly LifecyclePresenceInterval[
     anyOpen,
     lastLeftAt: lastLeftMs === null ? null : new Date(lastLeftMs),
     expertFirstJoinedAt: expertFirstJoinedMs === null ? null : new Date(expertFirstJoinedMs),
+    clientSideOpen,
+    clientSideFirstJoinedAt:
+      clientSideFirstJoinedMs === null ? null : new Date(clientSideFirstJoinedMs),
   };
 }
 

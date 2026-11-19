@@ -4,6 +4,7 @@ import { createLogger } from '@balo/shared/logging';
 import {
   trackServer,
   CALL_NOW_SERVER_EVENTS,
+  MEETING_SERVER_EVENTS,
   NOTIFICATION_SERVER_EVENTS,
 } from '@balo/analytics/server';
 import { createRedisConnection, getRedis } from '../../lib/redis.js';
@@ -11,6 +12,7 @@ import { checkRateLimit, type RateLimitConfig } from '../../lib/rate-limiter.js'
 import { maskPhone, getBrevoClient } from '../../lib/brevo.js';
 import { getSmsTemplate } from './templates/sms-templates.js';
 import { logNotification } from './log.js';
+import { WAITING_SMS_EVENTS } from '../events.js';
 import type { DeliveryPayload } from './types.js';
 
 const log = createLogger('notification-sms');
@@ -50,6 +52,38 @@ function trackCallSmsSent(payload: DeliveryPayload): void {
     log.warn(
       { ringId, error: error instanceof Error ? error.message : String(error) },
       'Failed to track call_sms_sent'
+    );
+  }
+}
+
+const WAITING_SMS_EVENT_NAMES: ReadonlySet<string> = new Set(WAITING_SMS_EVENTS);
+
+/**
+ * BAL-654 — `waiting_sms_sent`, once Brevo has accepted a waiting-party SMS. `distinct_id` is the
+ * MEETING id: there is no acting human, the recipient is the absent party. `seconds_after_start` is
+ * measured from the meeting's scheduled start, not from the waiting party's join.
+ *
+ * ⚠ NEVER THROWS, for the reason {@link trackCallSmsSent} gives.
+ */
+function trackWaitingSmsSent(payload: DeliveryPayload): void {
+  if (!WAITING_SMS_EVENT_NAMES.has(payload.event)) {
+    return;
+  }
+  const { meetingId, scheduledStartIso } = payload.payload;
+  if (typeof meetingId !== 'string' || typeof scheduledStartIso !== 'string') {
+    return;
+  }
+  try {
+    trackServer(MEETING_SERVER_EVENTS.WAITING_SMS_SENT, {
+      meeting_id: meetingId,
+      audience: payload.recipientSide ?? 'client',
+      seconds_after_start: Math.round((Date.now() - Date.parse(scheduledStartIso)) / 1000),
+      distinct_id: meetingId,
+    });
+  } catch (error) {
+    log.warn(
+      { meetingId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to track waiting_sms_sent'
     );
   }
 }
@@ -172,6 +206,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
       distinct_id: payload.recipientId,
     });
     trackCallSmsSent(payload);
+    trackWaitingSmsSent(payload);
     log.info({ template: payload.template, messageId }, 'SMS sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

@@ -223,6 +223,8 @@ describe('resolveSessionStatement — client-side presence on a missed call', ()
           anyOpen: false,
           lastLeftAt: null,
           expertFirstJoinedAt: null,
+          clientSideOpen: false,
+          clientSideFirstJoinedAt: null,
         },
       ],
     ]);

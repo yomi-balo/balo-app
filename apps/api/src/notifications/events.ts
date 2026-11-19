@@ -502,6 +502,41 @@ export interface CallMissedEmailDuePayload {
   missedCount: number;
 }
 
+/**
+ * BAL-654 — the payload of BOTH waiting-party SMS events. SERVER-ONLY: scheduled by the
+ * lifecycle sweep and published by the dispatch tick once `meetingWaitingSmsRecheck` passes.
+ *
+ * The arm site writes only the first five fields; the three nullable ones are seeded `null` and
+ * REBUILT by the recheck from live state, so a stale name, zone or recipient is never sent.
+ * ⚠ NO PHONE NUMBERS — the SMS adapter resolves the number at send time.
+ */
+export interface MeetingWaitingSmsPayload {
+  /** A fresh uuid per promise — never the meeting id (a meeting id would collide across promises). */
+  correlationId: string;
+  meetingId: string;
+  scheduledStartIso: string;
+  /** Owning company, resolved at the arm site. */
+  companyId: string;
+  /** The delivering expert's profile, or `null` for a meeting that names none. */
+  expertProfileId: string | null;
+  /** The single recipient — `null` when armed, set by the recheck. Read by the `self` recipient. */
+  recipientUserId: string | null;
+  /** The recipient's IANA zone for `{time}` — `null` when armed, and when none is usable (the body then omits the time). */
+  recipientTimeZone: string | null;
+  /** The waiting party's display name for `{name}` — `null` when armed, set by the recheck. */
+  waitingPartyName: string | null;
+}
+
+/**
+ * The two waiting-party SMS events — one per audience. The single home of the names, read by the
+ * scheduling guard, the SMS adapter's analytics and both unions below.
+ */
+export const WAITING_SMS_EVENTS = [
+  'meeting.waiting_for_client',
+  'meeting.waiting_for_expert',
+] as const;
+export type WaitingSmsEvent = (typeof WAITING_SMS_EVENTS)[number];
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -713,7 +748,10 @@ export type NotificationEvent =
   | 'call.stopped'
   | 'call.connected'
   // BAL-652: the delayed missed-call email, published by the scheduled-notification tick.
-  | 'call.missed_email_due';
+  | 'call.missed_email_due'
+  // BAL-654: the SMS to the ABSENT party of a scheduled consultation. `waiting_for_client` = the
+  // expert is waiting (texts the client); `waiting_for_expert` = the client side is waiting.
+  | WaitingSmsEvent;
 
 /**
  * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
@@ -838,7 +876,9 @@ export type ServerOnlyNotificationEvent =
   | 'call.stopped'
   | 'call.connected'
   // BAL-652: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
-  | 'call.missed_email_due';
+  | 'call.missed_email_due'
+  // BAL-654: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
+  | WaitingSmsEvent;
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -1017,4 +1057,6 @@ export interface EventPayloadMap {
   'call.stopped': CallRingEventPayload;
   'call.connected': CallRingEventPayload;
   'call.missed_email_due': CallMissedEmailDuePayload;
+  'meeting.waiting_for_client': MeetingWaitingSmsPayload;
+  'meeting.waiting_for_expert': MeetingWaitingSmsPayload;
 }

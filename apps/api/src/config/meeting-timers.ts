@@ -35,6 +35,13 @@ const log = createLogger('meeting-timers-config');
 const MS_PER_MINUTE = 60_000;
 
 /**
+ * BAL-654 — how long one party is alone in a scheduled consultation, past
+ * `max(scheduled_start, their first join)`, before the absent party is texted. A plain constant:
+ * not part of {@link MeetingTimers}, not env-overridable, and outside the coherence check.
+ */
+export const WAITING_PARTY_SMS_DELAY_MS = 60_000;
+
+/**
  * The six env variables, as DATA — the CLAUDE.md data-driven rule applied to configuration.
  *
  * ⚠ ONE ROW PER TIMER, and the row names both the variable and the field it overrides. Six

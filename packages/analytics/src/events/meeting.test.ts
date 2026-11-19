@@ -37,6 +37,8 @@ describe('MEETING_SERVER_EVENTS', () => {
       'MEETING_STARTED',
       'MEETING_VENUE_UNAVAILABLE',
       'MEETING_WAITING_ABANDONED',
+      // BAL-654. `MEETING_…` < `WAITING_…` because `M` < `W`.
+      'WAITING_SMS_SENT',
     ]);
   });
 
@@ -55,6 +57,24 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_END_REFUSED).toBe('meeting_end_refused');
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
     expect(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED).toBe('meeting_presence_reconciled');
+    expect(MEETING_SERVER_EVENTS.WAITING_SMS_SENT).toBe('waiting_sms_sent');
+  });
+
+  it('⚠ `waiting_sms_sent.audience` is a CLOSED two-value union', () => {
+    const sent: MeetingServerEventMap['waiting_sms_sent'] = {
+      meeting_id: 'meeting-1',
+      audience: 'client',
+      seconds_after_start: 61,
+      distinct_id: 'meeting-1',
+    };
+    const invented: MeetingServerEventMap['waiting_sms_sent'] = {
+      ...sent,
+      // @ts-expect-error — `observer` is not an audience.
+      audience: 'observer',
+    };
+
+    expect(sent.audience).toBe('client');
+    expect(invented.seconds_after_start).toBe(61);
   });
 
   /**

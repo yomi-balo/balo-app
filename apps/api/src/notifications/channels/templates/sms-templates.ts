@@ -1,3 +1,4 @@
+import { canonicalTimezone } from '@balo/shared/timezone';
 import { resolveAppUrl } from '../../../lib/app-url.js';
 
 /** One SMS is 160 GSM-7 characters; past that it splits and bills as several. */
@@ -10,6 +11,12 @@ const SMS_MAX_LENGTH = 160;
  * (e.g. `https://app.staging.balo.expert`) inside 160.
  */
 const MAX_CALLER_LENGTH = 28;
+
+/**
+ * BAL-654 — the longest waiting-party name. The waiting-party body has 52 fixed characters, a 51
+ * character path and a 5 character time, so 26 keeps a 31-character app origin inside 160.
+ */
+const MAX_WAITING_NAME_LENGTH = 26;
 
 /** The least of a case title worth keeping when the rest of the body already fills the SMS. */
 const MIN_CASE_TITLE_LENGTH = 10;
@@ -81,7 +88,11 @@ function sanitizeSmsText(value: string): string {
   const kept = Array.from(stripSchemes(mapped))
     .filter((char) => GSM7_KEPT.has(char))
     .join('');
-  return kept.replaceAll(/\s+/g, ' ').trim();
+  // A bare `evil.com` is auto-linked by phone keyboards and messengers; a space breaks the domain.
+  return kept
+    .replaceAll(/([\p{L}\p{N}])\.(?=\p{L})/gu, '$1 ')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
 }
 
 /** A sanitised value, or the fallback when nothing printable survives. */
@@ -90,12 +101,12 @@ function sanitizedOr(value: unknown, fallback: string): string {
   return clean.length > 0 ? clean : fallback;
 }
 
-/** Caps a sanitised caller label at {@link MAX_CALLER_LENGTH} with an ASCII `...`. */
-function capCaller(caller: string): string {
-  if (caller.length <= MAX_CALLER_LENGTH) {
+/** Caps a sanitised label at `maxLength` (default {@link MAX_CALLER_LENGTH}) with an ASCII `...`. */
+function capCaller(caller: string, maxLength: number = MAX_CALLER_LENGTH): string {
+  if (caller.length <= maxLength) {
     return caller;
   }
-  return `${caller.slice(0, MAX_CALLER_LENGTH - 3).trimEnd()}...`;
+  return `${caller.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
 /**
@@ -134,6 +145,53 @@ function incomingCallSms(
   return frame(fitCaseTitle(title, frame('')));
 }
 
+/**
+ * BAL-654 — the zone an SMS clock time may be shown in, or `null` when there is none worth
+ * showing: a missing or blank zone, one `Intl` rejects, or UTC in any spelling (`UTC`, `Etc/UTC`),
+ * which is the platform's "no saved zone" fallback rather than a place the reader is.
+ */
+export function usableRecipientZone(timeZone: unknown): string | null {
+  if (typeof timeZone !== 'string' || timeZone.trim().length === 0) {
+    return null;
+  }
+  const canonical = canonicalTimezone(timeZone.trim());
+  return canonical === null || canonical === 'UTC' ? null : canonical;
+}
+
+/**
+ * BAL-654 — `HH:mm` (24-hour) in the recipient's zone, or `null` when there is no usable zone or
+ * the start is unreadable. The `(City time)` label of the email is left out: it would push the
+ * body past 160.
+ */
+function waitingSmsTime(iso: unknown, timeZone: unknown): string | null {
+  const zone = usableRecipientZone(timeZone);
+  const at = new Date(typeof iso === 'string' ? iso : Number.NaN);
+  if (zone === null || Number.isNaN(at.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: zone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(at);
+}
+
+/**
+ * BAL-654 — "Balo: {name} is waiting in your {time} consultation. Join: {link}" (copy sheet §6);
+ * without a usable recipient zone the time is left out: "…is waiting in your consultation. …".
+ */
+function waitingPartySms(nameFallback: string, data: Record<string, unknown>): string {
+  const name = capCaller(sanitizedOr(data.waitingPartyName, nameFallback), MAX_WAITING_NAME_LENGTH);
+  const time = waitingSmsTime(data.scheduledStartIso, data.recipientTimeZone);
+  const meetingId = typeof data.meetingId === 'string' ? data.meetingId : '';
+  const link = resolveAppUrl(
+    meetingId.length > 0 ? `/meetings/${encodeURIComponent(meetingId)}/call` : ''
+  );
+  const consultation = time === null ? 'consultation' : `${time} consultation`;
+  return `Balo: ${name} is waiting in your ${consultation}. Join: ${link}`;
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // BAL-400 (D4) — no `booking-confirmed-sms` entry: the legacy SMS rule at booking time was
   // structurally incapable of firing (the resolver hydrates `data.user` from `payload.userId`
@@ -166,6 +224,13 @@ const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // the daily cap were decided before the ring was written, so nothing is re-checked here.
   'call-ringing-sms-expert': (data) => incomingCallSms(data.callerCompanyName, 'Your client', data),
   'call-ringing-sms-client': (data) => incomingCallSms(data.callerFirstName, 'Your expert', data),
+
+  // BAL-654 — the other party of a scheduled consultation has been alone about a minute. The
+  // recheck rebuilt the name (the expert's first name to a client, the client company to an
+  // expert) and the recipient-zone `{time}` source (null when no usable zone, so the time is
+  // left out); opt-in was decided there. There is no quiet-hours gate on this SMS.
+  'meeting-waiting-sms-client': (data) => waitingPartySms('Your expert', data),
+  'meeting-waiting-sms-expert': (data) => waitingPartySms('Your client', data),
 };
 
 export function getSmsTemplate(templateName: string, data: Record<string, unknown>): string {

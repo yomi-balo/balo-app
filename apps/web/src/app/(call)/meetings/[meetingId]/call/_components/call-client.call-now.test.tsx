@@ -687,6 +687,9 @@ describe('CallClient — a colleague waits for someone else’s call (R4)', () =
   });
 
   async function fireAwaitTimer(): Promise<void> {
+    // The retry timer is armed asynchronously after the wait notice renders (the join and the
+    // answer-view read resolve first), so wait for it rather than assume it is already queued.
+    await waitFor(() => expect(awaitTimers.length).toBeGreaterThan(0));
     const fire = awaitTimers.shift();
     expect(fire).toBeDefined();
     await act(async () => {

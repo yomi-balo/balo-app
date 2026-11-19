@@ -17,6 +17,8 @@ const {
   mockEmitMeetingEnded,
   mockScheduleExpertAbsent,
   mockScheduleClientAbsent,
+  mockScheduleWaitingPartySms,
+  mockIsWaitingSmsDecided,
   mockDeleteRoom,
   mockTrackServer,
   mockWarn,
@@ -51,6 +53,8 @@ const {
   mockEmitMeetingEnded: vi.fn(),
   mockScheduleExpertAbsent: vi.fn(),
   mockScheduleClientAbsent: vi.fn(),
+  mockScheduleWaitingPartySms: vi.fn(),
+  mockIsWaitingSmsDecided: vi.fn(),
   mockDeleteRoom: vi.fn(),
   mockTrackServer: vi.fn(),
   mockWarn: vi.fn(),
@@ -146,6 +150,13 @@ vi.mock('../services/credit-session/settle-sessionless-case-meeting.js', () => (
 vi.mock('../notifications/scheduling/meeting-absence.js', () => ({
   scheduleExpertAbsentAlert: mockScheduleExpertAbsent,
   scheduleClientAbsentNudge: mockScheduleClientAbsent,
+}));
+// BAL-654 — only the arming call is stubbed; `waitingSmsDirection` is the real trigger definition,
+// so these rows assert who is waiting rather than their own fixtures.
+vi.mock('../notifications/scheduling/meeting-waiting-sms.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../notifications/scheduling/meeting-waiting-sms.js')>()),
+  scheduleWaitingPartySms: mockScheduleWaitingPartySms,
+  isWaitingSmsDecided: mockIsWaitingSmsDecided,
 }));
 vi.mock('../services/daily/rooms.js', () => ({
   dailyRoomTeardown: { deleteRoom: mockDeleteRoom },
@@ -291,6 +302,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockListCandidates.mockResolvedValue([]);
     mockListStranded.mockResolvedValue([]);
     mockListByMeeting.mockResolvedValue([]);
+    mockIsWaitingSmsDecided.mockResolvedValue(false);
     mockListRingsForMeeting.mockResolvedValue([]);
     mockListOverdueRinging.mockResolvedValue([]);
     mockEndRing.mockResolvedValue({ ended: true });
@@ -1593,6 +1605,110 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
 
     expect(mockScheduleClientAbsent).not.toHaveBeenCalled();
+  });
+
+  // ── BAL-654 — THE WAITING-PARTY SMS ARM ─────────────────────────────────────────────────
+
+  describe('BAL-654 — arms the waiting-party SMS', () => {
+    it('to the CLIENT side when the expert is alone, anchored on the expert first join', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(5), leftAt: null }]);
+
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        scheduledStart: START,
+        direction: 'to_client',
+        waiterFirstJoinedAt: at(5),
+        companyId: 'company-1',
+        expertProfileId: 'expert-1',
+      });
+    });
+
+    it('to the EXPERT when a client-side occupant (a guest or colleague counts) is alone', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'client', joinedAt: at(2), leftAt: null }]);
+
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: 'to_expert', waiterFirstJoinedAt: at(2) })
+      );
+    });
+
+    it('⚠ a decided key costs one read: the waiting arm resolves no owner and arms nothing', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(5), leftAt: null }]);
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+      const ownerReadsWhenOpen = mockResolveOwner.mock.calls.length;
+      mockResolveOwner.mockClear();
+      mockScheduleWaitingPartySms.mockClear();
+      mockIsWaitingSmsDecided.mockResolvedValue(true);
+
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockIsWaitingSmsDecided).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
+      expect(mockResolveOwner.mock.calls).toHaveLength(ownerReadsWhenOpen - 1);
+    });
+
+    it('arms NOTHING for an observer alone in the room', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'observer', joinedAt: at(2), leftAt: null }]);
+
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
+    });
+
+    it('arms NOTHING when both sides are in, or the waiter has already left', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([
+        { party: 'expert', joinedAt: at(1), leftAt: null },
+        { party: 'client', joinedAt: at(2), leftAt: null },
+      ]);
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(1), leftAt: at(3) }]);
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
+    });
+
+    it('arms NOTHING before the scheduled start', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(-3), leftAt: null }]);
+
+      await runMeetingLifecycleSweep(at(-1), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
+    });
+
+    it('arms NOTHING when the owning party cannot be resolved', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(5), leftAt: null }]);
+      mockResolveOwner.mockResolvedValue(undefined);
+
+      await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
+    });
+
+    it('a failure is logged and never fails the tick, which still arms the other promises', async () => {
+      mockListCandidates.mockResolvedValue([meeting()]);
+      mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: at(5), leftAt: null }]);
+      mockScheduleWaitingPartySms.mockRejectedValue(new Error('db down'));
+
+      const result = await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
+
+      expect(result.scanned).toBe(1);
+      expect(mockScheduleClientAbsent).toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, error: 'db down' }),
+        'Waiting-party SMS arm failed — the next tick retries'
+      );
+    });
   });
 
   // ── PER-ROW ISOLATION ───────────────────────────────────────────────────────────────────
@@ -3572,6 +3688,7 @@ describe('runMeetingLifecycleSweep — BAL-649 Call now', () => {
 
       expect(mockScheduleExpertAbsent).not.toHaveBeenCalled();
       expect(mockScheduleClientAbsent).not.toHaveBeenCalled();
+      expect(mockScheduleWaitingPartySms).not.toHaveBeenCalled();
     });
   });
 

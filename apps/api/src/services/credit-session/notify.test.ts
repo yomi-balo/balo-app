@@ -587,6 +587,8 @@ function presenceFacts(clientSideEverPresent: boolean): Map<string, PresenceFact
         anyOpen: false,
         lastLeftAt: null,
         expertFirstJoinedAt: null,
+        clientSideOpen: false,
+        clientSideFirstJoinedAt: null,
       },
     ],
   ]);

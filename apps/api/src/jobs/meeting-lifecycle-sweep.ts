@@ -52,6 +52,11 @@ import {
   scheduleClientAbsentNudge,
   scheduleExpertAbsentAlert,
 } from '../notifications/scheduling/meeting-absence.js';
+import {
+  isWaitingSmsDecided,
+  scheduleWaitingPartySms,
+  waitingSmsDirection,
+} from '../notifications/scheduling/meeting-waiting-sms.js';
 import { endRing, terminateNoAnswerMeeting } from '../services/call-now/end-ring.js';
 import { emitMeetingEnded } from '../services/meetings/end-meeting.js';
 import { isReleasedSettlementCode } from '../services/credit-session/released-settlement-codes.js';
@@ -1274,6 +1279,63 @@ async function armAbsenceReminders(
 }
 
 /**
+ * BAL-654 — arm the waiting-party SMS: one side of a booked consultation is alone, so the OTHER
+ * side is texted about a minute past `max(scheduled_start, the waiter's first join)`.
+ *
+ * ⚠ ARMED FROM THE SWEEP FOR THE SAME REASON AS {@link armAbsenceReminders}, and gated the same
+ * way: never for a Call now (nobody is "late" for a call that was never scheduled), never before
+ * the scheduled start. `scheduleWaitingPartySms` arms nothing once the key is decided, and the
+ * fire-time recheck is the real guard, so a stale arm here costs one skipped row.
+ *
+ * ⚠ OWN TRY/CATCH: a failure here must never fail the tick's other meetings; the next tick
+ * re-evaluates from fresh state.
+ */
+async function armWaitingPartySms(state: CandidateState, now: Date): Promise<void> {
+  const { meeting, facts } = state;
+  if (state.callNow.origin === 'call_now' || now.getTime() < meeting.scheduledStart.getTime()) {
+    return;
+  }
+  const direction = waitingSmsDirection(facts);
+  if (direction === null) {
+    return;
+  }
+  try {
+    // ⚠ FIRST: once the SMS has fired, every later tick (the condition keeps holding) costs this one
+    // read and nothing else — no context list, no owner resolution.
+    if (await isWaitingSmsDecided(meeting.id)) {
+      return;
+    }
+    const primary = selectPrimaryMeetingContext(
+      await meetingContextsRepository.listByMeeting(meeting.id)
+    );
+    if (!primary.ok) {
+      return;
+    }
+    const owner = await resolveMeetingContextOwner(primary.context);
+    if (owner === undefined) {
+      return;
+    }
+    await scheduleWaitingPartySms({
+      meetingId: meeting.id,
+      scheduledStart: meeting.scheduledStart,
+      direction,
+      waiterFirstJoinedAt:
+        direction === 'to_client' ? facts.expertFirstJoinedAt : facts.clientSideFirstJoinedAt,
+      companyId: owner.companyId,
+      expertProfileId: owner.expertProfileId,
+    });
+  } catch (error) {
+    logger.warn(
+      {
+        meetingId: meeting.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Waiting-party SMS arm failed — the next tick retries'
+    );
+  }
+}
+
+/**
  * ⚠⚠ THE REPAIR IS NOT COMPLETE UNTIL THE **STATUS** IS REPAIRED TOO.
  *
  * Reconciliation writes `meeting_presence` rows. The status transitions those rows imply —
@@ -1495,6 +1557,7 @@ async function processCandidate(
   }
 
   await armAbsenceReminders(state, timers, now);
+  await armWaitingPartySms(state, now);
   return {
     terminated: false,
     closed,
