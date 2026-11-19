@@ -11,6 +11,12 @@ const SMS_MAX_LENGTH = 160;
  */
 const MAX_CALLER_LENGTH = 28;
 
+/**
+ * BAL-654 — the longest waiting-party name. The waiting-party body has 52 fixed characters, a 51
+ * character path and a 5 character time, so 26 keeps a 31-character app origin inside 160.
+ */
+const MAX_WAITING_NAME_LENGTH = 26;
+
 /** The least of a case title worth keeping when the rest of the body already fills the SMS. */
 const MIN_CASE_TITLE_LENGTH = 10;
 
@@ -81,7 +87,11 @@ function sanitizeSmsText(value: string): string {
   const kept = Array.from(stripSchemes(mapped))
     .filter((char) => GSM7_KEPT.has(char))
     .join('');
-  return kept.replaceAll(/\s+/g, ' ').trim();
+  // A bare `evil.com` is auto-linked by phone keyboards and messengers; a space breaks the domain.
+  return kept
+    .replaceAll(/([\p{L}\p{N}])\.(?=\p{L})/gu, '$1 ')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
 }
 
 /** A sanitised value, or the fallback when nothing printable survives. */
@@ -90,12 +100,12 @@ function sanitizedOr(value: unknown, fallback: string): string {
   return clean.length > 0 ? clean : fallback;
 }
 
-/** Caps a sanitised caller label at {@link MAX_CALLER_LENGTH} with an ASCII `...`. */
-function capCaller(caller: string): string {
-  if (caller.length <= MAX_CALLER_LENGTH) {
+/** Caps a sanitised label at `maxLength` (default {@link MAX_CALLER_LENGTH}) with an ASCII `...`. */
+function capCaller(caller: string, maxLength: number = MAX_CALLER_LENGTH): string {
+  if (caller.length <= maxLength) {
     return caller;
   }
-  return `${caller.slice(0, MAX_CALLER_LENGTH - 3).trimEnd()}...`;
+  return `${caller.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
 /**
@@ -134,6 +144,40 @@ function incomingCallSms(
   return frame(fitCaseTitle(title, frame('')));
 }
 
+/**
+ * BAL-654 — `HH:mm` (24-hour) in the recipient's zone, UTC when the zone is missing or invalid.
+ * The `(City time)` label of the email is left out: it would push the body past 160.
+ */
+function waitingSmsTime(iso: unknown, timeZone: unknown): string {
+  const at = new Date(typeof iso === 'string' ? iso : Number.NaN);
+  if (Number.isNaN(at.getTime())) {
+    return '';
+  }
+  const format = (zone: string): string =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(at);
+  try {
+    return format(typeof timeZone === 'string' && timeZone.length > 0 ? timeZone : 'UTC');
+  } catch {
+    return format('UTC');
+  }
+}
+
+/** BAL-654 — "Balo: {name} is waiting in your {time} consultation. Join: {link}" (copy sheet §6). */
+function waitingPartySms(nameFallback: string, data: Record<string, unknown>): string {
+  const name = capCaller(sanitizedOr(data.waitingPartyName, nameFallback), MAX_WAITING_NAME_LENGTH);
+  const time = waitingSmsTime(data.scheduledStartIso, data.recipientTimeZone);
+  const meetingId = typeof data.meetingId === 'string' ? data.meetingId : '';
+  const link = resolveAppUrl(
+    meetingId.length > 0 ? `/meetings/${encodeURIComponent(meetingId)}/call` : ''
+  );
+  return `Balo: ${name} is waiting in your ${time} consultation. Join: ${link}`;
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // BAL-400 (D4) — no `booking-confirmed-sms` entry: the legacy SMS rule at booking time was
   // structurally incapable of firing (the resolver hydrates `data.user` from `payload.userId`
@@ -166,6 +210,12 @@ const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // the daily cap were decided before the ring was written, so nothing is re-checked here.
   'call-ringing-sms-expert': (data) => incomingCallSms(data.callerCompanyName, 'Your client', data),
   'call-ringing-sms-client': (data) => incomingCallSms(data.callerFirstName, 'Your expert', data),
+
+  // BAL-654 — the other party of a scheduled consultation has been alone about a minute. The
+  // recheck rebuilt the name (the expert's first name to a client, the client company to an
+  // expert) and the recipient-zone `{time}` source; opt-in and hours were decided there.
+  'meeting-waiting-sms-client': (data) => waitingPartySms('Your expert', data),
+  'meeting-waiting-sms-expert': (data) => waitingPartySms('Your client', data),
 };
 
 export function getSmsTemplate(templateName: string, data: Record<string, unknown>): string {

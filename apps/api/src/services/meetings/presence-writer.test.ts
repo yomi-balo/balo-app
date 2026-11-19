@@ -638,6 +638,26 @@ describe('reconcileMeetingStatus — the transitions presence implies', () => {
     expect(mockCancelScheduled).toHaveBeenCalledWith(`meeting_client_absent:${MEETING_ID}`);
   });
 
+  it('BAL-654 — disarms the waiting-party SMS once BOTH sides are present', async () => {
+    mockListOpen.mockResolvedValue([{ party: 'expert' }, { party: 'client' }]);
+
+    await reconcileMeetingStatus(MEETING, END);
+
+    expect(mockCancelScheduled).toHaveBeenCalledWith(`meeting_waiting_sms:${MEETING_ID}`);
+  });
+
+  it.each([
+    ['only the expert', [{ party: 'expert' }]],
+    ['only the client', [{ party: 'client' }]],
+    ['the expert beside an observer', [{ party: 'expert' }, { party: 'observer' }]],
+  ])('BAL-654 — leaves the waiting-party SMS armed with %s present', async (_label, open) => {
+    mockListOpen.mockResolvedValue(open);
+
+    await reconcileMeetingStatus(MEETING, END);
+
+    expect(mockCancelScheduled).not.toHaveBeenCalledWith(`meeting_waiting_sms:${MEETING_ID}`);
+  });
+
   /**
    * ⚠ CANCELLATION IS AN OPTIMISATION, NOT THE MECHANISM (R11). A `claimed` row is deliberately
    * uncancellable and a cancel can always be missed, so both promises carry a registered

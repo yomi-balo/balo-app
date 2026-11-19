@@ -87,7 +87,7 @@ function isUnknownZone(timeZone: string): boolean {
  * no stored timezone, and 12:00 UTC says nothing about where that person is. This is the same
  * convention `recipientDisplayZone` applies to email. An expert's UTC zone is taken at face value.
  */
-function isInsideSmsHours(now: Date, timeZone: string, calleeSide: CallSide): boolean {
+export function isInsideSmsHours(now: Date, timeZone: string, calleeSide: CallSide): boolean {
   if (calleeSide === 'client' && isUnknownZone(timeZone)) {
     return false;
   }

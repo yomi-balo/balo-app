@@ -4,6 +4,7 @@ import { createLogger } from '@balo/shared/logging';
 import {
   trackServer,
   CALL_NOW_SERVER_EVENTS,
+  MEETING_SERVER_EVENTS,
   NOTIFICATION_SERVER_EVENTS,
 } from '@balo/analytics/server';
 import { createRedisConnection, getRedis } from '../../lib/redis.js';
@@ -50,6 +51,40 @@ function trackCallSmsSent(payload: DeliveryPayload): void {
     log.warn(
       { ringId, error: error instanceof Error ? error.message : String(error) },
       'Failed to track call_sms_sent'
+    );
+  }
+}
+
+const WAITING_SMS_EVENTS: ReadonlySet<string> = new Set([
+  'meeting.waiting_for_client',
+  'meeting.waiting_for_expert',
+]);
+
+/**
+ * BAL-654 — `waiting_sms_sent`, once Brevo has accepted a waiting-party SMS. `distinct_id` is the
+ * MEETING id: there is no acting human, the recipient is the absent party.
+ *
+ * ⚠ NEVER THROWS, for the reason {@link trackCallSmsSent} gives.
+ */
+function trackWaitingSmsSent(payload: DeliveryPayload): void {
+  if (!WAITING_SMS_EVENTS.has(payload.event)) {
+    return;
+  }
+  const { meetingId, scheduledStartIso } = payload.payload;
+  if (typeof meetingId !== 'string' || typeof scheduledStartIso !== 'string') {
+    return;
+  }
+  try {
+    trackServer(MEETING_SERVER_EVENTS.WAITING_SMS_SENT, {
+      meeting_id: meetingId,
+      audience: payload.recipientSide ?? 'client',
+      seconds_after_start: Math.round((Date.now() - Date.parse(scheduledStartIso)) / 1000),
+      distinct_id: meetingId,
+    });
+  } catch (error) {
+    log.warn(
+      { meetingId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to track waiting_sms_sent'
     );
   }
 }
@@ -172,6 +207,7 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
       distinct_id: payload.recipientId,
     });
     trackCallSmsSent(payload);
+    trackWaitingSmsSent(payload);
     log.info({ template: payload.template, messageId }, 'SMS sent');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

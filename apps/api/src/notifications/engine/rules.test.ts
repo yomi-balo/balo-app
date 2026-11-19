@@ -1645,6 +1645,8 @@ describe('notificationRules', () => {
       expect(templates).toEqual([
         'call-ringing-sms-client:client',
         'call-ringing-sms-expert:expert',
+        'meeting-waiting-sms-client:client',
+        'meeting-waiting-sms-expert:expert',
         'reschedule-proposal-sent-sms:client',
         'session-grace-entered-sms:client',
         'session-near-wrap-sms:client',
@@ -2017,6 +2019,26 @@ describe('Call now rules (BAL-652)', () => {
 
     it('sends nothing when the ring side is missing', () => {
       expect(firing('call.ringing', { reachedBy: 'sms', expiresAt: LIVE_UNTIL })).toEqual([]);
+    });
+  });
+
+  describe.each([
+    ['meeting.waiting_for_client', 'client', 'meeting-waiting-sms-client'],
+    ['meeting.waiting_for_expert', 'expert', 'meeting-waiting-sms-expert'],
+  ])('%s (BAL-654)', (event, side, template) => {
+    it('has exactly one unconditional SMS rule to the resolved recipient', () => {
+      const rules = notificationRules[event] ?? [];
+
+      expect(rules).toHaveLength(1);
+      expect(rules[0]).toMatchObject({
+        channel: 'sms',
+        recipient: 'self',
+        recipientSide: side,
+        template,
+        timing: 'immediate',
+        priority: 'critical',
+      });
+      expect(rules[0]?.condition).toBeUndefined();
     });
   });
 

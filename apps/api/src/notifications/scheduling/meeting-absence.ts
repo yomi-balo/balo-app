@@ -53,6 +53,7 @@ import {
 import { resolveMeetingTimers } from '../../config/meeting-timers.js';
 import { resolveCaseBillingSubject } from '../../services/credit-session/case-billing-subject.js';
 import { scheduleNotification } from './schedule.js';
+import { isScheduledKeyDecided } from './scheduled-key-decided.js';
 import type { ScheduledRecheck } from './rechecks.js';
 
 const log = createLogger('meeting-absence-scheduling');
@@ -79,6 +80,61 @@ export function clientAbsentKey(meetingId: string): string {
 }
 
 /**
+ * Every skip reason each guard can record — defined ONCE, so the re-armable lists and the guards'
+ * own returns are typed from the same union and a typo fails `typecheck`.
+ */
+export const EXPERT_ABSENT_SKIP_REASONS = [
+  'malformed_payload',
+  'meeting_missing',
+  'meeting_terminal',
+  'already_decided',
+  'venue_unavailable',
+  'venue_ready_late',
+  'expert_joined_before_alert',
+] as const;
+export type ExpertAbsentSkipReason = (typeof EXPERT_ABSENT_SKIP_REASONS)[number];
+
+export const CLIENT_ABSENT_SKIP_REASONS = [
+  'malformed_payload',
+  'meeting_missing',
+  'meeting_terminal',
+  'already_decided',
+  'client_joined_before_nudge',
+  'expert_left_before_nudge',
+  'case_closed',
+  'no_recipients',
+] as const;
+export type ClientAbsentSkipReason = (typeof CLIENT_ABSENT_SKIP_REASONS)[number];
+
+/**
+ * BAL-654 (decision 10) — the skip reasons after which a promise may legitimately be armed again.
+ * Every other skip is final, and so is a published or claimed row: see {@link scheduledKeyDecided}.
+ *
+ *   · expert-absent: the room was not ready, or became ready late — the anchor moved. A terminally
+ *     `failed` row re-arms too ({@link EXPERT_ABSENT_DECIDED_OPTIONS}): the ops alert must not be
+ *     silenced by one failed delivery;
+ *   · client-absent: the expert left before the nudge — they may come back and wait again.
+ */
+const EXPERT_ABSENT_REARMABLE_REASONS: readonly ExpertAbsentSkipReason[] = [
+  'venue_unavailable',
+  'venue_ready_late',
+  'already_decided',
+];
+const CLIENT_ABSENT_REARMABLE_REASONS: readonly ClientAbsentSkipReason[] = [
+  'expert_left_before_nudge',
+  'already_decided',
+];
+const EXPERT_ABSENT_DECIDED_OPTIONS = { failedRearms: true } as const;
+
+function expertAbsentSkip(reason: ExpertAbsentSkipReason): { publish: false; reason: string } {
+  return { publish: false, reason };
+}
+
+function clientAbsentSkip(reason: ClientAbsentSkipReason): { publish: false; reason: string } {
+  return { publish: false, reason };
+}
+
+/**
  * ⚠ THE ONE STATE READ BOTH GUARDS SHARE — extracted rather than written twice.
  *
  * The two rechecks are structurally similar by nature (read the meeting, read its presence,
@@ -86,7 +142,7 @@ export function clientAbsentKey(meetingId: string): string {
  * duplication SonarCloud's new-code gate flags. It also means the two guards can never disagree
  * about what "the meeting's presence" is.
  */
-async function loadAbsenceState(
+export async function loadAbsenceState(
   meetingId: string
 ): Promise<{ meeting: Meeting; facts: PresenceFacts } | null> {
   const meeting = await meetingsRepository.findById(meetingId);
@@ -110,7 +166,7 @@ async function loadAbsenceState(
  * is still an invitation the client cannot use, so it is suppressed too. A read failure answers `false`: the
  * nudge is only ever suppressed on evidence, never on an error.
  */
-async function isCaseNoLongerActive(meetingId: string): Promise<boolean> {
+export async function isCaseNoLongerActive(meetingId: string): Promise<boolean> {
   try {
     const subject = await resolveCaseBillingSubject(meetingId, { requireActive: false });
     return subject !== undefined && !subject.isActive;
@@ -128,7 +184,7 @@ async function isCaseNoLongerActive(meetingId: string): Promise<boolean> {
 }
 
 /** `meetings.status` values on which either promise is moot. */
-function isTerminal(meeting: Meeting): boolean {
+export function isTerminal(meeting: Meeting): boolean {
   return meeting.status === 'ended' || meeting.status === 'cancelled';
 }
 
@@ -136,7 +192,7 @@ function isTerminal(meeting: Meeting): boolean {
  * ⚠ THE ONE PAYLOAD-FIELD READER BOTH GUARDS SHARE. A row written by an older build, or
  * hand-edited, is SKIPPED — never published blind against a meeting id we could not read.
  */
-function meetingIdFrom(payload: Record<string, unknown>): string | null {
+export function meetingIdFrom(payload: Record<string, unknown>): string | null {
   const meetingId = payload.meetingId;
   return typeof meetingId === 'string' && meetingId.length > 0 ? meetingId : null;
 }
@@ -159,15 +215,27 @@ function meetingIdFrom(payload: Record<string, unknown>): string | null {
 export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
   const meetingId = meetingIdFrom(row.payload);
   if (meetingId === null) {
-    return { publish: false, reason: 'malformed_payload' };
+    return expertAbsentSkip('malformed_payload');
   }
 
   const state = await loadAbsenceState(meetingId);
   if (state === null) {
-    return { publish: false, reason: 'meeting_missing' };
+    return expertAbsentSkip('meeting_missing');
   }
   if (isTerminal(state.meeting)) {
-    return { publish: false, reason: 'meeting_terminal' };
+    return expertAbsentSkip('meeting_terminal');
+  }
+  // ⚠ ONCE PER MEETING — closes the claim-window race a cancel cannot reach, and a sibling the
+  // arm site's own read missed.
+  if (
+    await isScheduledKeyDecided(
+      expertAbsentKey(meetingId),
+      EXPERT_ABSENT_REARMABLE_REASONS,
+      row.id,
+      EXPERT_ABSENT_DECIDED_OPTIONS
+    )
+  ) {
+    return expertAbsentSkip('already_decided');
   }
 
   // ⚠⚠ BAL-581 — THE ALERT BLAMES THE EXPERT; IT MAY ONLY FIRE WHEN A ROOM EXISTED FOR THE
@@ -178,7 +246,7 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
   if (venueReadyAt === null) {
     // The venue is still not ready — this meeting is the `meeting.unprovisioned` admin alert's,
     // not a missing expert's.
-    return { publish: false, reason: 'venue_unavailable' };
+    return expertAbsentSkip('venue_unavailable');
   }
   const anchor = venueAbsenceAnchor(state.meeting.scheduledStart, venueReadyAt);
   // ⚠ A promise armed before the room existed (an older build's arm, or clock skew): skip — the
@@ -187,11 +255,11 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
     anchor !== null &&
     Date.now() < anchor.getTime() + resolveMeetingTimers().expertAbsentAlertMs
   ) {
-    return { publish: false, reason: 'venue_ready_late' };
+    return expertAbsentSkip('venue_ready_late');
   }
 
   if (state.facts.expertEverPresent) {
-    return { publish: false, reason: 'expert_joined_before_alert' };
+    return expertAbsentSkip('expert_joined_before_alert');
   }
 
   const minutesPastStart = Number(row.payload.minutesPastStart);
@@ -252,26 +320,31 @@ export const meetingExpertAbsentRecheck: ScheduledRecheck = async (row) => {
 export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   const meetingId = meetingIdFrom(row.payload);
   if (meetingId === null) {
-    return { publish: false, reason: 'malformed_payload' };
+    return clientAbsentSkip('malformed_payload');
   }
 
   const state = await loadAbsenceState(meetingId);
   if (state === null) {
-    return { publish: false, reason: 'meeting_missing' };
+    return clientAbsentSkip('meeting_missing');
   }
   if (isTerminal(state.meeting)) {
-    return { publish: false, reason: 'meeting_terminal' };
+    return clientAbsentSkip('meeting_terminal');
+  }
+  if (
+    await isScheduledKeyDecided(clientAbsentKey(meetingId), CLIENT_ABSENT_REARMABLE_REASONS, row.id)
+  ) {
+    return clientAbsentSkip('already_decided');
   }
   if (state.facts.clientSideEverPresent) {
-    return { publish: false, reason: 'client_joined_before_nudge' };
+    return clientAbsentSkip('client_joined_before_nudge');
   }
   if (!state.facts.expertOpen) {
-    return { publish: false, reason: 'expert_left_before_nudge' };
+    return clientAbsentSkip('expert_left_before_nudge');
   }
   // R6F-13, widened by D17.5 — the client cannot join a case that is no longer active, whenever it closed,
   // so there is no one to nudge.
   if (await isCaseNoLongerActive(meetingId)) {
-    return { publish: false, reason: 'case_closed' };
+    return clientAbsentSkip('case_closed');
   }
 
   // ⚠⚠ A MISSING OR BLANK `companyId` IS A MALFORMED PAYLOAD, EXACTLY LIKE A MISSING
@@ -283,7 +356,7 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
   // `meetingId`; this is the same class of defect and gets the same treatment.
   const companyId = row.payload.companyId;
   if (typeof companyId !== 'string' || companyId.length === 0) {
-    return { publish: false, reason: 'malformed_payload' };
+    return clientAbsentSkip('malformed_payload');
   }
 
   // ⚠ AND AN EMPTY RESOLVED LIST IS A SKIP FOR THE SAME REASON, NOT A SILENT SEND. Both
@@ -296,7 +369,7 @@ export const meetingClientAbsentRecheck: ScheduledRecheck = async (row) => {
       { meetingId, companyId },
       'Client nudge has no live recipient on the owning company — skipping rather than recording a delivery that reached nobody'
     );
-    return { publish: false, reason: 'no_recipients' };
+    return clientAbsentSkip('no_recipients');
   }
 
   // ⚠ KEYED ON THE ROW'S OWN ATTEMPT COUNTER, SO ONE PROMISE EMITS AT MOST ONE EVENT — the same
@@ -346,6 +419,17 @@ export interface ScheduleExpertAbsentAlertInput {
 export async function scheduleExpertAbsentAlert(
   input: ScheduleExpertAbsentAlertInput
 ): Promise<void> {
+  // ⚠ THE KEY FOLDS ONLY ONTO PENDING ROWS — a fired alert must not be armed again (decision 10).
+  if (
+    await isScheduledKeyDecided(
+      expertAbsentKey(input.meetingId),
+      EXPERT_ABSENT_REARMABLE_REASONS,
+      undefined,
+      EXPERT_ABSENT_DECIDED_OPTIONS
+    )
+  ) {
+    return;
+  }
   const fireAt = new Date(input.absenceAnchor.getTime() + input.timers.expertAbsentAlertMs);
   const { outcome } = await scheduleNotification(
     'meeting.expert_absent',
@@ -394,6 +478,11 @@ export interface ScheduleClientAbsentNudgeInput {
 export async function scheduleClientAbsentNudge(
   input: ScheduleClientAbsentNudgeInput
 ): Promise<void> {
+  if (
+    await isScheduledKeyDecided(clientAbsentKey(input.meetingId), CLIENT_ABSENT_REARMABLE_REASONS)
+  ) {
+    return;
+  }
   // R6F-13, widened by D17.5 — a case that is no longer active, whenever it closed, is never nudged; the
   // fire-time recheck applies the same rule.
   if (await isCaseNoLongerActive(input.meetingId)) {

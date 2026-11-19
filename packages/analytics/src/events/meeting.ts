@@ -75,6 +75,11 @@ export const MEETING_SERVER_EVENTS = {
    * those repairs are stranded meetings.
    */
   MEETING_PRESENCE_RECONCILED: 'meeting_presence_reconciled',
+  /**
+   * BAL-654 — the "someone is waiting in your consultation" SMS was ACCEPTED by the SMS
+   * provider (not merely scheduled or published). One per consultation.
+   */
+  WAITING_SMS_SENT: 'waiting_sms_sent',
 } as const;
 
 /**
@@ -407,6 +412,19 @@ export interface MeetingServerEventMap {
     /** `true` when the meeting was past the sweep's in-window lookback (the stranded arm). */
     stranded: boolean;
     /** The MEETING id — the sweep has no acting user. */
+    distinct_id: string;
+  };
+
+  /**
+   * BAL-654 — the waiting-party SMS was accepted by the provider. `audience` is the RECIPIENT's
+   * side; `seconds_after_start` is the lag from `scheduled_start`, so the ≈60 s promise is
+   * measurable. Skips and provider failures emit nothing. NO PII: ids, a closed label, a count.
+   */
+  [MEETING_SERVER_EVENTS.WAITING_SMS_SENT]: {
+    meeting_id: string;
+    audience: 'client' | 'expert';
+    seconds_after_start: number;
+    /** The MEETING id — there is no acting human. */
     distinct_id: string;
   };
 }

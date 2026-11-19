@@ -1535,6 +1535,32 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     },
   ],
 
+  // BAL-654 — WAITING-PARTY SMS, one event per audience. The scheduled recheck
+  // (`scheduling/meeting-waiting-sms.ts`) has already resolved the single recipient, gated
+  // consent, hours and presence, and written `recipientUserId`, so these rules carry no
+  // condition. `recipient: 'self'` reads that field; the SMS adapter re-gates client opt-in by
+  // `recipientSide`. `critical`: the other party is in the room now.
+  'meeting.waiting_for_client': [
+    {
+      channel: 'sms',
+      recipient: 'self',
+      recipientSide: 'client',
+      template: 'meeting-waiting-sms-client',
+      timing: 'immediate',
+      priority: 'critical',
+    },
+  ],
+  'meeting.waiting_for_expert': [
+    {
+      channel: 'sms',
+      recipient: 'self',
+      recipientSide: 'expert',
+      template: 'meeting-waiting-sms-expert',
+      timing: 'immediate',
+      priority: 'critical',
+    },
+  ],
+
   // MISSED CALL, BELL — one item per missed ring. ⚠ KEEP AT LEAST ONE RULE: the delayed email
   // is scheduled by the worker's follow-up (`scheduleMissedCallEmailFromContext`), and an event
   // with no rules returns before follow-ups run.

@@ -47,3 +47,15 @@ export {
   CALL_MISSED_EMAIL_DELAY_MS,
   CALL_MISSED_EMAIL_RECHECK,
 } from './call-missed.js';
+
+// BAL-654 — the waiting-party SMS, its fire-time guard, and the once-per-key history rule.
+export {
+  meetingWaitingSmsKey,
+  meetingWaitingSmsRecheck,
+  scheduleWaitingPartySms,
+  waitingSmsDirection,
+  MEETING_WAITING_SMS_RECHECK,
+  REARMABLE_WAITING_SMS_SKIP_REASONS,
+} from './meeting-waiting-sms.js';
+export type { ScheduleWaitingPartySmsInput, WaitingSmsDirection } from './meeting-waiting-sms.js';
+export { isScheduledKeyDecided, scheduledKeyDecided } from './scheduled-key-decided.js';

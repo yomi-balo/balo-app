@@ -52,13 +52,14 @@ describe('SCHEDULED_RECHECKS', () => {
    * BAL-134's expert-absent alert is the one Balo has operationally committed to. Registering a
    * name without its consumer, or shipping a consumer without its name, must come past here.
    */
-  it('carries exactly five guards: BAL-424 conversation_unread + BAL-134 absence pair + BAL-411 reschedule_proposal_unanswered + BAL-652 call_missed_email', () => {
+  it('carries exactly six guards: BAL-424 conversation_unread + BAL-134 absence pair + BAL-411 reschedule_proposal_unanswered + BAL-652 call_missed_email + BAL-654 meeting_waiting_sms', () => {
     expect(Object.keys(BUILT_IN_RECHECKS)).toEqual([
       'conversation_unread',
       'meeting_expert_absent',
       'meeting_client_absent',
       'reschedule_proposal_unanswered',
       'call_missed_email',
+      'meeting_waiting_sms',
     ]);
   });
 
@@ -127,7 +128,7 @@ describe('runRecheck', () => {
   });
 
   it('UnknownRecheckError carries the offending name for the log line', async () => {
-    const error = await runRecheck(row({ recheck: 'gone' })).catch((e: unknown) => e);
+    const error = await runRecheck(row({ recheck: 'gone' })).catch((error_: unknown) => error_);
 
     expect(error).toBeInstanceOf(UnknownRecheckError);
     expect((error as UnknownRecheckError).recheck).toBe('gone');

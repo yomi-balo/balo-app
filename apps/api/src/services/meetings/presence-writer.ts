@@ -74,6 +74,7 @@ import {
   clientAbsentKey,
   expertAbsentKey,
 } from '../../notifications/scheduling/meeting-absence.js';
+import { meetingWaitingSmsKey } from '../../notifications/scheduling/meeting-waiting-sms.js';
 import { cancelScheduledNotification } from '../../notifications/scheduling/schedule.js';
 
 const log = createLogger('meeting-presence-writer');
@@ -675,7 +676,8 @@ async function reconcileWhileRinging(input: {
 }
 
 /**
- * Best-effort disarm of the two absence promises. ⚠ NEVER FATAL — see
+ * Best-effort disarm of the two absence promises, and of the waiting-party SMS once both sides
+ * are present. ⚠ NEVER FATAL — see
  * {@link reconcileMeetingStatus}'s last paragraph. Wrapped as ONE helper rather than two
  * try/catch blocks so the "cancel is an optimisation" reasoning has a single home.
  */
@@ -690,6 +692,10 @@ async function cancelAbsenceReminders(input: {
   }
   if (input.clientPresent) {
     keys.push(clientAbsentKey(input.meetingId));
+  }
+  // BAL-654 — once BOTH sides are present nobody is waiting, whichever of them arrived last.
+  if (input.expertPresent && input.clientPresent) {
+    keys.push(meetingWaitingSmsKey(input.meetingId));
   }
 
   for (const key of keys) {

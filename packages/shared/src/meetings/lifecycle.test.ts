@@ -147,6 +147,8 @@ describe('summarisePresence', () => {
       anyOpen: false,
       lastLeftAt: null,
       expertFirstJoinedAt: null,
+      clientSideOpen: false,
+      clientSideFirstJoinedAt: null,
     });
   });
 
@@ -157,6 +159,38 @@ describe('summarisePresence', () => {
     ];
     expect(summarisePresence(intervals).expertFirstJoinedAt).toEqual(at(2));
     expect(summarisePresence([...intervals].reverse()).expertFirstJoinedAt).toEqual(at(2));
+  });
+
+  it('reports an open client-side interval and the earliest client join, whatever the order', () => {
+    const intervals: LifecyclePresenceInterval[] = [
+      { party: 'client', joinedAt: at(9), leftAt: null },
+      { party: 'client', joinedAt: at(3), leftAt: at(5) },
+    ];
+    for (const ordered of [intervals, [...intervals].reverse()]) {
+      const facts = summarisePresence(ordered);
+      expect(facts.clientSideOpen).toBe(true);
+      expect(facts.clientSideFirstJoinedAt).toEqual(at(3));
+    }
+  });
+
+  it('reports no open client side once every client interval has closed', () => {
+    const facts = summarisePresence([{ party: 'client', joinedAt: at(1), leftAt: at(4) }]);
+    expect(facts.clientSideOpen).toBe(false);
+    expect(facts.clientSideFirstJoinedAt).toEqual(at(1));
+  });
+
+  it('never counts an observer toward the client-side open or first-join facts', () => {
+    const facts = summarisePresence([{ party: 'observer', joinedAt: at(1), leftAt: null }]);
+    expect(facts.clientSideOpen).toBe(false);
+    expect(facts.clientSideFirstJoinedAt).toBeNull();
+  });
+
+  it('skips a client interval with a non-finite endpoint', () => {
+    const facts = summarisePresence([
+      { party: 'client', joinedAt: new Date(Number.NaN), leftAt: null },
+    ]);
+    expect(facts.clientSideOpen).toBe(false);
+    expect(facts.clientSideFirstJoinedAt).toBeNull();
   });
 
   it('reports the LATEST left_at, and reports the room empty only when nothing is open', () => {
@@ -1678,11 +1712,13 @@ describe('resolveWaitingPhase — the 2×4 matrix', () => {
 // ── A TYPE-LEVEL WITNESS, so a new fact cannot be added without a decision ─────────────────
 
 describe('PresenceFacts', () => {
-  it('names exactly the six structural facts the rules read', () => {
+  it('names exactly the eight structural facts the rules read', () => {
     const facts: PresenceFacts = summarisePresence([]);
     expect(Object.keys(facts).sort((a, b) => a.localeCompare(b))).toEqual([
       'anyOpen',
       'clientSideEverPresent',
+      'clientSideFirstJoinedAt',
+      'clientSideOpen',
       'expertEverPresent',
       'expertFirstJoinedAt',
       'expertOpen',
