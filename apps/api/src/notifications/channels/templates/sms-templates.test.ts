@@ -2,9 +2,11 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { getSmsTemplate, listSmsTemplates } from './sms-templates.js';
 
 describe('getSmsTemplate', () => {
-  it('returns correct text for booking-reminder-sms', () => {
-    const result = getSmsTemplate('booking-reminder-sms', {});
-    expect(result).toBe('Balo: Reminder - your consultation starts in 30 min. Join at balo.expert');
+  it('no longer registers the orphan booking-reminder-sms', () => {
+    expect(listSmsTemplates()).not.toContain('booking-reminder-sms');
+    expect(() => getSmsTemplate('booking-reminder-sms', {})).toThrow(
+      'Unknown SMS template: booking-reminder-sms'
+    );
   });
 
   it('throws for unknown template name', () => {
@@ -28,6 +30,7 @@ describe('getSmsTemplate', () => {
       scheduledStartIso: '2026-11-19T10:00:00.000Z',
       recipientTimeZone: 'Australia/Sydney',
       waitingPartyName: 'x'.repeat(100),
+      joinPath: '/meetings/3f2b8c1e-5d4a-4e7b-9c1d-0a6b7c8d9e0f/call',
     };
 
     for (const name of templateNames) {
@@ -396,6 +399,74 @@ describe('getSmsTemplate', () => {
       expect(listSmsTemplates()).toEqual(
         expect.arrayContaining(['meeting-waiting-sms-client', 'meeting-waiting-sms-expert'])
       );
+    });
+  });
+
+  describe('pre-call reminder SMS (BAL-658)', () => {
+    const JOIN_PATH = '/meetings/3f2b8c1e-5d4a-4e7b-9c1d-0a6b7c8d9e0f/call';
+    const BASE = {
+      scheduledStartIso: '2026-11-19T10:00:00.000Z',
+      recipientTimeZone: 'Australia/Sydney',
+      joinPath: JOIN_PATH,
+    };
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('states the local start time and links to the call', () => {
+      vi.stubEnv('APP_URL', 'https://balo.expert');
+      expect(getSmsTemplate('meeting-reminder-sms', BASE)).toBe(
+        `Balo: Your call starts at 21:00. Reschedule or cancel in Balo. Join: https://balo.expert${JOIN_PATH}`
+      );
+    });
+
+    it.each([null, 'UTC', '', 'Not/AZone'])(
+      'says "in 30 min" when the zone %j is not usable',
+      (zone) => {
+        vi.stubEnv('APP_URL', 'https://balo.expert');
+        expect(getSmsTemplate('meeting-reminder-sms', { ...BASE, recipientTimeZone: zone })).toBe(
+          `Balo: Your call starts in 30 min. Reschedule or cancel in Balo. Join: https://balo.expert${JOIN_PATH}`
+        );
+      }
+    );
+
+    it('says "in 30 min" when the start is unreadable', () => {
+      vi.stubEnv('APP_URL', 'https://balo.expert');
+      expect(
+        getSmsTemplate('meeting-reminder-sms', { ...BASE, scheduledStartIso: 'nope' })
+      ).toContain('starts in 30 min.');
+    });
+
+    it('falls back to the bare app origin without a join path', () => {
+      vi.stubEnv('APP_URL', 'https://balo.expert');
+      expect(getSmsTemplate('meeting-reminder-sms', { ...BASE, joinPath: undefined })).toMatch(
+        /Join: https:\/\/balo\.expert$/
+      );
+    });
+
+    it.each(['Australia/Sydney', null])(
+      'stays within 160 characters with a 31-character origin and the zone %s',
+      (zone) => {
+        vi.stubEnv('APP_URL', 'https://app.staging.balo.expert');
+        const body = getSmsTemplate('meeting-reminder-sms', { ...BASE, recipientTimeZone: zone });
+        expect(body.length).toBeLessThanOrEqual(160);
+      }
+    );
+
+    it('names nobody and carries no address', () => {
+      vi.stubEnv('APP_URL', 'https://balo.expert');
+      const body = getSmsTemplate('meeting-reminder-sms', {
+        ...BASE,
+        counterpartyName: 'Sandy',
+        email: 'sandy@example.com',
+      });
+      expect(body).not.toContain('Sandy');
+      expect(body).not.toContain('@');
+    });
+
+    it('registers the key', () => {
+      expect(listSmsTemplates()).toContain('meeting-reminder-sms');
     });
   });
 });

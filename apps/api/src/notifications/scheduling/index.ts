@@ -58,4 +58,17 @@ export {
   REARMABLE_WAITING_SMS_SKIP_REASONS,
 } from './meeting-waiting-sms.js';
 export type { ScheduleWaitingPartySmsInput, WaitingSmsDirection } from './meeting-waiting-sms.js';
+// BAL-658 — the pre-call reminders (24h / 1h / 30m), armed by the lifecycle sweep.
+export {
+  armMeetingReminders,
+  armWindowFor,
+  meetingReminderKey,
+  meetingReminderRecheck,
+  MEETING_REMINDER_ARM_LEAD_MS,
+  MEETING_REMINDER_ARM_TOLERANCE_MS,
+  MEETING_REMINDER_BATCH_LIMIT,
+  MEETING_REMINDER_RECHECK,
+  MEETING_REMINDER_SKIP_REASONS,
+  REARMABLE_MEETING_REMINDER_SKIP_REASONS,
+} from './meeting-reminders.js';
 export { isScheduledKeyDecided, scheduledKeyDecided } from './scheduled-key-decided.js';

@@ -1645,6 +1645,8 @@ describe('notificationRules', () => {
       expect(templates).toEqual([
         'call-ringing-sms-client:client',
         'call-ringing-sms-expert:expert',
+        'meeting-reminder-sms:client',
+        'meeting-reminder-sms:expert',
         'meeting-waiting-sms-client:client',
         'meeting-waiting-sms-expert:expert',
         'reschedule-proposal-sent-sms:client',
@@ -2059,6 +2061,65 @@ describe('Call now rules (BAL-652)', () => {
         priority: 'critical',
       });
       expect(rules[0]?.condition).toBeUndefined();
+    });
+  });
+
+  describe.each([
+    ['meeting.reminder_to_client', 'client'],
+    ['meeting.reminder_to_expert', 'expert'],
+  ] as const)('%s (BAL-658)', (event, audience) => {
+    const channelsAt = (offset: string): string[] =>
+      firing(event, { offset })
+        .map((rule) => rule.channel)
+        .sort((a, b) => a.localeCompare(b));
+
+    it('every rule is a single-recipient `self` rule', () => {
+      const rules = notificationRules[event] ?? [];
+
+      expect(rules.length).toBeGreaterThan(0);
+      for (const rule of rules) {
+        expect(rule.recipient).toBe('self');
+        expect(rule.timing).toBe('immediate');
+      }
+    });
+
+    it('maps the 24h offset to email only', () => {
+      expect(channelsAt('24h')).toEqual(['email']);
+    });
+
+    it('maps the 1h offset to email and in-app', () => {
+      expect(channelsAt('1h')).toEqual(['email', 'in-app']);
+    });
+
+    it('maps the 30m offset to SMS only, declaring the audience side', () => {
+      const fired = firing(event, { offset: '30m' });
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({
+        channel: 'sms',
+        recipientSide: audience,
+        template: 'meeting-reminder-sms',
+        priority: 'critical',
+      });
+    });
+
+    it.each([undefined, 'nope', 42, 'constructor', 'toString'])(
+      'fires nothing for the offset %s',
+      (offset) => {
+        expect(firing(event, { offset })).toEqual([]);
+      }
+    );
+
+    it('names the per-audience template for email and in-app, and both registries carry it', () => {
+      const rules = notificationRules[event] ?? [];
+      const template = `meeting-reminder-${audience}`;
+
+      expect(rules.filter((r) => r.channel !== 'sms').map((r) => r.template)).toEqual([
+        template,
+        template,
+      ]);
+      expect(() => getEmailTemplate(template, {})).not.toThrow();
+      expect(getInAppTemplate(template, {}).title).toBe('Starting in 1 hour');
     });
   });
 

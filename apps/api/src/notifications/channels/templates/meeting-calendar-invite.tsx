@@ -1,4 +1,4 @@
-import { Button, Heading, Section, Text } from '@react-email/components';
+import { Button, Heading, Link, Section, Text } from '@react-email/components';
 import {
   colors,
   shared,
@@ -65,7 +65,12 @@ interface MeetingCalendarInviteEmailBaseProps {
  */
 export type MeetingCalendarInviteEmailProps = MeetingCalendarInviteEmailBaseProps &
   (
-    | { readonly audience: 'member'; readonly memberJoinUrl: string }
+    | {
+        readonly audience: 'member';
+        readonly memberJoinUrl: string;
+        /** BAL-658 — the page the call lives on; absent ⇒ no Reschedule link. */
+        readonly memberRescheduleUrl?: string;
+      }
     | { readonly audience: 'guest' }
   );
 
@@ -202,6 +207,7 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
             <JoinAffordance
               audience={audience}
               memberJoinUrl={audience === 'member' ? props.memberJoinUrl : undefined}
+              memberRescheduleUrl={audience === 'member' ? props.memberRescheduleUrl : undefined}
             />
             {addToCalendarUrl === undefined ? null : (
               <Section style={{ ...shared.ctaWrapper, margin: '0 0 20px' }}>
@@ -235,7 +241,11 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
 
 /** The member CTA / guest note pair — extracted so the withdrawal suppression is ONE branch. */
 function JoinAffordance(
-  props: Readonly<{ audience: CalendarInviteEmailAudience; memberJoinUrl: string | undefined }>
+  props: Readonly<{
+    audience: CalendarInviteEmailAudience;
+    memberJoinUrl: string | undefined;
+    memberRescheduleUrl: string | undefined;
+  }>
 ) {
   if (props.audience === 'member') {
     return (
@@ -243,6 +253,13 @@ function JoinAffordance(
         <Button style={shared.smallCtaButton} href={props.memberJoinUrl}>
           Open in Balo →
         </Button>
+        {props.memberRescheduleUrl === undefined ? null : (
+          <Text style={{ ...shared.bodyText, fontSize: '13px', margin: '12px 0 0' }}>
+            <Link href={props.memberRescheduleUrl} style={shared.footerLink}>
+              Reschedule in Balo
+            </Link>
+          </Text>
+        )}
       </Section>
     );
   }

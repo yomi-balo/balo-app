@@ -18,6 +18,7 @@ const {
   mockScheduleExpertAbsent,
   mockScheduleClientAbsent,
   mockScheduleWaitingPartySms,
+  mockArmMeetingReminders,
   mockIsWaitingSmsDecided,
   mockDeleteRoom,
   mockTrackServer,
@@ -54,6 +55,7 @@ const {
   mockScheduleExpertAbsent: vi.fn(),
   mockScheduleClientAbsent: vi.fn(),
   mockScheduleWaitingPartySms: vi.fn(),
+  mockArmMeetingReminders: vi.fn(),
   mockIsWaitingSmsDecided: vi.fn(),
   mockDeleteRoom: vi.fn(),
   mockTrackServer: vi.fn(),
@@ -157,6 +159,9 @@ vi.mock('../notifications/scheduling/meeting-waiting-sms.js', async (importOrigi
   ...(await importOriginal<typeof import('../notifications/scheduling/meeting-waiting-sms.js')>()),
   scheduleWaitingPartySms: mockScheduleWaitingPartySms,
   isWaitingSmsDecided: mockIsWaitingSmsDecided,
+}));
+vi.mock('../notifications/scheduling/meeting-reminders.js', () => ({
+  armMeetingReminders: mockArmMeetingReminders,
 }));
 vi.mock('../services/daily/rooms.js', () => ({
   dailyRoomTeardown: { deleteRoom: mockDeleteRoom },
@@ -303,6 +308,7 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockListStranded.mockResolvedValue([]);
     mockListByMeeting.mockResolvedValue([]);
     mockIsWaitingSmsDecided.mockResolvedValue(false);
+    mockArmMeetingReminders.mockResolvedValue(undefined);
     mockListRingsForMeeting.mockResolvedValue([]);
     mockListOverdueRinging.mockResolvedValue([]);
     mockEndRing.mockResolvedValue({ ended: true });
@@ -356,6 +362,35 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       })
     ).resolves.toMatchObject({ scanned: 0, stranded: 0, terminated: 0 });
     expect(getAllPresence).not.toHaveBeenCalled();
+  });
+
+  describe('BAL-658 — pre-call reminder arming', () => {
+    it('arms the reminders on a tick with no candidates at all (before the empty-tick return)', async () => {
+      await expect(runMeetingLifecycleSweep(at(30), () => {}, EMPTY_READER)).resolves.toMatchObject(
+        { scanned: 0 }
+      );
+
+      expect(mockArmMeetingReminders).toHaveBeenCalledTimes(1);
+      expect(mockArmMeetingReminders).toHaveBeenCalledWith(at(30));
+    });
+
+    it('a throw from the reminder pass is logged and does not fail the tick', async () => {
+      mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+      mockArmMeetingReminders.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        runMeetingLifecycleSweep(
+          at(30),
+          () => {},
+          reader({ [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }] })
+        )
+      ).resolves.toMatchObject({ scanned: 1 });
+
+      expect(mockErrorLog).toHaveBeenCalledWith(
+        expect.objectContaining({ error: 'db down' }),
+        'Meeting reminder arming failed — the next tick retries'
+      );
+    });
   });
 
   it('asks for the three NON-TERMINAL statuses, inside a bounded lookback', async () => {

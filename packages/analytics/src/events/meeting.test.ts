@@ -34,6 +34,8 @@ describe('MEETING_SERVER_EVENTS', () => {
       'MEETING_PRESENCE_RECONCILED',
       'MEETING_PROVISION_FAILED',
       'MEETING_PROVISIONED',
+      // BAL-658. `MEETING_P…` < `MEETING_R…` < `MEETING_S…`.
+      'MEETING_REMINDER_SENT',
       'MEETING_STARTED',
       'MEETING_VENUE_UNAVAILABLE',
       'MEETING_WAITING_ABANDONED',
@@ -58,6 +60,31 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
     expect(MEETING_SERVER_EVENTS.MEETING_PRESENCE_RECONCILED).toBe('meeting_presence_reconciled');
     expect(MEETING_SERVER_EVENTS.WAITING_SMS_SENT).toBe('waiting_sms_sent');
+    expect(MEETING_SERVER_EVENTS.MEETING_REMINDER_SENT).toBe('meeting_reminder_sent');
+  });
+
+  it('`meeting_reminder_sent` closes offset, channel and audience to their literal unions', () => {
+    const sent: MeetingServerEventMap['meeting_reminder_sent'] = {
+      meeting_id: 'meeting-1',
+      offset: '1h',
+      channel: 'in_app',
+      audience: 'expert',
+      context_type: 'case',
+      distinct_id: 'user-1',
+    };
+    const badOffset: MeetingServerEventMap['meeting_reminder_sent'] = {
+      ...sent,
+      // @ts-expect-error — `2h` is not a reminder offset.
+      offset: '2h',
+    };
+    const badChannel: MeetingServerEventMap['meeting_reminder_sent'] = {
+      ...sent,
+      // @ts-expect-error — `in-app` (hyphen) is the engine's name; analytics uses `in_app`.
+      channel: 'in-app',
+    };
+    expect(sent.offset).toBe('1h');
+    expect(badOffset.meeting_id).toBe('meeting-1');
+    expect(badChannel.meeting_id).toBe('meeting-1');
   });
 
   it('⚠ `waiting_sms_sent.audience` is a CLOSED two-value union', () => {

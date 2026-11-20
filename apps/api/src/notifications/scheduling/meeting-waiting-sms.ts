@@ -36,12 +36,7 @@
  * payload (never substituted): a disagreement skips `owner_mismatch`.
  */
 import { randomUUID } from 'node:crypto';
-import {
-  clientPartyRecipientsRepository,
-  companiesRepository,
-  meetingRingsRepository,
-  usersRepository,
-} from '@balo/db';
+import { companiesRepository, meetingRingsRepository, usersRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { expertClockStart, type PresenceFacts } from '@balo/shared/meetings';
 import { WAITING_PARTY_SMS_DELAY_MS } from '../../config/meeting-timers.js';
@@ -50,8 +45,6 @@ import {
   deliveringExpertUserId,
 } from '../../services/meetings/delivering-party.js';
 import { meetingOrigin } from '../../services/call-now/meeting-origin.js';
-import { offlineCalleePresence } from '../../services/call-now/callee-presence.js';
-import { smsEligibility } from '../../services/call-now/sms-reach.js';
 import type { MeetingWaitingSmsPayload, WaitingSmsEvent } from '../events.js';
 import {
   isCaseNoLongerActive,
@@ -59,7 +52,11 @@ import {
   loadAbsenceState,
   meetingIdFrom,
 } from './meeting-absence.js';
-import { usableRecipientZone } from '../channels/templates/sms-templates.js';
+import {
+  resolveMeetingSingleRecipient,
+  smsIneligibilityHoursOpen,
+  type SmsIneligibleReason,
+} from './meeting-single-recipient.js';
 import type { ScheduledRecheck } from './rechecks.js';
 import { scheduleNotification } from './schedule.js';
 import { isScheduledKeyDecided } from './scheduled-key-decided.js';
@@ -101,12 +98,7 @@ export const WAITING_SMS_SKIP_REASONS = [
   'no_booker',
   'no_expert',
 ] as const;
-export type WaitingSmsSkipReason =
-  | (typeof WAITING_SMS_SKIP_REASONS)[number]
-  | Exclude<
-      Extract<ReturnType<typeof smsEligibility>, { eligible: false }>['reason'],
-      'outside_hours'
-    >;
+export type WaitingSmsSkipReason = (typeof WAITING_SMS_SKIP_REASONS)[number] | SmsIneligibleReason;
 
 /**
  * The skips after which the promise may be armed again: the waiter walked out before the fire
@@ -228,50 +220,44 @@ async function resolveBookerRecipient(
   companyId: string,
   expertProfileId: string | null
 ): Promise<RecipientResult> {
-  const bookerUserId = await clientPartyRecipientsRepository.findMeetingBookerUserId(meetingId);
-  if (
-    bookerUserId === null ||
-    !(await clientPartyRecipientsRepository.bookerStillParticipatesInCompany(
-      companyId,
-      bookerUserId
-    ))
-  ) {
-    return { ok: false, reason: 'no_booker' };
+  const resolved = await resolveMeetingSingleRecipient('client', {
+    meetingId,
+    companyId,
+    expertProfileId,
+  });
+  if (!resolved.ok) {
+    return resolved;
   }
-  const [context, expertUserId] = await Promise.all([
-    usersRepository.findTimezoneContext(bookerUserId, undefined),
-    deliveringExpertUserId(expertProfileId),
-  ]);
   return {
     ok: true,
     recipient: {
-      userId: bookerUserId,
-      timeZone: usableRecipientZone(context?.savedTimezone),
-      name: await expertFirstName(expertUserId),
+      userId: resolved.userId,
+      timeZone: resolved.timeZone,
+      name: await expertFirstName(await deliveringExpertUserId(expertProfileId)),
     },
   };
 }
 
 /** EXPERT direction — the delivering expert's own user, never their agency's owners or admins. */
 async function resolveExpertRecipient(
+  meetingId: string,
   companyId: string,
   expertProfileId: string | null
 ): Promise<RecipientResult> {
-  const expertUserId = await deliveringExpertUserId(expertProfileId);
-  if (expertUserId === null) {
-    return { ok: false, reason: 'no_expert' };
+  const resolved = await resolveMeetingSingleRecipient('expert', {
+    meetingId,
+    companyId,
+    expertProfileId,
+  });
+  if (!resolved.ok) {
+    return resolved;
   }
-  const [context, company] = await Promise.all([
-    usersRepository.findTimezoneContext(expertUserId, expertProfileId ?? undefined),
-    companiesRepository.findNameById(companyId),
-  ]);
+  const company = await companiesRepository.findNameById(companyId);
   return {
     ok: true,
     recipient: {
-      userId: expertUserId,
-      timeZone:
-        usableRecipientZone(context?.expert?.timezone) ??
-        usableRecipientZone(context?.savedTimezone),
+      userId: resolved.userId,
+      timeZone: resolved.timeZone,
       name: company?.name ?? null,
     },
   };
@@ -315,31 +301,6 @@ export const meetingWaitingSmsRecheck: ScheduledRecheck = async (row) => {
   }
   return decision;
 };
-
-/**
- * BAL-652's SMS gates (verified number, client opt-in, not active in the app) WITHOUT quiet hours:
- * the recipient booked this time, so the text is expected whenever it falls. `null` = eligible.
- */
-async function waitingSmsIneligibility(
-  calleeSide: 'client' | 'expert',
-  userId: string
-): Promise<WaitingSmsSkipReason | null> {
-  const eligibility = smsEligibility({
-    calleeSide,
-    consent: await usersRepository.findClientSmsConsent(userId),
-    calleeOnline: await offlineCalleePresence.isOnline(userId),
-    withinCallHours: true,
-  });
-  if (eligibility.eligible) {
-    return null;
-  }
-  // `withinCallHours` is held open above, so `smsEligibility` never answers `outside_hours`; the
-  // narrowing keeps that a compile-time fact rather than a cast.
-  if (eligibility.reason === 'outside_hours') {
-    throw new Error('smsEligibility answered outside_hours with withinCallHours held open');
-  }
-  return eligibility.reason;
-}
 
 async function decideWaitingSms(
   row: Parameters<ScheduledRecheck>[0]
@@ -396,13 +357,13 @@ async function decideWaitingSms(
   const resolved =
     armed === 'to_client'
       ? await resolveBookerRecipient(meetingId, companyId, expertProfileId)
-      : await resolveExpertRecipient(companyId, expertProfileId);
+      : await resolveExpertRecipient(meetingId, companyId, expertProfileId);
   if (!resolved.ok) {
     return waitingSkip(resolved.reason);
   }
   const { userId, timeZone, name } = resolved.recipient;
 
-  const ineligible = await waitingSmsIneligibility(
+  const ineligible = await smsIneligibilityHoursOpen(
     armed === 'to_client' ? 'client' : 'expert',
     userId
   );
