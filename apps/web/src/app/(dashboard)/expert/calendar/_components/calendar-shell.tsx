@@ -7,6 +7,7 @@ import { CalendarDays, Pause } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
+import { useRefreshOnMeetingsChanged } from '@/hooks/use-refresh-on-meetings-changed';
 import { track, CALENDAR_EVENTS } from '@/lib/analytics';
 import type { AvailabilityView } from '@/components/availability/use-expert-availability';
 import { MAX_AVAILABILITY_WINDOW_DAYS } from '@balo/shared/availability';
@@ -205,6 +206,7 @@ export function CalendarShell({
    * rate-limit ref, "mitigation not guarantee") moved with the code — see that module's docblock.
    */
   useRefreshOnFocus();
+  useRefreshOnMeetingsChanged();
 
   /**
    * ⚠ HOISTED ABOVE THE `calendar_viewed` EFFECT ON PURPOSE (BAL-512). This used to be declared

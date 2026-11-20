@@ -49,6 +49,7 @@ const mockRegisterAdminAlertSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartProjectBriefParse = vi.fn();
 const mockStartProposalDraftGenerate = vi.fn();
 const mockStartCallNowRingExpiry = vi.fn();
+const mockStartCallNowRingReping = vi.fn();
 const mockStartMeetingVenueRepairSweep = vi.fn();
 const mockRegisterMeetingVenueRepairSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingVenueProvision = vi.fn();
@@ -223,6 +224,11 @@ vi.mock('./proposal-draft-generate.js', () => ({
 vi.mock('./call-now-ring-expiry.js', () => ({
   startCallNowRingExpiryWorker: () => mockStartCallNowRingExpiry(),
 }));
+// Mandatory for the same reason as the ring expiry mock above: the real module opens a Redis
+// connection and hangs CI.
+vi.mock('./call-now-ring-reping.js', () => ({
+  startCallNowRingRepingWorker: () => mockStartCallNowRingReping(),
+}));
 // BAL-581: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
 // which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
 // GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
@@ -284,6 +290,7 @@ describe('startWorkers', () => {
     expect(mockStartProjectBriefParse).not.toHaveBeenCalled();
     expect(mockStartProposalDraftGenerate).not.toHaveBeenCalled();
     expect(mockStartCallNowRingExpiry).not.toHaveBeenCalled();
+    expect(mockStartCallNowRingReping).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueRepairSweep).not.toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).not.toHaveBeenCalled();
@@ -345,6 +352,7 @@ describe('startWorkers', () => {
     expect(mockStartProjectBriefParse).toHaveBeenCalled();
     expect(mockStartProposalDraftGenerate).toHaveBeenCalled();
     expect(mockStartCallNowRingExpiry).toHaveBeenCalled();
+    expect(mockStartCallNowRingReping).toHaveBeenCalled();
     expect(mockStartMeetingVenueRepairSweep).toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).toHaveBeenCalled();

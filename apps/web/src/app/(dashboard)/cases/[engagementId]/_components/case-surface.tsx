@@ -7,6 +7,7 @@ import { Reveal } from '@/components/balo/engagement/reveal';
 import { EngagementRatingCard } from '@/components/balo/reviews/engagement-rating-card';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
+import { useRefreshOnMeetingsChanged } from '@/hooks/use-refresh-on-meetings-changed';
 import type { CaseConsultationRowView, CaseSurfaceView } from '@/lib/cases/case-view-types';
 import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
 import { ProposeTimesDialog } from '@/components/booking/propose-times-dialog';
@@ -266,6 +267,7 @@ export function CaseSurface({
   // `router.refresh()` already runs from four existing handlers here, and the conversation
   // composer's draft is local `useState`, so a focus refresh can't clobber a half-typed message.
   useRefreshOnFocus();
+  useRefreshOnMeetingsChanged();
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;
 
