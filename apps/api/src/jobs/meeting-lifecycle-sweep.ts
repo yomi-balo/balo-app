@@ -52,6 +52,7 @@ import {
   scheduleClientAbsentNudge,
   scheduleExpertAbsentAlert,
 } from '../notifications/scheduling/meeting-absence.js';
+import { armMeetingReminders } from '../notifications/scheduling/meeting-reminders.js';
 import {
   isWaitingSmsDecided,
   scheduleWaitingPartySms,
@@ -1793,6 +1794,21 @@ async function expireOverdueRings(now: Date): Promise<number> {
   return expired;
 }
 
+/** BAL-658 — arm the pre-call reminders; a failure is logged and retried next tick. */
+async function armMeetingRemindersBestEffort(now: Date): Promise<void> {
+  try {
+    await armMeetingReminders(now);
+  } catch (error) {
+    logger.error(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Meeting reminder arming failed — the next tick retries'
+    );
+  }
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runMeetingLifecycleSweep(
   now: Date,
@@ -1803,6 +1819,9 @@ export async function runMeetingLifecycleSweep(
   const floor = new Date(now.getTime() - LIFECYCLE_LOOKBACK_MS);
   // ⚠ BEFORE THE CANDIDATE READ: a ring ended here is read by the passes below in its terminal state.
   const ringsExpired = await expireOverdueRings(now);
+  // ⚠ BEFORE THE EMPTY-TICK RETURN BELOW: a tick with no live candidates still has meetings ahead
+  // to remind. Its own try/catch — a reminder failure must never fail the lifecycle tick.
+  await armMeetingRemindersBestEffort(now);
   const candidates = await meetingsRepository.listLifecycleCandidates({
     statuses: ['scheduled', 'waiting_for_participants', 'in_progress'],
     scheduledStartAfter: floor,

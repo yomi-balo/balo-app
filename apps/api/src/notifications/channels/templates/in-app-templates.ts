@@ -436,6 +436,24 @@ function missedCallItem(
   };
 }
 
+/**
+ * BAL-658 — the 1-hour pre-call item: "Your {label} with {counterparty} starts in 1 hour." The
+ * counterparty is a NAME/ORG label the recheck rebuilt, never an address. Absent label ⇒ "call".
+ */
+function meetingReminderItem(
+  counterpartyFallback: string,
+  data: Record<string, unknown>
+): InAppOutput {
+  const label = optionalText(data.callLabel)?.toLowerCase() ?? 'call';
+  const counterparty = optionalText(data.counterpartyName) ?? counterpartyFallback;
+  const joinPath = optionalText(data.joinPath);
+  return {
+    title: 'Starting in 1 hour',
+    body: `Your ${label} with ${counterparty} starts in 1 hour.`,
+    ...(joinPath === undefined ? {} : { actionUrl: joinPath }),
+  };
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
   // BAL-400 (D4) — a consultation was booked into a case. The CLIENT in-app notice: prospective
   // copy names the PARTY (`expertPartyLabel`), never a pronoun. Deep-links to the case, never to
@@ -2003,6 +2021,11 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'call-ringing-expert': (data) => ringingCallItem('expert', data),
   'call-missed-client': (data) => missedCallItem('client', data),
   'call-missed-expert': (data) => missedCallItem('expert', data),
+
+  // BAL-658 — the 1-hour pre-call bell item. Both audiences share one body shape; the fallback
+  // names no one. `actionUrl` goes straight into the call, as the email's CTA does.
+  'meeting-reminder-client': (data) => meetingReminderItem('the expert', data),
+  'meeting-reminder-expert': (data) => meetingReminderItem('the client', data),
 };
 
 export function getInAppTemplate(templateName: string, data: Record<string, unknown>): InAppOutput {

@@ -495,3 +495,6 @@ export function currentCoPresenceStartedAt(
   }
   return new Date(Math.max(expertSince, clientSince));
 }
+// BAL-658 — the ONE context→page-href table, moved here from apps/web so apps/api (reminder
+// Reschedule links) and apps/web call the same function.
+export * from './href-for-meeting';

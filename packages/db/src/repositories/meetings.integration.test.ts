@@ -1351,6 +1351,103 @@ describe('meetingsRepository.listUnprovisionedScheduled (BAL-581)', () => {
   });
 });
 
+describe('meetingsRepository.listScheduledStartingBetween (BAL-658)', () => {
+  const MINUTE_MS = 60_000;
+
+  function windowStart(): number {
+    return Date.now() + 500 * DAY_MS;
+  }
+
+  async function seedAt(startMs: number, values: Partial<NewMeeting> = {}): Promise<Meeting> {
+    const { meeting } = await meetingFactory({
+      contexts: [],
+      values: {
+        scheduledStart: new Date(startMs),
+        scheduledEnd: new Date(startMs + HOUR_MS),
+        ...values,
+      },
+    });
+    return meeting;
+  }
+
+  it('returns only scheduled, live meetings inside the window, with just id and scheduledStart', async () => {
+    const start = windowStart();
+    const kept = await seedAt(start + MINUTE_MS);
+    await seedAt(start + 2 * MINUTE_MS, { status: 'waiting_for_participants' });
+    await seedAt(start + 3 * MINUTE_MS, { status: 'in_progress' });
+    await seedAt(start + 4 * MINUTE_MS, { status: 'ended' });
+    await seedAt(start + 5 * MINUTE_MS, { status: 'cancelled' });
+    await seedAt(start + 6 * MINUTE_MS, { deletedAt: new Date() });
+
+    const rows = await meetingsRepository.listScheduledStartingBetween({
+      startFrom: new Date(start),
+      startTo: new Date(start + 10 * MINUTE_MS),
+      limit: 50,
+    });
+
+    expect(rows).toEqual([{ id: kept.id, scheduledStart: new Date(start + MINUTE_MS) }]);
+  });
+
+  it('treats both bounds as inclusive and excludes starts just outside them', async () => {
+    const start = windowStart();
+    const to = start + 10 * MINUTE_MS;
+    await seedAt(start - 1);
+    const atFrom = await seedAt(start);
+    const atTo = await seedAt(to);
+    await seedAt(to + 1);
+
+    const rows = await meetingsRepository.listScheduledStartingBetween({
+      startFrom: new Date(start),
+      startTo: new Date(to),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([atFrom.id, atTo.id]);
+  });
+
+  it('orders scheduled_start ASC, then id ASC', async () => {
+    const start = windowStart();
+    const [lowId, highId] = [randomUUID(), randomUUID()].sort(compareStrings);
+    if (lowId === undefined || highId === undefined) throw new Error('expected two ids');
+    const later = await seedAt(start + MINUTE_MS);
+    await seedAt(start + 2 * MINUTE_MS, { id: highId });
+    await seedAt(start + 2 * MINUTE_MS, { id: lowId });
+    const earliest = await seedAt(start);
+
+    const rows = await meetingsRepository.listScheduledStartingBetween({
+      startFrom: new Date(start),
+      startTo: new Date(start + 10 * MINUTE_MS),
+      limit: 50,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([earliest.id, later.id, lowId, highId]);
+  });
+
+  it('honours the limit, keeping the soonest; a non-positive limit returns [] without querying', async () => {
+    const start = windowStart();
+    const first = await seedAt(start);
+    const second = await seedAt(start + MINUTE_MS);
+    await seedAt(start + 2 * MINUTE_MS);
+    const input = { startFrom: new Date(start), startTo: new Date(start + 10 * MINUTE_MS) };
+
+    const rows = await meetingsRepository.listScheduledStartingBetween({ ...input, limit: 2 });
+    expect(rows.map((row) => row.id)).toEqual([first.id, second.id]);
+
+    const spy = vi.spyOn(db, 'select');
+    try {
+      await expect(
+        meetingsRepository.listScheduledStartingBetween({ ...input, limit: 0 })
+      ).resolves.toEqual([]);
+      await expect(
+        meetingsRepository.listScheduledStartingBetween({ ...input, limit: -1 })
+      ).resolves.toEqual([]);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 /**
  * BAL-586 — the read behind the `meeting.stranded` finder. Every meeting is anchored on one fixed
  * `CUTOFF` (the finder's `now − 60m`), so each boundary is exact and independent of the host clock.

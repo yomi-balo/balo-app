@@ -539,6 +539,60 @@ export const WAITING_SMS_EVENTS = [
 ] as const;
 export type WaitingSmsEvent = (typeof WAITING_SMS_EVENTS)[number];
 
+/**
+ * BAL-658 — the pre-call reminder offsets, the single home read by the rules (channels), the arm
+ * pass (fire time) and the fire-time recheck. Each offset fires `beforeStartMs` ahead of the
+ * meeting's start; `channels` is the set the engine delivers that offset on.
+ */
+export const MEETING_REMINDER_OFFSETS = {
+  '24h': { beforeStartMs: 86_400_000, channels: ['email'] },
+  '1h': { beforeStartMs: 3_600_000, channels: ['email', 'in-app'] },
+  '30m': { beforeStartMs: 1_800_000, channels: ['sms'] },
+} as const;
+export type MeetingReminderOffset = keyof typeof MEETING_REMINDER_OFFSETS;
+
+/** The two pre-call reminder events — one per audience. */
+export const MEETING_REMINDER_EVENTS = [
+  'meeting.reminder_to_client',
+  'meeting.reminder_to_expert',
+] as const;
+export type MeetingReminderEvent = (typeof MEETING_REMINDER_EVENTS)[number];
+export type MeetingReminderAudience = 'client' | 'expert';
+
+/**
+ * BAL-658 — the payload of BOTH pre-call reminder events. SERVER-ONLY: scheduled by the lifecycle
+ * sweep and published by the dispatch tick once `meetingReminderRecheck` passes.
+ *
+ * The arm site writes only the first six fields; the rest are seeded `null` and REBUILT by the
+ * recheck from live state, so a stale name, zone, link or recipient is never sent.
+ * ⚠ NO ADDRESSES and no phone numbers — the adapters resolve those at send time.
+ */
+export interface MeetingReminderPayload {
+  /** A fresh uuid per promise — never the meeting id. */
+  correlationId: string;
+  meetingId: string;
+  scheduledStartIso: string;
+  offset: MeetingReminderOffset;
+  /** Owning company, resolved at the arm site. */
+  companyId: string;
+  /** The delivering expert's profile, or `null` for a meeting that names none. */
+  expertProfileId: string | null;
+  /** The single recipient — `null` when armed, set by the recheck. Read by the `self` recipient. */
+  recipientUserId: string | null;
+  /** The recipient's IANA zone — `null` when armed, and when none is usable. Email reads this first. */
+  recipientTimeZone: string | null;
+  /** The other party's display name — `null` when armed, set by the recheck. */
+  counterpartyName: string | null;
+  /** The context's event label (e.g. "Case consultation") — `null` when armed, or when the context has none. */
+  callLabel: string | null;
+  contextType: string | null;
+  durationMinutes: number | null;
+  /** In-app path to join the call — `null` when armed, set by the recheck. */
+  joinPath: string | null;
+  /** In-app path to the page the call lives on — `null` when armed, and when the context has no page. */
+  reschedulePath: string | null;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -753,7 +807,9 @@ export type NotificationEvent =
   | 'call.missed_email_due'
   // BAL-654: the SMS to the ABSENT party of a scheduled consultation. `waiting_for_client` = the
   // expert is waiting (texts the client); `waiting_for_expert` = the client side is waiting.
-  | WaitingSmsEvent;
+  | WaitingSmsEvent
+  // BAL-658: the pre-call reminders (24h / 1h / 30m), one event per audience.
+  | MeetingReminderEvent;
 
 /**
  * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
@@ -880,7 +936,9 @@ export type ServerOnlyNotificationEvent =
   // BAL-652: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
   | 'call.missed_email_due'
   // BAL-654: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
-  | WaitingSmsEvent;
+  | WaitingSmsEvent
+  // BAL-658: scheduled and published from `apps/api` only — no `publishBodySchema` arm.
+  | MeetingReminderEvent;
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -1061,4 +1119,6 @@ export interface EventPayloadMap {
   'call.missed_email_due': CallMissedEmailDuePayload;
   'meeting.waiting_for_client': MeetingWaitingSmsPayload;
   'meeting.waiting_for_expert': MeetingWaitingSmsPayload;
+  'meeting.reminder_to_client': MeetingReminderPayload;
+  'meeting.reminder_to_expert': MeetingReminderPayload;
 }

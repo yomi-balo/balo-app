@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { hrefForMeeting, type MeetingHrefSubject } from './href-for-meeting';
-import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
+import type { MeetingContextTypeWithHolder } from './guest-participation';
 
 const CONTEXT_ID = 'ctx-1';
 const PROJECT_REQUEST_ID = 'req-1';

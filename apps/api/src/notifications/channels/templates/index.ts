@@ -148,6 +148,12 @@ import {
   BookingConfirmedExpertEmail,
   bookingConfirmedSubject,
 } from './booking-confirmed.js';
+import { MeetingReminderEmail, meetingReminderSubject } from './meeting-reminder.js';
+import {
+  MEETING_REMINDER_OFFSETS,
+  type MeetingReminderAudience,
+  type MeetingReminderOffset,
+} from '../../events.js';
 import {
   BookingRescheduledClientEmail,
   BookingRescheduledExpertEmail,
@@ -202,6 +208,45 @@ function numberCount(value: unknown): number {
 /** The recipient's zone as injected by the email adapter; null when absent or not a string. */
 function readRecipientTimezone(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+/** The string value when it is a non-empty string, else `null`. */
+function nonEmptyStringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/** The payload's reminder offset when it is one of the table's keys, else the earliest ('24h'). */
+function readReminderOffset(value: unknown): MeetingReminderOffset {
+  return typeof value === 'string' && Object.hasOwn(MEETING_REMINDER_OFFSETS, value)
+    ? (value as MeetingReminderOffset)
+    : '24h';
+}
+
+/** BAL-658 — builds the pre-call reminder email for one audience from the rebuilt payload. */
+function meetingReminderEmail(
+  audience: MeetingReminderAudience,
+  data: Record<string, unknown>
+): TemplateOutput {
+  const counterpartyName = nonEmptyStringOrNull(data.counterpartyName);
+  const callLabel = nonEmptyStringOrNull(data.callLabel);
+  const joinPath = nonEmptyStringOrNull(data.joinPath);
+  const reschedulePath = nonEmptyStringOrNull(data.reschedulePath);
+  return {
+    component: React.createElement(MeetingReminderEmail, {
+      audience,
+      offset: readReminderOffset(data.offset),
+      firstName: (data.recipientName as string) ?? 'there',
+      counterpartyName,
+      callLabel,
+      scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+      durationMinutes: numberCount(data.durationMinutes),
+      recipientTimezone: readRecipientTimezone(data.recipientTimeZone ?? data.recipientTimezone),
+      joinUrl: `${BASE_URL}${joinPath ?? ''}`,
+      rescheduleUrl: reschedulePath === null ? null : `${BASE_URL}${reschedulePath}`,
+      baseUrl: BASE_URL,
+    }),
+    subject: meetingReminderSubject(audience, callLabel, counterpartyName),
+  };
 }
 
 /** BAL-622 — the present pre-formatted change labels joined on one line; undefined when none. */
@@ -2719,7 +2764,14 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     const props: MeetingCalendarInviteEmailProps =
       audience === 'guest'
         ? { ...base, audience: 'guest' }
-        : { ...base, audience: 'member', memberJoinUrl: (data.memberJoinUrl as string) ?? '' };
+        : {
+            ...base,
+            audience: 'member',
+            memberJoinUrl: (data.memberJoinUrl as string) ?? '',
+            ...(typeof data.memberRescheduleUrl === 'string'
+              ? { memberRescheduleUrl: data.memberRescheduleUrl }
+              : {}),
+          };
     return {
       component: React.createElement(MeetingCalendarInviteEmail, props),
       // BAL-476 — the subject prefix comes off the SAME table the body's chrome does, so a
@@ -2728,6 +2780,12 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: `${TRANSITION_CHROME[transition].previewPrefix}: ${sanitizeSubjectTitle(summary)}`,
     };
   },
+
+  // BAL-658 — the 24h / 1h pre-call email, one registry name per audience. The recheck rebuilt every
+  // field below; the zone is read from the payload's `recipientTimeZone` first, then the adapter's
+  // `recipientTimezone`.
+  'meeting-reminder-client': (data) => meetingReminderEmail('client', data),
+  'meeting-reminder-expert': (data) => meetingReminderEmail('expert', data),
 
   // BAL-522 — an explicit billing-email change, to the company's MANAGE_BILLING holders
   // (includes the actor, as confirmation). Copy comes from the ONE shared derivation

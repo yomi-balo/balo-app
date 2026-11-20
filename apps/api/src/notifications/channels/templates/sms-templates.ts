@@ -159,11 +159,11 @@ export function usableRecipientZone(timeZone: unknown): string | null {
 }
 
 /**
- * BAL-654 — `HH:mm` (24-hour) in the recipient's zone, or `null` when there is no usable zone or
- * the start is unreadable. The `(City time)` label of the email is left out: it would push the
- * body past 160.
+ * BAL-654 / BAL-658 — `HH:mm` (24-hour) in the recipient's zone, or `null` when there is no usable
+ * zone or the start is unreadable. The `(City time)` label of the email is left out: it would push
+ * the body past 160. Shared by the waiting-party and pre-call reminder SMS.
  */
-function waitingSmsTime(iso: unknown, timeZone: unknown): string | null {
+function smsClockTime(iso: unknown, timeZone: unknown): string | null {
   const zone = usableRecipientZone(timeZone);
   const at = new Date(typeof iso === 'string' ? iso : Number.NaN);
   if (zone === null || Number.isNaN(at.getTime())) {
@@ -183,7 +183,7 @@ function waitingSmsTime(iso: unknown, timeZone: unknown): string | null {
  */
 function waitingPartySms(nameFallback: string, data: Record<string, unknown>): string {
   const name = capCaller(sanitizedOr(data.waitingPartyName, nameFallback), MAX_WAITING_NAME_LENGTH);
-  const time = waitingSmsTime(data.scheduledStartIso, data.recipientTimeZone);
+  const time = smsClockTime(data.scheduledStartIso, data.recipientTimeZone);
   const meetingId = typeof data.meetingId === 'string' ? data.meetingId : '';
   const link = resolveAppUrl(
     meetingId.length > 0 ? `/meetings/${encodeURIComponent(meetingId)}/call` : ''
@@ -192,14 +192,25 @@ function waitingPartySms(nameFallback: string, data: Record<string, unknown>): s
   return `Balo: ${name} is waiting in your ${consultation}. Join: ${link}`;
 }
 
+/**
+ * BAL-658 — the 30-minute pre-call reminder. The body names nobody: "Balo: Your call starts at
+ * {HH:mm}. Reschedule or cancel in Balo. Join: {link}", or "starts in 30 min" when the recipient has
+ * no usable zone. 69 fixed characters (70 without a zone) plus a 51 character join path leave 40
+ * for the app origin, so a 31 character origin lands at 152.
+ */
+function meetingReminderSms(data: Record<string, unknown>): string {
+  const time = smsClockTime(data.scheduledStartIso, data.recipientTimeZone);
+  const joinPath = typeof data.joinPath === 'string' ? data.joinPath : '';
+  const when = time === null ? 'in 30 min' : `at ${time}`;
+  return `Balo: Your call starts ${when}. Reschedule or cancel in Balo. Join: ${resolveAppUrl(joinPath)}`;
+}
+
 const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // BAL-400 (D4) — no `booking-confirmed-sms` entry: the legacy SMS rule at booking time was
   // structurally incapable of firing (the resolver hydrates `data.user` from `payload.userId`
   // only, which `BookingConfirmedPayload` never carries) and the ticket's own spec puts SMS at
-  // the ~2h reminder — a separate, unbuilt event. See `engine/rules.ts`'s `booking.confirmed`.
-  'booking-reminder-sms': () => {
-    return 'Balo: Reminder - your consultation starts in 30 min. Join at balo.expert';
-  },
+  // the pre-call reminder — `meeting.reminder_to_client` / `_to_expert`, below. See
+  // `engine/rules.ts`'s `booking.confirmed`.
 
   // BAL-378 (ADR-1040 Lane 2) — the two urgent, time-sensitive session moments (entering
   // grace, nearing the wrap). ≤160 chars, warm, NO "overdraft" (its client name is "extra
@@ -231,6 +242,11 @@ const templates: Record<string, (data: Record<string, unknown>) => string> = {
   // left out); opt-in was decided there. There is no quiet-hours gate on this SMS.
   'meeting-waiting-sms-client': (data) => waitingPartySms('Your expert', data),
   'meeting-waiting-sms-expert': (data) => waitingPartySms('Your client', data),
+
+  // BAL-658 — the 30-minute pre-call reminder to one booked party. The recheck rebuilt the zone and
+  // the join path and gated opt-in and hours; the body names nobody, so one template serves both
+  // audiences.
+  'meeting-reminder-sms': meetingReminderSms,
 };
 
 export function getSmsTemplate(templateName: string, data: Record<string, unknown>): string {

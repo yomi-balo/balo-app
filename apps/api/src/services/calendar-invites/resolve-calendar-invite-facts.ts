@@ -1,11 +1,12 @@
-import { meetingContextsRepository } from '@balo/db';
-import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
+import { meetingContextsRepository, resolveMeetingContextOwner } from '@balo/db';
+import { selectPrimaryMeetingContext, type PrimaryMeetingContext } from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   CALENDAR_CONTEXT_REGISTRY,
   type CalendarProjectedContextType,
 } from '../consultation-events/calendar-context-registry.js';
-import { memberCallUrl } from '../consultation-events/member-call-url.js';
+import { memberCallUrl, memberPageUrl } from '../consultation-events/member-call-url.js';
+import { resolveMeetingPagePath } from '../meetings/meeting-page-path.js';
 import { resolveExpertCalendarFacts } from '../consultation-events/resolve-calendar-facts.js';
 import {
   deliveringContextOwnerForMeeting,
@@ -33,6 +34,11 @@ export interface CalendarInviteFacts {
   readonly location: string | undefined;
   /** The email CTA — the same value as `location` for a member; `undefined` for a guest. */
   readonly memberJoinUrl: string | undefined;
+  /**
+   * BAL-658 — the Balo page the call lives on, for a Reschedule link. A member's only; `undefined`
+   * for a guest and for a context with no page.
+   */
+  readonly memberRescheduleUrl: string | undefined;
 }
 
 /**
@@ -63,11 +69,24 @@ function hasCalendarDescriptor(label: string): label is CalendarProjectedContext
 function buildDescription(
   audience: CalendarInviteAudience,
   title: string,
-  memberUrl: string | undefined
+  memberUrl: string | undefined,
+  rescheduleUrl: string | undefined
 ): string {
-  const joinLine =
-    audience === 'member' ? `Join: ${memberUrl ?? ''}` : CALENDAR_INVITE_GUEST_JOIN_NOTE;
-  return `${title}\n\n${joinLine}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`;
+  if (audience === 'guest') {
+    return `${title}\n\n${CALENDAR_INVITE_GUEST_JOIN_NOTE}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`;
+  }
+  const rescheduleLine = rescheduleUrl === undefined ? '' : `\nReschedule: ${rescheduleUrl}`;
+  return `${title}\n\nJoin: ${memberUrl ?? ''}${rescheduleLine}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`;
+}
+
+/**
+ * BAL-658 — the member's Reschedule link: the page the call lives on, or `undefined` when that
+ * context has none (or its owning row cannot be verified).
+ */
+async function memberRescheduleUrlFor(primary: PrimaryMeetingContext): Promise<string | undefined> {
+  const owner = await resolveMeetingContextOwner(primary);
+  const path = await resolveMeetingPagePath(primary, owner !== undefined);
+  return path === null ? undefined : memberPageUrl(path);
 }
 
 /**
@@ -132,7 +151,9 @@ export async function resolveCalendarInviteFacts(
       summary = `${facts.eventLabel} with ${partyName ?? 'your expert'}`;
     }
 
-    const description = buildDescription(audience, facts.title, joinUrl);
+    const memberRescheduleUrl =
+      audience === 'member' ? await memberRescheduleUrlFor(primary.context) : undefined;
+    const description = buildDescription(audience, facts.title, joinUrl, memberRescheduleUrl);
     const location = audience === 'member' ? joinUrl : undefined;
 
     return {
@@ -141,6 +162,7 @@ export async function resolveCalendarInviteFacts(
       description,
       location,
       memberJoinUrl: audience === 'member' ? joinUrl : undefined,
+      memberRescheduleUrl,
     };
   } catch (error) {
     log.error(

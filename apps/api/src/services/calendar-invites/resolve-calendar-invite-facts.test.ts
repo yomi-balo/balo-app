@@ -5,15 +5,23 @@ const {
   mockResolveExpertCalendarFacts,
   mockDeliveringContextOwnerForMeeting,
   mockDeliveringPartyName,
+  mockResolveMeetingContextOwner,
+  mockResolveMeetingPagePath,
 } = vi.hoisted(() => ({
   mockListByMeeting: vi.fn(),
   mockResolveExpertCalendarFacts: vi.fn(),
   mockDeliveringContextOwnerForMeeting: vi.fn(),
   mockDeliveringPartyName: vi.fn(),
+  mockResolveMeetingContextOwner: vi.fn(),
+  mockResolveMeetingPagePath: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   meetingContextsRepository: { listByMeeting: mockListByMeeting },
+  resolveMeetingContextOwner: mockResolveMeetingContextOwner,
+}));
+vi.mock('../meetings/meeting-page-path.js', () => ({
+  resolveMeetingPagePath: mockResolveMeetingPagePath,
 }));
 vi.mock('../consultation-events/resolve-calendar-facts.js', () => ({
   resolveExpertCalendarFacts: mockResolveExpertCalendarFacts,
@@ -22,6 +30,11 @@ vi.mock('../meetings/delivering-party.js', () => ({
   deliveringContextOwnerForMeeting: mockDeliveringContextOwnerForMeeting,
   deliveringPartyName: mockDeliveringPartyName,
 }));
+
+import {
+  CALENDAR_INVITE_CHANGES_NOTE,
+  CALENDAR_INVITE_GUEST_JOIN_NOTE,
+} from '../../notifications/calendar-invite-copy.js';
 
 const { resolveCalendarInviteFacts, CalendarInviteFactsError } =
   await import('./resolve-calendar-invite-facts.js');
@@ -49,6 +62,12 @@ beforeEach(() => {
     deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
   });
   mockDeliveringPartyName.mockResolvedValue('CloudPeak');
+  mockResolveMeetingContextOwner.mockResolvedValue({
+    companyId: 'company-1',
+    expertProfileId: 'expert-profile-1',
+    deliveringAgency: { from: 'engagement', deliveringAgencyId: 'agency-1' },
+  });
+  mockResolveMeetingPagePath.mockResolvedValue('/cases/ctx-1');
 });
 
 describe('resolveCalendarInviteFacts', () => {
@@ -123,6 +142,67 @@ describe('resolveCalendarInviteFacts', () => {
 
     expect(facts?.description).toContain('CPQ rollout');
     expect(facts?.description).toContain('Rescheduling and cancelling happen in Balo');
+  });
+
+  describe('Reschedule link (BAL-658)', () => {
+    it('member description carries a Reschedule line with the case URL, between Join and the note', async () => {
+      const facts = await resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
+        fakeLog()
+      );
+
+      expect(facts?.memberRescheduleUrl).toMatch(/\/cases\/ctx-1$/);
+      expect(facts?.description).toBe(
+        `CPQ rollout\n\nJoin: ${facts?.memberJoinUrl}\nReschedule: ${facts?.memberRescheduleUrl}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`
+      );
+      expect(mockResolveMeetingPagePath).toHaveBeenCalledWith(
+        { contextType: 'case', contextId: 'ctx-1' },
+        true
+      );
+    });
+
+    it('omits the Reschedule line when the context has no page', async () => {
+      mockResolveMeetingPagePath.mockResolvedValue(null);
+
+      const facts = await resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'client', audience: 'member' },
+        fakeLog()
+      );
+
+      expect(facts?.memberRescheduleUrl).toBeUndefined();
+      expect(facts?.description).not.toContain('Reschedule:');
+      expect(facts?.description).toBe(
+        `CPQ rollout\n\nJoin: ${facts?.memberJoinUrl}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`
+      );
+    });
+
+    it('passes owner-not-found through so the path resolver returns null', async () => {
+      mockResolveMeetingContextOwner.mockResolvedValue(undefined);
+
+      await resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
+        fakeLog()
+      );
+
+      expect(mockResolveMeetingPagePath).toHaveBeenCalledWith(
+        { contextType: 'case', contextId: 'ctx-1' },
+        false
+      );
+    });
+
+    it('leaves the guest description byte-identical and resolves no page', async () => {
+      const facts = await resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'guest' },
+        fakeLog()
+      );
+
+      expect(facts?.description).toBe(
+        `CPQ rollout\n\n${CALENDAR_INVITE_GUEST_JOIN_NOTE}\n\n${CALENDAR_INVITE_CHANGES_NOTE}`
+      );
+      expect(facts?.memberRescheduleUrl).toBeUndefined();
+      expect(mockResolveMeetingContextOwner).not.toHaveBeenCalled();
+      expect(mockResolveMeetingPagePath).not.toHaveBeenCalled();
+    });
   });
 
   it('no primary context (none) ⇒ undefined', async () => {

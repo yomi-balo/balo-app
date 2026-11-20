@@ -80,6 +80,12 @@ export const MEETING_SERVER_EVENTS = {
    * provider (not merely scheduled or published). One per consultation.
    */
   WAITING_SMS_SENT: 'waiting_sms_sent',
+  /**
+   * BAL-658 — a pre-call reminder passed its fire-time recheck and was published to one channel.
+   * Means "published to the channel", not provider acceptance: an SMS the provider then skips
+   * surfaces as `sms_skipped`. One per channel of the offset, first attempt only.
+   */
+  MEETING_REMINDER_SENT: 'meeting_reminder_sent',
 } as const;
 
 /**
@@ -427,6 +433,20 @@ export interface MeetingServerEventMap {
     audience: 'client' | 'expert';
     seconds_after_start: number;
     /** The MEETING id — there is no acting human. */
+    distinct_id: string;
+  };
+
+  /**
+   * BAL-658 — one pre-call reminder published to one channel. `audience` is the RECIPIENT's side.
+   * NO PII: ids and closed labels only.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_REMINDER_SENT]: {
+    meeting_id: string;
+    offset: '24h' | '1h' | '30m';
+    channel: 'email' | 'in_app' | 'sms';
+    audience: 'client' | 'expert';
+    context_type: string;
+    /** The recipient's user id. */
     distinct_id: string;
   };
 }

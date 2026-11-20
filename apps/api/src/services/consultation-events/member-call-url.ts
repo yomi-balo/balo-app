@@ -26,7 +26,20 @@
 /** The web origin used to build the MEMBER call route. */
 const WEB_BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
 
+/** `/meetings/{meetingId}/call` — the member's in-call route for one meeting, relative. */
+export function memberCallPath(meetingId: string): string {
+  return `/meetings/${meetingId}/call`;
+}
+
 /** `${WEB_BASE_URL}/meetings/{meetingId}/call` — the member's in-call route for one meeting. */
 export function memberCallUrl(meetingId: string): string {
-  return `${WEB_BASE_URL}/meetings/${meetingId}/call`;
+  return `${WEB_BASE_URL}${memberCallPath(meetingId)}`;
+}
+
+/**
+ * BAL-658 — `${WEB_BASE_URL}{path}` for any member-facing Balo page, on the SAME origin as
+ * {@link memberCallUrl} so a calendar entry's Join and Reschedule links can never disagree.
+ */
+export function memberPageUrl(path: string): string {
+  return `${WEB_BASE_URL}${path}`;
 }
