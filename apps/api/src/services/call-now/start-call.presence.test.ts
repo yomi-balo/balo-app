@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   releaseSlot: vi.fn(),
   provision: vi.fn(),
   enqueueExpiry: vi.fn(),
+  enqueueRepings: vi.fn(),
   enqueueRebuild: vi.fn(),
   publish: vi.fn(),
   checkFunding: vi.fn(),
@@ -62,6 +63,9 @@ vi.mock('../meetings/case-booking-funding.js', () => ({
 vi.mock('../meetings/provision-meeting.js', () => ({ provisionCallNowVenue: mocks.provision }));
 vi.mock('../../jobs/call-now-ring-expiry.js', () => ({
   enqueueCallNowRingExpiry: mocks.enqueueExpiry,
+}));
+vi.mock('../../jobs/call-now-ring-reping.js', () => ({
+  enqueueCallNowRingRepings: mocks.enqueueRepings,
 }));
 vi.mock('../../jobs/availability-cache.js', () => ({
   enqueueAvailabilityCacheRebuild: mocks.enqueueRebuild,
@@ -147,6 +151,7 @@ beforeEach(() => {
   }));
   mocks.provision.mockResolvedValue({ provisioned: true });
   mocks.enqueueExpiry.mockResolvedValue(undefined);
+  mocks.enqueueRepings.mockResolvedValue(undefined);
   mocks.enqueueRebuild.mockResolvedValue(undefined);
   mocks.publish.mockResolvedValue(undefined);
 });

@@ -53,8 +53,13 @@ export type PanelOpenSource =
 
 export const POLL_VISIBLE_MS = 30_000;
 export const POLL_HIDDEN_MS = 60_000;
-/** Safety-net poll cadence while the push connection is live; a ping, not the poll, is the signal. */
-export const POLL_PUSH_VISIBLE_MS = 120_000;
+/**
+ * Safety-net poll cadence while the push connection is live; a ping, not the poll, is the signal.
+ * ⚠ The visible cadence stays at {@link POLL_VISIBLE_MS}: a connection can read as live and still
+ * drop pings, and a Call now ring in the app lasts 45 s, so a visible tab's poll must land inside
+ * one ring on its own.
+ */
+export const POLL_PUSH_VISIBLE_MS = POLL_VISIBLE_MS;
 export const POLL_PUSH_HIDDEN_MS = 300_000;
 /** Trailing window that collapses a burst of pings into one feed refetch. */
 export const PUSH_REFETCH_DEBOUNCE_MS = 500;

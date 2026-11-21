@@ -1929,23 +1929,25 @@ describe('NotificationBell', () => {
       expect(props.latency_ms).toBeLessThan(5500);
     });
 
-    it('slows the poll to 120s while push is live', async () => {
+    it('keeps the 30s poll on a visible tab while push is live — a live connection can still drop pings', async () => {
       await renderPush();
       await goLive();
+      await flush(0);
       const before = feedFetches().length;
 
-      await flush(119_000);
+      await flush(29_999);
       expect(feedFetches()).toHaveLength(before);
 
-      await flush(1000);
+      await flush(1);
       expect(feedFetches()).toHaveLength(before + 1);
     });
 
     it('restarts the 30s poll from the moment the connection drops', async () => {
       await renderPush();
       await goLive();
+      await flush(0);
       const before = feedFetches().length;
-      await flush(100_000);
+      await flush(20_000);
       expect(feedFetches()).toHaveLength(before);
 
       act(() => client().connection.emit('disconnected'));
@@ -1956,7 +1958,7 @@ describe('NotificationBell', () => {
       expect(feedFetches()).toHaveLength(before + 1);
     });
 
-    it('catches up once on reconnect, then returns to the 120s poll', async () => {
+    it('catches up once on reconnect, then returns to the 30s poll', async () => {
       await renderPush();
       await goLive();
       act(() => client().connection.emit('disconnected'));
@@ -1967,7 +1969,7 @@ describe('NotificationBell', () => {
       await flush(0);
       expect(feedFetches()).toHaveLength(before + 1);
 
-      await flush(119_000);
+      await flush(29_000);
       expect(feedFetches()).toHaveLength(before + 1);
 
       await flush(1000);

@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { CALL_NOW_EVENTS, track } from '@/lib/analytics';
 import { takeAnswerIntent } from '@/lib/call-now/answer-intent';
 import type { IncomingCallView } from '@/lib/call-now/call-now-types';
+import { MEETINGS_CHANGED_EVENT } from '@/lib/meetings/meetings-changed-event';
 import type { BellNotification } from '../notification-arrival';
 import { useCallToast } from './use-call-toast';
 import type { MissedToastView, RingingToastView } from './call-toast-model';
@@ -95,6 +96,9 @@ async function flush(ms = 0): Promise<void> {
   });
 }
 
+const meetingsChanged = vi.fn();
+globalThis.addEventListener(MEETINGS_CHANGED_EVENT, () => meetingsChanged());
+
 function shownCalls(): unknown[][] {
   return vi.mocked(track).mock.calls.filter(([name]) => name === CALL_NOW_EVENTS.TOAST_SHOWN);
 }
@@ -121,7 +125,7 @@ describe('useCallToast — the ring', () => {
 
     expect(result.current.view).toMatchObject({ mode: 'ringing', ringId: 'ring-1' });
     expect(shownCalls()).toEqual([
-      [CALL_NOW_EVENTS.TOAST_SHOWN, { mode: 'ringing', trigger: 'load' }],
+      [CALL_NOW_EVENTS.TOAST_SHOWN, { mode: 'ringing', trigger: 'load', ring_age_ms: 0 }],
     ]);
   });
 
@@ -171,7 +175,23 @@ describe('useCallToast — the ring', () => {
     expect(mocks.readIncoming).toHaveBeenCalledTimes(2);
     expect(result.current.view).toMatchObject({ mode: 'ringing' });
     expect(shownCalls()).toEqual([
-      [CALL_NOW_EVENTS.TOAST_SHOWN, { mode: 'ringing', trigger: 'live' }],
+      [CALL_NOW_EVENTS.TOAST_SHOWN, { mode: 'ringing', trigger: 'live', ring_age_ms: 0 }],
+    ]);
+  });
+
+  it('tracks how long after the ring started the toast appeared, on the server clock', async () => {
+    vi.setSystemTime(NOW + 600_000);
+    mocks.readIncoming.mockResolvedValue(
+      ring({
+        startedAtIso: new Date(NOW - 12_000).toISOString(),
+        serverNowIso: new Date(NOW).toISOString(),
+      })
+    );
+    mount();
+    await flush();
+
+    expect(shownCalls()).toEqual([
+      [CALL_NOW_EVENTS.TOAST_SHOWN, { mode: 'ringing', trigger: 'load', ring_age_ms: 12_000 }],
     ]);
   });
 
@@ -213,7 +233,7 @@ describe('useCallToast — the ring ends', () => {
       callerLabel: 'Sandy',
     });
     expect(shownCalls().map(([, props]) => props)).toEqual([
-      { mode: 'ringing', trigger: 'load' },
+      { mode: 'ringing', trigger: 'load', ring_age_ms: 0 },
       { mode: 'missed', trigger: 'live' },
     ]);
   });
@@ -256,11 +276,40 @@ describe('useCallToast — the ring ends', () => {
       const { result } = mount();
       await flush();
 
+      expect(meetingsChanged).not.toHaveBeenCalled();
+
       await flush(RING_MS);
 
       expect(result.current.view).toBeNull();
+      expect(meetingsChanged).toHaveBeenCalledTimes(1);
     }
   );
+
+  it('a ring still ringing mid-ring keeps the toast and signals no meeting change', async () => {
+    mocks.readRing.mockResolvedValue({ ok: true, status: 'ringing', expiresAtIso: '' });
+    mocks.readIncoming.mockResolvedValue(ring());
+    const unread = row('r1', 'call.ringing');
+    const { result, rerender } = mount({ notifications: [unread] });
+    await flush();
+
+    rerender({ notifications: [{ ...unread, readAt: new Date(NOW).toISOString() }] });
+    await flush();
+
+    expect(mocks.readRing).toHaveBeenCalledTimes(1);
+    expect(result.current.view?.mode).toBe('ringing');
+    expect(meetingsChanged).not.toHaveBeenCalled();
+  });
+
+  it('a lapsed ring signals a meeting change as it turns missed', async () => {
+    mocks.readIncoming.mockResolvedValue(ring());
+    const { result } = mount();
+    await flush();
+
+    await flush(RING_MS);
+
+    expect(result.current.view).toMatchObject({ mode: 'missed', pending: true });
+    expect(meetingsChanged).toHaveBeenCalledTimes(1);
+  });
 
   it('clears when the ring read fails or throws', async () => {
     mocks.readRing.mockRejectedValue(new Error('boom'));
@@ -312,7 +361,7 @@ describe('useCallToast — the ring ends', () => {
 
     expect(result.current.view).toMatchObject({ pending: false, rowIds: ['m1'] });
     expect(shownCalls().map(([, props]) => props)).toEqual([
-      { mode: 'ringing', trigger: 'load' },
+      { mode: 'ringing', trigger: 'load', ring_age_ms: 0 },
       { mode: 'missed', trigger: 'live' },
     ]);
   });
@@ -441,8 +490,10 @@ describe('useCallToast — Not now', () => {
     expect(result.current.view).toBeNull();
     expect(track).toHaveBeenCalledWith(CALL_NOW_EVENTS.TOAST_DECLINED, { lens: 'client' });
     expect(mocks.decline).toHaveBeenCalledWith({ ringId: 'ring-1' });
+    expect(meetingsChanged).not.toHaveBeenCalled();
     await flush();
     expect(mocks.toastSuccess).toHaveBeenCalledWith('We’ve let Sandy know.');
+    expect(meetingsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('shows an error toast when the caller could not be told, and the toast stays hidden', async () => {
@@ -456,6 +507,7 @@ describe('useCallToast — Not now', () => {
       'We couldn’t let Sandy know just now — they may keep trying.'
     );
     expect(result.current.view).toBeNull();
+    expect(meetingsChanged).not.toHaveBeenCalled();
   });
 
   it('shows the error toast when the action throws', async () => {
@@ -476,7 +528,9 @@ describe('useCallToast — Not now', () => {
     await flush(RING_MS);
 
     expect(result.current.view).toBeNull();
-    expect(shownCalls().map(([, props]) => props)).toEqual([{ mode: 'ringing', trigger: 'load' }]);
+    expect(shownCalls().map(([, props]) => props)).toEqual([
+      { mode: 'ringing', trigger: 'load', ring_age_ms: 0 },
+    ]);
   });
 });
 
