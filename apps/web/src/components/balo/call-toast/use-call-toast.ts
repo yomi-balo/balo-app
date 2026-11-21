@@ -15,6 +15,7 @@ import { markAnswerIntent } from '@/lib/call-now/answer-intent';
 import { requestCallNotificationPermission } from '@/lib/call-now/notification-permission';
 import type { IncomingCallView } from '@/lib/call-now/call-now-types';
 import { CALL_TOAST_COPY } from '@/lib/call-now/call-toast-copy';
+import { dispatchMeetingsChanged } from '@/lib/meetings/meetings-changed-event';
 import type { BellNotification } from '../notification-arrival';
 import {
   PENDING_MISSED_GRACE_MS,
@@ -92,6 +93,10 @@ function settleOutcome(result: ReadCallNowRingResult | null, lapsed: boolean): S
  * {@link PENDING_MISSED_GRACE_MS} passes), so the toast morphs in place rather than blinking out.
  * Every ring end is confirmed against the ring read first, so a ring that was declined, stopped
  * or connected elsewhere clears instead of turning missed. Nothing here ever navigates by itself.
+ *
+ * A ring that ends, or that this tab declines, raises `MEETINGS_CHANGED_EVENT`: a declined or
+ * stopped ring leaves no new bell row, so without it the page's meeting surfaces would keep
+ * offering the ring's meeting until the next focus.
  */
 export function useCallToast({
   notifications,
@@ -195,6 +200,7 @@ export function useCallToast({
         return;
       }
       if (!aliveRef.current) return;
+      dispatchMeetingsChanged();
       setNowMs(Math.max(serverNowMs(), expiresAtMs));
       setIncoming((current) => (current?.ringId === view.ringId ? null : current));
       if (outcome === 'missed' && !declinedRef.current.has(view.ringId)) setPendingMissed(view);
@@ -281,11 +287,17 @@ export function useCallToast({
     const key = shownKeyOf(view);
     if (shownRef.current.has(key)) return;
     shownRef.current.add(key);
+    const current = incomingRef.current;
+    const ringAge =
+      view.mode === 'ringing' && current?.ringId === view.ringId
+        ? { ring_age_ms: Math.max(0, Math.round(serverNowMs() - Date.parse(current.startedAtIso))) }
+        : {};
     track(CALL_NOW_EVENTS.TOAST_SHOWN, {
       mode: view.mode,
       trigger: shownTrigger(view, triggerByRingRef.current, notifications, mountedAtRef.current),
+      ...ringAge,
     });
-  }, [view, notifications]);
+  }, [view, notifications, serverNowMs]);
 
   const join = useCallback((ring: RingingToastView): void => {
     const intent = ring.lens === 'client' && ring.awaitsAnswer;
@@ -304,8 +316,10 @@ export function useCallToast({
     track(CALL_NOW_EVENTS.TOAST_DECLINED, { lens: ring.lens });
     declineCallNowRingAction({ ringId: ring.ringId })
       .then((result) => {
-        if (result.ok) toast.success(CALL_TOAST_COPY.declined(ring.callerLabel));
-        else toast.error(CALL_TOAST_COPY.declineFailed(ring.callerLabel));
+        if (result.ok) {
+          dispatchMeetingsChanged();
+          toast.success(CALL_TOAST_COPY.declined(ring.callerLabel));
+        } else toast.error(CALL_TOAST_COPY.declineFailed(ring.callerLabel));
       })
       .catch((error: unknown) => {
         report(error);

@@ -4,9 +4,9 @@
  * The callee's open tabs learn of a ring from a content-free `notification.created` ping
  * (`in-app-push.ts`), published once, right after the `call.ringing` bell row is written. The
  * ping is ephemeral, so a tab that misses it hears nothing more until its safety-net poll — and
- * while push is live that poll runs every 120 s, about as long as the ring itself. One lost ping
- * therefore costs the whole call. Re-sending it every {@link CALL_NOW_RING_REPING_INTERVAL_MS}
- * caps that loss at one interval.
+ * a ring in the app lasts only 45 s. Re-sending the ping — twice early, at
+ * {@link CALL_NOW_RING_REPING_EARLY_DELAYS_MS}, then every {@link CALL_NOW_RING_REPING_INTERVAL_MS}
+ * — means one lost ping delays the ring toast by seconds instead of costing the call.
  *
  * ⚠ ONE DELAYED JOB PER TICK, ALL SCHEDULED WHEN THE RING STARTS, each with its own id. Every job
  * re-reads the ring and publishes only while it is still `ringing` and before `expires_at`, so a
@@ -28,7 +28,13 @@ const log = createLogger('call-now-ring-reping');
 
 export const CALL_NOW_RING_REPING_QUEUE = 'call-now-ring-reping';
 
-/** The gap between two pings for one ring, so a lost ping delays the ring toast by at most this. */
+/**
+ * The first re-pings, from the ring's start. The bell row lands a few seconds after the ring
+ * starts, so these reach a tab that missed the first ping while the ring is still young.
+ */
+export const CALL_NOW_RING_REPING_EARLY_DELAYS_MS: readonly number[] = [3_000, 6_000];
+
+/** The gap between the steady re-pings, so a lost ping delays the ring toast by at most this. */
 export const CALL_NOW_RING_REPING_INTERVAL_MS = 10_000;
 
 export interface CallNowRingRepingJobData {
@@ -36,13 +42,12 @@ export interface CallNowRingRepingJobData {
 }
 
 /**
- * The delays, from `now`, of every re-ping a ring gets: one per interval, strictly before
- * `expiresAt`. The ring's first ping is the in-app delivery's own, so the first re-ping waits a
- * full interval.
+ * The delays, from `now`, of every re-ping a ring gets, strictly before `expiresAt`: the early
+ * re-pings, then one per interval. The ring's first ping is the in-app delivery's own.
  */
 export function ringRepingDelaysMs(expiresAt: Date, now: Date): number[] {
   const remainingMs = expiresAt.getTime() - now.getTime();
-  const delays: number[] = [];
+  const delays = CALL_NOW_RING_REPING_EARLY_DELAYS_MS.filter((delayMs) => delayMs < remainingMs);
   for (
     let delayMs = CALL_NOW_RING_REPING_INTERVAL_MS;
     delayMs < remainingMs;
@@ -89,6 +94,10 @@ export async function handleCallNowRingReping(
     return;
   }
   await publishNotificationCreated(ring.calleeUserId);
+  log.info(
+    { ringId, ringAgeMs: now.getTime() - ring.createdAt.getTime() },
+    'call-now-ring-reping: re-ping sent'
+  );
 }
 
 export function startCallNowRingRepingWorker(): Worker<CallNowRingRepingJobData> {

@@ -4,13 +4,14 @@ const mocks = vi.hoisted(() => ({
   addBulk: vi.fn(),
   findById: vi.fn(),
   publishCreated: vi.fn(),
+  info: vi.fn(),
   warn: vi.fn(),
   workerOn: vi.fn(),
   workerCtor: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mocks.warn, error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: mocks.info, warn: mocks.warn, error: vi.fn() }),
 }));
 vi.mock('bullmq', () => ({
   Worker: class {
@@ -33,6 +34,7 @@ vi.mock('../notifications/channels/in-app-push.js', () => ({
 import type { Job } from 'bullmq';
 import { buildJobId } from '../lib/queue.js';
 import {
+  CALL_NOW_RING_REPING_EARLY_DELAYS_MS,
   CALL_NOW_RING_REPING_INTERVAL_MS,
   CALL_NOW_RING_REPING_QUEUE,
   enqueueCallNowRingRepings,
@@ -55,6 +57,7 @@ function ring(overrides: Partial<{ status: string; expiresAt: Date }> = {}): unk
     id: RING_ID,
     calleeUserId: CALLEE_ID,
     status: 'ringing',
+    createdAt: new Date(NOW.getTime() - 13_000),
     expiresAt: new Date(NOW.getTime() + 60_000),
     ...overrides,
   };
@@ -67,60 +70,53 @@ beforeEach(() => {
 });
 
 describe('ringRepingDelaysMs', () => {
-  it('is one delay per 10 s interval, strictly before expires_at', () => {
+  it('pings at 3 s and 6 s, then once per 10 s interval, strictly before expires_at', () => {
+    expect(CALL_NOW_RING_REPING_EARLY_DELAYS_MS).toEqual([3_000, 6_000]);
     expect(CALL_NOW_RING_REPING_INTERVAL_MS).toBe(10_000);
     expect(ringRepingDelaysMs(new Date(NOW.getTime() + 45_000), NOW)).toEqual([
-      10_000, 20_000, 30_000, 40_000,
+      3_000, 6_000, 10_000, 20_000, 30_000, 40_000,
     ]);
   });
 
   it('never schedules a ping on the expiry instant itself', () => {
-    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 30_000), NOW)).toEqual([10_000, 20_000]);
+    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 30_000), NOW)).toEqual([
+      3_000, 6_000, 10_000, 20_000,
+    ]);
+    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 6_000), NOW)).toEqual([3_000]);
   });
 
-  it('is empty for a ring shorter than one interval, or already expired', () => {
-    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 10_000), NOW)).toEqual([]);
+  it('is empty for a ring of 3 s or less, or one already expired', () => {
+    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 3_000), NOW)).toEqual([]);
     expect(ringRepingDelaysMs(new Date(NOW.getTime() - 1), NOW)).toEqual([]);
   });
 
-  it('covers a two-minute ring with eleven re-pings', () => {
-    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 117_000), NOW)).toHaveLength(11);
+  it('covers a two-minute ring with thirteen re-pings', () => {
+    expect(ringRepingDelaysMs(new Date(NOW.getTime() + 117_000), NOW)).toHaveLength(13);
   });
 });
 
 describe('enqueueCallNowRingRepings', () => {
   it('adds one delayed, single-attempt `reping` job per tick, each with its own colon-free id', async () => {
-    await enqueueCallNowRingRepings(RING_ID, new Date(NOW.getTime() + 25_000), NOW);
+    await enqueueCallNowRingRepings(RING_ID, new Date(NOW.getTime() + 12_000), NOW);
 
     expect(mocks.addBulk).toHaveBeenCalledTimes(1);
-    expect(mocks.addBulk).toHaveBeenCalledWith([
-      {
+    expect(mocks.addBulk).toHaveBeenCalledWith(
+      [3_000, 6_000, 10_000].map((delay, index) => ({
         name: 'reping',
         data: { ringId: RING_ID },
         opts: {
-          jobId: buildJobId('call-now-ring-reping', RING_ID, '1'),
-          delay: 10_000,
+          jobId: buildJobId('call-now-ring-reping', RING_ID, String(index + 1)),
+          delay,
           attempts: 1,
           removeOnComplete: true,
           removeOnFail: true,
         },
-      },
-      {
-        name: 'reping',
-        data: { ringId: RING_ID },
-        opts: {
-          jobId: buildJobId('call-now-ring-reping', RING_ID, '2'),
-          delay: 20_000,
-          attempts: 1,
-          removeOnComplete: true,
-          removeOnFail: true,
-        },
-      },
-    ]);
+      }))
+    );
   });
 
   it('adds nothing when the ring is too short to need a re-ping', async () => {
-    await enqueueCallNowRingRepings(RING_ID, new Date(NOW.getTime() + 5_000), NOW);
+    await enqueueCallNowRingRepings(RING_ID, new Date(NOW.getTime() + 3_000), NOW);
 
     expect(mocks.addBulk).not.toHaveBeenCalled();
   });
@@ -143,6 +139,10 @@ describe('handleCallNowRingReping', () => {
     expect(mocks.findById).toHaveBeenCalledWith(RING_ID);
     expect(mocks.publishCreated).toHaveBeenCalledTimes(1);
     expect(mocks.publishCreated).toHaveBeenCalledWith(CALLEE_ID);
+    expect(mocks.info).toHaveBeenCalledWith(
+      { ringId: RING_ID, ringAgeMs: 13_000 },
+      'call-now-ring-reping: re-ping sent'
+    );
   });
 
   it.each(['connected', 'unanswered', 'declined', 'stopped'])(
@@ -153,6 +153,7 @@ describe('handleCallNowRingReping', () => {
       await handleCallNowRingReping(job(), NOW);
 
       expect(mocks.publishCreated).not.toHaveBeenCalled();
+      expect(mocks.info).not.toHaveBeenCalled();
     }
   );
 
