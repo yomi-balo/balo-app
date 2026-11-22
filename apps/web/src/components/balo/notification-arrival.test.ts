@@ -278,7 +278,7 @@ describe('pollDelayMs', () => {
 
   it('pins the cadence values', () => {
     expect([POLL_VISIBLE_MS, POLL_HIDDEN_MS, POLL_PUSH_VISIBLE_MS, POLL_PUSH_HIDDEN_MS]).toEqual([
-      30_000, 60_000, 120_000, 300_000,
+      30_000, 60_000, 30_000, 300_000,
     ]);
   });
 });

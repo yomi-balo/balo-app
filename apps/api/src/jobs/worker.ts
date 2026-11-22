@@ -46,6 +46,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
       startMeetingVenueProvisionWorker,
     },
     { startCallNowRingExpiryWorker },
+    { startCallNowRingRepingWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -79,6 +80,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./proposal-draft-generate.js'),
     import('./meeting-venue-repair.js'),
     import('./call-now-ring-expiry.js'),
+    import('./call-now-ring-reping.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -180,5 +182,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // cron; the meeting lifecycle sweep is its backstop. ⚠ Its `vi.mock` in `worker.test.ts` must
   // land in THIS commit.
   startCallNowRingExpiryWorker();
+  // The Call now ring re-ping: delayed jobs scheduled per ring at start, no cron. A lost
+  // `notification.created` ping otherwise leaves the callee's tab silent for the whole ring.
+  startCallNowRingRepingWorker();
   logger?.info('BullMQ workers started');
 }

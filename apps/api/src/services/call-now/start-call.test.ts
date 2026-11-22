@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
     startOnMeeting: vi.fn(),
     provision: vi.fn(),
     enqueueExpiry: vi.fn(),
+    enqueueRepings: vi.fn(),
     enqueueRebuild: vi.fn(),
     publish: vi.fn(),
     // Things a Call now start must NEVER do (a call in progress is not a booking).
@@ -61,6 +62,9 @@ vi.mock('../../jobs/booking-calendar-projection-job.js', () => ({
 }));
 vi.mock('../../jobs/call-now-ring-expiry.js', () => ({
   enqueueCallNowRingExpiry: mocks.enqueueExpiry,
+}));
+vi.mock('../../jobs/call-now-ring-reping.js', () => ({
+  enqueueCallNowRingRepings: mocks.enqueueRepings,
 }));
 vi.mock('../../jobs/availability-cache.js', () => ({
   enqueueAvailabilityCacheRebuild: mocks.enqueueRebuild,
@@ -166,6 +170,7 @@ beforeEach(() => {
   });
   mocks.provision.mockResolvedValue({ provisioned: true, dailyRoomName: 'r', joinUrl: 'u' });
   mocks.enqueueExpiry.mockResolvedValue(undefined);
+  mocks.enqueueRepings.mockResolvedValue(undefined);
   mocks.enqueueRebuild.mockResolvedValue(undefined);
   mocks.publish.mockResolvedValue(undefined);
   mocks.endRing.mockResolvedValue({ ended: true });
@@ -258,6 +263,7 @@ describe('startCallNow — placement', () => {
       code: 'in_place_not_eligible',
     });
     expect(mocks.enqueueExpiry).not.toHaveBeenCalled();
+    expect(mocks.enqueueRepings).not.toHaveBeenCalled();
   });
 
   describe('expert caller (decision 9)', () => {
@@ -400,6 +406,7 @@ describe('startCallNow — refusals', () => {
       reason: null,
     });
     expect(mocks.enqueueExpiry).not.toHaveBeenCalled();
+    expect(mocks.enqueueRepings).not.toHaveBeenCalled();
   });
 
   it('an unexpected repository error propagates to the route’s log.error boundary', async () => {
@@ -576,6 +583,7 @@ describe('startCallNow — new_meeting post-commit', () => {
       })
     );
     expect(mocks.enqueueExpiry).not.toHaveBeenCalled();
+    expect(mocks.enqueueRepings).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
@@ -632,6 +640,27 @@ describe('startCallNow — expiry job and events', () => {
       expect.objectContaining({ ringId: RING_ID }),
       expect.stringContaining('sweep')
     );
+  });
+
+  it('schedules the re-pings with the ring id, its expiresAt and now', async () => {
+    await start();
+
+    expect(mocks.enqueueRepings).toHaveBeenCalledWith(
+      RING_ID,
+      new Date(NOW.getTime() + CALL_NOW_RING_MS),
+      NOW
+    );
+  });
+
+  it('a re-ping enqueue failure warns and the ring still starts and is announced', async () => {
+    mocks.enqueueRepings.mockRejectedValue(new Error('redis down'));
+
+    await expect(start()).resolves.toMatchObject({ ok: true, ringId: RING_ID });
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ ringId: RING_ID, error: 'redis down' }),
+      expect.stringContaining('re-pings could not be enqueued')
+    );
+    expect(mocks.publish).toHaveBeenCalledWith('call.ringing', expect.anything());
   });
 
   it('publishes call.ringing after the expiry is scheduled', async () => {
@@ -770,6 +799,7 @@ describe('startCallNow — SMS reach (BAL-652)', () => {
     expect(mocks.releaseSmsSlot).toHaveBeenCalledWith(CLIENT, EXPERT_USER);
     expect(mocks.trackSuppressed).not.toHaveBeenCalled();
     expect(mocks.enqueueExpiry).not.toHaveBeenCalled();
+    expect(mocks.enqueueRepings).not.toHaveBeenCalled();
   });
 
   it('a throwing write on an `app` ring has no slot to give back', async () => {

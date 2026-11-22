@@ -56,6 +56,7 @@ import {
 import type { FastifyBaseLogger } from 'fastify';
 import { resolveCallNowRingWindows, ringExpiresAt } from '../../config/call-now-timers.js';
 import { enqueueCallNowRingExpiry } from '../../jobs/call-now-ring-expiry.js';
+import { enqueueCallNowRingRepings } from '../../jobs/call-now-ring-reping.js';
 import {
   checkCaseBookingFunding,
   type CaseBookingFundingCode,
@@ -293,7 +294,10 @@ async function giveBackSmsSlot(
   }
 }
 
-/** The ring is committed: schedule its expiry (best-effort), announce it and log the start. */
+/**
+ * The ring is committed: schedule its expiry and its re-pings (each best-effort), announce it and
+ * log the start.
+ */
 async function announceStartedRing(input: {
   ring: MeetingRing;
   meetingId: string;
@@ -312,6 +316,17 @@ async function announceStartedRing(input: {
         error: error instanceof Error ? error.message : String(error),
       },
       'Call now ring expiry could not be enqueued — the lifecycle sweep will end the ring'
+    );
+  }
+  try {
+    await enqueueCallNowRingRepings(ring.id, expiresAt, now);
+  } catch (error) {
+    log.warn(
+      {
+        ringId: ring.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Call now re-pings could not be enqueued — the callee hears the ring from its one ping'
     );
   }
 

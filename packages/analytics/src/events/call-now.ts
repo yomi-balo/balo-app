@@ -175,6 +175,11 @@ export interface CallNowEventMap {
     mode: 'ringing' | 'missed';
     /** `live` arrived by push while the page was open; `load` was found on page load. */
     trigger: 'live' | 'load';
+    /**
+     * Ringing toasts only: milliseconds from the ring's start to the toast appearing, on the
+     * server's clock. How long a callee's tab took to hear of the ring.
+     */
+    ring_age_ms?: number;
   };
   [CALL_NOW_EVENTS.TOAST_JOIN_CLICKED]: {
     /** The callee's side. */

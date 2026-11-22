@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { useViewerClock } from '@/hooks/use-viewer-clock';
 import { useRefreshOnFocus } from '@/hooks/use-refresh-on-focus';
+import { useRefreshOnMeetingsChanged } from '@/hooks/use-refresh-on-meetings-changed';
 import { loadMoreOpenCases } from '../_actions/load-more-cases';
 import { resolveFeaturedTiming } from '../_lib/cases-index-presentation';
 import {
@@ -195,9 +196,11 @@ function CasesIndexReady({
   expertSetupHref: string | null;
 }>): React.JSX.Element {
   const clock = useViewerClock();
-  // A case can be booked, rescheduled or closed in another tab; re-reading on focus keeps the
-  // list from going stale without polling. Same hook the dashboard Up next card uses.
+  // A case can be booked, rescheduled or closed in another tab; re-reading on focus, and when the
+  // bell feed reports a meeting change, keeps the list from going stale without polling. Same
+  // hooks the dashboard Up next card uses.
   useRefreshOnFocus();
+  useRefreshOnMeetingsChanged();
   const viewedRef = useRef(false);
 
   /**
