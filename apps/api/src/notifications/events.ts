@@ -214,21 +214,37 @@ export interface ProjectProposalSubmittedPayload {
   title: string; // request title — email/in-app body
 }
 
+/** The fields every reminder-sequence payload carries, whatever the sequence. */
+export interface ReminderPayloadBase {
+  correlationId: string; // fresh uuid per promise
+  sequenceId: ReminderSequenceId;
+  step: string; // the step key, e.g. 'day_2'
+  entityId: string; // the entity the sequence is keyed to
+  anchorIso: string; // the instant the sequence's step offsets count from
+  recipientUserId: string; // → resolves recipient:'self'
+}
+
 /**
  * BAL-663 — the proposal-review follow-up. Armed by the reminder-sequence sweep; the
  * `reminder_sequence` recheck refreshes `awaitingCount` and `title` at fire time. Names no
  * price, budget or email address.
  */
-export interface ProposalReviewReminderPayload {
-  correlationId: string; // fresh uuid per promise
-  sequenceId: ReminderSequenceId;
-  step: string; // the step key, e.g. 'day_2'
-  entityId: string; // the project request id
-  anchorIso: string; // the oldest awaiting proposal's submit time the sequence is keyed to
-  recipientUserId: string; // → resolves recipient:'self'
-  projectRequestId: string; // → the email CTA
+export interface ProposalReviewReminderPayload extends ReminderPayloadBase {
+  projectRequestId: string; // → the email CTA; equals `entityId`
   title: string; // request title — email body
   awaitingCount: number; // proposals awaiting the client's review
+}
+
+/**
+ * BAL-664 — the invitation follow-up. Armed by the reminder-sequence sweep; the
+ * `reminder_sequence` recheck refreshes `title`, `projectRequestId` and `companyName` at fire
+ * time. Names no price, budget, fee or email address.
+ */
+export interface InvitationReminderPayload extends ReminderPayloadBase {
+  relationshipId: string; // the invited expert's relationship; equals `entityId`
+  projectRequestId: string; // → the email CTA
+  title: string; // request title — email body
+  companyName: string; // the client party the email names
 }
 
 export interface ProjectProposalAcceptedPayload {
@@ -579,6 +595,9 @@ export type NotificationEvent =
   // BAL-663: the 2 / 5 / 9 day follow-up while proposals still await the client. SERVER-ONLY
   // (see `ServerOnlyNotificationEvent` below).
   | 'project.proposal_review_reminder'
+  // BAL-664: the day 1 / day 3 follow-up while the expert still owes an answer. SERVER-ONLY
+  // (see `ServerOnlyNotificationEvent` below).
+  | 'project.invitation_reminder'
   | 'project.proposal_accepted'
   | 'project.kickoff_approved'
   | 'project.changes_requested'
@@ -882,6 +901,9 @@ export type ServerOnlyNotificationEvent =
   // BAL-663: scheduled by the reminder-sequence sweep and published by the dispatch tick only —
   // no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
   | 'project.proposal_review_reminder'
+  // BAL-664: scheduled by the reminder-sequence sweep and published by the dispatch tick only —
+  // no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+  | 'project.invitation_reminder'
   // BAL-521 §3: published from BOTH doors in apps/api — the Stripe webhook applier
   // (`services/stripe/dispatch.ts`) and `detachSavedCard` (`services/stripe/mandate.ts`) —
   // never from apps/web, so it has NO `publishBodySchema` arm; adding one would be a
@@ -992,6 +1014,7 @@ export interface EventPayloadMap {
   'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.proposal_submitted': ProjectProposalSubmittedPayload;
   'project.proposal_review_reminder': ProposalReviewReminderPayload;
+  'project.invitation_reminder': InvitationReminderPayload;
   'project.proposal_accepted': ProjectProposalAcceptedPayload;
   'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;

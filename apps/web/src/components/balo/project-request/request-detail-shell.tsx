@@ -1,5 +1,6 @@
 import { Lock, Shield, User, Users } from 'lucide-react';
 import {
+  directExpertOwesChoice,
   narrowToPassableRelationshipStatus,
   type PassableRelationshipStatus,
 } from '@balo/shared/project-requests';
@@ -14,7 +15,6 @@ import type {
   ConversationThreadView,
   ConversationView,
 } from '@/lib/project-request/conversation-view-types';
-import { directExpertOwesChoice } from '@/lib/project-request/direct-request-choice';
 import type { KickoffBillingCapture } from '@/lib/billing/billing-capture';
 import { RequestCard } from './request-card';
 import { RequestContext } from './request-context';

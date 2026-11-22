@@ -22,12 +22,22 @@ vi.mock('./registry.js', async () => {
   const sequence = {
     id: 'proposal_review',
     event: 'project.proposal_review_reminder',
+    entityIdField: 'projectRequestId',
+    exemptFromDailyLimit: false,
+    evaluate: mockEvaluate,
+    resolveRecipients: mockResolve,
+  };
+  const invitation = {
+    id: 'invitation',
+    event: 'project.invitation_reminder',
+    entityIdField: 'relationshipId',
     exemptFromDailyLimit: false,
     evaluate: mockEvaluate,
     resolveRecipients: mockResolve,
   };
   return {
-    findReminderSequence: (id: unknown) => (id === 'proposal_review' ? sequence : undefined),
+    findReminderSequence: (id: unknown) =>
+      id === 'proposal_review' ? sequence : id === 'invitation' ? invitation : undefined,
     limitedSequencePrefixes: () => ['seq:proposal_review:'],
     __sequence: sequence,
   };
@@ -269,5 +279,44 @@ describe('reminderSequenceRecheck', () => {
   it('lets a repository throw propagate so the row is retried', async () => {
     mockEvaluate.mockRejectedValue(new Error('db blip'));
     await expect(reminderSequenceRecheck(row())).rejects.toThrow('db blip');
+  });
+
+  describe('invitation rows', () => {
+    function invitationRow(payload: Record<string, unknown> = {}): ScheduledNotification {
+      const base = row();
+      return {
+        ...base,
+        dedupeKey: `seq:invitation:${REQ}:day_1:${USER}:2026-11-02T00:00:00.000Z`,
+        event: 'project.invitation_reminder',
+        payload: {
+          correlationId: 'c-1',
+          sequenceId: 'invitation',
+          step: 'day_1',
+          entityId: REQ,
+          anchorIso: ANCHOR.toISOString(),
+          recipientUserId: USER,
+          relationshipId: REQ,
+          projectRequestId: '33333333-3333-4333-8333-333333333333',
+          title: 'Old title',
+          companyName: 'Northwind',
+          ...payload,
+        },
+      };
+    }
+
+    it('skips as over_daily_limit when the recipient has had two reminders today', async () => {
+      mockCount.mockResolvedValue(2);
+      expect(await reminderSequenceRecheck(invitationRow())).toEqual({
+        publish: false,
+        reason: 'over_daily_limit',
+      });
+    });
+
+    it('skips as malformed_payload when the relationship id differs from the entity id', async () => {
+      expect(await reminderSequenceRecheck(invitationRow({ relationshipId: USER }))).toEqual({
+        publish: false,
+        reason: 'malformed_payload',
+      });
+    });
   });
 });

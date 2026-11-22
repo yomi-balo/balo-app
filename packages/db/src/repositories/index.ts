@@ -248,6 +248,8 @@ export {
   RequestClosedError,
   // BAL-604 — `passTrack`'s output shape.
   type PassTrackResult,
+  // BAL-664 — the invitation reminder sequence's candidate row.
+  type InvitationReminderCandidateRow,
 } from './request-expert-relationships';
 export {
   deriveRequestStatus,

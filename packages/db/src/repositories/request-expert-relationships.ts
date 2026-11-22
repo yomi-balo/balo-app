@@ -1,8 +1,11 @@
-import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, ne, notInArray } from 'drizzle-orm';
 import { db } from '../client';
 import {
+  companies,
+  expertProfiles,
   projectRequests,
   requestExpertRelationships,
+  users,
   type RelationshipDeclineReason,
   type RequestExpertRelationship,
 } from '../schema';
@@ -517,7 +520,92 @@ export class RequestClosedError extends Error {
   }
 }
 
+/**
+ * One live `invited` / `eoi_submitted` relationship on an open request, with the invited
+ * expert's own user. Carries no budget or price column.
+ */
+export interface InvitationReminderCandidateRow {
+  relationshipId: string;
+  projectRequestId: string;
+  companyId: string;
+  companyName: string;
+  title: string;
+  expertUserId: string;
+  requestStatus: string;
+  relationshipStatus: string;
+  onDirectLeg: boolean;
+  availabilitySharedAt: Date | null;
+  invitedAt: Date;
+}
+
 export const requestExpertRelationshipsRepository = {
+  /**
+   * Candidates for the invitation reminder sequence: every live relationship in `invited` or
+   * `eoi_submitted` on a live request that is not `closed`, `accepted` or `kickoff_approved`,
+   * whose expert profile resolves to a live, active user (the company is joined on id only: companies has no soft delete). `onDirectLeg` is
+   * true when the request was sent directly to this very expert. The SQL only narrows the
+   * rows; whether the expert still owes an answer is decided by the shared rule, not here.
+   * Ordered by `invited_at`, then id. `relationshipId` narrows to one row; `invitedSince`
+   * drops rows invited before it.
+   */
+  async listInvitationReminderCandidates(
+    input: { relationshipId?: string; invitedSince?: Date } = {}
+  ): Promise<InvitationReminderCandidateRow[]> {
+    const rows = await db
+      .select({
+        relationshipId: requestExpertRelationships.id,
+        projectRequestId: projectRequests.id,
+        companyId: projectRequests.companyId,
+        companyName: companies.name,
+        title: projectRequests.title,
+        expertUserId: users.id,
+        requestStatus: projectRequests.status,
+        relationshipStatus: requestExpertRelationships.status,
+        sendTo: projectRequests.sendTo,
+        requestExpertProfileId: projectRequests.expertProfileId,
+        expertProfileId: requestExpertRelationships.expertProfileId,
+        availabilitySharedAt: requestExpertRelationships.availabilitySharedAt,
+        invitedAt: requestExpertRelationships.invitedAt,
+      })
+      .from(requestExpertRelationships)
+      .innerJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, requestExpertRelationships.projectRequestId),
+          isNull(projectRequests.deletedAt),
+          notInArray(projectRequests.status, ['closed', 'accepted', 'kickoff_approved'])
+        )
+      )
+      .innerJoin(companies, eq(companies.id, projectRequests.companyId))
+      .innerJoin(expertProfiles, eq(expertProfiles.id, requestExpertRelationships.expertProfileId))
+      .innerJoin(
+        users,
+        and(
+          eq(users.id, expertProfiles.userId),
+          isNull(users.deletedAt),
+          eq(users.status, 'active')
+        )
+      )
+      .where(
+        and(
+          inArray(requestExpertRelationships.status, ['invited', 'eoi_submitted']),
+          isNull(requestExpertRelationships.deletedAt),
+          input.relationshipId === undefined
+            ? undefined
+            : eq(requestExpertRelationships.id, input.relationshipId),
+          input.invitedSince === undefined
+            ? undefined
+            : gte(requestExpertRelationships.invitedAt, input.invitedSince)
+        )
+      )
+      .orderBy(asc(requestExpertRelationships.invitedAt), asc(requestExpertRelationships.id));
+
+    return rows.map(({ sendTo, requestExpertProfileId, expertProfileId, ...row }) => ({
+      ...row,
+      onDirectLeg: sendTo === 'direct' && requestExpertProfileId === expertProfileId,
+    }));
+  },
+
   /**
    * Admin invites an expert → creates an `invited` relationship row.
    *

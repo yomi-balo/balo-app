@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { PortfolioRequestRow, PortfolioInvitationRow } from '@balo/db';
+import { expertInvitationMove } from '@balo/shared/project-requests';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import {
@@ -1023,4 +1024,48 @@ describe('agency row helpers', () => {
     expect(agencyRowMatches(row, 'pending_acceptance')).toBe(true);
     expect(agencyRowMatches(row, 'in_delivery')).toBe(false);
   });
+});
+
+describe('needsYouForExpert parity with expertInvitationMove', () => {
+  const requestStatuses = [
+    'experts_invited',
+    'eoi_submitted',
+    'closed',
+    'accepted',
+    'kickoff_approved',
+  ] as const;
+  const relationshipStatuses = ['invited', 'eoi_submitted', 'proposal_requested'] as const;
+
+  for (const requestStatus of requestStatuses) {
+    for (const relationshipStatus of relationshipStatuses) {
+      for (const onDirectLeg of [true, false]) {
+        for (const availabilityShared of [true, false]) {
+          for (const sentMessage of [true, false]) {
+            it(`${requestStatus} / ${relationshipStatus} / direct=${onDirectLeg} / availability=${availabilityShared} / message=${sentMessage}`, () => {
+              const { moveKind } = needsYouForExpert(
+                makeInvitation({
+                  requestStatus,
+                  relationshipStatus,
+                  onDirectLeg,
+                  availabilitySharedAt: availabilityShared ? day(1) : null,
+                }),
+                { ...SIGNAL_QUIET, viewerHasSentMessage: sentMessage }
+              );
+              const card =
+                moveKind === 'invitation' || moveKind === 'direct_request' ? moveKind : null;
+              expect(card).toBe(
+                expertInvitationMove({
+                  requestStatus,
+                  relationshipStatus,
+                  onDirectLeg,
+                  availabilityShared,
+                  sentMessage,
+                })
+              );
+            });
+          }
+        }
+      }
+    }
+  }
 });

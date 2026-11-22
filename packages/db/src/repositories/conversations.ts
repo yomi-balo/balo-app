@@ -28,9 +28,11 @@ import {
   conversationFiles,
   conversationReadStates,
   conversations,
+  expertProfiles,
   meetingContexts,
   meetingFiles,
   meetings,
+  requestExpertRelationships,
   users,
   type Conversation,
   type ConversationContext,
@@ -608,6 +610,55 @@ export const conversationsRepository = {
       })),
       hasEarlier,
     };
+  },
+
+  /**
+   * Of the given relationships, those whose invited expert's own user has written at least one
+   * live message in the relationship's live thread (request-share cards are messages, so they
+   * count). Empty input ⇒ empty Set, no query.
+   */
+  async relationshipsWithExpertMessage(relationshipIds: readonly string[]): Promise<Set<string>> {
+    if (relationshipIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await db
+      .selectDistinct({ relationshipId: conversationContexts.contextId })
+      .from(conversationContexts)
+      .innerJoin(
+        conversations,
+        and(
+          eq(conversations.id, conversationContexts.conversationId),
+          isNull(conversations.deletedAt)
+        )
+      )
+      .innerJoin(
+        conversationMessages,
+        and(
+          eq(conversationMessages.conversationId, conversations.id),
+          isNull(conversationMessages.deletedAt)
+        )
+      )
+      .innerJoin(
+        requestExpertRelationships,
+        eq(requestExpertRelationships.id, conversationContexts.contextId)
+      )
+      .innerJoin(
+        expertProfiles,
+        and(
+          eq(expertProfiles.id, requestExpertRelationships.expertProfileId),
+          eq(expertProfiles.userId, conversationMessages.senderUserId)
+        )
+      )
+      .where(
+        and(
+          eq(conversationContexts.contextType, 'relationship'),
+          inArray(conversationContexts.contextId, [...relationshipIds]),
+          isNull(conversationContexts.deletedAt)
+        )
+      );
+
+    return new Set(rows.map((row) => row.relationshipId));
   },
 
   /**

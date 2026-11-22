@@ -1,6 +1,6 @@
 import { canonicalTimezone, zonedWallClockToUtc } from '../timezone';
 
-export const REMINDER_SEQUENCE_IDS = ['proposal_review'] as const;
+export const REMINDER_SEQUENCE_IDS = ['proposal_review', 'invitation'] as const;
 export type ReminderSequenceId = (typeof REMINDER_SEQUENCE_IDS)[number];
 
 export type ReminderStepTiming = 'exact' | 'weekday_morning';
@@ -21,6 +21,10 @@ export const REMINDER_SEQUENCE_STEPS: Readonly<
     { key: 'day_5', offsetMinutes: reminderDays(5), timing: 'weekday_morning' },
     { key: 'day_9', offsetMinutes: reminderDays(9), timing: 'weekday_morning' },
   ],
+  invitation: [
+    { key: 'day_1', offsetMinutes: reminderDays(1), timing: 'weekday_morning' },
+    { key: 'day_3', offsetMinutes: reminderDays(3), timing: 'weekday_morning' },
+  ],
 };
 
 /** Names of the shared rules each sequence's finder must call rather than re-implement. */
@@ -28,6 +32,7 @@ export const REMINDER_SEQUENCE_SHARED_RULES: Readonly<
   Record<ReminderSequenceId, readonly string[]>
 > = {
   proposal_review: ['proposalAwaitsClientReview'],
+  invitation: ['expertInvitationMove'],
 };
 
 export const MAX_REMINDER_STEPS = 3;

@@ -16,16 +16,19 @@ export interface SequenceEntity {
 /** How often a sequence's sweep runs. The lead a sweep arms ahead by equals its cadence. */
 export type ReminderCadence = 'hourly';
 
-export type ReminderPayload = EventPayloadMap['project.proposal_review_reminder'];
+/** The events a reminder sequence publishes. */
+export type ReminderEvent = 'project.proposal_review_reminder' | 'project.invitation_reminder';
 
 /**
  * A reminder sequence. The steps are never stored here: they are always read from
  * `REMINDER_SEQUENCE_STEPS[id]` in `@balo/shared/notifications`, so the web app and the sweep
  * cannot disagree about them.
  */
-export interface ReminderSequence {
+export interface ReminderSequence<E extends ReminderEvent = ReminderEvent> {
   readonly id: ReminderSequenceId;
-  readonly event: 'project.proposal_review_reminder';
+  readonly event: E;
+  /** The payload field that must equal the entity id; the recheck refuses a row where it does not. */
+  readonly entityIdField: keyof EventPayloadMap[E] & string;
   readonly channel: 'email';
   readonly audience: 'client' | 'expert';
   readonly cadence: ReminderCadence;
@@ -41,5 +44,8 @@ export interface ReminderSequence {
     stepKey: string,
     recipientUserId: string,
     correlationId: string
-  ): ReminderPayload;
+  ): EventPayloadMap[E];
 }
+
+/** Any one registered sequence, each paired with its own event and payload. */
+export type AnyReminderSequence = { [K in ReminderEvent]: ReminderSequence<K> }[ReminderEvent];

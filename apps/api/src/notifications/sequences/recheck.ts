@@ -62,23 +62,13 @@ function nonBlank(value: unknown): value is string {
 
 /** The stored payload's identifying fields, or null when any is missing or unusable. */
 function parsePayload(row: ScheduledNotification): ParsedPayload | null {
-  const {
-    correlationId,
-    sequenceId,
-    step,
-    entityId,
-    anchorIso,
-    recipientUserId,
-    projectRequestId,
-  } = row.payload;
+  const { correlationId, sequenceId, step, entityId, anchorIso, recipientUserId } = row.payload;
   if (
     !nonBlank(correlationId) ||
     !nonBlank(sequenceId) ||
     !nonBlank(step) ||
     !isUuid(entityId) ||
     !isUuid(recipientUserId) ||
-    !isUuid(projectRequestId) ||
-    projectRequestId !== entityId ||
     !nonBlank(anchorIso) ||
     !isRoundTrippedIso(anchorIso)
   ) {
@@ -87,6 +77,7 @@ function parsePayload(row: ScheduledNotification): ParsedPayload | null {
   const sequence = findReminderSequence(sequenceId);
   if (
     sequence?.event !== row.event ||
+    row.payload[sequence.entityIdField] !== entityId ||
     !REMINDER_SEQUENCE_STEPS[sequence.id].some((known) => known.key === step)
   ) {
     return null;

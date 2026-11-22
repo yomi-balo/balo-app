@@ -22,7 +22,7 @@ describe('REMINDER_SEQUENCES', () => {
   });
 
   it('limits every non-exempt sequence by its key prefix', () => {
-    expect(limitedSequencePrefixes()).toEqual(['seq:proposal_review:']);
+    expect(limitedSequencePrefixes()).toEqual(['seq:proposal_review:', 'seq:invitation:']);
   });
 
   it('finds a known id and not an unknown one', () => {
@@ -37,5 +37,14 @@ describe('REMINDER_SEQUENCES', () => {
       /import \{[^}]*proposalAwaitsClientReview[^}]*\} from '@balo\/shared\/project-requests'/
     );
     expect(source).not.toMatch(/function proposalAwaitsClientReview/);
+  });
+
+  it('takes the invitation rule from the shared package and declares no copy', () => {
+    const source = readFileSync(new URL('./invitation.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(
+      /import \{[^}]*expertInvitationMove[^}]*\} from '@balo\/shared\/project-requests'/
+    );
+    expect(source).not.toMatch(/function expertInvitationMove/);
+    expect(source).not.toMatch(/budget|price|fee/i);
   });
 });

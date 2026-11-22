@@ -19,8 +19,8 @@ import {
 } from '../notifications/sequences/recheck.js';
 import { allReminderSequences } from '../notifications/sequences/registry.js';
 import type {
+  AnyReminderSequence,
   ReminderCadence,
-  ReminderSequence,
   SequenceEntity,
 } from '../notifications/sequences/types.js';
 
@@ -70,7 +70,7 @@ export interface ReminderSequenceSweepResult {
 }
 
 async function armRecipient(
-  sequence: ReminderSequence,
+  sequence: AnyReminderSequence,
   entity: SequenceEntity,
   userId: string,
   now: Date,
@@ -120,7 +120,7 @@ type FindResult =
 
 /** One sequence's waiting entities. A failing `find` is logged and ends only that sequence. */
 async function findEntities(
-  sequence: ReminderSequence,
+  sequence: AnyReminderSequence,
   now: Date,
   jobLog: (message: string) => void
 ): Promise<FindResult> {
@@ -143,7 +143,7 @@ async function findEntities(
 
 /** Arms one entity for every recipient. A failure is logged and never aborts the batch. */
 async function armEntity(
-  sequence: ReminderSequence,
+  sequence: AnyReminderSequence,
   entity: SequenceEntity,
   now: Date,
   leadMs: number,

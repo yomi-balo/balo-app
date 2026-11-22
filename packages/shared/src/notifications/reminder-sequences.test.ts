@@ -25,6 +25,13 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
     }
   );
 
+  it('invitation is day 1 / 3, weekday mornings', () => {
+    expect(REMINDER_SEQUENCE_STEPS.invitation).toEqual([
+      { key: 'day_1', offsetMinutes: 1440, timing: 'weekday_morning' },
+      { key: 'day_3', offsetMinutes: 4320, timing: 'weekday_morning' },
+    ]);
+  });
+
   it('proposal_review is day 2 / 5 / 9, weekday mornings', () => {
     expect(REMINDER_SEQUENCE_STEPS.proposal_review).toEqual([
       { key: 'day_2', offsetMinutes: 2880, timing: 'weekday_morning' },

@@ -46,4 +46,46 @@ describe('planDueSteps', () => {
     const planned = plan(new Date('2026-11-02T12:30:00.000Z'), ANCHOR, exact);
     expect(planned).toEqual([{ stepKey: 'ping', fireAt: new Date('2026-11-02T13:00:00.000Z') }]);
   });
+
+  describe('steps that would land on the same morning', () => {
+    const INVITATION = REMINDER_SEQUENCE_STEPS.invitation;
+    const MELBOURNE = 'Australia/Melbourne';
+    // Thursday 2026-11-05 14:00 Melbourne (UTC+11) is 03:00 UTC.
+    const THURSDAY = new Date('2026-11-05T03:00:00.000Z');
+
+    function planInvitation(now: Date) {
+      return planDueSteps({
+        steps: INVITATION,
+        anchor: THURSDAY,
+        now,
+        leadMs: HOUR_MS,
+        zone: MELBOURNE,
+      });
+    }
+
+    it('sends day_1 on Monday and day_3 on Tuesday for a Thursday afternoon invite', () => {
+      // day_1 is due Friday 14:00 and slips to Monday 09:00 (22:00 UTC Sunday); day_3 is due
+      // Sunday 14:00 and would also be Monday 09:00.
+      expect(planInvitation(new Date('2026-11-08T21:30:00.000Z'))).toEqual([
+        { stepKey: 'day_1', fireAt: new Date('2026-11-08T22:00:00.000Z') },
+      ]);
+      expect(planInvitation(new Date('2026-11-09T22:30:00.000Z'))).toEqual([
+        { stepKey: 'day_3', fireAt: new Date('2026-11-09T22:00:00.000Z') },
+      ]);
+    });
+
+    it('arms the moved step within its own window', () => {
+      expect(planInvitation(new Date('2026-11-09T21:30:00.000Z')).map((s) => s.stepKey)).toContain(
+        'day_3'
+      );
+      expect(
+        planInvitation(new Date('2026-11-09T20:30:00.000Z')).map((s) => s.stepKey)
+      ).not.toContain('day_3');
+    });
+
+    it('leaves proposal_review send times as they were', () => {
+      const planned = plan(new Date('2026-11-05T08:30:00.000Z'));
+      expect(planned[0]?.fireAt.toISOString()).toBe('2026-11-05T09:00:00.000Z');
+    });
+  });
 });

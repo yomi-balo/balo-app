@@ -2,7 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { conversationContexts, conversations, requestExpertRelationships } from '../schema';
+import {
+  conversationContexts,
+  conversations,
+  expertProfiles,
+  projectRequests,
+  requestExpertRelationships,
+  users,
+} from '../schema';
 import {
   userFactory,
   expertDraftFactory,
@@ -794,5 +801,175 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       .from(requestExpertRelationships)
       .where(eq(requestExpertRelationships.id, relationship.id));
     expect(raw?.status).toBe('invited');
+  });
+});
+
+describe('requestExpertRelationshipsRepository.listInvitationReminderCandidates', () => {
+  async function ids(
+    input: Parameters<
+      typeof requestExpertRelationshipsRepository.listInvitationReminderCandidates
+    >[0]
+  ): Promise<string[]> {
+    const rows = await requestExpertRelationshipsRepository.listInvitationReminderCandidates(input);
+    return rows.map((r) => r.relationshipId);
+  }
+
+  it('returns an invited row with its request, company and the expert user', async () => {
+    const seeded = await requestExpertRelationshipFactory({ values: { status: 'invited' } });
+    const [expert] = await db
+      .select()
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, seeded.expertProfileId));
+    const [request] = await db
+      .select()
+      .from(projectRequests)
+      .where(eq(projectRequests.id, seeded.projectRequestId));
+
+    const rows = await requestExpertRelationshipsRepository.listInvitationReminderCandidates({
+      relationshipId: seeded.relationship.id,
+    });
+
+    expect(rows).toEqual([
+      {
+        relationshipId: seeded.relationship.id,
+        projectRequestId: seeded.projectRequestId,
+        companyId: request?.companyId,
+        companyName: 'Acme Co',
+        title: request?.title,
+        expertUserId: expert?.userId,
+        requestStatus: request?.status,
+        relationshipStatus: 'invited',
+        onDirectLeg: true,
+        availabilitySharedAt: null,
+        invitedAt: seeded.relationship.invitedAt,
+      },
+    ]);
+  });
+
+  it('flags a direct eoi_submitted row as on the direct leg and a match row as not', async () => {
+    const direct = await requestExpertRelationshipFactory({ values: { status: 'eoi_submitted' } });
+    const matchRequest = await projectRequestFactory({ sendTo: 'match', expertProfileId: null });
+    const other = await expertDraftFactory();
+    const match = await requestExpertRelationshipFactory({
+      projectRequestId: matchRequest.id,
+      expertProfileId: other.id,
+      values: { status: 'eoi_submitted' },
+    });
+
+    const rows = await requestExpertRelationshipsRepository.listInvitationReminderCandidates();
+    const byId = new Map(rows.map((r) => [r.relationshipId, r]));
+
+    expect(byId.get(direct.relationship.id)?.onDirectLeg).toBe(true);
+    expect(byId.get(match.relationship.id)?.onDirectLeg).toBe(false);
+  });
+
+  it('does not treat another expert invited to a direct request as on the direct leg', async () => {
+    const direct = await requestExpertRelationshipFactory();
+    const other = await expertDraftFactory();
+    const alongside = await requestExpertRelationshipFactory({
+      projectRequestId: direct.projectRequestId,
+      expertProfileId: other.id,
+    });
+
+    const rows = await requestExpertRelationshipsRepository.listInvitationReminderCandidates({
+      relationshipId: alongside.relationship.id,
+    });
+
+    expect(rows.map((r) => r.onDirectLeg)).toEqual([false]);
+  });
+
+  it('excludes declined, proposal_requested and soft-deleted relationships', async () => {
+    const declined = await requestExpertRelationshipFactory({ values: { status: 'declined' } });
+    const advanced = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const removed = await requestExpertRelationshipFactory({ values: { deletedAt: new Date() } });
+
+    const got = await ids({});
+
+    expect(got).not.toContain(declined.relationship.id);
+    expect(got).not.toContain(advanced.relationship.id);
+    expect(got).not.toContain(removed.relationship.id);
+  });
+
+  it.each(['closed', 'accepted', 'kickoff_approved'] as const)(
+    'excludes a row whose request is %s',
+    async (status) => {
+      const request = await projectRequestFactory({ status });
+      const { relationship } = await requestExpertRelationshipFactory({
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId ?? undefined,
+      });
+
+      expect(await ids({ relationshipId: relationship.id })).toEqual([]);
+    }
+  );
+
+  it('excludes a row whose request or expert user is soft-deleted', async () => {
+    const deletedRequest = await requestExpertRelationshipFactory();
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, deletedRequest.projectRequestId));
+
+    const deletedUser = await requestExpertRelationshipFactory();
+    const [expert] = await db
+      .select()
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, deletedUser.expertProfileId));
+    await db
+      .update(users)
+      .set({ deletedAt: new Date() })
+      .where(eq(users.id, expert?.userId ?? randomUUID()));
+
+    const got = await ids({});
+
+    expect(got).not.toContain(deletedRequest.relationship.id);
+    expect(got).not.toContain(deletedUser.relationship.id);
+  });
+
+  it.each(['suspended', 'inactive'] as const)(
+    'excludes a row whose expert user is %s',
+    async (status) => {
+      const { relationship, expertProfileId } = await requestExpertRelationshipFactory();
+      const [expert] = await db
+        .select()
+        .from(expertProfiles)
+        .where(eq(expertProfiles.id, expertProfileId));
+      await db
+        .update(users)
+        .set({ status })
+        .where(eq(users.id, expert?.userId ?? randomUUID()));
+
+      expect(await ids({ relationshipId: relationship.id })).toEqual([]);
+    }
+  );
+
+  it('filters by invitedSince and narrows by relationshipId', async () => {
+    const older = await requestExpertRelationshipFactory({
+      values: { invitedAt: new Date('2026-11-01T00:00:00.000Z') },
+    });
+    const newer = await requestExpertRelationshipFactory({
+      values: { invitedAt: new Date('2026-11-10T00:00:00.000Z') },
+    });
+
+    const since = await ids({ invitedSince: new Date('2026-11-05T00:00:00.000Z') });
+    expect(since).toContain(newer.relationship.id);
+    expect(since).not.toContain(older.relationship.id);
+
+    expect(await ids({ relationshipId: older.relationship.id })).toEqual([older.relationship.id]);
+  });
+
+  it('orders by invited_at then id', async () => {
+    const later = await requestExpertRelationshipFactory({
+      values: { invitedAt: new Date('2026-11-12T00:00:00.000Z') },
+    });
+    const earlier = await requestExpertRelationshipFactory({
+      values: { invitedAt: new Date('2026-11-11T00:00:00.000Z') },
+    });
+
+    const got = await ids({ invitedSince: new Date('2026-11-11T00:00:00.000Z') });
+
+    expect(got).toEqual([earlier.relationship.id, later.relationship.id]);
   });
 });
