@@ -12,7 +12,11 @@ const {
   mockRunRecheck,
   mockTrackServer,
   mockLogger,
+  workerProcessors,
 } = vi.hoisted(() => ({
+  workerProcessors: [] as Array<
+    (job: { log: (message: string) => Promise<unknown> }) => Promise<void>
+  >,
   mockListDue: vi.fn(),
   mockClaim: vi.fn(),
   mockMarkPublished: vi.fn(),
@@ -58,13 +62,23 @@ vi.mock('../notifications/scheduling/rechecks.js', async (importOriginal) => {
 
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: () => ({}) }));
 vi.mock('../lib/queue.js', () => ({ getQueue: vi.fn(() => ({ add: vi.fn() })) }));
-vi.mock('bullmq', () => ({ Worker: class MockWorker {} }));
+vi.mock('bullmq', () => ({
+  Worker: class MockWorker {
+    constructor(
+      _queue: string,
+      processor: (job: { log: (message: string) => Promise<unknown> }) => Promise<void>
+    ) {
+      workerProcessors.push(processor);
+    }
+  },
+}));
 
 import { UnknownRecheckError } from '../notifications/scheduling/rechecks.js';
 import {
   runScheduledNotificationDispatch,
   SCHEDULED_NOTIFICATION_DISPATCH_CRON,
   SCHEDULED_NOTIFICATION_DISPATCH_QUEUE,
+  startScheduledNotificationDispatchWorker,
 } from './scheduled-notification-dispatch.js';
 
 const NOW = new Date('2026-08-05T12:00:00.000Z');
@@ -454,5 +468,36 @@ describe('runScheduledNotificationDispatch — batch isolation', () => {
     const counts = await runScheduledNotificationDispatch(NOW);
 
     expect(counts).toEqual({ published: 1, skipped: 1, failed: 1 });
+  });
+});
+
+describe('startScheduledNotificationDispatchWorker', () => {
+  it('waits for the summary job log before the job settles', async () => {
+    startScheduledNotificationDispatchWorker();
+    const processor = workerProcessors.at(-1);
+    expect(processor).toBeDefined();
+
+    let releaseLog: () => void = () => {};
+    const log = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseLog = resolve;
+        })
+    );
+    let settled = false;
+    const run = processor?.({ log }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(log).toHaveBeenCalledWith(
+        'scheduled notification dispatch: 0 published, 0 skipped, 0 failed'
+      );
+    });
+    expect(settled).toBe(false);
+
+    releaseLog();
+    await run;
+    expect(settled).toBe(true);
   });
 });

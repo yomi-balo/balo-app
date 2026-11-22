@@ -297,7 +297,7 @@ export function startScheduledNotificationDispatchWorker(): Worker {
         new Date(),
         (m) => job.log(m)
       );
-      job.log(
+      await job.log(
         `scheduled notification dispatch: ${published} published, ${skipped} skipped, ${failed} failed`
       );
     },
