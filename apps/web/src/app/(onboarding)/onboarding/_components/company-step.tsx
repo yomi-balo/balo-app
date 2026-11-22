@@ -2,6 +2,7 @@
 
 import { forwardRef, useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import * as Sentry from '@sentry/nextjs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowLeft, Loader2 } from 'lucide-react';
@@ -106,7 +107,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
       setPhase('create');
     };
 
-    (async () => {
+    const resolve = async (): Promise<void> => {
       try {
         const result: ResolveOnboardingCompanyResult = await resolveOnboardingCompanyAction();
         if (!live) return;
@@ -123,7 +124,8 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         resolveFailedOpenRef.current = true;
         applyCreate('new', '');
       }
-    })();
+    };
+    resolve().catch(Sentry.captureException);
 
     return () => {
       live = false;
