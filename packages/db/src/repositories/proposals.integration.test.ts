@@ -45,6 +45,9 @@ import {
 import { insertClausesTx, proposalClausesRepository } from './proposal-clauses';
 import { auditEventsRepository } from './audit-events';
 
+/** A Balo Projects MSA version; a local literal, never imported from apps/web. */
+const TERMS_VERSION = '2025-07-23';
+
 /**
  * Audit rows for one entity (BAL-344 generic table), copied verbatim from
  * `meetings.integration.test.ts`'s helper — including its BAL-426 ordering (`created_at` then
@@ -236,6 +239,7 @@ describe('proposalsRepository.accept', () => {
     const accepted = await proposalsRepository.accept({
       id: proposal.id,
       actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
     });
 
     expect(accepted.status).toBe('accepted');
@@ -255,7 +259,11 @@ describe('proposalsRepository.accept', () => {
 
   it('throws for an unknown proposal id', async () => {
     await expect(
-      proposalsRepository.accept({ id: randomUUID(), actorUserId: await seedActorId() })
+      proposalsRepository.accept({
+        id: randomUUID(),
+        actorUserId: await seedActorId(),
+        termsVersion: TERMS_VERSION,
+      })
     ).rejects.toThrow();
   });
 
@@ -281,7 +289,11 @@ describe('proposalsRepository.accept', () => {
     });
 
     await expect(
-      proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() })
+      proposalsRepository.accept({
+        id: proposal.id,
+        actorUserId: await seedActorId(),
+        termsVersion: TERMS_VERSION,
+      })
     ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
 
     // Status untouched on disk.
@@ -310,7 +322,11 @@ describe('proposalsRepository.accept', () => {
     if (proposal === undefined) throw new Error('proposal insert failed');
 
     await expect(
-      proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() })
+      proposalsRepository.accept({
+        id: proposal.id,
+        actorUserId: await seedActorId(),
+        termsVersion: TERMS_VERSION,
+      })
     ).rejects.toThrow();
 
     // Proposal status unchanged.
@@ -366,7 +382,11 @@ describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit 
 
     try {
       await expect(
-        proposalsRepository.accept({ id: proposal.id, actorUserId: acceptActorId })
+        proposalsRepository.accept({
+          id: proposal.id,
+          actorUserId: acceptActorId,
+          termsVersion: TERMS_VERSION,
+        })
       ).rejects.toThrow('audit insert failed');
     } finally {
       spy.mockRestore();
@@ -412,7 +432,11 @@ describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit 
       cadence: 'monthly',
     });
     const acceptor = await seedActorId();
-    const accepted = await proposalsRepository.accept({ id: proposal.id, actorUserId: acceptor });
+    const accepted = await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: acceptor,
+      termsVersion: TERMS_VERSION,
+    });
 
     // (1) the floor column — on the RETURNED row (this is D6's proof) …
     expect(accepted.acceptedByUserId).toBe(acceptor);
@@ -441,7 +465,7 @@ describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit 
     ).toEqual(new Set([acceptor]));
   });
 
-  it('the proposal.accepted metadata carries ids + version ONLY — no money fields', async () => {
+  it('the proposal.accepted metadata carries ids, proposal version and terms version ONLY — no money fields', async () => {
     const { relationship, projectRequestId, expertProfileId } =
       await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
     const proposal = await proposalsRepository.submit({
@@ -454,26 +478,91 @@ describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit 
       rateCents: 18000,
       cadence: 'monthly',
     });
-    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
+    await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
+    });
 
     const [row] = (await auditEventsForEntity(proposal.id)).filter(
       (r) => r.action === 'proposal.accepted'
     );
     expect(row).toBeDefined(); // ⚠ NON-VACUITY ANCHOR
     const metadata = row?.metadata as Record<string, unknown>;
-    expect(Object.keys(metadata)).toHaveLength(4); // ⚠ NON-VACUITY ANCHOR
-    expect(Object.keys(metadata).sort()).toEqual([
+    expect(Object.keys(metadata)).toHaveLength(5); // ⚠ NON-VACUITY ANCHOR
+    expect(Object.keys(metadata).sort((a, b) => a.localeCompare(b))).toEqual([
       'expertProfileId',
       'projectRequestId',
       'proposalVersion',
       'relationshipId',
+      'termsVersion',
     ]);
     expect(metadata).toEqual({
       relationshipId: relationship.id,
       projectRequestId,
       expertProfileId,
       proposalVersion: 1,
+      termsVersion: TERMS_VERSION,
     });
+  });
+
+  it('BAL-662 — stamps accepted_terms_version on the returned row and on disk; a submitted proposal has none', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    expect(proposal.acceptedTermsVersion).toBeNull();
+
+    const accepted = await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
+    });
+
+    expect(accepted.acceptedTermsVersion).toBe(TERMS_VERSION);
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.acceptedTermsVersion).toBe(TERMS_VERSION);
+  });
+
+  it('BAL-662 — a failed accept leaves accepted_terms_version NULL', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    await proposalsRepository.transitionStatus({
+      id: proposal.id,
+      to: 'changes_requested',
+      expectedFrom: 'submitted',
+    });
+
+    await expect(
+      proposalsRepository.accept({
+        id: proposal.id,
+        actorUserId: await seedActorId(),
+        termsVersion: TERMS_VERSION,
+      })
+    ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.acceptedTermsVersion).toBeNull();
   });
 });
 
@@ -593,7 +682,11 @@ describe('proposalsRepository.transitionStatus', () => {
       rateCents: 18000,
       cadence: 'monthly',
     });
-    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
+    await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
+    });
 
     await expect(
       proposalsRepository.transitionStatus({ id: proposal.id, to: 'withdrawn' })
@@ -684,7 +777,11 @@ describe('proposalsRepository.requestChanges', () => {
       rateCents: 18000,
       cadence: 'monthly',
     });
-    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
+    await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
+    });
     const client = await userFactory();
 
     await expect(
@@ -1965,7 +2062,7 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
     });
 
     const err = await proposalsRepository
-      .accept({ id: proposal.id, actorUserId: await seedActorId() })
+      .accept({ id: proposal.id, actorUserId: await seedActorId(), termsVersion: TERMS_VERSION })
       .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('installments_not_100');
@@ -2007,6 +2104,7 @@ describe('proposalsRepository.accept — coherence guard (BAL-293)', () => {
     const accepted = await proposalsRepository.accept({
       id: proposal.id,
       actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
     });
     expect(accepted.status).toBe('accepted');
     expect(accepted.acceptedAt).toBeInstanceOf(Date);
@@ -2391,6 +2489,7 @@ describe('proposalsRepository.accept — Fixed pricing completeness is not re-ch
     const accepted = await proposalsRepository.accept({
       id: proposal.id,
       actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
     });
     expect(accepted.status).toBe('accepted');
   });
@@ -2505,6 +2604,7 @@ describe('proposalsRepository.accept — T&M effort/total coherence (BAL-294)', 
     const accepted = await proposalsRepository.accept({
       id: proposal.id,
       actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
     });
     expect(accepted.status).toBe('accepted');
     expect(accepted.acceptedAt).toBeInstanceOf(Date);
@@ -2530,7 +2630,7 @@ describe('proposalsRepository.accept — T&M effort/total coherence (BAL-294)', 
     });
 
     const err = await proposalsRepository
-      .accept({ id: proposal.id, actorUserId: await seedActorId() })
+      .accept({ id: proposal.id, actorUserId: await seedActorId(), termsVersion: TERMS_VERSION })
       .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
     expect((err as ProposalCoherenceError).rule).toBe('tm_missing_effort');

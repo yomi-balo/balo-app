@@ -15,6 +15,9 @@ import {
 } from './request-expert-relationships';
 import { proposalsRepository } from './proposals';
 
+/** A Balo Projects MSA version; a local literal, never imported from apps/web. */
+const TERMS_VERSION = '2025-07-23';
+
 /**
  * BAL-295 / ADR-1025 — request-status coherence: `project_requests.status` is a
  * stored, centrally-derived max-progress rollup over its live per-expert
@@ -359,7 +362,11 @@ describe('request-status coherence — via the cross-table repo wrappers', () =>
       'proposal_submitted'
     );
 
-    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
+    await proposalsRepository.accept({
+      id: proposal.id,
+      actorUserId: await seedActorId(),
+      termsVersion: TERMS_VERSION,
+    });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('accepted');
   });
 });

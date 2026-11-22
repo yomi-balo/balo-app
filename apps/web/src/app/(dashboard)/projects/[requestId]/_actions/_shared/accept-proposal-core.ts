@@ -19,6 +19,7 @@ import { resolveConversationAccess } from '@/lib/project-request/resolve-convers
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { PROJECT_TERMS_VERSION } from '@/lib/legal/project-terms';
 import { lockContentionFailure } from './deadlock';
 
 const inputSchema = z.object({
@@ -160,7 +161,11 @@ async function commitAccept(
   actorUserId: string
 ): Promise<'ok' | 'stale' | { coherence: ProposalCoherenceError }> {
   try {
-    await proposalsRepository.accept({ id: proposalId, actorUserId });
+    await proposalsRepository.accept({
+      id: proposalId,
+      actorUserId,
+      termsVersion: PROJECT_TERMS_VERSION,
+    });
     return 'ok';
   } catch (error) {
     if (error instanceof ProposalCoherenceError) {
@@ -247,6 +252,7 @@ export async function runAcceptProposal(
       proposalId,
       userId: user.id,
       transitioned,
+      termsVersion: PROJECT_TERMS_VERSION,
     });
 
     // BAL-357: emit PROJECT_PROPOSAL_ACCEPTED SERVER-SIDE (audience boundary). The
@@ -261,6 +267,7 @@ export async function runAcceptProposal(
       balo_fee_bps: proposal.baloFeeBps,
       client_price_cents: clientPriceCents,
       additional_term_count: groupClauseBodies(clauses).additionalTerms.length,
+      terms_version: PROJECT_TERMS_VERSION,
       distinct_id: user.id,
     });
 

@@ -1,4 +1,4 @@
-import { Document, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
+import { Document, Link, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import {
   BALO_TERMS_ADDITIVE_SENTENCE,
@@ -41,6 +41,8 @@ export interface ProposalPdfDocumentProps {
   preparedByOrgName: string | null;
   /** ISO timestamp stamped into the every-page footer. */
   generatedAtIso: string;
+  /** Absolute URL of the public Projects MSA page, printed in the terms box. */
+  projectTermsUrl: string;
 }
 
 const styles = StyleSheet.create({
@@ -416,11 +418,13 @@ function StandardTerms({
   clientCompanyName,
   expertName,
   additionalTerms,
+  projectTermsUrl,
 }: Readonly<{
   pricingMethod: 'fixed' | 'tm';
   clientCompanyName: string;
   expertName: string;
   additionalTerms: readonly string[];
+  projectTermsUrl: string;
 }>): React.JSX.Element {
   return (
     <View style={styles.termsBox}>
@@ -435,6 +439,9 @@ function StandardTerms({
           <Text style={styles.termText}>{term}</Text>
         </View>
       ))}
+      <Text style={[styles.termText, { marginTop: 4 }]}>
+        Read the Project T&amp;Cs at <Link src={projectTermsUrl}>{projectTermsUrl}</Link>
+      </Text>
       {additionalTerms.length > 0 ? (
         <View style={styles.additionalTerms}>
           <Text style={styles.termsHeading}>{expertName}’s additional terms</Text>
@@ -452,6 +459,7 @@ export function ProposalPdfDocument({
   clientCompanyName,
   preparedByOrgName,
   generatedAtIso,
+  projectTermsUrl,
 }: Readonly<ProposalPdfDocumentProps>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
   const preparedBy =
@@ -519,6 +527,7 @@ export function ProposalPdfDocument({
             clientCompanyName={clientCompanyName}
             expertName={doc.expert.name}
             additionalTerms={doc.additionalTerms}
+            projectTermsUrl={projectTermsUrl}
           />
         </View>
 

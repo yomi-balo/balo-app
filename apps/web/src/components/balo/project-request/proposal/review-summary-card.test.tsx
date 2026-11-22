@@ -11,6 +11,7 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
     version: 1,
     status: 'submitted',
     pricingMethod: 'fixed',
+    acceptedTermsVersion: null,
     overviewHtml: '<p>Overview</p>',
     assumptions: [],
     exclusions: [],

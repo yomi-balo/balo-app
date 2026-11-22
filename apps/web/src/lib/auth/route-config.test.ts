@@ -43,6 +43,11 @@ describe('isPublicRoute', () => {
     // middleware 302s every invited guest to /login, and a guest has no account to
     // log in WITH, so the feature is not merely degraded — it is unreachable.
     expect(isPublicRoute('/join/some-token')).toBe(true);
+    // BAL-662 — the public Projects MSA page and its frozen PDFs.
+    expect(isPublicRoute('/legal/project-terms')).toBe(true);
+    expect(isPublicRoute('/legal/balo-projects-msa-2025-07-23.pdf')).toBe(true);
+    expect(isPublicRoute('/legal/other')).toBe(false);
+    expect(isPublicRoute('/legal/')).toBe(false);
   });
 
   it('rejects protected routes', () => {

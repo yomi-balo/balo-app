@@ -113,6 +113,11 @@ export interface ProposalReviewDoc {
     | 'draft'
     | 'declined';
   pricingMethod: 'fixed' | 'tm';
+  /**
+   * The Project T&Cs version recorded when the client accepted, an ISO date. Null before
+   * acceptance, and for a proposal accepted before versions were recorded.
+   */
+  acceptedTermsVersion: string | null;
   overviewHtml: string;
   /**
    * The three clause lists, plain text in the order the expert set them. They carry no money,

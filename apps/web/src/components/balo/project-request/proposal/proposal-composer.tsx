@@ -374,14 +374,12 @@ export function ProposalComposer({
       dirtyDuringSaveRef.current = true;
       return pending;
     }
-    const run = (async (): Promise<SaveOutcome> => {
-      let outcome: SaveOutcome;
-      do {
-        dirtyDuringSaveRef.current = false;
-        outcome = await saveOnce();
-      } while (dirtyDuringSaveRef.current);
-      return outcome;
-    })().finally(() => {
+    const saveRound = async (): Promise<SaveOutcome> => {
+      dirtyDuringSaveRef.current = false;
+      const outcome = await saveOnce();
+      return dirtyDuringSaveRef.current ? saveRound() : outcome;
+    };
+    const run = saveRound().finally(() => {
       savePromiseRef.current = null;
     });
     savePromiseRef.current = run;
@@ -1061,6 +1059,7 @@ export function ProposalComposer({
                 lead={
                   <BaloTermsBlock
                     where="composer"
+                    lens="expert"
                     pricingMethod={state.pricingMethod}
                     companyName={companyName}
                   />

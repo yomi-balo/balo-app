@@ -312,6 +312,7 @@ function agreedTerms(overrides: Partial<AgreedTermsView> = {}): AgreedTermsView 
     clientCompanyName: 'Northwind Industrial',
     expertName: 'Priya Sharma',
     acceptedLine: null,
+    acceptedTermsVersion: null,
     changedSinceStart: false,
     ...overrides,
   };

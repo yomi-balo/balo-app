@@ -40,6 +40,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     submittedAt: NOW,
     acceptedAt: null,
     acceptedByUserId: null,
+    acceptedTermsVersion: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,

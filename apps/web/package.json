@@ -12,7 +12,8 @@
     "test": "vitest --root ../.. --project 'web*'",
     "test:run": "vitest run --root ../.. --project 'web*'",
     "test:coverage": "vitest run --root ../.. --project 'web*' --coverage --coverage.reportsDirectory=apps/web/coverage",
-    "help:generate": "vitest run --config vitest.node.config.ts src/lib/help/compiler/help-content.generated.test.ts --update"
+    "help:generate": "vitest run --config vitest.node.config.ts src/lib/help/compiler/help-content.generated.test.ts --update",
+    "legal:publish": "LEGAL_PUBLISH=1 vitest run --config vitest.node.config.ts src/lib/legal/publish --update"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

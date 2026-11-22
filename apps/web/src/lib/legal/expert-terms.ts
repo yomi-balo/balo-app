@@ -1,44 +1,12 @@
 import { DEFAULT_BALO_FEE_BPS, formatFeePercent } from '@balo/shared/pricing';
 import { PLATFORM_PRICING } from '@/lib/constants/platform';
-
-/**
- * One numbered clause. Its number is derived from its position (see `clauseLabel`), never typed.
- * `text` may contain `{{clause:<id>}}` tokens, which `resolveClauseRefs` replaces with the number
- * of the clause carrying that `id`.
- */
-export interface TermsNode {
-  /** Required when the clause is referenced by a token, or carries a `draft` marker. */
-  id?: string;
-  text: string;
-  children?: readonly TermsNode[];
-  /** A trailing paragraph that renders after the sub-clauses. */
-  after?: string;
-  /** Drafted for Balo rather than ported from the published terms. The renderer never reads it. */
-  draft?: true;
-}
-
-export interface TermsSection {
-  id: string;
-  title: string;
-  clauses: readonly TermsNode[];
-  /** Drafted for Balo rather than ported from the published terms. The renderer never reads it. */
-  draft?: true;
-}
+import { formatTermsDate, type TermsSection } from './terms';
 
 /** ISO date the terms were last revised. */
 export const EXPERT_TERMS_LAST_UPDATED = '2026-10-12';
 
-const LAST_UPDATED_FORMAT = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'UTC',
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-});
-
 /** `EXPERT_TERMS_LAST_UPDATED` as a long date, e.g. "12 October 2026". */
-export const EXPERT_TERMS_LAST_UPDATED_LABEL: string = LAST_UPDATED_FORMAT.format(
-  new Date(`${EXPERT_TERMS_LAST_UPDATED}T00:00:00Z`)
-);
+export const EXPERT_TERMS_LAST_UPDATED_LABEL: string = formatTermsDate(EXPERT_TERMS_LAST_UPDATED);
 
 /** The default Service Fee as a share of the Rate, derived from the platform fee. */
 const FEE_ON_TOP = formatFeePercent(DEFAULT_BALO_FEE_BPS);
@@ -945,78 +913,3 @@ export const EXPERT_TERMS: readonly TermsSection[] = [
     ],
   },
 ];
-
-const ROMAN_NUMERALS = ['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'] as const;
-
-/**
- * The visible number of a clause from its 1-based position path
- * (`[section, clause, subclause, item, subitem]`): `3`, `3.7`, `3.7.1`, `(a)`, `ii.`.
- */
-export function clauseLabel(path: readonly number[]): string {
-  const [last] = path.slice(-1);
-  if (last === undefined) {
-    throw new RangeError('A clause path needs at least one position');
-  }
-  switch (path.length) {
-    case 1:
-    case 2:
-    case 3:
-      return path.join('.');
-    case 4: {
-      if (last < 1 || last > 26) {
-        throw new RangeError(`No letter for position ${last}`);
-      }
-      return `(${String.fromCodePoint(96 + last)})`;
-    }
-    case 5: {
-      const numeral = ROMAN_NUMERALS[last - 1];
-      if (numeral === undefined) {
-        throw new RangeError(`No roman numeral for position ${last}`);
-      }
-      return `${numeral}.`;
-    }
-    default:
-      throw new RangeError(`Unsupported clause depth ${path.length}`);
-  }
-}
-
-function indexNodes(
-  nodes: readonly TermsNode[],
-  parentPath: readonly number[],
-  index: Map<string, string>
-): void {
-  nodes.forEach((node, position) => {
-    const path = [...parentPath, position + 1];
-    if (node.id !== undefined) {
-      index.set(node.id, clauseLabel(path));
-    }
-    if (node.children) {
-      indexNodes(node.children, path, index);
-    }
-  });
-}
-
-/** Maps every section id and clause id to its visible number. */
-export function buildClauseIndex(sections: readonly TermsSection[]): ReadonlyMap<string, string> {
-  const index = new Map<string, string>();
-  sections.forEach((section, position) => {
-    const path = [position + 1];
-    index.set(section.id, clauseLabel(path));
-    indexNodes(section.clauses, path, index);
-  });
-  return index;
-}
-
-/** Matches a `{{clause:<id>}}` token in clause text. */
-export const CLAUSE_TOKEN = /\{\{clause:([a-z0-9.-]+)\}\}/g;
-
-/** Replaces each `{{clause:<id>}}` token with the number of that clause. Throws on an unknown id. */
-export function resolveClauseRefs(text: string, index: ReadonlyMap<string, string>): string {
-  return text.replaceAll(CLAUSE_TOKEN, (_token, id: string) => {
-    const label = index.get(id);
-    if (label === undefined) {
-      throw new Error(`Unknown clause reference: ${id}`);
-    }
-    return label;
-  });
-}

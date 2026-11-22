@@ -72,6 +72,7 @@ const REL_ID = '22222222-2222-4222-8222-222222222222';
 const REQ_ID = '33333333-3333-4333-8333-333333333333';
 const EXPERT_ID = '44444444-4444-4444-8444-444444444444';
 const ACTOR_ID = '55555555-5555-4555-8555-555555555555';
+const TERMS_VERSION = '2025-07-23';
 
 /**
  * Deliberately asymmetric fixtures — so no assertion can pass by coincidence.
@@ -155,14 +156,22 @@ beforeEach(() => {
 describe('proposalsRepository.accept — the proposal.accepted audit row (BAL-432 / ADR-1030)', () => {
   it('T1.1 records the audit row on the ACCEPT TRANSACTION, never the base db client', async () => {
     // ⚠ THE LOAD-BEARING ASSERTION OF THIS FILE.
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     const [, exec] = mockRecord.mock.calls[0] ?? [];
     expect(exec).toBe(capturedTx);
   });
 
   it('T1.2 writes EXACTLY ONE proposal.accepted row, on the proposal, with the accepting actor', async () => {
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(mockRecord.mock.calls[0]?.[0]).toMatchObject({
@@ -173,30 +182,40 @@ describe('proposalsRepository.accept — the proposal.accepted audit row (BAL-43
     });
   });
 
-  it('T1.3 (D4) the metadata key set is EXACTLY the four ids/version — no money fields', async () => {
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+  it('T1.3 (D4) the metadata key set is EXACTLY the four ids/version plus the terms version — no money fields', async () => {
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     const metadata = (mockRecord.mock.calls[0]?.[0] as { metadata: Record<string, unknown> })
       .metadata;
     const keys = Object.keys(metadata);
 
-    expect(keys).toHaveLength(4); // ⚠ NON-VACUITY ANCHOR
-    expect([...keys].sort()).toEqual([
+    expect(keys).toHaveLength(5); // ⚠ NON-VACUITY ANCHOR
+    expect([...keys].sort((a, b) => a.localeCompare(b))).toEqual([
       'expertProfileId',
       'projectRequestId',
       'proposalVersion',
       'relationshipId',
+      'termsVersion',
     ]);
     expect(metadata).toEqual({
       relationshipId: REL_ID,
       projectRequestId: REQ_ID,
       expertProfileId: EXPERT_ID,
       proposalVersion: 7,
+      termsVersion: TERMS_VERSION,
     });
   });
 
   it("T1.4 proposalVersion is the LOCKED row's version, not the post-flip re-read", async () => {
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     const metadata = (mockRecord.mock.calls[0]?.[0] as { metadata: { proposalVersion: number } })
       .metadata;
@@ -204,20 +223,35 @@ describe('proposalsRepository.accept — the proposal.accepted audit row (BAL-43
   });
 
   it('T1.5 orders lock → relationship → statusUpdate → stampUpdate → audit', async () => {
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     expect(callOrder).toEqual(['lock', 'relationship', 'statusUpdate', 'stampUpdate', 'audit']);
   });
 
-  it('T1.6 the local stamp update payload is EXACTLY { acceptedByUserId }, no spread', async () => {
-    await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+  it('T1.6 the local stamp update payload is EXACTLY { acceptedByUserId, acceptedTermsVersion }, no spread', async () => {
+    await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     expect(mockSet.mock.calls).toHaveLength(2); // ⚠ NON-VACUITY ANCHOR
-    expect(mockSet.mock.calls[1]?.[0]).toEqual({ acceptedByUserId: ACTOR_ID });
+    expect(mockSet.mock.calls[1]?.[0]).toEqual({
+      acceptedByUserId: ACTOR_ID,
+      acceptedTermsVersion: TERMS_VERSION,
+    });
   });
 
   it('T1.7 (D6) returns the RE-STAMPED row, not the pre-stamp advanced row', async () => {
-    const result = await proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID });
+    const result = await proposalsRepository.accept({
+      id: PROPOSAL_ID,
+      actorUserId: ACTOR_ID,
+      termsVersion: TERMS_VERSION,
+    });
 
     expect(result).toBe(STAMPED_ROW);
     expect(result.acceptedByUserId).toBe(ACTOR_ID);
@@ -231,7 +265,11 @@ describe('proposalsRepository.accept — the proposal.accepted audit row (BAL-43
     mockReturning.mockResolvedValueOnce([]);
 
     await expect(
-      proposalsRepository.accept({ id: PROPOSAL_ID, actorUserId: ACTOR_ID })
+      proposalsRepository.accept({
+        id: PROPOSAL_ID,
+        actorUserId: ACTOR_ID,
+        termsVersion: TERMS_VERSION,
+      })
     ).rejects.toThrow(/Failed to stamp acceptedByUserId/);
   });
 });

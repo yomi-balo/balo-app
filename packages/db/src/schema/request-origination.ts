@@ -383,6 +383,19 @@ export const proposals = pgTable(
     acceptedByUserId: uuid('accepted_by_user_id').references(() => users.id, {
       onDelete: 'restrict',
     }),
+    /**
+     * BAL-662 — the version of the Balo Projects MSA the client accepted with this proposal.
+     * Written only by `proposalsRepository.accept`, in the same local update that stamps
+     * `accepted_by_user_id`.
+     *
+     * The value is the agreement's ISO date version (e.g. `2025-07-23`) and names the frozen
+     * copy at `apps/web/public/legal/balo-projects-msa-{version}.pdf`.
+     *
+     * NULL means the proposal is not accepted, or was accepted before versions were recorded
+     * (pre-BAL-662). Nullable with no default and no CHECK: the historical accepted rows have no
+     * version, and the web layer owns the list of valid versions.
+     */
+    acceptedTermsVersion: text('accepted_terms_version'),
     ...timestamps,
     ...softDelete,
   },

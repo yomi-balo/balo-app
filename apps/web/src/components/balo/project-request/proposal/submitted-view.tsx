@@ -171,7 +171,12 @@ export function SubmittedView(props: Readonly<SubmittedViewProps>): React.JSX.El
       </div>
 
       <div className="border-border bg-card rounded-2xl border p-5 sm:p-6">
-        <ProposalDoc doc={doc} onDownload={download} downloadingId={downloadingId} />
+        <ProposalDoc
+          doc={doc}
+          termsViewer={{ surface: 'proposal', lens }}
+          onDownload={download}
+          downloadingId={downloadingId}
+        />
         {lens === 'expert' && <PayoutAssuranceNote pricingMethod={doc.pricingMethod} />}
       </div>
 

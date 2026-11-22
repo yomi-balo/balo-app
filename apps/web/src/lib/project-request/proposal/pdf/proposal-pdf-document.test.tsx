@@ -17,6 +17,7 @@ import { hydrateReviewDoc } from '@/lib/project-request/proposal-audience-view';
 import { ProposalPdfDocument, renderProposalPdfToBuffer } from './proposal-pdf-document';
 
 const NOW = new Date('2026-01-01T00:00:00.000Z');
+const PROJECT_TERMS_URL = 'https://balo.example/legal/project-terms';
 
 /** Expert quote 100_000 @ 2500 bps → client price 125_000 (marked-up). */
 function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
@@ -41,6 +42,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     submittedAt: NOW,
     acceptedAt: null,
     acceptedByUserId: null,
+    acceptedTermsVersion: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,
@@ -220,6 +222,7 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: 'CloudPeak',
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     ).toBeTruthy();
     expect(
@@ -229,6 +232,7 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: null,
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     ).toBeTruthy();
   });
@@ -242,6 +246,7 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'Northwind Industrial',
       preparedByOrgName: 'CloudPeak',
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
@@ -270,6 +275,7 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'your company',
       preparedByOrgName: null,
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
@@ -289,6 +295,7 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'Northwind Industrial',
       preparedByOrgName: 'CloudPeak',
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
@@ -303,9 +310,28 @@ describe('ProposalPdfDocument — conditional branches', () => {
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: 'CloudPeak',
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     );
   }
+
+  it('prints the full Project T&Cs URL under the standard terms', () => {
+    const text = renderTree(clientDoc());
+    expect(text).toContain('Read the Project T&Cs at');
+    expect(text).toContain(PROJECT_TERMS_URL);
+  });
+
+  it('renders an italic overview without throwing (no italic Geist face is registered)', async () => {
+    const buffer = await renderProposalPdfToBuffer({
+      doc: clientDoc({ overview: '<p>An <em>emphasised</em> word in the overview.</p>' }),
+      title: 'CRM Cleanup',
+      clientCompanyName: 'Northwind Industrial',
+      preparedByOrgName: 'CloudPeak',
+      generatedAtIso: NOW.toISOString(),
+      projectTermsUrl: PROJECT_TERMS_URL,
+    });
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  });
 
   it('shows the "revised" version note for version 2', () => {
     const text = renderTree(clientDoc({ version: 2 }));

@@ -904,6 +904,13 @@
       "when": 1795354882187,
       "tag": "0128_bal661_proposal_clauses",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1795368174703,
+      "tag": "0129_bal662_proposal_accepted_terms_version",
+      "breakpoints": true
     }
   ]
 }

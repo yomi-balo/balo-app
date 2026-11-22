@@ -56,7 +56,7 @@ vi.mock('@/lib/project-request/proposal-audience-view', () => ({
 // opt into the summary cells. Capturing is how that is asserted without rendering the doc.
 const mockProposalDocProps = vi.fn();
 vi.mock('@/components/balo/project-request/proposal/proposal-doc', () => ({
-  ProposalDoc: (props: Readonly<{ showSummaryCells?: boolean }>) => {
+  ProposalDoc: (props: Readonly<{ showSummaryCells?: boolean; termsViewer?: unknown }>) => {
     mockProposalDocProps(props);
     return <div data-testid="proposal-doc" />;
   },
@@ -136,7 +136,10 @@ describe('SharedProposalPage', () => {
     });
     // BAL-392 — the recipient is the CLIENT audience, so the summary cells are on.
     expect(mockProposalDocProps).toHaveBeenCalledWith(
-      expect.objectContaining({ showSummaryCells: true })
+      expect.objectContaining({
+        showSummaryCells: true,
+        termsViewer: { surface: 'shared', lens: 'anonymous' },
+      })
     );
     // Access is stamped once the proposal is confirmed renderable.
     expect(mockRecordAccess).toHaveBeenCalledWith(LINK_ID);

@@ -36,7 +36,9 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   bold: { fontWeight: 700 },
-  italic: { fontStyle: 'italic' },
+  // No italic Geist face is registered, and react-pdf throws on `fontStyle: 'italic'` without one.
+  // Emphasis therefore prints upright (see pdf-fonts.ts).
+  italic: {},
   link: { color: PDF_COLORS.brand, textDecoration: 'underline' },
   list: { marginBottom: 6, gap: 3 },
   listItem: { flexDirection: 'row', gap: 6 },

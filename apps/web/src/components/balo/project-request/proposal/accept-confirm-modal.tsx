@@ -268,6 +268,7 @@ export function AcceptConfirmModal({
             <h3 className="text-foreground text-[13.5px] font-semibold">What you’re agreeing to</h3>
             <BaloTermsBlock
               where="accept"
+              lens="client"
               pricingMethod={doc.pricingMethod}
               companyName={clientCompanyName}
             />

@@ -174,7 +174,11 @@ export default async function SharedProposalPage({
         />
       </SharedProposalReveal>
       <SharedProposalReveal index={1} className={cn('p-5 sm:p-6', isWithdrawn && 'opacity-75')}>
-        <ProposalDoc doc={doc} showSummaryCells />
+        <ProposalDoc
+          doc={doc}
+          termsViewer={{ surface: 'shared', lens: 'anonymous' }}
+          showSummaryCells
+        />
         {showJoinCta && <SharedProposalJoinCta clientCompany={clientCompany} />}
       </SharedProposalReveal>
       <SharedProposalReveal index={2}>

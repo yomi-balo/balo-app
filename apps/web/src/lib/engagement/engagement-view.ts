@@ -360,6 +360,8 @@ export interface AgreedTermsView {
   expertName: string;
   /** "Accepted by Dana @ Northwind on 24 November 2026.", or null when it can't be attributed. */
   acceptedLine: string | null;
+  /** The Project T&Cs version recorded at acceptance, or null when it predates recording. */
+  acceptedTermsVersion: string | null;
   /** A change order has been approved since kickoff, so the card points at the change history. */
   changedSinceStart: boolean;
 }
@@ -1089,6 +1091,7 @@ function deriveAgreedTerms(
     clientCompanyName: parties.clientCompanyName,
     expertName: parties.expertPerson,
     acceptedLine,
+    acceptedTermsVersion: source.proposalAcceptedTermsVersion,
     changedSinceStart: changeOrders.some((order) => order.status === 'approved'),
   };
 }

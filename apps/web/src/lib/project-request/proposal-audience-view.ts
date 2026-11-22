@@ -176,6 +176,7 @@ export function hydrateReviewDoc(
     version: proposal.version,
     status: proposal.status,
     pricingMethod: proposal.pricingMethod,
+    acceptedTermsVersion: proposal.acceptedTermsVersion,
     overviewHtml: proposal.overview,
     ...groupClauseBodies(clauses),
     clientCompanyName,

@@ -889,6 +889,9 @@ export const proposalsRepository = {
    * `advanceProposalStatus`'s pre-stamp read, which would come back with
    * `accepted_by_user_id: null`.
    *
+   * BAL-662 — the same local update also stamps `accepted_terms_version = termsVersion`, and the
+   * audit row's metadata carries it, so the column and the audit trail name the same agreement.
+   *
    * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship to `accepted` ALSO
    * advances the request-level status via `deriveRequestStatus` inside
    * `advanceRelationshipStatus`, in this SAME transaction — the request rollup is
@@ -909,6 +912,12 @@ export const proposalsRepository = {
     id: string;
     /** BAL-540 / ADR-1030 — the client accepting. Attributes the relationship audit row. */
     actorUserId: string;
+    /**
+     * BAL-662 — the Balo Projects MSA version the client accepts (an ISO date, e.g.
+     * `2025-07-23`). The caller supplies the version currently published; it is stamped on
+     * `accepted_terms_version` and recorded in the audit metadata.
+     */
+    termsVersion: string;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
@@ -963,7 +972,7 @@ export const proposalsRepository = {
       // that claim.
       const [stamped] = await tx
         .update(proposals)
-        .set({ acceptedByUserId: input.actorUserId })
+        .set({ acceptedByUserId: input.actorUserId, acceptedTermsVersion: input.termsVersion })
         .where(eq(proposals.id, advanced.id))
         .returning();
       if (stamped === undefined) {
@@ -972,10 +981,10 @@ export const proposalsRepository = {
 
       // BAL-432 — the proposal-grain audit row, LAST, on THIS transaction. Last so it records a
       // transition that has fully succeeded; on THIS tx so an audit-insert failure rolls the
-      // whole acceptance back (proved by proposals.integration.test.ts). All four metadata
-      // values come from `current` — the row locked FOR UPDATE above — so this costs NO
+      // whole acceptance back (proved by proposals.integration.test.ts). The four entity
+      // metadata values come from `current` — the row locked FOR UPDATE above — so this costs NO
       // additional read, and `proposalVersion` is the version at acceptance (the status flip
-      // does not change it).
+      // does not change it). `termsVersion` is the caller's input, as stamped above.
       await recordProposalAccepted(tx, {
         actorUserId: input.actorUserId,
         proposalId: stamped.id,
@@ -983,6 +992,7 @@ export const proposalsRepository = {
         projectRequestId: current.projectRequestId,
         expertProfileId: current.expertProfileId,
         proposalVersion: current.version,
+        termsVersion: input.termsVersion,
       });
 
       // BAL-432 (D6) — return the RE-STAMPED row. `advanced` was read BEFORE the actor was

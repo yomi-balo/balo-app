@@ -1,0 +1,1 @@
+ALTER TABLE "proposals" ADD COLUMN "accepted_terms_version" text;

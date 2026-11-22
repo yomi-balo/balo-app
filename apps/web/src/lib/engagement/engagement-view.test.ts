@@ -128,6 +128,7 @@ describe('mapEngagementToWorkspaceView — agreed terms', () => {
       ],
       proposalAcceptedAt: ACCEPTED_AT,
       proposalAcceptedBy: DANA,
+      proposalAcceptedTermsVersion: null,
       ...over,
     };
   }
@@ -190,6 +191,13 @@ describe('mapEngagementToWorkspaceView — agreed terms', () => {
     expect(agreedFor(source())?.acceptedLine).toBe(
       'Accepted by Dana @ Northwind Industrial on 10 June 2026.'
     );
+  });
+
+  it('carries the recorded terms version, or null when none was recorded', () => {
+    expect(agreedFor(source({ proposalAcceptedTermsVersion: '2025-07-23' }))).toMatchObject({
+      acceptedTermsVersion: '2025-07-23',
+    });
+    expect(agreedFor(source())?.acceptedTermsVersion).toBeNull();
   });
 
   it('has no accepted line when there is no actor', () => {

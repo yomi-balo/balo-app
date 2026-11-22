@@ -18,6 +18,8 @@ import { firstName } from './proposal-name';
 import type { ProposalReviewDoc } from './proposal-review-types';
 import type { SharedLinkView } from '@/lib/project-request/proposal/share-view-types';
 
+const CLIENT_TERMS_VIEWER = { surface: 'proposal', lens: 'client' } as const;
+
 interface ProposalReviewProps {
   requestId: string;
   /** Every live proposal on the request the client can review (1+). */
@@ -230,6 +232,7 @@ export function ProposalReview({
               <div className="border-border bg-card mt-2 rounded-2xl border p-6 sm:p-7">
                 <ProposalDoc
                   doc={active}
+                  termsViewer={CLIENT_TERMS_VIEWER}
                   sectionIdPrefix={`sec-${active.id}-`}
                   showSummaryCells
                   onDownload={download}
@@ -250,6 +253,7 @@ export function ProposalReview({
             <div className="border-border bg-card mt-2 rounded-2xl border p-5">
               <ProposalDoc
                 doc={active}
+                termsViewer={CLIENT_TERMS_VIEWER}
                 sectionIdPrefix={`sec-${active.id}-`}
                 showSummaryCells
                 onDownload={download}

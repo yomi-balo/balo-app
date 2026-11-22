@@ -4,7 +4,9 @@
  * share one source of truth. Each line restates something the agreement itself says.
  */
 export const STANDARD_TERMS = [
+  // Summarises clause 5.1
   'Work is delivered against the milestones and scope set out in this proposal.',
+  // Summarises section 8 (Confidentiality)
   'Confidential information shared during the engagement stays confidential.',
 ];
 
