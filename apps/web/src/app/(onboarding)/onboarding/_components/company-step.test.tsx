@@ -71,16 +71,26 @@ describe('CompanyStep', () => {
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     expect(screen.getByLabelText(/company name/i)).toHaveValue('Acme');
     expect(screen.getByText(/we suggested this from your email/i)).toBeInTheDocument();
+  });
+
+  it('uses the ask copy, not the suggestion claim, when a new domain yields an empty suggestion', async () => {
+    mockResolve.mockResolvedValue({ status: 'new', suggestion: '' });
+    renderStep();
+
+    await screen.findByRole('heading', { name: /what is your company name/i });
+    expect(screen.getByLabelText(/company name/i)).toHaveValue('');
+    expect(screen.getByText(/tell us your company or team name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/we suggested this from your email/i)).not.toBeInTheDocument();
   });
 
   it('renders the blocked-domain helper copy and an empty field', async () => {
     mockResolve.mockResolvedValue({ status: 'blocked', suggestion: '' });
     renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     expect(screen.getByLabelText(/company name/i)).toHaveValue('');
     expect(screen.getByText(/tell us your company or team name/i)).toBeInTheDocument();
   });
@@ -90,7 +100,7 @@ describe('CompanyStep', () => {
     mockResolve.mockResolvedValue({ status: 'blocked', suggestion: '' });
     renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     expect(await screen.findByText(/enter a name for your workspace/i)).toBeInTheDocument();
@@ -104,7 +114,7 @@ describe('CompanyStep', () => {
       mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
       renderStep(authMethod);
 
-      await screen.findByRole('heading', { name: /name your workspace/i });
+      await screen.findByRole('heading', { name: /what is your company name/i });
       await user.click(screen.getByRole('button', { name: /continue/i }));
 
       await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
@@ -129,7 +139,7 @@ describe('CompanyStep', () => {
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     renderStep('email', '/expert/apply');
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
@@ -141,7 +151,7 @@ describe('CompanyStep', () => {
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     renderStep('email', null);
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
@@ -162,7 +172,7 @@ describe('CompanyStep', () => {
       />
     );
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/'));
@@ -184,7 +194,7 @@ describe('CompanyStep', () => {
       />
     );
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     value = null; // simulates the marker expiring between mount and the click
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
@@ -238,7 +248,7 @@ describe('CompanyStep', () => {
     });
     renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     await user.click(screen.getByRole('button', { name: /continue/i }));
 
     const alert = await screen.findByRole('alert');
@@ -423,6 +433,20 @@ describe('CompanyStep', () => {
       ).not.toBeInTheDocument();
     });
 
+    it('escaping a match that carries no suggestion shows the ask copy under an empty field', async () => {
+      const user = userEvent.setup();
+      mockResolve.mockResolvedValue({ ...matched('auto'), suggestion: '' });
+      renderStep();
+
+      await screen.findByRole('heading', { name: /join northwind\?/i });
+      await user.click(screen.getByRole('button', { name: /this isn't my company/i }));
+
+      await screen.findByRole('heading', { name: /what is your company name/i });
+      expect(screen.getByLabelText(/company name/i)).toHaveValue('');
+      expect(screen.getByText(/tell us your company or team name/i)).toBeInTheDocument();
+      expect(screen.queryByText(/we suggested this from your email/i)).not.toBeInTheDocument();
+    });
+
     it('escapes to a create form prefilled with the matched suggestion and fires OPTED_OUT', async () => {
       const user = userEvent.setup();
       mockResolve.mockResolvedValue(matched('auto'));
@@ -432,9 +456,10 @@ describe('CompanyStep', () => {
       await user.click(screen.getByRole('button', { name: /this isn't my company/i }));
 
       expect(
-        await screen.findByRole('heading', { name: /name your workspace/i })
+        await screen.findByRole('heading', { name: /what is your company name/i })
       ).toBeInTheDocument();
       expect(screen.getByLabelText(/company name/i)).toHaveValue('Northwind');
+      expect(screen.getByText(/we suggested this from your email/i)).toBeInTheDocument();
       expect(track).toHaveBeenCalledWith(DOMAIN_JOIN_EVENTS.INTERSTITIAL_OPTED_OUT, {
         mode: 'auto',
         party_type: 'company',
@@ -446,15 +471,17 @@ describe('CompanyStep', () => {
     mockResolve.mockRejectedValue(new Error('rpc down'));
     renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     expect(screen.getByLabelText(/company name/i)).toHaveValue('');
+    expect(screen.getByText(/tell us your company or team name/i)).toBeInTheDocument();
+    expect(screen.queryByText(/we suggested this from your email/i)).not.toBeInTheDocument();
   });
 
   it('has no accessibility violations in the create state', async () => {
     mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
     const { container } = renderStep();
 
-    await screen.findByRole('heading', { name: /name your workspace/i });
+    await screen.findByRole('heading', { name: /what is your company name/i });
     expect(await axe(container)).toHaveNoViolations();
   });
 });
