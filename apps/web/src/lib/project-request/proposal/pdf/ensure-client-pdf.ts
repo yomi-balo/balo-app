@@ -9,7 +9,13 @@ import {
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import { hydrateReviewDoc } from '@/lib/project-request/proposal-audience-view';
-import { proposalPdfKey, putProposalPdfToR2 } from '@/lib/storage/proposal-pdf';
+import { log } from '@/lib/logging';
+import {
+  acceptedProposalPdfKey,
+  getProposalPdfFromR2,
+  proposalPdfKey,
+  putProposalPdfToR2,
+} from '@/lib/storage/proposal-pdf';
 import { renderProposalPdfToBuffer } from '@/lib/project-request/proposal/pdf/proposal-pdf-document';
 
 type Relationship = ProjectRequestWithRelations['relationships'][number];
@@ -56,11 +62,44 @@ export async function generateClientProposalPdf(target: ClientPdfTarget): Promis
 }
 
 /**
- * Force-generate the client PDF and write it to R2 UNCONDITIONALLY (BAL-386).
- * Unlike the download route's read-through cache, this always re-renders and
- * overwrites so the R2 object at `proposalPdfKey(proposal.id)` is guaranteed to
- * exist (and be current) before a `proposal.shared` event is published — the
- * delivery worker reads those bytes by key at send time.
+ * Freeze an accepted proposal's client PDF at `acceptedProposalPdfKey` (BAL-668).
+ * One rule: serve the stored copy, or store a new one and then serve it.
+ *
+ * - A stored copy is returned as-is, with no render and no write.
+ * - A read error other than not-found throws and nothing is written, so a transient
+ *   R2 blip can never overwrite a frozen copy.
+ * - A write failure after a render also throws, so this never returns bytes it did
+ *   not persist. Callers map the throw (route → 500, share → `send_failed`, accept →
+ *   warning).
+ *
+ * This is the ONLY writer of the accepted key. It does not check proposal status —
+ * callers own that gate. It renders `doc.status`-free content, so the pre-commit row
+ * the accept core holds is safe to pass. Two concurrent first requests may both
+ * render and write (no conditional put); the last write wins and the copies differ
+ * only in the `generatedAtIso` footer.
+ */
+export async function freezeAcceptedProposalPdf(target: ClientPdfTarget): Promise<Uint8Array> {
+  const stored = await getProposalPdfFromR2(acceptedProposalPdfKey(target.proposal.id));
+  if (stored !== null) {
+    return stored;
+  }
+  const bytes = await generateClientProposalPdf(target);
+  await putProposalPdfToR2(acceptedProposalPdfKey(target.proposal.id), bytes);
+  log.info('Accepted proposal PDF frozen', {
+    proposalId: target.proposal.id,
+    relationshipId: target.relationship.id,
+    version: target.proposal.version,
+  });
+  return bytes;
+}
+
+/**
+ * Force-generate the client PDF of a NON-ACCEPTED proposal and write it to R2
+ * UNCONDITIONALLY (BAL-386). Unlike the download route's read-through cache, this
+ * always re-renders and overwrites so the R2 object at `proposalPdfKey(proposal.id)`
+ * is guaranteed to exist (and be current) before a `proposal.shared` event is
+ * published — the delivery worker reads those bytes by key at send time. An
+ * accepted proposal goes through {@link freezeAcceptedProposalPdf} instead.
  */
 export async function ensureClientProposalPdf(target: ClientPdfTarget): Promise<void> {
   const bytes = await generateClientProposalPdf(target);

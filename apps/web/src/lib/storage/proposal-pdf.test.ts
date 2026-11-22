@@ -28,6 +28,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 import {
   PROPOSAL_PDF_LAYOUT_VERSION,
   PROPOSAL_PDF_PREFIX,
+  acceptedProposalPdfKey,
   proposalPdfKey,
   getProposalPdfFromR2,
   putProposalPdfToR2,
@@ -53,6 +54,15 @@ describe('proposalPdfKey', () => {
     expect(PROPOSAL_PDF_LAYOUT_VERSION).toBe('v3');
     expect(proposalPdfKey(PROPOSAL_ID)).toContain(`/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`);
     expect(proposalPdfKey(PROPOSAL_ID)).not.toBe(`proposals/${PROPOSAL_ID}/client.pdf`);
+  });
+});
+
+describe('acceptedProposalPdfKey', () => {
+  it('is a layout-independent key under the proposals prefix', () => {
+    const key = acceptedProposalPdfKey('p1');
+    expect(key).toBe('proposals/p1/accepted.pdf');
+    expect(key.startsWith(PROPOSAL_PDF_PREFIX)).toBe(true);
+    expect(key).not.toContain(PROPOSAL_PDF_LAYOUT_VERSION);
   });
 });
 

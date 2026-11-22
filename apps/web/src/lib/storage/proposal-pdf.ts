@@ -16,7 +16,9 @@ import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
  * version always maps to a fresh key and no content-driven invalidation is needed.
  * The PDF's LAYOUT is not covered by that argument — the template can change under
  * an unchanged proposal id — so the key also carries
- * {@link PROPOSAL_PDF_LAYOUT_VERSION}.
+ * {@link PROPOSAL_PDF_LAYOUT_VERSION}. A layout bump re-renders non-accepted proposals
+ * only — an accepted proposal's frozen copy at {@link acceptedProposalPdfKey} is never
+ * re-rendered.
  */
 
 /** Key prefix every cached proposal PDF lives under. */
@@ -29,13 +31,25 @@ export const PROPOSAL_PDF_PREFIX = 'proposals/';
  * layout forever. `v2` = BAL-392's four-cell summary box (replacing BAL-385's
  * two-item money/timeframe banner); `v3` = the assumptions-and-exclusions section, Balo's
  * Project T&Cs with the expert's numbered additional terms, and Attachments last. Objects under a superseded version are
- * orphaned in R2; that is accepted — there is no purge job.
+ * orphaned in R2; that is accepted — there is no purge job. A bump re-renders
+ * non-accepted proposals only — an accepted proposal's frozen copy at
+ * {@link acceptedProposalPdfKey} is never re-rendered.
  */
 export const PROPOSAL_PDF_LAYOUT_VERSION = 'v3';
 
 /** Deterministic cache key for a proposal's client PDF: `proposals/{id}/client-v3.pdf`. */
 export function proposalPdfKey(proposalId: string): string {
   return `${PROPOSAL_PDF_PREFIX}${proposalId}/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`;
+}
+
+/**
+ * Layout-independent key for an accepted proposal's frozen client PDF:
+ * `proposals/{id}/accepted.pdf`. The object is written once, at acceptance or on
+ * first access afterwards, and holds the client-audience render. It carries no
+ * layout version, so a {@link PROPOSAL_PDF_LAYOUT_VERSION} bump never touches it.
+ */
+export function acceptedProposalPdfKey(proposalId: string): string {
+  return `${PROPOSAL_PDF_PREFIX}${proposalId}/accepted.pdf`;
 }
 
 /** True when an AWS/R2 error signals the object is simply absent (cache miss). */
