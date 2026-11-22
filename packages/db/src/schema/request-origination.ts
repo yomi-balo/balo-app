@@ -321,9 +321,6 @@ export const proposals = pgTable(
     isCurrent: boolean('is_current').notNull().default(true),
     // Sanitised HTML main body (the design's "Overview"; renamed from `scope`).
     overview: text('overview').notNull(),
-    // RETIRED by BAL-661: unread and unwritten, superseded by `proposal_clauses`. The
-    // follow-up ticket drops it. Never add a reader or writer.
-    exclusions: text('exclusions'),
     // "~N weeks" estimate — a DURATION, not a date. Author-optional.
     timeframeWeeks: integer('timeframe_weeks'),
     priceCents: integer('price_cents').notNull(),
