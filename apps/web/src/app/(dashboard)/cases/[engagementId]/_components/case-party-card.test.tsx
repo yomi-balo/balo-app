@@ -105,6 +105,12 @@ describe('CasePartyCard — Call now', () => {
     expect(onCallNow).toHaveBeenCalledWith(expect.any(String));
   });
 
+  it('gives the Call now button’s focus ring room inside its clipping reveal', () => {
+    renderCard({ callNow: BUTTON_VIEW, onCallNow: vi.fn() });
+    const box = screen.getByRole('button', { name: 'Call Amara now' }).parentElement?.parentElement;
+    expect(box).toHaveClass('overflow-hidden', '-mx-1', '-mb-1', 'px-1', 'pb-1');
+  });
+
   it('renders neither the entry nor the Online word when there is no view', () => {
     renderCard({ callNow: null, onCallNow: vi.fn() });
     expect(screen.queryByRole('button', { name: /^Call .* now$/ })).not.toBeInTheDocument();

@@ -2,7 +2,6 @@
 
 import { useCallback } from 'react';
 import Link from 'next/link';
-import { motion, useReducedMotion } from 'motion/react';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -23,6 +22,7 @@ import type { ProductTaxonomy } from '@/lib/search/taxonomy';
 import { CaseEarningsBlock } from './case-earnings-block';
 import { CaseSlotQuickPick, type FollowUpRequest } from './case-slot-quick-pick';
 import { CallNowEntry } from './call-now-entry';
+import { HeightReveal } from './height-reveal';
 
 /**
  * BAL-421 — the rail's counterparty card. ONE component for both lenses, because the two
@@ -100,7 +100,6 @@ export function CasePartyCard({
   callNow = null,
   onCallNow,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
-  const reduceMotion = useReducedMotion();
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
   }, [lens]);
@@ -157,12 +156,12 @@ export function CasePartyCard({
               <InlineRating average={party.ratingAverage} count={party.ratingCount} />
             </p>
           )}
-          {callNow?.onlineBadge === true && (
+          <HeightReveal show={callNow?.onlineBadge === true}>
             <p className="text-success mt-1 inline-flex items-center gap-1.5 text-xs">
               <span aria-hidden="true" className="bg-success size-[7px] rounded-full" />
               {CALL_NOW_COPY.online}
             </p>
-          )}
+          </HeightReveal>
         </div>
       </div>
 
@@ -216,18 +215,16 @@ export function CasePartyCard({
         />
       )}
 
-      {callNow !== null && onCallNow !== undefined && (
-        // The entry streams in after the page renders, so it opens its own room rather than
-        // shoving the earnings block and the rail cards below it down in one jump.
-        <motion.div
-          className="overflow-hidden"
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: 'easeOut' }}
-        >
+      {/* The entry streams in after the page renders, so it opens and closes its own room. The
+          padding keeps the full-width button's focus ring inside the clipping box. */}
+      <HeightReveal
+        show={callNow !== null && onCallNow !== undefined}
+        className="-mx-1 -mb-1 px-1 pb-1"
+      >
+        {callNow !== null && onCallNow !== undefined && (
           <CallNowEntry callNow={callNow} lens={lens} onCallNow={onCallNow} />
-        </motion.div>
-      )}
+        )}
+      </HeightReveal>
 
       {earnings !== undefined && <CaseEarningsBlock earnings={earnings} />}
     </section>
