@@ -3,11 +3,15 @@ import {
   reminderSequenceKeyPrefix,
   type ReminderSequenceId,
 } from '@balo/shared/notifications';
+import { deliveryReviewSequence } from './delivery-review.js';
 import { proposalReviewSequence } from './proposal-review.js';
-import type { ReminderSequence } from './types.js';
+import type { ReminderSequence, ReminderSequenceEvents } from './types.js';
 
-export const REMINDER_SEQUENCES: Readonly<Record<ReminderSequenceId, ReminderSequence>> = {
+export const REMINDER_SEQUENCES: {
+  readonly [K in ReminderSequenceId]: ReminderSequence<ReminderSequenceEvents[K]>;
+} = {
   proposal_review: proposalReviewSequence,
+  delivery_review: deliveryReviewSequence,
 };
 
 /** The sequences, in the order `REMINDER_SEQUENCE_IDS` lists them. */

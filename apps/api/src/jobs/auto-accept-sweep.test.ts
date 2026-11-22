@@ -38,7 +38,6 @@ vi.mock('@balo/db', () => ({
   // this same mocked module — both exports are REQUIRED here or the named import throws.
   reviewsRepository: { findLive: mockFindLiveReview },
   reviewInviteTokensRepository: { create: mockCreateReviewToken },
-  AUTO_ACCEPT_DAYS: 7,
 }));
 
 // `@balo/shared/parties` is pure — use the real expertPartyDisplayName (no mock).
@@ -47,7 +46,6 @@ vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
   ENGAGEMENT_SERVER_EVENTS: {
     ACCEPTED: 'engagement_accepted',
-    REVIEW_REMINDER_SENT: 'engagement_review_reminder_sent',
   },
 }));
 
@@ -62,11 +60,7 @@ vi.mock('bullmq', () => ({
 }));
 
 import type { ProjectEngagementRow, ProjectEngagementWithMilestones } from '@balo/db';
-import {
-  runDeliveryReviewSweep,
-  REVIEW_REMINDER_LEAD_DAYS,
-  DELIVERY_REVIEW_SWEEP_CRON,
-} from './auto-accept-sweep.js';
+import { runDeliveryReviewSweep, DELIVERY_REVIEW_SWEEP_CRON } from './auto-accept-sweep.js';
 
 // ── Fixtures ───────────────────────────────────────────────────
 // Typed `Partial<…>` against the BAL-417 shapes rather than `Record<string, unknown>`:
@@ -130,7 +124,7 @@ beforeEach(() => {
 
 describe('runDeliveryReviewSweep — auto-accept pass', () => {
   it('auto-accepts a past-window engagement and fans out the notifications + analytics', async () => {
-    mockListPending.mockResolvedValueOnce([engRow()]).mockResolvedValueOnce([]);
+    mockListPending.mockResolvedValueOnce([engRow()]);
     mockAccept.mockResolvedValue(
       engRow({ status: 'completed', acceptedAt: new Date('2026-07-10T12:00:00Z') })
     );
@@ -140,11 +134,11 @@ describe('runDeliveryReviewSweep — auto-accept pass', () => {
     const now = new Date('2026-07-10T12:00:00Z'); // 7 days after 07-03
     const result = await runDeliveryReviewSweep(now);
 
-    expect(result).toEqual({ accepted: 1, reminded: 0 });
+    expect(result).toEqual({ accepted: 1 });
     expect(mockAccept).toHaveBeenCalledWith({ engagementId: 'eng-1', method: 'auto' });
-    // The accept-pass cutoff is now − AUTO_ACCEPT_DAYS; reminder cutoff is now − (7−2).
+    // The accept cutoff is now − AUTO_ACCEPT_DAYS; it is the only query the sweep makes.
+    expect(mockListPending).toHaveBeenCalledTimes(1);
     expect(mockListPending.mock.calls[0]?.[0]).toEqual(new Date('2026-07-03T12:00:00Z'));
-    expect(mockListPending.mock.calls[1]?.[0]).toEqual(new Date('2026-07-05T12:00:00Z'));
     expect(mockPublish).toHaveBeenCalledWith(
       'engagement.auto_accepted',
       expect.objectContaining({
@@ -174,9 +168,7 @@ describe('runDeliveryReviewSweep — auto-accept pass', () => {
   });
 
   it('isolates a failing row — one bad accept never aborts the batch', async () => {
-    mockListPending
-      .mockResolvedValueOnce([engRow({ id: 'bad' }), engRow({ id: 'good' })])
-      .mockResolvedValueOnce([]);
+    mockListPending.mockResolvedValueOnce([engRow({ id: 'bad' }), engRow({ id: 'good' })]);
     mockAccept
       .mockRejectedValueOnce(new Error('boom'))
       .mockResolvedValue(
@@ -192,7 +184,7 @@ describe('runDeliveryReviewSweep — auto-accept pass', () => {
   });
 
   it('publishes with recipientId undefined when the client company has no live owner', async () => {
-    mockListPending.mockResolvedValueOnce([engRow()]).mockResolvedValueOnce([]);
+    mockListPending.mockResolvedValueOnce([engRow()]);
     mockAccept.mockResolvedValue(
       engRow({ status: 'completed', acceptedAt: new Date('2026-07-10T12:00:00Z') })
     );
@@ -211,7 +203,7 @@ describe('runDeliveryReviewSweep — auto-accept pass', () => {
 
 describe('runDeliveryReviewSweep — BAL-390 fused rating ask (auto-accept pass ONLY)', () => {
   function pendingRow() {
-    mockListPending.mockResolvedValueOnce([engRow()]).mockResolvedValueOnce([]);
+    mockListPending.mockResolvedValueOnce([engRow()]);
     mockAccept.mockResolvedValue(
       engRow({ status: 'completed', acceptedAt: new Date('2026-07-10T12:00:00Z') })
     );
@@ -329,132 +321,39 @@ describe('runDeliveryReviewSweep — BAL-390 fused rating ask (auto-accept pass 
       expect.objectContaining({ reviewToken: undefined })
     );
   });
-
-  /**
-   * ⚠ THE BOUNDARY, ENCODED AS A TEST. BAL-390 touched `autoAcceptOne` and NOTHING ELSE
-   * in this file. The T-2 reminder pass (`remindOne` + `runDeliveryReviewSweep`'s second
-   * pass) is CONFIRMED BROKEN — a `(now−7d, now−5d]`, i.e. 48-hour, band against an
-   * hourly cron, leaning on BullMQ jobId dedup that the shared `notification-events`
-   * queue's `removeOnComplete: { count: 100 }` cannot supply. It is ticketed separately
-   * and was deliberately NOT fixed, NOT copied, and NOT used as precedent here. If a
-   * future change makes the reminder pass mint review tokens, this fails.
-   */
-  it('leaves the T-2 reminder pass completely untouched — it mints nothing', async () => {
-    mockListPending
-      .mockResolvedValueOnce([]) // nothing to auto-accept
-      .mockResolvedValueOnce([engRow({ id: 'eng-2', completionRequestedAt: REQUESTED_07_06 })]);
-    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-2' }));
-    mockFindOwner.mockResolvedValue({ id: 'owner-2' });
-
-    const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
-
-    expect(result).toEqual({ accepted: 0, reminded: 1 });
-    expect(mockFindLiveReview).not.toHaveBeenCalled();
-    expect(mockCreateReviewToken).not.toHaveBeenCalled();
-    expect(mockPublish).toHaveBeenCalledWith(
-      'engagement.review_reminder',
-      expect.not.objectContaining({ reviewToken: expect.anything() })
-    );
-  });
 });
 
-describe('runDeliveryReviewSweep — reminder pass', () => {
-  it('sends the T-2 reminder for an in-window engagement with a pluralised daysLeft', async () => {
-    mockListPending
-      .mockResolvedValueOnce([]) // nothing past the auto-accept window
-      .mockResolvedValueOnce([engRow({ id: 'eng-2', completionRequestedAt: REQUESTED_07_06 })]);
-    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-2' }));
+describe('runDeliveryReviewSweep — the T-2 reminder is no longer sent here', () => {
+  it('never publishes engagement.review_reminder or tracks it, even for a pending row at day 5.5', async () => {
+    const midWindow = engRow({ id: 'eng-2', completionRequestedAt: REQUESTED_07_06 });
+    // Only the auto-accept query exists now; it returns nothing for a row inside the window.
+    mockListPending.mockResolvedValue([]);
+    mockFindWithMilestones.mockResolvedValue(hydrated({ id: midWindow.id }));
     mockFindOwner.mockResolvedValue({ id: 'owner-2' });
-
-    const now = new Date('2026-07-11T12:00:00Z'); // autoAt 07-13 → 2 days left
-    const result = await runDeliveryReviewSweep(now);
-
-    expect(result).toEqual({ accepted: 0, reminded: 1 });
-    expect(mockAccept).not.toHaveBeenCalled();
-    expect(mockPublish).toHaveBeenCalledWith(
-      'engagement.review_reminder',
-      expect.objectContaining({
-        correlationId: `eng-2:review_reminder:${REQUESTED_07_06.getTime()}`,
-        engagementId: 'eng-2',
-        recipientId: 'owner-2',
-        projectTitle: 'CPQ implementation',
-        requestedDate: '6 Jul',
-        autoDate: '13 Jul',
-        daysLeft: 2,
-      })
-    );
-    expect(mockTrackServer).toHaveBeenCalledWith(
-      'engagement_review_reminder_sent',
-      expect.objectContaining({ engagement_id: 'eng-2', distinct_id: 'owner-2' })
-    );
-  });
-
-  it('skips the reminder (no send, not counted) when there is no client owner', async () => {
-    mockListPending
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([engRow({ id: 'eng-3', completionRequestedAt: REQUESTED_07_06 })]);
-    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-3' }));
-    mockFindOwner.mockRejectedValue(new Error('No owner found'));
 
     const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
 
-    expect(result.reminded).toBe(0);
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockTrackServer).not.toHaveBeenCalled();
+    expect(result).toEqual({ accepted: 0 });
+    expect(mockListPending).toHaveBeenCalledTimes(1);
+    expect(mockPublish).not.toHaveBeenCalledWith('engagement.review_reminder', expect.anything());
+    expect(mockTrackServer).not.toHaveBeenCalledWith(
+      'engagement_review_reminder_sent',
+      expect.anything()
+    );
   });
 
-  it('uses the independent expert’s own name as the party label (freelancer path)', async () => {
-    mockListPending
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([engRow({ id: 'eng-4', completionRequestedAt: REQUESTED_07_06 })]);
-    mockFindWithMilestones.mockResolvedValue(
-      hydrated({
-        id: 'eng-4',
-        expertProfile: {
-          id: 'ep-4',
-          type: 'freelancer',
-          headline: null,
-          timezone: 'UTC',
-          user: { id: 'u-ex', firstName: 'Priya', lastName: 'Sharma', avatarUrl: null },
-        },
-        deliveringAgency: null,
-      })
-    );
-    mockFindOwner.mockResolvedValue({ id: 'owner-4' });
+  it('does not mint a review token for a row it leaves pending', async () => {
+    mockListPending.mockResolvedValue([]);
 
     await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
 
-    expect(mockPublish).toHaveBeenCalledWith(
-      'engagement.review_reminder',
-      expect.objectContaining({ expertPartyLabel: 'Priya Sharma' })
-    );
-  });
-
-  it('does NOT remind a lingering overdue row past the auto-accept deadline (lower-bounded window)', async () => {
-    // A row whose accept FAILED and now lingers well past T-7. The reminder query still
-    // returns it (<= now-5d), but the lower bound (> now-7d) excludes it, so it never
-    // gets a past-dated "1 day to go" reminder — it's retried by the accept pass instead.
-    const overdue = engRow({
-      id: 'eng-overdue',
-      completionRequestedAt: new Date('2026-06-01T00:00:00Z'),
-    });
-    mockListPending
-      .mockResolvedValueOnce([overdue]) // accept pass finds it (>= 7d)…
-      .mockResolvedValueOnce([overdue]); // …reminder query returns it too (<= now-5d)
-    mockAccept.mockRejectedValue(new Error('boom')); // …but the accept fails, so it lingers pending
-    mockFindWithMilestones.mockResolvedValue(hydrated({ id: 'eng-overdue' }));
-    mockFindOwner.mockResolvedValue({ id: 'owner-x' });
-
-    const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
-
-    expect(result).toEqual({ accepted: 0, reminded: 0 });
-    expect(mockPublish).not.toHaveBeenCalledWith('engagement.review_reminder', expect.anything());
+    expect(mockFindLiveReview).not.toHaveBeenCalled();
+    expect(mockCreateReviewToken).not.toHaveBeenCalled();
   });
 });
 
 describe('config knobs', () => {
-  it('exposes the T-2 lead and the hourly cron cadence', () => {
-    expect(REVIEW_REMINDER_LEAD_DAYS).toBe(2);
+  it('exposes the hourly cron cadence', () => {
     expect(DELIVERY_REVIEW_SWEEP_CRON).toBe('0 * * * *');
   });
 });

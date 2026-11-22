@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { AUTO_ACCEPT_DAYS } from '../engagements/delivery-review';
 import {
   MAX_REMINDER_STEPS,
+  REMINDER_ARMABLE_AFTER_DUE_MS,
   REMINDER_DEFAULT_ZONE,
   REMINDER_SEQUENCE_IDS,
+  REMINDER_SEQUENCE_SHARED_RULES,
   REMINDER_SEQUENCE_STEPS,
   reminderLocalDayStart,
   reminderRecipientZone,
@@ -31,6 +34,24 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
       { key: 'day_5', offsetMinutes: 7200, timing: 'weekday_morning' },
       { key: 'day_9', offsetMinutes: 12960, timing: 'weekday_morning' },
     ]);
+  });
+
+  it('delivery_review is one exact step, 5 days after the completion request', () => {
+    expect(REMINDER_SEQUENCE_STEPS.delivery_review).toEqual([
+      { key: 'pre_auto_accept', offsetMinutes: 7200, timing: 'exact' },
+    ]);
+  });
+
+  it('delivery_review step cannot fire after auto-accept unless dispatch lags', () => {
+    const [step] = REMINDER_SEQUENCE_STEPS.delivery_review;
+    const autoAcceptMs = AUTO_ACCEPT_DAYS * 86_400_000;
+    expect((step?.offsetMinutes ?? 0) * 60_000 + REMINDER_ARMABLE_AFTER_DUE_MS).toBeLessThan(
+      autoAcceptMs
+    );
+  });
+
+  it('delivery_review shares no predicate rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual([]);
   });
 });
 
@@ -101,6 +122,7 @@ describe('reminderSequenceKey', () => {
 
   it('prefix is seq:{id}:', () => {
     expect(reminderSequenceKeyPrefix('proposal_review')).toBe('seq:proposal_review:');
+    expect(reminderSequenceKeyPrefix('delivery_review')).toBe('seq:delivery_review:');
   });
 });
 

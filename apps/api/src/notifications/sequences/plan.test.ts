@@ -41,6 +41,30 @@ describe('planDueSteps', () => {
     expect(plan(new Date('2026-11-06T12:00:00.000Z'), ANCHOR, moved as typeof STEPS)).toEqual([]);
   });
 
+  describe('delivery_review', () => {
+    const DELIVERY_STEPS = REMINDER_SEQUENCE_STEPS.delivery_review;
+    const DAY_MS = 86_400_000;
+
+    it('plans only pre_auto_accept, always at the same fireAt, on every hourly tick for 7 days', () => {
+      const fireAts = new Set<number>();
+      const planned: string[] = [];
+      for (let hour = 0; hour <= 7 * 24; hour += 1) {
+        const now = new Date(ANCHOR.getTime() + hour * HOUR_MS + 20 * 60_000);
+        for (const step of plan(now, ANCHOR, DELIVERY_STEPS)) {
+          planned.push(step.stepKey);
+          fireAts.add(step.fireAt.getTime());
+        }
+      }
+      expect(new Set(planned)).toEqual(new Set(['pre_auto_accept']));
+      expect([...fireAts]).toEqual([ANCHOR.getTime() + 5 * DAY_MS]);
+    });
+
+    it('arms nothing once the step is more than the grace past due', () => {
+      const late = new Date(ANCHOR.getTime() + 6 * DAY_MS + HOUR_MS);
+      expect(plan(late, ANCHOR, DELIVERY_STEPS)).toEqual([]);
+    });
+  });
+
   it('arms an exact step one lead ahead with at equal to the due time', () => {
     const exact = [{ key: 'ping', offsetMinutes: 60, timing: 'exact' }] as typeof STEPS;
     const planned = plan(new Date('2026-11-02T12:30:00.000Z'), ANCHOR, exact);
