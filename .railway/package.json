@@ -1,0 +1,8 @@
+{
+  "name": "balo-railway-config",
+  "private": true,
+  "description": "The railway SDK for .railway/railway.ts, installed on its own (outside the pnpm workspace) by the Railway plan job.",
+  "dependencies": {
+    "railway": "3.16.0"
+  }
+}
