@@ -3,8 +3,8 @@ import { HTMLElement, TextNode, parse } from 'node-html-parser';
 import { PDF_COLORS, PDF_TYPE } from './pdf-theme';
 
 /**
- * HTML → react-pdf mapper for the proposal's rich-text fields (overview,
- * exclusions, milestone descriptions) — the ticket's flagged risk (BAL-385).
+ * HTML → react-pdf mapper for the proposal's rich-text fields (overview and
+ * milestone descriptions) — the ticket's flagged risk (BAL-385).
  *
  * The input is ALREADY server-sanitised to a known allow-list
  * (`PROPOSAL_OVERVIEW_ALLOWED_TAGS`: p, br, strong, b, em, i, a, h2, h3, ul, ol,

@@ -41,6 +41,7 @@ const DOC = draftToReviewDoc(
       rating: null,
       ratingCount: 0,
     },
+    clientCompanyName: 'Northwind',
   }
 );
 
@@ -128,6 +129,21 @@ describe('ProposalPreview', () => {
 
     expect(screen.getByRole('button', { name: 'Resend to Northwind' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send to Northwind' })).not.toBeInTheDocument();
+  });
+
+  it('lists attachments as plain rows: the preview offers no download', () => {
+    renderPreview({
+      doc: {
+        ...DOC,
+        assumptions: [],
+        exclusions: [],
+        additionalTerms: [],
+        clientCompanyName: 'Northwind',
+        attachments: [{ id: 'att-1', fileName: 'spec.pdf', sizeBytes: 10 }],
+      },
+    });
+    expect(screen.getByText('spec.pdf')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
   });
 
   it('moves focus to the banner heading on mount', () => {

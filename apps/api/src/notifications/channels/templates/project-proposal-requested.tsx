@@ -25,7 +25,7 @@ export function ProjectProposalRequestedEmail({
       bodyText="Good news — the client you've been talking with asked you to put together a formal proposal: scope, deliverables, and price. Open the conversation to build it."
       summaryLabel="Project request"
       projectTitle={projectTitle}
-      calloutText="A sharp, specific proposal keeps the momentum you've built. Lay out deliverables, exclusions, terms, and your payment schedule — you can keep messaging and meeting while you build it."
+      calloutText="A sharp, specific proposal keeps the momentum you've built. Lay out deliverables, assumptions, exclusions, terms and your payment schedule — you can keep messaging and meeting while you build it."
       ctaLabel="Build your proposal →"
       supportPrefix="Questions about proposals?"
     />

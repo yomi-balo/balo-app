@@ -1,7 +1,36 @@
 import { describe, it, expect } from 'vitest';
+import {
+  PROPOSAL_CHANGE_SECTIONS,
+  proposalChangeSectionPhrase,
+} from '@balo/shared/project-requests';
 import { getInAppTemplate } from './in-app-templates.js';
 
 describe('getInAppTemplate', () => {
+  describe('project-changes-requested', () => {
+    it.each(PROPOSAL_CHANGE_SECTIONS)('names the %s section by its phrase', (section) => {
+      const result = getInAppTemplate('project-changes-requested', {
+        clientName: 'Dana',
+        section,
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-1',
+      });
+      expect(result).toEqual({
+        title: 'Changes requested',
+        body: `Dana asked for a change to ${proposalChangeSectionPhrase(section)} in your proposal for "CPQ implementation"`,
+        actionUrl: '/projects/req-1',
+      });
+      expect(result.body).not.toContain('payment_terms');
+    });
+
+    it('reads as the whole proposal when the section is missing', () => {
+      const result = getInAppTemplate('project-changes-requested', {});
+      expect(result.body).toBe(
+        'The client asked for a change to the proposal in your proposal for "a project"'
+      );
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('booking-confirmed-client', () => {
     it('names the expert party and deep-links to the case, new case', () => {
       const result = getInAppTemplate('booking-confirmed-client', {

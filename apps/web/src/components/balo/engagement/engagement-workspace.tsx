@@ -18,6 +18,7 @@ import { ExpertMilestoneRail, type ProposeChangeLink } from './expert-milestone-
 import { MilestoneEmptyState } from './milestone-empty-state';
 import { ExpertCompletionCard } from './expert-completion-card';
 import { ActionItemsPanel } from './action-items-panel';
+import { AgreedTermsCard } from './agreed-terms-card';
 import type { ChangeOrderPanelView } from '@/lib/engagement/change-order-view';
 import {
   ChangeOrderAdminPanel,
@@ -228,6 +229,16 @@ export function EngagementWorkspace({
       )}
 
       {milestoneSection}
+
+      {view.agreedTerms !== null && (
+        <Reveal delay={0.2}>
+          <AgreedTermsCard
+            view={view.agreedTerms}
+            engagementId={view.engagementId}
+            lens={view.lens}
+          />
+        </Reveal>
+      )}
 
       {changeOrders !== undefined && view.lens === 'client' && view.status === 'active' && (
         <Reveal delay={0.21}>

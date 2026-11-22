@@ -11,6 +11,7 @@ import { ReviewSummaryCard } from './review-summary-card';
 import { AcceptConfirmModal } from './accept-confirm-modal';
 import { ChangesModal } from './changes-modal';
 import { BackChannel } from './back-channel';
+import { useProposalAttachmentDownload } from './use-proposal-attachment-download';
 import { ShareMenu } from './share/share-menu';
 import { SharedWithCard } from './share/shared-with-card';
 import { firstName } from './proposal-name';
@@ -42,14 +43,15 @@ interface ProposalReviewProps {
 }
 
 /**
- * The nav sections actually present for a proposal: overview/milestones/payment/
- * terms always; attachments only when the proposal has a non-terms file (terms
- * docs fold into the Terms section, so a terms-only proposal has no Attachments).
+ * The nav sections actually present for a proposal: overview/milestones/payment/terms
+ * always; the assumptions-and-exclusions section only when either list has an item; and
+ * attachments only when the proposal has a file.
  */
 export function presentSections(doc: ProposalReviewDoc): ReviewSection[] {
   return REVIEW_SECTIONS.filter((section) => {
-    if (section.key !== 'attachments') return true;
-    return doc.attachments.some((attachment) => attachment.kind !== 'terms');
+    if (section.key === 'scope') return doc.assumptions.length > 0 || doc.exclusions.length > 0;
+    if (section.key === 'attachments') return doc.attachments.length > 0;
+    return true;
   });
 }
 
@@ -90,13 +92,21 @@ export function ProposalReview({
   // Drop `?accept=1` once honoured, so a refresh or back-navigation doesn't reopen it.
   useEffect(() => {
     if (!openAccept) return;
-    const url = new URL(window.location.href);
+    const url = new URL(globalThis.location.href);
     url.searchParams.delete('accept');
-    window.history.replaceState(window.history.state, '', url);
+    globalThis.history.replaceState(globalThis.history.state, '', url);
   }, [openAccept]);
   const [changesOpen, setChangesOpen] = useState(false);
 
   const active = proposals.find((proposal) => proposal.id === activeId) ?? proposals[0];
+
+  // Declared before the empty-state return so the hook order never changes. With no active
+  // proposal nothing renders a download row, so the empty ids are never used.
+  const { download, downloadingId } = useProposalAttachmentDownload({
+    requestId,
+    relationshipId: active?.relationshipId ?? '',
+    proposalId: active?.id ?? '',
+  });
 
   if (active === undefined) {
     return (
@@ -218,7 +228,13 @@ export function ProposalReview({
             <div>
               <ProposalSectionNav proposalId={active.id} sections={presentSections(active)} />
               <div className="border-border bg-card mt-2 rounded-2xl border p-6 sm:p-7">
-                <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} showSummaryCells />
+                <ProposalDoc
+                  doc={active}
+                  sectionIdPrefix={`sec-${active.id}-`}
+                  showSummaryCells
+                  onDownload={download}
+                  downloadingId={downloadingId}
+                />
               </div>
             </div>
             <ReviewSummaryCard
@@ -232,7 +248,13 @@ export function ProposalReview({
           <div className="lg:hidden">
             <ProposalSectionNav proposalId={active.id} sections={presentSections(active)} />
             <div className="border-border bg-card mt-2 rounded-2xl border p-5">
-              <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} showSummaryCells />
+              <ProposalDoc
+                doc={active}
+                sectionIdPrefix={`sec-${active.id}-`}
+                showSummaryCells
+                onDownload={download}
+                downloadingId={downloadingId}
+              />
             </div>
             {isAccepted && (
               <div className="border-success/30 bg-success/10 text-success mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold">

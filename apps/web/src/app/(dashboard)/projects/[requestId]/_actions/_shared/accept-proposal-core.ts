@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import {
   proposalsRepository,
   projectRequestsRepository,
+  proposalClausesRepository,
   ensureClientBillingGateConfirmed,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
@@ -12,6 +13,7 @@ import {
   type Proposal,
 } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import type { SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
@@ -201,6 +203,11 @@ export async function runAcceptProposal(
       return { success: false, error: STALE_PROPOSAL };
     }
 
+    // The terms the client is agreeing to, for the accept event's count. Read BEFORE the commit,
+    // so a failed read cannot follow a committed accept; only drafts can be written once a
+    // proposal is submitted, so the set cannot change between here and the commit.
+    const clauses = await proposalClausesRepository.listByProposal(proposalId);
+
     // Commit the accept (proposal + relationship in ONE tx). A stale double-accept
     // trips the typed transition errors → friendly stale copy; the repo coherence
     // guard (defence-in-depth) → generic copy + an analytics `coherence` payload.
@@ -254,6 +261,7 @@ export async function runAcceptProposal(
       proposal_id: proposalId,
       balo_fee_bps: proposal.baloFeeBps,
       client_price_cents: clientPriceCents,
+      additional_term_count: groupClauseBodies(clauses).additionalTerms.length,
       distinct_id: user.id,
     });
 

@@ -8,10 +8,13 @@ describe('ProposalSectionNav', () => {
     vi.clearAllMocks();
   });
 
-  it('exports the canonical review sections without a Not-included chip', () => {
+  it('exports the canonical review sections, with one chip for assumptions and exclusions', () => {
     const keys = REVIEW_SECTIONS.map((s) => s.key);
-    expect(keys).toEqual(['overview', 'milestones', 'payment', 'terms', 'attachments']);
+    expect(keys).toEqual(['overview', 'milestones', 'scope', 'payment', 'terms', 'attachments']);
     expect(keys).not.toContain('exclusions');
+    expect(REVIEW_SECTIONS.find((s) => s.key === 'scope')?.label).toBe(
+      'Assumptions and exclusions'
+    );
   });
 
   it('renders a chip per section', () => {

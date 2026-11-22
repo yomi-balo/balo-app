@@ -5,8 +5,14 @@ import type {
   ProposalMilestone,
   ProposalPaymentInstallment,
   ProposalDocument,
+  ProposalClause,
   ProjectRequestWithRelations,
 } from '@balo/db';
+import {
+  BALO_TERMS_ADDITIVE_SENTENCE,
+  BALO_TERMS_PRECEDENCE_SENTENCE,
+  STANDARD_TERMS,
+} from '@/components/balo/project-request/proposal/proposal-standard-terms';
 import { hydrateReviewDoc } from '@/lib/project-request/proposal-audience-view';
 import { ProposalPdfDocument, renderProposalPdfToBuffer } from './proposal-pdf-document';
 
@@ -123,10 +129,24 @@ function makeRelationship(): Relationship {
   };
 }
 
+function makeClause(kind: ProposalClause['kind'], body: string, sortOrder: number): ProposalClause {
+  return {
+    id: `clause-${kind}-${sortOrder}`,
+    proposalId: 'proposal-1',
+    kind,
+    sortOrder,
+    body,
+    createdAt: NOW,
+    updatedAt: NOW,
+    deletedAt: null,
+  };
+}
+
 interface ClientDocLists {
   milestones?: ProposalMilestone[];
   installments?: ProposalPaymentInstallment[];
   documents?: ProposalDocument[];
+  clauses?: ProposalClause[];
 }
 
 function clientDoc(proposalOverrides: Partial<Proposal> = {}, lists: ClientDocLists = {}) {
@@ -135,8 +155,10 @@ function clientDoc(proposalOverrides: Partial<Proposal> = {}, lists: ClientDocLi
     lists.milestones ?? [makeMilestone()],
     lists.installments ?? [makeInstallment()],
     lists.documents ?? [makeDocument()],
+    lists.clauses ?? [],
     makeRelationship(),
-    'client'
+    'client',
+    'Northwind Industrial'
   );
 }
 
@@ -182,8 +204,10 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
       [makeMilestone()],
       [makeInstallment()],
       [makeDocument()],
+      [],
       makeRelationship(),
-      'admin'
+      'admin',
+      'Northwind Industrial'
     );
     expect(adminView.adminPricing?.baloFeeBps).toBe(2500);
   });
@@ -227,15 +251,23 @@ describe('ProposalPdfDocument — render smoke', () => {
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
 
-  it('renders a T&M proposal with exclusions and null timeframe without throwing', async () => {
-    const doc = clientDoc({
-      pricingMethod: 'tm',
-      depositCents: 20_000,
-      rateCents: 30_000,
-      cadence: 'monthly',
-      exclusions: '<p>Data migration is out of scope.</p>',
-      timeframeWeeks: null,
-    });
+  it('renders a T&M proposal with clauses and null timeframe without throwing', async () => {
+    const doc = clientDoc(
+      {
+        pricingMethod: 'tm',
+        depositCents: 20_000,
+        rateCents: 30_000,
+        cadence: 'monthly',
+        timeframeWeeks: null,
+      },
+      {
+        clauses: [
+          makeClause('assumption', 'Sandbox access by kickoff', 0),
+          makeClause('exclusion', 'Data migration is out of scope.', 0),
+          makeClause('additional_term', 'One revision round per milestone', 0),
+        ],
+      }
+    );
     const buffer = await renderProposalPdfToBuffer({
       doc,
       title: 'Ongoing Support',
@@ -279,16 +311,104 @@ describe('ProposalPdfDocument — conditional branches', () => {
     );
   }
 
-  it('shows the "revised" version note and the terms-supplement line (v2 + terms attachment)', () => {
-    const doc = clientDoc(
-      { version: 2 },
-      { documents: [makeDocument({ id: 'terms-1', kind: 'terms', fileName: 'MSA.pdf' })] }
-    );
-    const text = renderTree(doc);
+  it('shows the "revised" version note for version 2', () => {
+    const text = renderTree(clientDoc({ version: 2 }));
     // Version > 1 → the "· revised" note (not the bare "Version 2").
     expect(text).toContain('Version 2 · revised');
-    // The kind:'terms' attachment folds into the Terms section as a supplement line.
-    expect(text).toContain('Additional terms attached: MSA.pdf');
+  });
+
+  it('lists every attachment, whatever its stored kind, with no supplement line', () => {
+    const doc = clientDoc(
+      {},
+      {
+        documents: [
+          makeDocument({ id: 'ref-1', kind: 'ref', fileName: 'appendix.pdf' }),
+          makeDocument({ id: 'terms-1', kind: 'terms', fileName: 'MSA.pdf' }),
+        ],
+      }
+    );
+    const text = renderTree(doc);
+    expect(text).toContain('ATTACHMENTSappendix.pdfMSA.pdf');
+    expect(text).not.toContain('Additional terms attached');
+  });
+
+  describe('assumptions, exclusions and terms', () => {
+    const clauses = [
+      makeClause('assumption', 'Sandbox access by kickoff', 0),
+      makeClause('assumption', 'Price list is final', 1),
+      makeClause('exclusion', 'Data migration', 0),
+      makeClause('additional_term', 'One revision round per milestone', 0),
+      makeClause('additional_term', 'Net 14', 1),
+    ];
+
+    it('orders the sections: overview, milestones, scope, payment, terms, attachments', () => {
+      const text = renderTree(clientDoc({}, { clauses }));
+      // `TERMS` alone also matches inside `PAYMENT TERMS`, so match it standing on its own.
+      const order = [
+        /OVERVIEW/,
+        /MILESTONES & DELIVERABLES/,
+        /ASSUMPTIONS AND EXCLUSIONS/,
+        /PAYMENT TERMS/,
+        /(?<!PAYMENT )TERMS/,
+        /ATTACHMENTS/,
+      ].map((label) => text.search(label));
+      expect(order.every((index) => index >= 0)).toBe(true);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+    });
+
+    it('numbers each list from 1, with the text exactly as typed', () => {
+      const text = renderTree(clientDoc({}, { clauses }));
+      expect(text).toContain(
+        'ASSUMPTIONS1.Sandbox access by kickoff2.Price list is finalNOT INCLUDED1.Data migration'
+      );
+    });
+
+    it('prints markup in a body literally, with no rich-text conversion', () => {
+      const text = renderTree(
+        clientDoc({}, { clauses: [makeClause('exclusion', '<b>Data</b> & more', 0)] })
+      );
+      expect(text).toContain('1.<b>Data</b> & more');
+    });
+
+    it('omits the section when both lists are empty, even with additional terms', () => {
+      const text = renderTree(
+        clientDoc({}, { clauses: [makeClause('additional_term', 'Net 14', 0)] })
+      );
+      expect(text).not.toContain('ASSUMPTIONS AND EXCLUSIONS');
+      expect(text).not.toContain('NOT INCLUDED');
+      expect(text).toContain('Net 14');
+    });
+
+    it('prints Balo’s Project T&Cs, the fixed-price rule and the summary bullets', () => {
+      const text = renderTree(clientDoc({}, { clauses }));
+      expect(text).toContain('Balo Project T&Cs apply');
+      expect(text).toContain('The same terms for every project on Balo.');
+      expect(text).toContain(
+        'This is a fixed-price project. Any increase in cost is only charged if Northwind Industrial approves it.'
+      );
+      for (const term of STANDARD_TERMS) expect(text).toContain(term);
+      expect(text).not.toContain(BALO_TERMS_PRECEDENCE_SENTENCE);
+    });
+
+    it('prints the time-and-materials rule for a T&M proposal', () => {
+      const text = renderTree(clientDoc({ pricingMethod: 'tm' }));
+      expect(text).toContain(
+        'This is a time and materials project. Any increase in cost is only charged if Northwind Industrial approves it.'
+      );
+    });
+
+    it('prints the expert’s additional terms, numbered, after the additive sentence', () => {
+      const text = renderTree(clientDoc({}, { clauses }));
+      expect(text).toContain(
+        `Dana Okafor’s additional terms${BALO_TERMS_ADDITIVE_SENTENCE}1.One revision round per milestone2.Net 14`
+      );
+    });
+
+    it('omits the additional-terms block when the expert added none', () => {
+      const text = renderTree(clientDoc());
+      expect(text).not.toContain('additional terms');
+      expect(text).not.toContain(BALO_TERMS_ADDITIVE_SENTENCE);
+    });
   });
 
   it('renders no milestone amount for a null or zero value, and still renders a positive one', () => {

@@ -8,6 +8,7 @@ import { ProposalDoc } from './proposal-doc';
 import { PayoutAssuranceNote } from './payout-assurance-note';
 import { BackChannel } from './back-channel';
 import { ProposalPdfDownloadLink } from './proposal-pdf-download-link';
+import { useProposalAttachmentDownload } from './use-proposal-attachment-download';
 import type { AdminProposalPricing, ProposalReviewDoc } from './proposal-review-types';
 
 interface SubmittedViewProps {
@@ -145,6 +146,11 @@ function AdminPricingCard({
 export function SubmittedView(props: Readonly<SubmittedViewProps>): React.JSX.Element {
   const { lens, requestId, doc, clientName } = props;
   const { icon: Icon, headline, sub } = waitingCopy(props);
+  const { download, downloadingId } = useProposalAttachmentDownload({
+    requestId,
+    relationshipId: doc.relationshipId,
+    proposalId: doc.id,
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -165,7 +171,7 @@ export function SubmittedView(props: Readonly<SubmittedViewProps>): React.JSX.El
       </div>
 
       <div className="border-border bg-card rounded-2xl border p-5 sm:p-6">
-        <ProposalDoc doc={doc} />
+        <ProposalDoc doc={doc} onDownload={download} downloadingId={downloadingId} />
         {lens === 'expert' && <PayoutAssuranceNote pricingMethod={doc.pricingMethod} />}
       </div>
 

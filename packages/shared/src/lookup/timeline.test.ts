@@ -396,6 +396,11 @@ describe('describeAuditEvent — mapped actions', () => {
       expected: 'Milestones snapshotted from the accepted proposal',
     },
     {
+      action: 'engagement.clauses_snapshotted',
+      metadata: {},
+      expected: 'Agreed terms copied from the accepted proposal',
+    },
+    {
       action: 'engagement.completion_requested',
       metadata: {},
       expected: 'Completion requested',

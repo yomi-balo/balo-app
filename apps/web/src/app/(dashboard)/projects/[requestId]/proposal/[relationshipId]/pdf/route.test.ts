@@ -43,6 +43,7 @@ vi.mock('@balo/db', () => ({
   proposalMilestonesRepository: { listByProposal: mockListMilestones },
   proposalPaymentInstallmentsRepository: { listByProposal: mockListInstallments },
   proposalDocumentsRepository: { listByProposal: mockListDocuments },
+  proposalClausesRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
 }));
 
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: () => mockGetCurrentUser() }));
@@ -212,7 +213,7 @@ describe('GET proposal PDF — audience invariant (money-safety)', () => {
     const res = await callGet();
     expect(res.status).toBe(200);
     const call = mockHydrateReviewDoc.mock.calls[0];
-    expect(call?.[5]).toBe('client');
+    expect(call?.[6]).toBe('client');
   });
 
   it('serializes with the CLIENT audience even for the ADMIN lens (never admin)', async () => {
@@ -220,9 +221,9 @@ describe('GET proposal PDF — audience invariant (money-safety)', () => {
     const res = await callGet();
     expect(res.status).toBe(200);
     const call = mockHydrateReviewDoc.mock.calls[0];
-    expect(call?.[5]).toBe('client');
-    // Assert the forbidden audiences were never passed.
-    expect(call?.[5]).not.toBe('admin');
+    expect(call?.[6]).toBe('client');
+    //Assert the forbidden audiences were never passed.
+    expect(call?.[6]).not.toBe('admin');
     expect(call?.[5]).not.toBe('expert');
   });
 });

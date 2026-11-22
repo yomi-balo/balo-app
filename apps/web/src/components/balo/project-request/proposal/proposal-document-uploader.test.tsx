@@ -66,8 +66,6 @@ interface Rendered {
 
 function renderUploader(props: {
   documents?: ProposalDocumentView[];
-  kind?: 'terms' | 'ref';
-  single?: boolean;
   pickLabel?: string;
   ensureProposalId?: () => Promise<string | null>;
 }): Rendered {
@@ -76,14 +74,13 @@ function renderUploader(props: {
   const ensureProposalId = vi.fn<() => Promise<string | null>>(
     props.ensureProposalId ?? (() => Promise.resolve(PROPOSAL_ID))
   );
-  const { kind = 'ref', single, pickLabel } = props;
+  const { pickLabel } = props;
   const documents = props.documents ?? [];
   function Harness(): React.JSX.Element {
     const controller = useProposalDocumentUpload({
       requestId: REQUEST_ID,
       relationshipId: RELATIONSHIP_ID,
-      kind,
-      single,
+      kind: 'ref',
       documents,
       ensureProposalId,
       onAdded,
@@ -96,7 +93,6 @@ function renderUploader(props: {
           controller={controller}
           documents={documents}
           labelId="uploader-label"
-          single={single}
           pickLabel={pickLabel}
         />
       </>
@@ -301,71 +297,20 @@ describe('useProposalDocumentUpload + ProposalDocumentUploaderView', () => {
     );
   });
 
-  it('tags each row by kind', () => {
-    renderUploader({
-      documents: [doc(), doc({ id: 'doc-2', kind: 'terms', fileName: 'terms.pdf' })],
-    });
-    expect(screen.getByText('Reference')).toBeInTheDocument();
-    expect(screen.getByText('Your terms')).toBeInTheDocument();
+  it('tags every row as a reference', () => {
+    renderUploader({ documents: [doc(), doc({ id: 'doc-2', fileName: 'more.pdf' })] });
+    expect(screen.getAllByText('Reference')).toHaveLength(2);
+    expect(screen.queryByText('Your terms')).not.toBeInTheDocument();
   });
 
-  describe('single (terms) mode', () => {
-    it('takes one file only and toasts the terms copy', async () => {
-      confirmProposalDocumentUploadAction.mockResolvedValue({
-        success: true,
-        document: doc({ kind: 'terms' }),
-      });
-      const { fileInput } = renderUploader({ kind: 'terms', single: true });
-      expect(fileInput).not.toHaveAttribute('multiple');
-
-      fireEvent.change(fileInput, { target: { files: [pdf('terms.pdf'), pdf('extra.pdf')] } });
-
-      await waitFor(() =>
-        expect(mockToast.success).toHaveBeenCalledWith('Your terms are attached')
-      );
-      expect(requestProposalDocumentUploadAction).toHaveBeenCalledTimes(1);
-    });
-
-    it('offers "Attach your terms" with nothing attached', () => {
-      renderUploader({ kind: 'terms', single: true });
-      expect(screen.getByRole('button', { name: 'Attach your terms' })).toBeInTheDocument();
-    });
-
-    it('at capacity keeps the picker as "Replace your terms" and uploads through it', async () => {
-      const user = userEvent.setup();
-      const { fileInput, onAdded } = renderUploader({
-        kind: 'terms',
-        single: true,
-        documents: [doc({ kind: 'terms' })],
-      });
-      expect(screen.queryByRole('button', { name: /remove to replace/i })).not.toBeInTheDocument();
-      const picker = screen.getByRole('button', { name: 'Replace your terms' });
-      expect(picker).toBeEnabled();
-
-      const click = vi.spyOn(fileInput, 'click');
-      await user.click(picker);
-      expect(click).toHaveBeenCalled();
-
-      await user.upload(fileInput, pdf('new-terms.pdf'));
-      await waitFor(() => expect(onAdded).toHaveBeenCalled());
-      expect(requestProposalDocumentUploadAction).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: 'terms', fileName: 'new-terms.pdf' })
-      );
-    });
-
-    it('still lets the attached terms be removed', async () => {
-      const user = userEvent.setup();
-      const { onRemoved } = renderUploader({
-        kind: 'terms',
-        single: true,
-        documents: [doc({ kind: 'terms' })],
-      });
-      await user.click(screen.getByRole('button', { name: 'Remove spec.pdf' }));
-      await waitFor(() => expect(onRemoved).toHaveBeenCalledWith('doc-1'));
-    });
+  it('takes several files at once and offers the default picker', () => {
+    const { fileInput } = renderUploader({});
+    expect(fileInput).toHaveAttribute('multiple');
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /your terms/i })).not.toBeInTheDocument();
   });
 
-  it('uses the custom pick label in multi mode', () => {
+  it('uses the custom pick label', () => {
     renderUploader({ pickLabel: 'Drop files anywhere on this page, or browse' });
     expect(
       screen.getByRole('button', { name: 'Drop files anywhere on this page, or browse' })

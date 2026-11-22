@@ -7,13 +7,16 @@ import { revalidatePath } from 'next/cache';
 import {
   proposalsRepository,
   proposalDocumentsRepository,
+  proposalClausesRepository,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   ProposalCoherenceError,
   type Proposal,
+  type ProposalClauseInput,
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { sanitizeProjectHtml, sanitizeProposalOverviewHtml } from '@/lib/sanitize/project-html';
@@ -24,7 +27,7 @@ import {
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { validateProposalReadiness } from './proposal-readiness';
-import { proposalDraftBaseFields } from './proposal-schema';
+import { proposalDraftBaseFields, toClauseInputs } from './proposal-schema';
 import { lockContentionFailure } from './_shared/deadlock';
 
 // The composer payload — same shape as `save-proposal-draft.ts` (shared via
@@ -60,7 +63,13 @@ export type ResubmitProposalResult =
        */
       expertProfileId: string;
       /** Server-computed — the island attaches these to `PROJECT_PROPOSAL_RESUBMITTED`. */
-      analytics: { priceCents: number; currency: string };
+      analytics: {
+        priceCents: number;
+        currency: string;
+        assumptionCount: number;
+        exclusionCount: number;
+        additionalTermCount: number;
+      };
     }
   | { success: false; error: string; coherence?: ProposalCoherenceFailure };
 
@@ -139,19 +148,17 @@ interface SanitisedContent {
   overview: string;
   milestones: ProposalMilestoneInput[];
   installments: ProposalPaymentInstallmentInput[];
-  exclusions?: string;
 }
 
 /**
  * Server-side sanitise (NEVER trust the client) of the rich-text fields, mirroring
  * `submit-proposal.ts`'s sanitise step: the overview via `sanitizeProposalOverviewHtml`
- * and each milestone description + the exclusions via `sanitizeProjectHtml`.
+ * and each milestone description via `sanitizeProjectHtml`. Clauses are plain text,
+ * normalised by `toClauseInputs`, so they need no sanitising.
  */
 function sanitiseContent(input: ResubmitProposalInput): SanitisedContent {
-  const exclusions = input.exclusions ?? '';
   return {
     overview: sanitizeProposalOverviewHtml(input.overview),
-    exclusions: exclusions.length === 0 ? undefined : sanitizeProjectHtml(exclusions),
     milestones: input.milestones.map((m) => ({
       title: m.title,
       descriptionHtml:
@@ -184,6 +191,20 @@ function validateResubmitReadiness(
     rateCents: data.rateCents ?? null,
     priceCents: data.priceCents,
   });
+}
+
+/**
+ * v2's clause set. The payload's `clauses` win when present; an `undefined` field (a tab that
+ * predates the lists) carries v1's live clauses over instead, so a resubmit never drops them.
+ */
+async function resolveResubmitClauses(
+  data: ResubmitProposalInput,
+  fromProposalId: string
+): Promise<ProposalClauseInput[]> {
+  if (data.clauses !== undefined) {
+    return toClauseInputs(data.clauses);
+  }
+  return toClauseInputs(await proposalClausesRepository.listByProposal(fromProposalId));
 }
 
 /** The failure result for a repo coherence rejection (rule is analytics-only, never rendered). */
@@ -219,7 +240,7 @@ async function carryOverDocuments(fromProposalId: string, toProposalId: string):
         fileName: doc.fileName,
         contentType: doc.contentType,
         sizeBytes: doc.sizeBytes,
-        kind: doc.kind,
+        kind: 'ref',
         uploadedByUserId: doc.uploadedByUserId,
       });
     } catch (error) {
@@ -246,8 +267,10 @@ async function finishResubmit(args: {
   relationshipId: string;
   fromProposalId: string;
   proposal: Proposal;
+  clauses: readonly ProposalClauseInput[];
 }): Promise<ResubmitProposalResult> {
-  const { access, user, requestId, relationshipId, fromProposalId, proposal: v2 } = args;
+  const { access, user, requestId, relationshipId, fromProposalId, proposal: v2, clauses } = args;
+  const { assumptions, exclusions, additionalTerms } = groupClauseBodies(clauses);
 
   // Document carryover (best-effort, AFTER the header + children commit — a missing
   // attachment must never fail the resubmit).
@@ -289,7 +312,13 @@ async function finishResubmit(args: {
     proposalId: v2.id,
     version: v2.version,
     expertProfileId: access.relationship.expertProfileId,
-    analytics: { priceCents: v2.priceCents, currency: v2.currency },
+    analytics: {
+      priceCents: v2.priceCents,
+      currency: v2.currency,
+      assumptionCount: assumptions.length,
+      exclusionCount: exclusions.length,
+      additionalTermCount: additionalTerms.length,
+    },
   };
 }
 
@@ -359,6 +388,7 @@ export async function resubmitProposalAction(
     //     SAME transaction, so a current/submitted v2 never exists without its
     //     children. A stale double-resubmit trips the typed transition errors →
     //     friendly stale copy.
+    const clauses = await resolveResubmitClauses(data, fromProposalId);
     const outcome = await resubmitWithStaleGuard({
       relationshipId,
       overview: sanitised.overview,
@@ -366,12 +396,12 @@ export async function resubmitProposalAction(
       priceCents: data.priceCents,
       currency: data.currency,
       timeframeWeeks: data.timeframeWeeks,
-      exclusions: sanitised.exclusions,
       depositCents: data.depositCents,
       rateCents: data.rateCents,
       cadence: data.cadence,
       milestones: sanitised.milestones,
       installments: sanitised.installments,
+      clauses,
     });
     if (outcome.kind === 'stale') {
       return { success: false, error: STALE_PROPOSAL };
@@ -391,6 +421,7 @@ export async function resubmitProposalAction(
       relationshipId,
       fromProposalId,
       proposal: outcome.proposal,
+      clauses,
     });
   } catch (error) {
     // ⚠ fix round R1 — `proposalsRepository.resubmit` is one of the twelve writers serialised

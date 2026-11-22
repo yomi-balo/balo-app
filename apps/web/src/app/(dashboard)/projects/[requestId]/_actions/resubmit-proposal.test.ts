@@ -47,6 +47,7 @@ const {
   mockSetInstallments,
   mockListDocuments,
   mockAddDocument,
+  mockListClauses,
   mockTransitionRequest,
   mockAdvanceRelationship,
   mockInstallmentsSumTo100,
@@ -74,6 +75,7 @@ const {
     mockSetInstallments: vi.fn(),
     mockListDocuments: vi.fn(),
     mockAddDocument: vi.fn(),
+    mockListClauses: vi.fn(),
     mockTransitionRequest: vi.fn(),
     mockAdvanceRelationship: vi.fn(),
     mockInstallmentsSumTo100: vi.fn(),
@@ -97,6 +99,9 @@ vi.mock('@balo/db', () => ({
   proposalDocumentsRepository: {
     listByProposal: (...a: unknown[]) => mockListDocuments(...a),
     addDocument: (...a: unknown[]) => mockAddDocument(...a),
+  },
+  proposalClausesRepository: {
+    listByProposal: (...a: unknown[]) => mockListClauses(...a),
   },
   projectRequestsRepository: {
     transitionStatus: (...a: unknown[]) => mockTransitionRequest(...a),
@@ -167,6 +172,7 @@ describe('resubmitProposalAction', () => {
     mockSetMilestones.mockResolvedValue([]);
     mockSetInstallments.mockResolvedValue([]);
     mockListDocuments.mockResolvedValue([]);
+    mockListClauses.mockResolvedValue([]);
     mockGenerateKey.mockReturnValue('proposal-documents/v2/uploader/fresh-uuid');
     mockCopyObject.mockResolvedValue(undefined);
     mockAddDocument.mockResolvedValue({ id: 'doc-2' });
@@ -338,7 +344,13 @@ describe('resubmitProposalAction', () => {
       proposalId: V2_ID,
       version: 2,
       expertProfileId: EXPERT_PROFILE_ID,
-      analytics: { priceCents: 500000, currency: 'aud' },
+      analytics: {
+        priceCents: 500000,
+        currency: 'aud',
+        assumptionCount: 0,
+        exclusionCount: 0,
+        additionalTermCount: 0,
+      },
     });
 
     expect(mockSanitizeOverview).toHaveBeenCalledWith('<p>scope</p>');
@@ -367,6 +379,84 @@ describe('resubmitProposalAction', () => {
     expect(mockSetInstallments).not.toHaveBeenCalled();
   });
 
+  describe('clauses', () => {
+    const CLAUSES = [
+      { kind: 'assumption' as const, body: 'Sandbox provided' },
+      { kind: 'exclusion' as const, body: 'a\nb ' },
+      { kind: 'exclusion' as const, body: '  ' },
+      { kind: 'additional_term' as const, body: 'Net 14' },
+    ];
+
+    it('passes the payload clauses, normalised and blank-free, to the version bump', async () => {
+      const result = await resubmitProposalAction({ ...VALID_INPUT, clauses: CLAUSES });
+
+      expect(mockResubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clauses: [
+            { kind: 'assumption', body: 'Sandbox provided' },
+            { kind: 'exclusion', body: 'a b' },
+            { kind: 'additional_term', body: 'Net 14' },
+          ],
+        })
+      );
+      expect(mockListClauses).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        success: true,
+        analytics: { assumptionCount: 1, exclusionCount: 1, additionalTermCount: 1 },
+      });
+    });
+
+    it('sends an empty set when the payload clears every list', async () => {
+      const result = await resubmitProposalAction({ ...VALID_INPUT, clauses: [] });
+
+      expect(mockResubmit).toHaveBeenCalledWith(expect.objectContaining({ clauses: [] }));
+      expect(mockListClauses).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        success: true,
+        analytics: { assumptionCount: 0, exclusionCount: 0, additionalTermCount: 0 },
+      });
+    });
+
+    it('carries the previous version’s clauses over when the payload has none', async () => {
+      mockListClauses.mockResolvedValue([
+        { id: 'k1', kind: 'assumption', sortOrder: 0, body: 'Sandbox provided' },
+        { id: 'k2', kind: 'additional_term', sortOrder: 0, body: 'Net 14' },
+        { id: 'k3', kind: 'additional_term', sortOrder: 1, body: 'Travel at cost' },
+      ]);
+
+      const result = await resubmitProposalAction(VALID_INPUT);
+
+      expect(mockListClauses).toHaveBeenCalledWith(V1_ID);
+      expect(mockResubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clauses: [
+            { kind: 'assumption', body: 'Sandbox provided' },
+            { kind: 'additional_term', body: 'Net 14' },
+            { kind: 'additional_term', body: 'Travel at cost' },
+          ],
+        })
+      );
+      expect(result).toMatchObject({
+        success: true,
+        analytics: { assumptionCount: 1, exclusionCount: 0, additionalTermCount: 2 },
+      });
+    });
+
+    it('refuses 21 items of one kind', async () => {
+      const clauses = Array.from({ length: 21 }, () => ({ kind: 'exclusion' as const, body: 'x' }));
+      expect(await resubmitProposalAction({ ...VALID_INPUT, clauses })).toEqual({
+        success: false,
+        error: 'Invalid request.',
+      });
+      expect(mockResubmit).not.toHaveBeenCalled();
+    });
+
+    it('does not pass the retired exclusions header to the version bump', async () => {
+      await resubmitProposalAction({ ...VALID_INPUT, clauses: [] });
+      expect(mockResubmit.mock.calls[0]?.[0]).not.toHaveProperty('exclusions');
+    });
+  });
+
   it('returns the relationship expert profile id (analytics expert_id) on success', async () => {
     const result = await resubmitProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
@@ -383,7 +473,7 @@ describe('resubmitProposalAction', () => {
         fileName: 'spec.pdf',
         contentType: 'application/pdf',
         sizeBytes: 1234,
-        kind: 'attachment',
+        kind: 'terms',
         uploadedByUserId: UPLOADER_ID,
       },
     ]);
@@ -405,6 +495,8 @@ describe('resubmitProposalAction', () => {
 
     // Children are written inside resubmit's transaction; doc carryover runs after.
     expect(order).toEqual(['resubmit', 'copyObject', 'addDocument']);
+    // A carried-over document is always an attachment, whatever kind v1's row held.
+    expect(mockAddDocument).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ref' }));
     expect(mockSetMilestones).not.toHaveBeenCalled();
     expect(mockSetInstallments).not.toHaveBeenCalled();
 
@@ -420,7 +512,7 @@ describe('resubmitProposalAction', () => {
       fileName: 'spec.pdf',
       contentType: 'application/pdf',
       sizeBytes: 1234,
-      kind: 'attachment',
+      kind: 'ref',
       uploadedByUserId: UPLOADER_ID,
     });
   });

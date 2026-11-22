@@ -1,16 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { MessageSquare, Paperclip } from 'lucide-react';
 import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
-import { Textarea } from '@/components/ui/textarea';
+import { PROPOSAL_CLAUSE_KINDS, type ProposalClauseKind } from '@balo/shared/project-requests';
 import { isDescriptionEmpty, isRichTextHtml } from '@/components/balo/rich-text/plain-text';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { saveProposalDraftAction } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { ResubmitProposalInput } from '@/app/(dashboard)/projects/[requestId]/_actions/resubmit-proposal';
+import { BaloTermsBlock } from './balo-terms-block';
 import { ChangeRequestNote, CHANGE_SECTION_NOUN, asChangeSection } from './change-request-note';
+import { ClauseListEditor, ClauseListHint, clauseRemovedToastId } from './clause-list-editor';
 import { ComposerBriefCard } from './composer-brief-card';
 import { jumpToField } from './composer-jump';
 import { ComposerMobileBar } from './composer-mobile-bar';
@@ -38,12 +41,14 @@ import {
   COMPOSER_TARGET,
   applyDraftPatch,
   blankMilestone,
+  clauseCounts,
   computeTotalCents,
   seedInstallments,
   summaryReadiness,
   syncPerMilestoneInstallments,
   toSavePayload,
   type ProposalCadenceValue,
+  type ProposalClauseDraft,
   type ProposalDraftState,
   type ProposalInstallmentDraft,
   type ProposalMilestoneDraft,
@@ -165,10 +170,89 @@ function NotedSection({ note, children }: Readonly<NotedSectionProps>): React.JS
   );
 }
 
+type ClauseField = 'assumptions' | 'exclusions' | 'additionalTerms';
+
+interface ClauseListSectionProps {
+  /** The change note pinned above the section, when this section is the one it is about. */
+  note: React.ReactNode;
+  id: string;
+  title: string;
+  help: string;
+  kind: ProposalClauseKind;
+  field: ClauseField;
+  items: ProposalClauseDraft[];
+  onChange: (field: ClauseField, items: ProposalClauseDraft[]) => void;
+  proposalId: string | null;
+  companyName: string;
+  priceSectionLabel: string;
+  newRowId: string;
+  /** Content above the list (Balo's terms block). */
+  lead?: React.ReactNode;
+  /** Content below the list. */
+  footer?: React.ReactNode;
+}
+
+/**
+ * One clause-list section: the optional change note, the section heading with the list hint
+ * (shown while focus is inside the section), then the editor. The `group/clauses` wrapper
+ * carries the focus-within state and keeps the section's top spacing when it is not the first
+ * child.
+ */
+function ClauseListSection({
+  note,
+  id,
+  title,
+  help,
+  kind,
+  field,
+  items,
+  onChange,
+  proposalId,
+  companyName,
+  priceSectionLabel,
+  newRowId,
+  lead,
+  footer,
+}: Readonly<ClauseListSectionProps>): React.JSX.Element {
+  const handleChange = useCallback(
+    (next: ProposalClauseDraft[]): void => onChange(field, next),
+    [onChange, field]
+  );
+  return (
+    <div className="group/clauses pt-11 [&>section]:pt-0">
+      {note}
+      <ComposerSection id={id} title={title} optional help={help} aside={<ClauseListHint />}>
+        {lead}
+        <div className={lead === undefined ? undefined : 'mt-3'}>
+          <ClauseListEditor
+            kind={kind}
+            items={items}
+            onChange={handleChange}
+            proposalId={proposalId}
+            companyName={companyName}
+            priceSectionLabel={priceSectionLabel}
+            newRowId={newRowId}
+          />
+        </div>
+        {footer}
+      </ComposerSection>
+    </div>
+  );
+}
+
+/**
+ * The title of the pricing section for a method, named in the clause amount warning. These
+ * repeat the titles in `pricing-section.tsx`, which this file does not export.
+ */
+const PRICE_SECTION_LABEL: Record<ProposalPricingMethod, string> = {
+  fixed: 'Price and payments',
+  tm: 'Rates and billing',
+};
+
 /**
  * The expert proposal composer (A6.2 / BAL-288, reshaped by BAL-610). One page in a
- * fixed order — property bar, brief, overview, milestones, pricing, exclusions,
- * attachments — beside a jump-to checklist rail. It owns the single
+ * fixed order — property bar, brief, overview, milestones, assumptions, not included,
+ * pricing, additional terms, attachments — beside a jump-to checklist rail. It owns the single
  * `ProposalDraftState`, a debounced best-effort autosave (race-guarded via a
  * monotonic `saveSeq`; no concurrent saves — coalesces a dirty-during-save into one
  * trailing save), and a `mode` machine: `edit` → `preview` → `sent`. A successful
@@ -246,16 +330,10 @@ export function ProposalComposer({
   const { noteEdit, noteClear, noteRestore } = draft;
 
   const totalCents = useMemo(() => computeTotalCents(state), [state]);
+  const priceSectionLabel = PRICE_SECTION_LABEL[state.pricingMethod];
   const readiness = useMemo(() => summaryReadiness(state), [state]);
 
-  const termsDocuments = useMemo(
-    () => state.documents.filter((d) => d.kind === 'terms'),
-    [state.documents]
-  );
-  const refDocuments = useMemo(
-    () => state.documents.filter((d) => d.kind === 'ref'),
-    [state.documents]
-  );
+  const counts = useMemo(() => clauseCounts(state), [state]);
 
   /** One save round against the LATEST state; never throws. */
   const saveOnce = useCallback(async (): Promise<SaveOutcome> => {
@@ -343,7 +421,9 @@ export function ProposalComposer({
     state.pricingMethod,
     state.currency,
     state.timeframeWeeks,
+    state.assumptions,
     state.exclusions,
+    state.additionalTerms,
     state.depositCents,
     state.rateCents,
     state.fixedPriceCents,
@@ -508,13 +588,9 @@ export function ProposalComposer({
     setState((prev) => ({ ...prev, timeframeWeeks }));
   }, []);
 
-  const handleExclusionsChange = useCallback(
-    (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-      const exclusions = event.target.value;
-      setState((prev) => ({ ...prev, exclusions }));
-    },
-    []
-  );
+  const setClauses = useCallback((field: ClauseField, items: ProposalClauseDraft[]): void => {
+    setState((prev) => ({ ...prev, [field]: items }));
+  }, []);
 
   /**
    * Removing one milestone that holds content offers Undo, which puts it back at its
@@ -632,14 +708,7 @@ export function ProposalComposer({
   }, []);
 
   const addDocument = useCallback((document: ProposalDocumentView): void => {
-    setState((prev) => ({
-      ...prev,
-      // Replace any same-kind 'terms' doc (single supplement); append for 'ref'.
-      documents:
-        document.kind === 'terms'
-          ? [...prev.documents.filter((d) => d.kind !== 'terms'), document]
-          : [...prev.documents, document],
-    }));
+    setState((prev) => ({ ...prev, documents: [...prev.documents, document] }));
   }, []);
 
   const removeDocument = useCallback((documentId: string): void => {
@@ -649,23 +718,12 @@ export function ProposalComposer({
     }));
   }, []);
 
-  // One upload pipeline per document kind, shared by the page-wide drop, the
-  // Attachments section and the Terms popover.
+  // One upload pipeline, shared by the page-wide drop and the Attachments section.
   const refUpload = useProposalDocumentUpload({
     requestId,
     relationshipId,
     kind: 'ref',
-    documents: refDocuments,
-    ensureProposalId,
-    onAdded: addDocument,
-    onRemoved: removeDocument,
-  });
-  const termsUpload = useProposalDocumentUpload({
-    requestId,
-    relationshipId,
-    kind: 'terms',
-    single: true,
-    documents: termsDocuments,
+    documents: state.documents,
     ensureProposalId,
     onAdded: addDocument,
     onRemoved: removeDocument,
@@ -677,16 +735,24 @@ export function ProposalComposer({
 
   // ── Jump + preview ──
   const softIssues = useMemo<ReadinessIssue[]>(() => {
-    if (changeRequest === undefined || addressed) return [];
-    const noun = CHANGE_SECTION_NOUN[asChangeSection(changeRequest.section)];
-    return [
-      {
+    const issues: ReadinessIssue[] = [];
+    if (changeRequest !== undefined && !addressed) {
+      const noun = CHANGE_SECTION_NOUN[asChangeSection(changeRequest.section)];
+      issues.push({
         id: 'change_request',
         label: `${clientFirstName}'s note on ${noun} isn't marked as addressed`,
         targetId: COMPOSER_TARGET.changeNote,
-      },
-    ];
-  }, [changeRequest, addressed, clientFirstName]);
+      });
+    }
+    if (counts.assumption === 0 && counts.exclusion === 0) {
+      issues.push({
+        id: 'no_assumptions_or_exclusions',
+        label: 'No assumptions or exclusions yet',
+        targetId: COMPOSER_TARGET.assumptions,
+      });
+    }
+    return issues;
+  }, [changeRequest, addressed, clientFirstName, counts.assumption, counts.exclusion]);
 
   const handleJump = useCallback((issue: ReadinessIssue, source: JumpSource): void => {
     jumpToField(issue.targetId);
@@ -750,6 +816,10 @@ export function ProposalComposer({
       if (!event.metaKey && !event.ctrlKey) return;
       event.preventDefault();
       event.stopPropagation();
+      // Leaving a field commits its pending text (an empty clause row), so flush that render
+      // before the preview reads the latest state.
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) flushSync(() => active.blur());
       goPreview('shortcut');
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
@@ -773,6 +843,7 @@ export function ProposalComposer({
     toast.dismiss(DRAFT_MILESTONES_TOAST_ID);
     for (const id of removedToastIdsRef.current) toast.dismiss(id);
     removedToastIdsRef.current.clear();
+    for (const kind of PROPOSAL_CLAUSE_KINDS) toast.dismiss(clauseRemovedToastId(kind));
   }, []);
   useEffect(() => {
     if (mode !== 'edit') dismissUndoToasts();
@@ -810,9 +881,10 @@ export function ProposalComposer({
             relationshipId,
             version: reviseMode ? nextVersion : 1,
             expert,
+            clientCompanyName: companyName,
           })
         : null,
-    [mode, state, requestId, relationshipId, reviseMode, nextVersion, expert]
+    [mode, state, requestId, relationshipId, reviseMode, nextVersion, expert, companyName]
   );
 
   // ── Render ──
@@ -870,8 +942,6 @@ export function ProposalComposer({
                 onPricingMethodChange={setPricingMethod}
                 timeframeWeeks={state.timeframeWeeks}
                 onTimeframeChange={setTimeframe}
-                termsDocuments={termsDocuments}
-                termsUpload={termsUpload}
                 trailing={mode === 'edit' ? statusNode : null}
               />
 
@@ -932,6 +1002,36 @@ export function ProposalComposer({
                 />
               </NotedSection>
 
+              <ClauseListSection
+                note={noteFor('assumptions_exclusions')}
+                id="proposal-section-assumptions"
+                title="Assumptions"
+                help="What your price and timeline rely on. If one turns out not to hold, it’s your basis for proposing a change."
+                kind="assumption"
+                field="assumptions"
+                items={state.assumptions}
+                onChange={setClauses}
+                proposalId={state.proposalId}
+                companyName={companyName}
+                priceSectionLabel={priceSectionLabel}
+                newRowId={COMPOSER_TARGET.assumptions}
+              />
+
+              <ClauseListSection
+                note={null}
+                id="proposal-section-exclusions"
+                title="Not included"
+                help="Anything explicitly out of scope, so there are no surprises later."
+                kind="exclusion"
+                field="exclusions"
+                items={state.exclusions}
+                onChange={setClauses}
+                proposalId={state.proposalId}
+                companyName={companyName}
+                priceSectionLabel={priceSectionLabel}
+                newRowId={COMPOSER_TARGET.exclusions}
+              />
+
               <NotedSection note={noteFor('pricing', 'payment_terms')}>
                 <PricingSection
                   state={state}
@@ -945,23 +1045,36 @@ export function ProposalComposer({
                 />
               </NotedSection>
 
-              <ComposerSection
-                id="proposal-section-exclusions"
-                title="Not included"
-                optional
-                help="Anything explicitly out of scope, so there are no surprises later."
-              >
-                <Textarea
-                  id="proposal-exclusions"
-                  aria-label="What's not included"
-                  value={state.exclusions}
-                  onChange={handleExclusionsChange}
-                  rows={3}
-                  placeholder="Migrating historical quotes from your spreadsheets"
-                />
-              </ComposerSection>
+              <ClauseListSection
+                note={noteFor('terms')}
+                id="proposal-section-additional-terms"
+                title="Additional terms"
+                help="Terms of your own for this project. They add to Balo’s Project T&Cs and can’t replace them."
+                kind="additional_term"
+                field="additionalTerms"
+                items={state.additionalTerms}
+                onChange={setClauses}
+                proposalId={state.proposalId}
+                companyName={companyName}
+                priceSectionLabel={priceSectionLabel}
+                newRowId={COMPOSER_TARGET.additionalTerms}
+                lead={
+                  <BaloTermsBlock
+                    where="composer"
+                    pricingMethod={state.pricingMethod}
+                    companyName={companyName}
+                  />
+                }
+                footer={
+                  counts.additional_term > 0 ? (
+                    <p className="text-muted-foreground mt-3 text-[13px]">
+                      {companyName} sees these with the proposal and agrees to them when accepting.
+                    </p>
+                  ) : undefined
+                }
+              />
 
-              <AttachmentsSection documents={refDocuments} upload={refUpload} />
+              <AttachmentsSection documents={state.documents} upload={refUpload} />
             </div>
 
             <aside aria-label="Proposal summary" className="hidden lg:sticky lg:top-6 lg:block">
@@ -970,7 +1083,6 @@ export function ProposalComposer({
                 totalCents={totalCents}
                 readiness={readiness}
                 softIssues={softIssues}
-                termsAttached={termsDocuments.length > 0}
                 reviseMode={reviseMode}
                 nudgeKey={nudgeKey}
                 drafting={draft.drafting}

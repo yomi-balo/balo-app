@@ -4,6 +4,7 @@ import {
   applyDraftPatch,
   INSTALLMENT_PRESETS,
   blankMilestone,
+  clauseCounts,
   computeTotalCents,
   emptyDraftState,
   hydrateMilestonePricing,
@@ -33,7 +34,9 @@ function readyFixed(): ProposalDraftState {
     pricingMethod: 'fixed',
     currency: 'aud',
     timeframeWeeks: 6,
-    exclusions: '',
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
     depositCents: null,
     rateCents: null,
     fixedPriceCents: 1_000_000,
@@ -117,6 +120,13 @@ describe('emptyDraftState', () => {
     expect(s.milestones[0]?.estimatedMinutes).toBeNull();
     expect(s.fixedPriceCents).toBeNull();
     expect(s.milestonePricingEnabled).toBe(false);
+  });
+
+  it('starts with the three clause lists empty', () => {
+    const s = emptyDraftState();
+    expect(s.assumptions).toEqual([]);
+    expect(s.exclusions).toEqual([]);
+    expect(s.additionalTerms).toEqual([]);
   });
 
   it('is not ready (empty overview + untitled milestone)', () => {
@@ -456,13 +466,92 @@ describe('toSavePayload — Fixed', () => {
     expect(payload.milestones[1]?.acceptanceCriteria).toBeNull();
   });
 
-  it('sends null for a cleared timeframe and emptied exclusions', () => {
+  it('sends null for a cleared timeframe', () => {
     const s = readyFixed();
-    s.exclusions = '   ';
     s.timeframeWeeks = null;
     const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
-    expect(payload.exclusions).toBeNull();
     expect(payload.timeframeWeeks).toBeNull();
+  });
+
+  it('sends no exclusions field', () => {
+    expect(toSavePayload(readyFixed(), REQUEST_ID, RELATIONSHIP_ID)).not.toHaveProperty(
+      'exclusions'
+    );
+  });
+});
+
+function clause(body: string): { key: string; body: string } {
+  return { key: nextDraftKey(), body };
+}
+
+describe('toSavePayload — clauses', () => {
+  it('always sends clauses, an empty array when every list is empty', () => {
+    const payload = toSavePayload(readyFixed(), REQUEST_ID, RELATIONSHIP_ID);
+    expect(payload.clauses).toEqual([]);
+  });
+
+  it('orders assumptions, then exclusions, then additional terms, keeping each list in order', () => {
+    const s: ProposalDraftState = {
+      ...readyFixed(),
+      additionalTerms: [clause('T1'), clause('T2')],
+      exclusions: [clause('E1')],
+      assumptions: [clause('A1'), clause('A2')],
+    };
+    const payload = toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID);
+    expect(payload.clauses).toEqual([
+      { kind: 'assumption', body: 'A1' },
+      { kind: 'assumption', body: 'A2' },
+      { kind: 'exclusion', body: 'E1' },
+      { kind: 'additional_term', body: 'T1' },
+      { kind: 'additional_term', body: 'T2' },
+    ]);
+  });
+
+  it('collapses line breaks and trims each body', () => {
+    const s: ProposalDraftState = {
+      ...readyFixed(),
+      assumptions: [clause('  first line\n  second line  ')],
+    };
+    expect(toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID).clauses).toEqual([
+      { kind: 'assumption', body: 'first line second line' },
+    ]);
+  });
+
+  it('drops blank and whitespace-only rows', () => {
+    const s: ProposalDraftState = {
+      ...readyFixed(),
+      exclusions: [clause(''), clause('   \n '), clause('Keep me')],
+    };
+    expect(toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID).clauses).toEqual([
+      { kind: 'exclusion', body: 'Keep me' },
+    ]);
+  });
+
+  it('sends the same clauses under T&M', () => {
+    const s: ProposalDraftState = { ...readyTm(), assumptions: [clause('A1')] };
+    expect(toSavePayload(s, REQUEST_ID, RELATIONSHIP_ID).clauses).toEqual([
+      { kind: 'assumption', body: 'A1' },
+    ]);
+  });
+});
+
+describe('clauseCounts', () => {
+  it('counts the non-blank items in each list', () => {
+    const s: ProposalDraftState = {
+      ...readyFixed(),
+      assumptions: [clause('A1'), clause(''), clause('A2')],
+      exclusions: [clause('   ')],
+      additionalTerms: [clause('T1')],
+    };
+    expect(clauseCounts(s)).toEqual({ assumption: 2, exclusion: 0, additional_term: 1 });
+  });
+
+  it('is zero for an empty draft', () => {
+    expect(clauseCounts(emptyDraftState())).toEqual({
+      assumption: 0,
+      exclusion: 0,
+      additional_term: 0,
+    });
   });
 });
 
@@ -536,6 +625,9 @@ describe('target id builders', () => {
       rate: 'proposal-rate',
       deposit: 'proposal-deposit',
       changeNote: 'proposal-change-note',
+      assumptions: 'proposal-clause-new-assumption',
+      exclusions: 'proposal-clause-new-exclusion',
+      additionalTerms: 'proposal-clause-new-additional_term',
     });
   });
 });
@@ -859,8 +951,14 @@ describe('applyDraftPatch', () => {
     expect(new Set(next.milestones.map((m) => m.key)).size).toBe(2);
   });
 
-  it('leaves pricing, installments, timeframe and exclusions unchanged', () => {
-    const before = { ...readyFixed(), exclusions: 'Data migration', depositCents: 5_000 };
+  it('leaves pricing, installments, timeframe and the clause lists unchanged', () => {
+    const before: ProposalDraftState = {
+      ...readyFixed(),
+      assumptions: [clause('Sandbox access')],
+      exclusions: [clause('Data migration')],
+      additionalTerms: [clause('One round of revisions')],
+      depositCents: 5_000,
+    };
     const next = applyDraftPatch(before, patch);
     expect(next.pricingMethod).toBe(before.pricingMethod);
     expect(next.fixedPriceCents).toBe(before.fixedPriceCents);
@@ -868,7 +966,9 @@ describe('applyDraftPatch', () => {
     expect(next.depositCents).toBe(before.depositCents);
     expect(next.installments).toBe(before.installments);
     expect(next.timeframeWeeks).toBe(before.timeframeWeeks);
+    expect(next.assumptions).toBe(before.assumptions);
     expect(next.exclusions).toBe(before.exclusions);
+    expect(next.additionalTerms).toBe(before.additionalTerms);
     expect(next.milestonePricingEnabled).toBe(before.milestonePricingEnabled);
   });
 

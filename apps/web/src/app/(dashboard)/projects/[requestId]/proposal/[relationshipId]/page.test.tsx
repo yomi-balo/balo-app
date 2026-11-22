@@ -6,6 +6,7 @@ import type {
   ProposalMilestone,
   ProposalPaymentInstallment,
   ProposalDocument,
+  ProposalClause,
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 
@@ -21,6 +22,7 @@ const {
   mockListMilestones,
   mockListInstallments,
   mockListDocuments,
+  mockListClauses,
   mockListChangeRequests,
   mockGetCurrentUser,
   mockNotFound,
@@ -36,6 +38,7 @@ const {
   mockListMilestones: vi.fn(),
   mockListInstallments: vi.fn(),
   mockListDocuments: vi.fn(),
+  mockListClauses: vi.fn(),
   mockListChangeRequests: vi.fn(),
   mockGetCurrentUser: vi.fn(),
   // notFound()/redirect() must THROW so control flow stops, exactly like Next.
@@ -59,6 +62,7 @@ vi.mock('@balo/db', () => ({
   proposalMilestonesRepository: { listByProposal: mockListMilestones },
   proposalPaymentInstallmentsRepository: { listByProposal: mockListInstallments },
   proposalDocumentsRepository: { listByProposal: mockListDocuments },
+  proposalClausesRepository: { listByProposal: mockListClauses },
   proposalChangeRequestsRepository: { listByProposal: mockListChangeRequests },
 }));
 vi.mock('@/lib/project-request/proposal/proposal-draft-view', () => ({
@@ -228,7 +232,6 @@ function draft(overrides: Partial<Proposal> = {}): Proposal {
     status: 'submitted',
     pricingMethod: 'fixed',
     overview: '<p>Overview</p>',
-    exclusions: null,
     priceCents: 1_200_000,
     currency: 'aud',
     baloFeeBps: 2500,
@@ -262,6 +265,16 @@ function installment(
     pct: 30,
     ...overrides,
   } as ProposalPaymentInstallment;
+}
+
+function clause(kind: ProposalClause['kind'], body: string, sortOrder = 0): ProposalClause {
+  return {
+    id: `clause-${kind}-${sortOrder}`,
+    proposalId: PROPOSAL_ID,
+    kind,
+    sortOrder,
+    body,
+  } as ProposalClause;
 }
 
 function document(overrides: Partial<ProposalDocument> = {}): ProposalDocument {
@@ -311,6 +324,7 @@ function seedChildren(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockListClauses.mockResolvedValue([]);
   mockListChangeRequests.mockResolvedValue([]);
   mockFindPublicUsernames.mockResolvedValue(new Map());
   mockNotFound.mockImplementation(() => {
@@ -491,6 +505,70 @@ describe('ProposalSurfacePage (RSC) — expert composer branch', () => {
     );
   });
 
+  it('hydrates the three clause lists from the draft’s clauses, in order, as keyed rows', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
+    seedChildren();
+    mockListClauses.mockResolvedValue([
+      clause('assumption', 'A sandbox is provided', 0),
+      clause('assumption', 'Two rounds of review', 1),
+      clause('exclusion', 'Data migration', 0),
+      clause('additional_term', 'Net 14 days', 0),
+    ]);
+
+    await renderPage();
+
+    expect(mockListClauses).toHaveBeenCalledWith(PROPOSAL_ID);
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    const initialState = props.initialState as Record<string, Array<{ key: string; body: string }>>;
+    expect(initialState.assumptions?.map((row) => row.body)).toEqual([
+      'A sandbox is provided',
+      'Two rounds of review',
+    ]);
+    expect(initialState.exclusions?.map((row) => row.body)).toEqual(['Data migration']);
+    expect(initialState.additionalTerms?.map((row) => row.body)).toEqual(['Net 14 days']);
+    const keys = [
+      ...(initialState.assumptions ?? []),
+      ...(initialState.exclusions ?? []),
+      ...(initialState.additionalTerms ?? []),
+    ].map((row) => row.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.every((key) => key.length > 0)).toBe(true);
+  });
+
+  it('hydrates three empty lists when the draft has no clauses', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'draft' }));
+    seedChildren();
+
+    await renderPage();
+
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.initialState).toMatchObject({
+      assumptions: [],
+      exclusions: [],
+      additionalTerms: [],
+    });
+  });
+
+  it('reads no clauses when there is no draft yet', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(undefined);
+    mockLoadDraftGeneration.mockResolvedValue(null);
+
+    await renderPage();
+
+    expect(mockListClauses).not.toHaveBeenCalled();
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect((props.initialState as Record<string, unknown>).proposalId).toBeNull();
+  });
+
   it('falls back to "the client" when the client has no first name', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(
@@ -637,6 +715,34 @@ describe('ProposalSurfacePage (RSC) — expert submitted view branch', () => {
     expect(doc.milestones as unknown[]).toHaveLength(1);
     expect(doc.installments as unknown[]).toHaveLength(2);
     expect((doc.attachments as Array<{ fileName: string }>)[0]?.fileName).toBe('case-study.pdf');
+    // The attachment carries no `kind`: every live document is an attachment.
+    expect((doc.attachments as Array<object>)[0]).not.toHaveProperty('kind');
+  });
+
+  it('serialises the clause lists and the client company name onto the doc', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(draft({ status: 'submitted' }));
+    seedChildren();
+    mockListClauses.mockResolvedValue([
+      clause('assumption', 'A sandbox is provided'),
+      clause('exclusion', 'Data migration'),
+      clause('additional_term', 'Net 14 days'),
+    ]);
+
+    await renderPage();
+
+    const props = mockSubmitted.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(props.doc).toMatchObject({
+      assumptions: ['A sandbox is provided'],
+      exclusions: ['Data migration'],
+      additionalTerms: ['Net 14 days'],
+      clientCompanyName: 'Northwind Industrial',
+    });
+    expect(props.doc).not.toHaveProperty('exclusionsHtml');
   });
 
   it('counts OTHER submitted/accepted relationships for the "alongside N" framing', async () => {
@@ -777,6 +883,31 @@ describe('ProposalSurfacePage (RSC) — in-place sent screen (?sent)', () => {
 });
 
 describe('ProposalSurfacePage (RSC) — expert revise composer branch (A6.4)', () => {
+  it('prefills the revise composer from the current version’s clauses', async () => {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ relationships: [relationship({ status: 'proposal_submitted' })] })
+    );
+    mockResolveRequestLens.mockReturnValue(expertCtx(RELATIONSHIP_ID));
+    mockFindCurrentByRelationship.mockResolvedValue(
+      draft({ status: 'changes_requested', version: 1 })
+    );
+    seedChildren();
+    mockListClauses.mockResolvedValue([
+      clause('exclusion', 'Data migration'),
+      clause('additional_term', 'Net 14 days'),
+    ]);
+
+    await renderPage();
+
+    expect(mockListClauses).toHaveBeenCalledWith(PROPOSAL_ID);
+    const props = mockComposer.mock.calls[0]?.[0] as Record<string, unknown>;
+    const initialState = props.initialState as Record<string, Array<{ body: string }>>;
+    expect(initialState.assumptions).toEqual([]);
+    expect(initialState.exclusions?.map((row) => row.body)).toEqual(['Data migration']);
+    expect(initialState.additionalTerms?.map((row) => row.body)).toEqual(['Net 14 days']);
+  });
+
   it('renders the composer in REVISE mode when the relationship is submitted but the current proposal is changes_requested', async () => {
     mockGetCurrentUser.mockResolvedValue(user());
     mockFindByIdWithRelations.mockResolvedValue(
@@ -877,6 +1008,7 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     mockListMilestones.mockResolvedValue([]);
     mockListInstallments.mockResolvedValue([]);
     mockListDocuments.mockResolvedValue([]);
+    mockListClauses.mockResolvedValue([clause('assumption', 'A sandbox is provided')]);
     // Only the first expert's public profile resolves.
     mockFindPublicUsernames.mockResolvedValue(new Map([[EXPERT_PROFILE_ID, 'priya-nair']]));
 
@@ -897,6 +1029,12 @@ describe('ProposalSurfacePage (RSC) — client review branch', () => {
     expect(firstDoc?.priceCents).toBe(1_500_000);
     // The fee/margin breakdown must NEVER reach the client audience.
     expect(firstDoc?.adminPricing).toBeUndefined();
+    // Each doc carries the clause lists and the client company, never the retired HTML field.
+    expect(proposals[0]).toMatchObject({
+      assumptions: ['A sandbox is provided'],
+      clientCompanyName: 'Northwind Industrial',
+    });
+    expect(proposals[0]).not.toHaveProperty('exclusionsHtml');
     // ONE batched public-profile read; a header links only where the profile resolves.
     expect(mockFindPublicUsernames).toHaveBeenCalledTimes(1);
     expect(mockFindPublicUsernames).toHaveBeenCalledWith([EXPERT_PROFILE_ID, 'expert-2']);

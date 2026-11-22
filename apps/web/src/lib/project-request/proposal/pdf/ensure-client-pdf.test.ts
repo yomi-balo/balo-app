@@ -8,6 +8,7 @@ vi.mock('@balo/db', () => ({
   proposalMilestonesRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
   proposalPaymentInstallmentsRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
   proposalDocumentsRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
+  proposalClausesRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
   proposalsRepository: { findExpertOrgName: vi.fn().mockResolvedValue('Meridian Consulting') },
 }));
 
@@ -44,7 +45,7 @@ describe('generateClientProposalPdf', () => {
 
   it('always hydrates with the CLIENT audience', async () => {
     await generateClientProposalPdf(TARGET);
-    const audience = mockHydrate.mock.calls[0]?.[5];
+    const audience = mockHydrate.mock.calls[0]?.[6];
     expect(audience).toBe('client');
     expect(mockRender).toHaveBeenCalledTimes(1);
   });

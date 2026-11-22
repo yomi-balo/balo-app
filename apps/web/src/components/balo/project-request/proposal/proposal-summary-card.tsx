@@ -8,6 +8,7 @@ import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta'
 import { PayoutAssuranceNote } from './payout-assurance-note';
 import { DraftingLabel, draftingLabel } from './proposal-draft-indicators';
 import { pricingMethodLabel } from './proposal-summary-cells';
+import { clauseCounts } from './proposal-composer-state';
 import type {
   ProposalDraftState,
   ReadinessIssue,
@@ -20,8 +21,6 @@ interface ProposalSummaryCardProps {
   readiness: ReadinessResult;
   /** Non-blocking suggestions shown once the proposal is ready (e.g. an unaddressed change note). */
   softIssues: ReadinessIssue[];
-  /** Whether the expert attached their own terms document. */
-  termsAttached: boolean;
   /** Revise mode relabels the CTA to "Preview and resend". */
   reviseMode: boolean;
   /** Bumped by the composer to replay the checklist nudge when the CTA is hit with issues left. */
@@ -85,6 +84,15 @@ function paymentsSummary(state: ProposalDraftState): string {
   return state.installments.map((i) => `${i.pct}%`).join(' / ');
 }
 
+/** "None" for an empty list, otherwise the count. */
+function countOrNone(count: number): string {
+  return count === 0 ? 'None' : String(count);
+}
+
+function termsSummary(additionalTerms: number): string {
+  return additionalTerms === 0 ? 'Balo’s only' : `Balo’s and ${additionalTerms} of yours`;
+}
+
 function timeframeSummary(weeks: number | null): string {
   if (weeks === null) return 'Not set';
   return `About ${weeks} ${pluralise(weeks, 'week', 'weeks')}`;
@@ -128,7 +136,6 @@ export function ProposalSummaryCard({
   totalCents,
   readiness,
   softIssues,
-  termsAttached,
   reviseMode,
   nudgeKey,
   drafting = false,
@@ -140,12 +147,15 @@ export function ProposalSummaryCard({
   const total = railTotal(state, totalCents);
   const issueCount = readiness.issues.length;
 
+  const counts = clauseCounts(state);
   const rows: { label: string; value: string }[] = [
     { label: 'Pricing', value: pricingMethodLabel(state.pricingMethod) },
     { label: 'Milestones', value: drafting ? '—' : String(state.milestones.length) },
     { label: 'Timeframe', value: timeframeSummary(state.timeframeWeeks) },
     { label: isFixed ? 'Payments' : 'Billing', value: paymentsSummary(state) },
-    { label: 'Terms', value: termsAttached ? 'Balo and yours' : 'Balo standard' },
+    { label: 'Assumptions', value: countOrNone(counts.assumption) },
+    { label: 'Not included', value: countOrNone(counts.exclusion) },
+    { label: 'Terms', value: termsSummary(counts.additional_term) },
   ];
 
   return (

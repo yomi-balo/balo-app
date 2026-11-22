@@ -12,6 +12,7 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
+  proposalClausesRepository,
 } from '@balo/db';
 import { cn } from '@/lib/utils';
 import { log } from '@/lib/logging';
@@ -123,10 +124,11 @@ export default async function SharedProposalPage({
   const firstOpen = row.accessCount === 0;
   await proposalShareLinksRepository.recordAccess(row.id);
 
-  const [milestones, installments, documents, sharer, expertOrgName] = await Promise.all([
+  const [milestones, installments, documents, clauses, sharer, expertOrgName] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposal.id),
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
+    proposalClausesRepository.listByProposal(proposal.id),
     usersRepository.findById(row.createdByUserId),
     proposalsRepository.findExpertOrgName(proposal.id),
   ]);
@@ -136,8 +138,10 @@ export default async function SharedProposalPage({
     milestones,
     installments,
     documents,
+    clauses,
     relationship,
-    'client'
+    'client',
+    request.company?.name ?? 'the client'
   );
   const clientCompany = request.company?.name ?? 'their team';
   const sharerName = sharer === undefined ? 'a colleague' : shareDisplayName(sharer);

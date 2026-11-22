@@ -67,6 +67,17 @@ describe('requestProposalDocumentUploadAction', () => {
     });
   });
 
+  it('refuses the retired terms kind before touching anything', async () => {
+    const result = await requestProposalDocumentUploadAction({
+      ...VALID_INPUT,
+      // @ts-expect-error `terms` is no longer an accepted upload kind
+      kind: 'terms',
+    });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockResolveAccess).not.toHaveBeenCalled();
+    expect(mockCreatePresigned).not.toHaveBeenCalled();
+  });
+
   it('returns the access guard error on denial', async () => {
     mockResolveAccess.mockResolvedValue({ ok: false, error: 'No access.' });
     expect(await requestProposalDocumentUploadAction(VALID_INPUT)).toEqual({

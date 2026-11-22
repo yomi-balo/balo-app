@@ -5,6 +5,7 @@ import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 import {
   mapEngagementToWorkspaceView,
+  type AgreedTermsView,
   type CompletionCardView,
   type EngagementParties,
   type EngagementProgressView,
@@ -296,6 +297,22 @@ function view(overrides: Partial<EngagementWorkspaceView> = {}): EngagementWorks
     cancelDialog: null,
     completionCard: null,
     addMilestoneNeedsChangeOrder: false,
+    agreedTerms: null,
+    ...overrides,
+  };
+}
+
+function agreedTerms(overrides: Partial<AgreedTermsView> = {}): AgreedTermsView {
+  return {
+    assumptions: ['Sandbox access is provided.'],
+    exclusions: ['Data migration.'],
+    additionalTerms: [],
+    summary: '1 assumption · 1 exclusion',
+    pricingMethod: 'fixed',
+    clientCompanyName: 'Northwind Industrial',
+    expertName: 'Priya Sharma',
+    acceptedLine: null,
+    changedSinceStart: false,
     ...overrides,
   };
 }
@@ -311,6 +328,18 @@ describe('EngagementWorkspace — composition', () => {
   it('renders the progress card only when there are milestones', () => {
     render(<EngagementWorkspace view={view()} />);
     expect(screen.getByText('milestones completed')).toBeInTheDocument();
+  });
+});
+
+describe('EngagementWorkspace — agreed terms card', () => {
+  it.each(['client', 'expert', 'admin'] as const)('renders the card for the %s lens', (lens) => {
+    render(<EngagementWorkspace view={view({ lens, agreedTerms: agreedTerms() })} />);
+    expect(screen.getByRole('button', { name: /Agreed in the proposal/ })).toBeInTheDocument();
+  });
+
+  it('is absent when the view carries no agreed terms', () => {
+    render(<EngagementWorkspace view={view({ agreedTerms: null })} />);
+    expect(screen.queryByText('Agreed in the proposal')).not.toBeInTheDocument();
   });
 });
 
@@ -744,6 +773,22 @@ describe('EngagementWorkspace — change orders', () => {
     render(<EngagementWorkspace view={view()} />);
     expect(screen.queryByText('Need something different from the plan?')).not.toBeInTheDocument();
     expect(screen.queryByText('Changes to this project')).not.toBeInTheDocument();
+  });
+
+  it('places the agreed-terms card after the progress and rail and before the change cards', () => {
+    render(
+      <EngagementWorkspace
+        view={view({ agreedTerms: agreedTerms() })}
+        changeOrders={changeOrders({ affordances: { ...NO_AFFORDANCES, requestChange: true } })}
+      />
+    );
+    const rail = screen.getByText('Discovery workshop');
+    const card = screen.getByRole('button', { name: /Agreed in the proposal/ });
+    const requestChange = screen.getByText('Need something different from the plan?');
+    expect(rail.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      card.compareDocumentPosition(requestChange) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it('client · active: invites a request and shows the lens footnote', () => {

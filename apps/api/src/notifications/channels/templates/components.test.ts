@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@react-email/render';
+import {
+  PROPOSAL_CHANGE_SECTIONS,
+  proposalChangeSectionPhrase,
+} from '@balo/shared/project-requests';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
@@ -550,6 +554,83 @@ describe('ProjectChangesRequestedEmail', () => {
     expect(html).toContain('pricing');
     expect(html).toContain('Revise your proposal');
     expect(html).toContain('https://app.balo.expert/projects/req-42');
+  });
+
+  it.each(PROPOSAL_CHANGE_SECTIONS)(
+    'names the %s section by its phrase, never the raw value',
+    async (section) => {
+      const html = await render(
+        ProjectChangesRequestedEmail({
+          firstName: 'Priya',
+          clientName: 'Dana Whitfield',
+          section,
+          note: 'A note',
+          projectTitle: 'CPQ implementation',
+          projectRequestId: 'req-42',
+          baseUrl: 'https://app.balo.expert',
+        })
+      );
+      expect(html).toContain(
+        `asked for a change to ${proposalChangeSectionPhrase(section)} before`
+      );
+      expect(html).not.toContain('payment_terms');
+      expect(html).not.toContain('assumptions_exclusions');
+    }
+  );
+
+  it('falls back to the whole proposal for an unrecognised section', async () => {
+    const html = await render(
+      ProjectChangesRequestedEmail({
+        firstName: 'Priya',
+        clientName: 'Dana Whitfield',
+        section: 'something_else',
+        note: 'A note',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-42',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain('asked for a change to the proposal before');
+  });
+});
+
+describe('proposal email callouts', () => {
+  it('lists the assumptions in the submitted and resubmitted callouts', async () => {
+    const submitted = await render(
+      ProjectProposalSubmittedEmail({
+        firstName: 'Dana',
+        expertName: 'Priya Nair',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-1',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    const resubmitted = await render(
+      ProjectProposalResubmittedEmail({
+        firstName: 'Dana',
+        expertName: 'Priya Nair',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-1',
+        version: 2,
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(submitted).toContain('deliverables, assumptions, exclusions and payment terms');
+    expect(resubmitted).toContain('deliverables, assumptions, exclusions and payment terms');
+  });
+
+  it('lists the assumptions in the requested callout', async () => {
+    const html = await render(
+      ProjectProposalRequestedEmail({
+        firstName: 'Priya',
+        projectTitle: 'CPQ implementation',
+        projectRequestId: 'req-1',
+        baseUrl: 'https://app.balo.expert',
+      })
+    );
+    expect(html).toContain(
+      'deliverables, assumptions, exclusions, terms and your payment schedule'
+    );
   });
 });
 

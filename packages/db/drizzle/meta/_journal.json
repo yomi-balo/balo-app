@@ -897,6 +897,13 @@
       "when": 1795043396026,
       "tag": "0127_bal651_ring_attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1795354882187,
+      "tag": "0128_bal661_proposal_clauses",
+      "breakpoints": true
     }
   ]
 }

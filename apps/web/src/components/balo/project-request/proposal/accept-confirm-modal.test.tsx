@@ -22,6 +22,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import { AcceptConfirmModal } from './accept-confirm-modal';
+import { BALO_TERMS_PRECEDENCE_SENTENCE } from './proposal-standard-terms';
 
 const REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 const RELATIONSHIP_ID = '22222222-2222-2222-2222-222222222222';
@@ -38,7 +39,10 @@ function fixedDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc
     status: 'submitted',
     pricingMethod: 'fixed',
     overviewHtml: '<p>Overview</p>',
-    exclusionsHtml: null,
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
+    clientCompanyName: 'Northwind',
     priceCents: 1_000_000, // A$10,000
     currency: 'aud',
     timeframeWeeks: 6,
@@ -108,7 +112,109 @@ describe('AcceptConfirmModal', () => {
     renderModal();
     expect(screen.getByText("Accept Priya Sharma's proposal?")).toBeInTheDocument();
     expect(screen.getByText('This starts the engagement and is binding.')).toBeInTheDocument();
-    expect(screen.getByText(/commits Northwind to these terms/)).toBeInTheDocument();
+    expect(screen.getByText(/understand accepting commits Northwind to them/)).toBeInTheDocument();
+  });
+
+  describe('What you’re agreeing to', () => {
+    const FIVE_TERMS = ['Term one', 'Term two', 'Term three', 'Term four', 'Term five'];
+
+    function ackCopy(): string {
+      return document.getElementById('accept-ack-copy')?.textContent ?? '';
+    }
+
+    it('shows Balo’s Project T&Cs and the pricing rule, but no expert terms block, with 0 terms', () => {
+      renderModal(fixedDoc());
+      expect(screen.getByRole('heading', { name: 'What you’re agreeing to' })).toBeInTheDocument();
+      expect(screen.getByText('Balo Project T&Cs')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'This is a fixed-price project. Any increase in cost is only charged if Northwind approves it.'
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/additional terms/)).not.toBeInTheDocument();
+      expect(screen.queryByText(BALO_TERMS_PRECEDENCE_SENTENCE)).not.toBeInTheDocument();
+      expect(ackCopy()).not.toContain('additional terms');
+      expect(ackCopy()).toContain('I agree to Balo’s Project T&Cs, and understand accepting');
+    });
+
+    it('uses the time-and-materials rule for a T&M proposal', () => {
+      renderModal(tmDoc());
+      expect(
+        screen.getByText(
+          'This is a time and materials project. Any increase in cost is only charged if Northwind approves it.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('lists 2 terms with a count and no Show all toggle', () => {
+      renderModal(fixedDoc({ additionalTerms: ['Term one', 'Term two'] }));
+      expect(screen.getByText('Priya Sharma’s additional terms (2)')).toBeInTheDocument();
+      expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(
+        expect.arrayContaining(['Term one', 'Term two'])
+      );
+      expect(screen.queryByRole('button', { name: /Show all|Show fewer/ })).not.toBeInTheDocument();
+      expect(ackCopy()).toContain('and Priya Sharma’s additional terms above, and understand');
+    });
+
+    it('shows the first 3 of 5 terms, then all on Show all, then 3 again on Show fewer', async () => {
+      const user = userEvent.setup();
+      renderModal(fixedDoc({ additionalTerms: FIVE_TERMS }));
+      expect(screen.getByText('Priya Sharma’s additional terms (5)')).toBeInTheDocument();
+      expect(screen.getByText('Term three')).toBeInTheDocument();
+      expect(screen.queryByText('Term four')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Show all 5' }));
+      expect(screen.getByText('Term four')).toBeInTheDocument();
+      expect(screen.getByText('Term five')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Show fewer' }));
+      expect(screen.queryByText('Term four')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Show all 5' })).toBeInTheDocument();
+    });
+
+    it('does not collapse exactly 3 terms', () => {
+      renderModal(fixedDoc({ additionalTerms: FIVE_TERMS.slice(0, 3) }));
+      expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+    });
+
+    it('collapses again when the dialog is closed and reopened', async () => {
+      const user = userEvent.setup();
+      const { onOpenChange } = renderModal(fixedDoc({ additionalTerms: FIVE_TERMS }));
+      await user.click(screen.getByRole('button', { name: 'Show all 5' }));
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(screen.getByRole('button', { name: 'Show all 5' })).toBeInTheDocument();
+    });
+
+    it('renders markup in a term literally', () => {
+      renderModal(fixedDoc({ additionalTerms: ['<b>bold</b> claim'] }));
+      expect(screen.getByText('<b>bold</b> claim')).toBeInTheDocument();
+    });
+
+    it.each([
+      [['A1', 'A2', 'A3'], ['E1', 'E2'], 'The proposal’s 3 assumptions and 2 exclusions are'],
+      [['A1'], ['E1'], 'The proposal’s 1 assumption and 1 exclusion are'],
+      [['A1', 'A2'], [], 'The proposal’s 2 assumptions are'],
+      [[], ['E1'], 'The proposal’s 1 exclusion '],
+    ])('states the scope counts: %j / %j', (assumptions, exclusions, expected) => {
+      renderModal(fixedDoc({ assumptions, exclusions }));
+      expect(screen.getByText(new RegExp(expected))).toBeInTheDocument();
+    });
+
+    it('omits the count line when there are no assumptions or exclusions', () => {
+      renderModal(fixedDoc());
+      expect(screen.queryByText(/are part of what you’re accepting/)).not.toBeInTheDocument();
+    });
+
+    it('scrolls the body between a fixed header and footer', () => {
+      renderModal();
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).toHaveClass('flex', 'max-h-[90dvh]', 'flex-col');
+      const body = screen.getByRole('heading', { name: 'What you’re agreeing to' }).parentElement
+        ?.parentElement;
+      expect(body).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+      expect(screen.getByRole('button', { name: 'Cancel' }).parentElement).toHaveClass('shrink-0');
+    });
   });
 
   it('keeps Confirm disabled until the acknowledgement is ticked', async () => {

@@ -1,13 +1,16 @@
 import { Document, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
 import { formatWholeCurrency } from '@/lib/utils/currency';
-import { STANDARD_TERMS } from '@/components/balo/project-request/proposal/proposal-standard-terms';
+import {
+  BALO_TERMS_ADDITIVE_SENTENCE,
+  STANDARD_TERMS,
+  pricingMethodRule,
+} from '@/components/balo/project-request/proposal/proposal-standard-terms';
 import {
   buildProposalSummaryCells,
   pricingMethodLabel,
   proposalTotalLabel,
 } from '@/components/balo/project-request/proposal/proposal-summary-cells';
 import type {
-  ProposalReviewAttachment,
   ProposalReviewDoc,
   ProposalReviewMilestone,
 } from '@/components/balo/project-request/proposal/proposal-review-types';
@@ -161,6 +164,16 @@ const styles = StyleSheet.create({
   },
   termRow: { flexDirection: 'row', gap: 6, marginBottom: 3 },
   termMarker: { fontSize: PDF_TYPE.small, color: PDF_COLORS.muted },
+  clauseNumber: { fontSize: PDF_TYPE.small, color: PDF_COLORS.muted, minWidth: 16 },
+  clauseHeading: {
+    fontSize: PDF_TYPE.label,
+    fontWeight: 700,
+    color: PDF_COLORS.faint,
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  clauseGroupGap: { marginTop: 10 },
+  additionalTerms: { marginTop: 10 },
   termText: { flex: 1, fontSize: PDF_TYPE.small, color: PDF_COLORS.muted, lineHeight: 1.5 },
   paymentBox: {
     borderWidth: 1,
@@ -353,23 +366,82 @@ function PaymentTerms({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.
   );
 }
 
+/**
+ * A numbered list of plain-text clauses, printed exactly as typed (no rich-text conversion).
+ * A repeated body is legal, so each key carries the body plus its occurrence count.
+ */
+function NumberedRows({ items }: Readonly<{ items: readonly string[] }>): React.JSX.Element {
+  const seen = new Map<string, number>();
+  const keyed = items.map((item, position) => {
+    const occurrence = (seen.get(item) ?? 0) + 1;
+    seen.set(item, occurrence);
+    return { key: `${item}::${occurrence}`, item, number: position + 1 };
+  });
+  return (
+    <View>
+      {keyed.map(({ key, item, number }) => (
+        <View key={key} style={styles.termRow} wrap={false}>
+          <Text style={styles.clauseNumber}>{number}.</Text>
+          <Text style={styles.termText}>{item}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function AssumptionsAndExclusions({
+  doc,
+}: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
+  return (
+    <View style={styles.section}>
+      <SectionLabel>ASSUMPTIONS AND EXCLUSIONS</SectionLabel>
+      {doc.assumptions.length > 0 ? (
+        <View>
+          <Text style={styles.clauseHeading}>ASSUMPTIONS</Text>
+          <NumberedRows items={doc.assumptions} />
+        </View>
+      ) : null}
+      {doc.exclusions.length > 0 ? (
+        <View style={doc.assumptions.length > 0 ? styles.clauseGroupGap : undefined}>
+          <Text style={styles.clauseHeading}>NOT INCLUDED</Text>
+          <NumberedRows items={doc.exclusions} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function StandardTerms({
-  termsSupplement,
-}: Readonly<{ termsSupplement: ProposalReviewAttachment | undefined }>): React.JSX.Element {
+  pricingMethod,
+  clientCompanyName,
+  expertName,
+  additionalTerms,
+}: Readonly<{
+  pricingMethod: 'fixed' | 'tm';
+  clientCompanyName: string;
+  expertName: string;
+  additionalTerms: readonly string[];
+}>): React.JSX.Element {
   return (
     <View style={styles.termsBox}>
-      <Text style={styles.termsHeading}>Balo standard terms apply</Text>
+      <Text style={styles.termsHeading}>Balo Project T&amp;Cs apply</Text>
+      <Text style={styles.termText}>The same terms for every project on Balo.</Text>
+      <Text style={[styles.termText, { marginTop: 4, marginBottom: 4 }]}>
+        {pricingMethodRule(pricingMethod, clientCompanyName)}
+      </Text>
       {STANDARD_TERMS.map((term) => (
         <View key={term} style={styles.termRow}>
           <Text style={styles.termMarker}>•</Text>
           <Text style={styles.termText}>{term}</Text>
         </View>
       ))}
-      {termsSupplement !== undefined && (
-        <Text style={[styles.termText, { marginTop: 4 }]}>
-          Additional terms attached: {termsSupplement.fileName}
-        </Text>
-      )}
+      {additionalTerms.length > 0 ? (
+        <View style={styles.additionalTerms}>
+          <Text style={styles.termsHeading}>{expertName}’s additional terms</Text>
+          <Text style={[styles.termText, { marginBottom: 4 }]}>{BALO_TERMS_ADDITIVE_SENTENCE}</Text>
+          <NumberedRows items={additionalTerms} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -387,9 +459,7 @@ export function ProposalPdfDocument({
   const versionNote =
     doc.version > 1 ? `Version ${doc.version} · revised` : `Version ${doc.version}`;
   const overview = richTextToPdf(doc.overviewHtml);
-  const exclusions = richTextToPdf(doc.exclusionsHtml);
-  const termsSupplement = doc.attachments.find((attachment) => attachment.kind === 'terms');
-  const fileAttachments = doc.attachments.filter((attachment) => attachment.kind !== 'terms');
+  const hasScope = doc.assumptions.length > 0 || doc.exclusions.length > 0;
 
   return (
     <Document title={title} author="Balo">
@@ -435,33 +505,33 @@ export function ProposalPdfDocument({
           </View>
         ) : null}
 
+        {hasScope ? <AssumptionsAndExclusions doc={doc} /> : null}
+
         <View style={styles.section}>
           <SectionLabel>PAYMENT TERMS</SectionLabel>
           <PaymentTerms doc={doc} />
         </View>
 
-        {exclusions.length > 0 ? (
-          <View style={styles.section}>
-            <SectionLabel>NOT INCLUDED</SectionLabel>
-            {exclusions}
-          </View>
-        ) : null}
+        <View style={styles.section}>
+          <SectionLabel>TERMS</SectionLabel>
+          <StandardTerms
+            pricingMethod={doc.pricingMethod}
+            clientCompanyName={clientCompanyName}
+            expertName={doc.expert.name}
+            additionalTerms={doc.additionalTerms}
+          />
+        </View>
 
-        {fileAttachments.length > 0 ? (
+        {doc.attachments.length > 0 ? (
           <View style={styles.section}>
             <SectionLabel>ATTACHMENTS</SectionLabel>
-            {fileAttachments.map((attachment) => (
+            {doc.attachments.map((attachment) => (
               <View key={attachment.id} style={styles.attachment}>
                 <Text style={styles.attachmentName}>{attachment.fileName}</Text>
               </View>
             ))}
           </View>
         ) : null}
-
-        <View style={styles.section}>
-          <SectionLabel>TERMS</SectionLabel>
-          <StandardTerms termsSupplement={termsSupplement} />
-        </View>
 
         <Text
           style={styles.footer}

@@ -1,14 +1,14 @@
 'use client';
 
 import {
-  AlertCircle,
   Check,
-  ChevronDown,
   DollarSign,
+  Download,
   FileText,
   History,
   Layers,
-  Lock,
+  ListChecks,
+  Loader2,
   Paperclip,
   Shield,
 } from 'lucide-react';
@@ -20,11 +20,13 @@ import {
   ExpertProfileAvatarLink,
   ExpertProfileLink,
 } from '@/components/balo/expert-profile-link';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
 import { RichTextViewer, isDescriptionEmpty } from '@/components/balo/rich-text-editor';
-import { STANDARD_TERMS } from './proposal-standard-terms';
+import { BaloTermsBlock } from './balo-terms-block';
+import { NumberedList } from './numbered-list';
+import { firstName } from './proposal-name';
+import { BALO_TERMS_ADDITIVE_SENTENCE } from './proposal-standard-terms';
 import {
   buildProposalSummaryCells,
   pricingMethodLabel,
@@ -54,6 +56,13 @@ interface ProposalDocProps {
    * framing on an expert screen and the ticket never scopes it. Do not turn it on there.
    */
   showSummaryCells?: boolean;
+  /**
+   * When provided, each attachment row becomes a button that calls it. Omit it for the
+   * surfaces that must not offer a download (the composer preview and the public share page).
+   */
+  onDownload?: (attachment: ProposalReviewAttachment) => void;
+  /** The attachment id currently being fetched, which disables its row and shows a spinner. */
+  downloadingId?: string | null;
 }
 
 /** Props that anchor a section for the nav, or `{}` when un-anchored. */
@@ -83,7 +92,7 @@ function Avatar({ initials }: Readonly<{ initials: string }>): React.JSX.Element
   );
 }
 
-/** A red-tinted file-icon tile used by attachment / supplement rows. */
+/** A red-tinted file-icon tile used by attachment rows. */
 function FileTile(): React.JSX.Element {
   return (
     <span className="bg-destructive/10 flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg">
@@ -96,6 +105,8 @@ export function ProposalDoc({
   doc,
   sectionIdPrefix,
   showSummaryCells = false,
+  onDownload,
+  downloadingId = null,
 }: Readonly<ProposalDocProps>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
 
@@ -104,8 +115,7 @@ export function ProposalDoc({
   const anchor = (key: string): SectionAnchor =>
     sectionIdPrefix ? { id: sectionIdPrefix + key, className: 'scroll-mt-20' } : {};
 
-  const termsSupplement = doc.attachments.find((a) => a.kind === 'terms');
-  const fileAttachments = doc.attachments.filter((a) => a.kind !== 'terms');
+  const hasScope = doc.assumptions.length > 0 || doc.exclusions.length > 0;
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -211,7 +221,30 @@ export function ProposalDoc({
         </div>
       </section>
 
-      {/* 5 — Payment terms (adaptive) */}
+      {/* 5 — Assumptions and exclusions (omitted when both lists are empty) */}
+      {hasScope && (
+        <section {...anchor('scope')}>
+          <SectionLabel icon={ListChecks}>Assumptions and exclusions</SectionLabel>
+          <div className="flex flex-col gap-4">
+            {doc.assumptions.length > 0 && (
+              <ClauseGroup
+                heading="Assumptions"
+                lead={`${firstName(doc.expert.name)}’s price and timeline rely on these.`}
+                items={doc.assumptions}
+              />
+            )}
+            {doc.exclusions.length > 0 && (
+              <ClauseGroup
+                heading="Not included"
+                lead="Outside this proposal."
+                items={doc.exclusions}
+              />
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* 6 — Payment terms (adaptive) */}
       <section {...anchor('payment')}>
         <SectionLabel icon={DollarSign}>Payment terms</SectionLabel>
         {isTM ? (
@@ -225,75 +258,56 @@ export function ProposalDoc({
         )}
       </section>
 
-      {/* 6 — Terms (standard + optional supplement) */}
+      {/* 7 — Terms: Balo's Project T&Cs, then the expert's additional terms */}
       <section {...anchor('terms')}>
         <SectionLabel icon={Shield}>Terms</SectionLabel>
-        <div className="flex flex-col gap-2.5">
-          <Collapsible className="border-border bg-muted/30 rounded-xl border">
-            <CollapsibleTrigger className="group focus-visible:ring-ring flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left focus-visible:ring-2 focus-visible:outline-none">
-              <span className="border-border bg-card flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[9px] border">
-                <Lock className="text-muted-foreground h-3.5 w-3.5" aria-hidden="true" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-foreground text-[13.5px] font-semibold">
-                  Balo standard terms apply
-                </p>
-                <p className="text-muted-foreground mt-px text-xs">
-                  Platform engagement terms — IP, payment via Balo, disputes. Non-negotiable.
-                </p>
-              </div>
-              <span className="text-primary inline-flex shrink-0 items-center gap-1 text-xs font-semibold">
-                View
-                <ChevronDown
-                  className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180"
-                  aria-hidden="true"
-                />
-              </span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <ul className="border-border text-muted-foreground mt-1 flex list-disc flex-col gap-1.5 border-t px-4 py-3 pl-9 text-xs leading-relaxed">
-                {STANDARD_TERMS.map((term) => (
-                  <li key={term}>{term}</li>
-                ))}
-              </ul>
-            </CollapsibleContent>
-          </Collapsible>
-          {termsSupplement !== undefined && (
-            <div className="border-border flex items-center gap-3 rounded-xl border px-3.5 py-2.5">
-              <FileTile />
-              <div className="min-w-0 flex-1">
-                <p className="text-foreground truncate text-[13px] font-semibold">
-                  {termsSupplement.fileName}
-                </p>
-                <p className="text-muted-foreground text-[11.5px]">
-                  {doc.expert.name}&apos;s additional terms ·{' '}
-                  {formatBytes(termsSupplement.sizeBytes)}
-                </p>
-              </div>
-            </div>
+        <div className="flex flex-col gap-4">
+          <BaloTermsBlock
+            where="proposal"
+            pricingMethod={doc.pricingMethod}
+            companyName={doc.clientCompanyName}
+          />
+          {doc.additionalTerms.length > 0 && (
+            <ClauseGroup
+              heading={`${doc.expert.name}’s additional terms`}
+              lead={BALO_TERMS_ADDITIVE_SENTENCE}
+              items={doc.additionalTerms}
+            />
           )}
         </div>
       </section>
 
-      {/* 7 — Not included (deliberately NOT in the nav) */}
-      {doc.exclusionsHtml !== null && (
-        <section>
-          <SectionLabel icon={AlertCircle}>Not included</SectionLabel>
-          <RichTextViewer value={doc.exclusionsHtml} />
-        </section>
-      )}
-
-      {/* 8 — Attachments (non-terms only) */}
-      {fileAttachments.length > 0 && (
+      {/* 8 — Attachments */}
+      {doc.attachments.length > 0 && (
         <section {...anchor('attachments')}>
           <SectionLabel icon={Paperclip}>Attachments</SectionLabel>
           <div className="flex flex-col gap-2">
-            {fileAttachments.map((attachment) => (
-              <AttachmentRow key={attachment.id} attachment={attachment} />
+            {doc.attachments.map((attachment) => (
+              <AttachmentRow
+                key={attachment.id}
+                attachment={attachment}
+                onDownload={onDownload}
+                downloading={downloadingId === attachment.id}
+              />
             ))}
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+/** One heading, a lead-in line and its numbered list. */
+function ClauseGroup({
+  heading,
+  lead,
+  items,
+}: Readonly<{ heading: string; lead: string; items: readonly string[] }>): React.JSX.Element {
+  return (
+    <div>
+      <h3 className="text-foreground text-[13.5px] font-semibold">{heading}</h3>
+      <p className="text-muted-foreground mt-0.5 mb-2 text-xs">{lead}</p>
+      <NumberedList items={items} />
     </div>
   );
 }
@@ -458,16 +472,52 @@ function TmTerms({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Eleme
   );
 }
 
+const ATTACHMENT_ROW_CLASS =
+  'border-border bg-card flex min-h-11 w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left';
+
 function AttachmentRow({
   attachment,
-}: Readonly<{ attachment: ProposalReviewAttachment }>): React.JSX.Element {
-  return (
-    <div className="border-border bg-card flex items-center gap-3 rounded-xl border px-3.5 py-2.5">
+  onDownload,
+  downloading,
+}: Readonly<{
+  attachment: ProposalReviewAttachment;
+  onDownload: ((attachment: ProposalReviewAttachment) => void) | undefined;
+  downloading: boolean;
+}>): React.JSX.Element {
+  const body = (
+    <>
       <FileTile />
       <div className="min-w-0 flex-1">
         <p className="text-foreground truncate text-[13px] font-semibold">{attachment.fileName}</p>
         <p className="text-muted-foreground text-[11.5px]">{formatBytes(attachment.sizeBytes)}</p>
       </div>
-    </div>
+    </>
+  );
+
+  if (onDownload === undefined) {
+    return <div className={ATTACHMENT_ROW_CLASS}>{body}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onDownload(attachment)}
+      disabled={downloading}
+      aria-label={`Download ${attachment.fileName}`}
+      className={cn(
+        ATTACHMENT_ROW_CLASS,
+        'hover:bg-muted/40 focus-visible:ring-ring transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-wait disabled:opacity-70'
+      )}
+    >
+      {body}
+      {downloading ? (
+        <Loader2
+          className="text-muted-foreground h-4 w-4 shrink-0 animate-spin"
+          aria-hidden="true"
+        />
+      ) : (
+        <Download className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
+    </button>
   );
 }

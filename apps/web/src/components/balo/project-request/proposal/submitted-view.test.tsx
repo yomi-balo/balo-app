@@ -1,11 +1,20 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@/test/utils';
+import userEvent from '@testing-library/user-event';
+import { getProposalDocumentDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download';
 import { SubmittedView } from './submitted-view';
 import type { AdminProposalPricing, ProposalReviewDoc } from './proposal-review-types';
 
 vi.mock('@/components/balo/rich-text-editor', () => ({
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
   isDescriptionEmpty: (html: string) => html.replace(/<[^<>]*>/g, '').trim() === '',
+}));
+
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download', () => ({
+  getProposalDocumentDownloadAction: vi.fn(),
+}));
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
 function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
@@ -16,7 +25,10 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
     status: 'submitted',
     pricingMethod: 'fixed',
     overviewHtml: 'Overview body text',
-    exclusionsHtml: null,
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
+    clientCompanyName: 'Northwind',
     priceCents: 5_800_000,
     currency: 'aud',
     timeframeWeeks: 8,
@@ -108,6 +120,31 @@ describe('SubmittedView', () => {
       />
     );
     expect(screen.getByText('Overview body text')).toBeInTheDocument();
+  });
+
+  it('makes the expert’s own attachments downloadable', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProposalDocumentDownloadAction).mockResolvedValue({
+      success: false,
+      error: 'nope',
+    });
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc({ attachments: [{ id: 'att-1', fileName: 'spec.pdf', sizeBytes: 10 }] })}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Download spec.pdf' }));
+    expect(getProposalDocumentDownloadAction).toHaveBeenCalledWith({
+      requestId: 'req-1',
+      relationshipId: 'rel-1',
+      proposalId: 'prop-1',
+      documentId: 'att-1',
+    });
   });
 
   /**

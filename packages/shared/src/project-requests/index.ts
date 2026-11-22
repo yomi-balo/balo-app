@@ -39,6 +39,10 @@ export * from './document-key';
 // and `packages/db`'s seed-integrity test must agree on it, and neither may import the other.
 export * from './taxonomy-label';
 
+// The proposal's three clause lists (assumptions, exclusions, additional terms): the kinds, the
+// caps and the text clean-up shared by the db pin, the save actions and the composer.
+export * from './clauses';
+
 // The client-visibility rule: a client sees an expert only once their track has opened.
 export * from './client-visibility';
 
@@ -138,10 +142,29 @@ export const PROPOSAL_CHANGE_SECTIONS = [
   'pricing',
   'payment_terms',
   'timeline',
+  'assumptions_exclusions',
+  'terms',
 ] as const;
 
 /** @see PROPOSAL_CHANGE_SECTIONS */
 export type ProposalChangeSection = (typeof PROPOSAL_CHANGE_SECTIONS)[number];
+
+/** The section as a noun phrase, for "asked for a change to ..." in emails and in-app copy. */
+export const PROPOSAL_CHANGE_SECTION_PHRASE: Record<ProposalChangeSection, string> = {
+  general: 'the proposal',
+  milestones: 'the milestones',
+  pricing: 'the pricing',
+  payment_terms: 'the payment schedule',
+  timeline: 'the timeline',
+  assumptions_exclusions: 'the assumptions and exclusions',
+  terms: 'the terms',
+};
+
+/** The phrase for a stored section string; anything unrecognised reads as the whole proposal. */
+export function proposalChangeSectionPhrase(section: string): string {
+  const known = PROPOSAL_CHANGE_SECTIONS.find((candidate) => candidate === section);
+  return PROPOSAL_CHANGE_SECTION_PHRASE[known ?? 'general'];
+}
 
 /**
  * Why a request was CLOSED (`project_request_close_reason`). `withdrawn` is the CLIENT arm's

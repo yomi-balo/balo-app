@@ -115,8 +115,8 @@ function contend<T>(statement: Promise<T>): Promise<T> {
     () => {
       box.value = { status: 'fulfilled' };
     },
-    (reason: unknown) => {
-      box.value = { status: 'rejected', reason };
+    (error: unknown) => {
+      box.value = { status: 'rejected', reason: error };
     }
   );
   inFlight.push(observed);
@@ -733,6 +733,7 @@ describe('Group A — the per-request advisory lock is taken before any row lock
           cadence: 'monthly',
           milestones: [],
           installments: [],
+          clauses: [],
         })
       )
     );
@@ -971,6 +972,7 @@ describe('Group B — concurrent writers on the same request never see 40P01', (
         cadence: 'monthly',
         milestones: [],
         installments: [],
+        clauses: [],
       })
     );
 

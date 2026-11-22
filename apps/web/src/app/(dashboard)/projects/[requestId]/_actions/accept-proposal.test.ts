@@ -37,6 +37,7 @@ const {
   mockFindById,
   mockAccept,
   mockFindRequestById,
+  mockListClauses,
   mockEnsureBillingGate,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
@@ -56,6 +57,7 @@ const {
     mockFindById: vi.fn(),
     mockAccept: vi.fn(),
     mockFindRequestById: vi.fn(),
+    mockListClauses: vi.fn(),
     mockEnsureBillingGate: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
@@ -67,6 +69,9 @@ vi.mock('@balo/db', () => ({
   proposalsRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
     accept: (...a: unknown[]) => mockAccept(...a),
+  },
+  proposalClausesRepository: {
+    listByProposal: (...a: unknown[]) => mockListClauses(...a),
   },
   projectRequestsRepository: {
     // BAL-295: the request rollup is derived inside accept(); the action re-reads
@@ -130,6 +135,7 @@ describe('acceptProposalAction', () => {
     mockResolveAccess.mockResolvedValue(accessOk());
     mockFindById.mockResolvedValue({ ...PROPOSAL });
     mockAccept.mockResolvedValue({ id: PROPOSAL_ID });
+    mockListClauses.mockResolvedValue([]);
     // Default re-read: the rollup advanced proposal_submitted → accepted (the access
     // pre-op floor is `proposal_submitted`), so `transitioned` is true.
     mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'accepted' });
@@ -222,6 +228,38 @@ describe('acceptProposalAction', () => {
     expect(mockAccept).not.toHaveBeenCalled();
   });
 
+  it('counts only the additional terms on the accept event, reading them before the commit', async () => {
+    mockListClauses.mockResolvedValue([
+      { kind: 'assumption', body: 'Sandbox provided' },
+      { kind: 'exclusion', body: 'Data migration' },
+      { kind: 'additional_term', body: 'Net 14' },
+      { kind: 'additional_term', body: 'Travel at cost' },
+    ]);
+
+    await acceptProposalAction(VALID_INPUT);
+
+    expect(mockListClauses).toHaveBeenCalledWith(PROPOSAL_ID);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'project_proposal_accepted',
+      expect.objectContaining({ additional_term_count: 2 })
+    );
+    expect(mockListClauses.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAccept.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('does not commit the accept when the clause read fails', async () => {
+    mockListClauses.mockRejectedValue(new Error('db down'));
+
+    const result = await acceptProposalAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not accept this proposal. Please try again.',
+    });
+    expect(mockAccept).not.toHaveBeenCalled();
+  });
+
   it('accepts the proposal, advances the aggregate, publishes, and returns success', async () => {
     const result = await acceptProposalAction(VALID_INPUT);
 
@@ -241,6 +279,7 @@ describe('acceptProposalAction', () => {
       proposal_id: PROPOSAL_ID,
       balo_fee_bps: 2500,
       client_price_cents: 625000, // applyBaloFee(500000, 2500)
+      additional_term_count: 0,
       distinct_id: 'user-client',
     });
 

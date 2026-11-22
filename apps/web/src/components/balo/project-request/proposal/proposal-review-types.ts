@@ -54,15 +54,13 @@ export interface ProposalReviewInstallment {
 }
 
 /**
- * A proposal-scoped attachment. The single list drives two sections:
- * `kind: 'terms'` folds into the Terms section as a supplement; everything else
- * lists under Attachments.
+ * A proposal-scoped attachment. Every live proposal document lists under Attachments; the
+ * terms a proposal commits to are its `additionalTerms` list, not a file.
  */
 export interface ProposalReviewAttachment {
   id: string;
   fileName: string;
   sizeBytes: number;
-  kind: 'terms' | 'ref';
 }
 
 /**
@@ -116,7 +114,19 @@ export interface ProposalReviewDoc {
     | 'declined';
   pricingMethod: 'fixed' | 'tm';
   overviewHtml: string;
-  exclusionsHtml: string | null;
+  /**
+   * The three clause lists, plain text in the order the expert set them. They carry no money,
+   * so they are identical for every audience. Render each body as a React text child, never as
+   * HTML.
+   */
+  assumptions: string[];
+  exclusions: string[];
+  additionalTerms: string[];
+  /**
+   * The client company's name, for the copy that names the party ("Northwind pays Balo"). The
+   * caller passes `request.company?.name ?? 'the client'`.
+   */
+  clientCompanyName: string;
   priceCents: number;
   currency: string;
   timeframeWeeks: number | null;

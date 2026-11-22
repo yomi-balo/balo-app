@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { ProjectEngagementWithMilestones } from '@balo/db';
+import type { AgreedTermsSource, ProjectEngagementWithMilestones } from '@balo/db';
+import type { ProposalClauseKind } from '@balo/shared/project-requests';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
 import { makeLine, makeOrder } from '@/test/change-order-fixtures';
 import {
@@ -7,6 +8,7 @@ import {
   mapEngagementToWorkspaceView,
   offersRatingCard,
   type EngagementWorkspaceStatus,
+  type EngagementWorkspaceView,
 } from './engagement-view';
 
 // Deterministic "now" — all date math runs under TZ=UTC (see vitest env).
@@ -106,6 +108,122 @@ function ctxFor(lens: EngagementLens): EngagementViewerContext {
     isDeliveringExpert: lens === 'expert',
   };
 }
+
+describe('mapEngagementToWorkspaceView — agreed terms', () => {
+  const ACCEPTED_AT = new Date('2026-06-10T09:30:00.000Z');
+  const DANA = { firstName: 'Dana', lastName: 'Lee' };
+
+  function clause(kind: ProposalClauseKind, body: string): AgreedTermsSource['clauses'][number] {
+    return { kind, body } as AgreedTermsSource['clauses'][number];
+  }
+
+  function source(over: Partial<AgreedTermsSource> = {}): AgreedTermsSource {
+    return {
+      clauses: [
+        clause('assumption', 'Sandbox access is provided.'),
+        clause('assumption', 'Two review rounds.'),
+        clause('exclusion', 'Data migration.'),
+        clause('additional_term', 'Work pauses if feedback takes over 5 days.'),
+      ],
+      proposalAcceptedAt: ACCEPTED_AT,
+      proposalAcceptedBy: DANA,
+      ...over,
+    };
+  }
+
+  const agreedFor = (
+    terms: AgreedTermsSource | null | undefined,
+    lens: EngagementLens = 'client',
+    orders: Parameters<typeof mapEngagementToWorkspaceView>[3] = [],
+    engagement = makeEngagement()
+  ): EngagementWorkspaceView['agreedTerms'] =>
+    mapEngagementToWorkspaceView(engagement, ctxFor(lens), NOW, orders, [], null, null, terms)
+      .agreedTerms;
+
+  it('is null when the page passes no source', () => {
+    expect(agreedFor(undefined)).toBeNull();
+    expect(agreedFor(null)).toBeNull();
+  });
+
+  it('is null when the proposal carried no clauses', () => {
+    expect(agreedFor(source({ clauses: [] }))).toBeNull();
+  });
+
+  it('groups the lists in order and summarises the counts', () => {
+    expect(agreedFor(source())).toMatchObject({
+      assumptions: ['Sandbox access is provided.', 'Two review rounds.'],
+      exclusions: ['Data migration.'],
+      additionalTerms: ['Work pauses if feedback takes over 5 days.'],
+      summary: '2 assumptions · 1 exclusion · 1 additional term',
+    });
+  });
+
+  it('skips an empty kind in the summary and singularises one', () => {
+    const only = source({ clauses: [clause('exclusion', 'Data migration.')] });
+    expect(agreedFor(only)?.summary).toBe('1 exclusion');
+    const noTerms = source({
+      clauses: [clause('assumption', 'A.'), clause('assumption', 'B.'), clause('exclusion', 'C.')],
+    });
+    expect(agreedFor(noTerms)?.summary).toBe('2 assumptions · 1 exclusion');
+    const terms = source({
+      clauses: [clause('additional_term', 'A.'), clause('additional_term', 'B.')],
+    });
+    expect(agreedFor(terms)?.summary).toBe('2 additional terms');
+  });
+
+  it('names the parties and the pricing method', () => {
+    expect(agreedFor(source())).toMatchObject({
+      clientCompanyName: 'Northwind Industrial',
+      expertName: 'Priya Sharma',
+      pricingMethod: 'fixed',
+    });
+    expect(
+      agreedFor(source(), 'client', [], makeEngagement({ pricingMethod: 'tm' }))
+    ).toMatchObject({ pricingMethod: 'tm' });
+  });
+
+  it('attributes the acceptance to the person at the company, on the full date', () => {
+    expect(agreedFor(source())?.acceptedLine).toBe(
+      'Accepted by Dana @ Northwind Industrial on 10 June 2026.'
+    );
+  });
+
+  it('has no accepted line when there is no actor', () => {
+    expect(agreedFor(source({ proposalAcceptedBy: null }))?.acceptedLine).toBeNull();
+  });
+
+  it('has no accepted line when the acceptance time is unknown', () => {
+    expect(agreedFor(source({ proposalAcceptedAt: null }))?.acceptedLine).toBeNull();
+  });
+
+  it('is the same on every lens, carrying the same lists and line', () => {
+    const [client, expert, admin] = (['client', 'expert', 'admin'] as const).map((lens) =>
+      agreedFor(source(), lens)
+    );
+    expect(expert).toEqual(client);
+    expect(admin).toEqual(client);
+  });
+
+  describe('changedSinceStart', () => {
+    it('is false with no change orders', () => {
+      expect(agreedFor(source())?.changedSinceStart).toBe(false);
+    });
+
+    it.each(['requested', 'draft', 'sent', 'declined', 'withdrawn'] as const)(
+      'is false for a %s change order',
+      (status) => {
+        expect(agreedFor(source(), 'client', [makeOrder({ status })])?.changedSinceStart).toBe(
+          false
+        );
+      }
+    );
+
+    it('is true once a change order has been approved', () => {
+      const orders = [makeOrder({ status: 'declined' }), makeOrder({ status: 'approved' })];
+      expect(agreedFor(source(), 'client', orders)?.changedSinceStart).toBe(true);
+    });
+  });
+});
 
 describe('mapEngagementToWorkspaceView — header line profile link', () => {
   const HREF = '/experts/priya-sharma';

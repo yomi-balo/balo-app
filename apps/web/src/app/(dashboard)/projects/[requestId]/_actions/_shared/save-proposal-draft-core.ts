@@ -5,6 +5,7 @@ import {
   proposalsRepository,
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
+  proposalClausesRepository,
   ProposalNotDraftError,
   ProposalTrackNotOpenError,
   type ProposalMilestoneInput,
@@ -12,7 +13,7 @@ import {
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { proposalDraftBaseFields } from '../proposal-schema';
+import { proposalDraftBaseFields, toClauseInputs } from '../proposal-schema';
 import { lockContentionFailure } from './deadlock';
 import { resolveProposalAuthorAccess } from './proposal-author-access';
 
@@ -43,7 +44,6 @@ type DraftHeader = {
   priceCents: number;
   currency?: string;
   timeframeWeeks?: number | null;
-  exclusions?: string | null;
   depositCents?: number | null;
   rateCents?: number | null;
   cadence?: 'monthly' | 'fortnightly' | null;
@@ -110,7 +110,6 @@ export async function runSaveProposalDraft(
       priceCents: data.priceCents,
       currency: data.currency,
       timeframeWeeks: data.timeframeWeeks,
-      exclusions: data.exclusions,
       depositCents: data.depositCents,
       rateCents: data.rateCents,
       cadence: data.cadence,
@@ -132,10 +131,18 @@ export async function runSaveProposalDraft(
       pct: i.pct,
     }));
 
-    // Both child writers lock the header and refuse a non-draft with
+    // Every child writer locks the header and refuses a non-draft with
     // `ProposalNotDraftError` — the same stale branch as `updateDraft` above.
     await proposalMilestonesRepository.setForProposal({ proposalId, milestones });
     await proposalPaymentInstallmentsRepository.setForProposal({ proposalId, installments });
+    // `clauses` is optional on the wire: an autosave from a tab that predates the lists leaves
+    // the stored clauses alone rather than clearing them.
+    if (data.clauses !== undefined) {
+      await proposalClausesRepository.setForProposal({
+        proposalId,
+        clauses: toClauseInputs(data.clauses),
+      });
+    }
 
     return { success: true, proposalId };
   } catch (error) {

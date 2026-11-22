@@ -1,9 +1,10 @@
+import { proposalChangeSectionPhrase } from '@balo/shared/project-requests';
 import { ProjectStatusEmail, type ProjectEmailRecipientProps } from './shared.js';
 
 /** Adds the requesting client's name + the change section/note to the shared props. */
 export interface ProjectChangesRequestedEmailProps extends ProjectEmailRecipientProps {
   readonly clientName: string;
-  /** Which part of the proposal needs work (e.g. "pricing", "milestones"). */
+  /** Which part of the proposal needs work (a `PROPOSAL_CHANGE_SECTIONS` value such as "pricing"). */
   readonly section: string;
   /** The client's change note — surfaced verbatim in the callout. */
   readonly note: string;
@@ -35,7 +36,7 @@ export function ProjectChangesRequestedEmail({
       pillLabel="✏️ Changes requested"
       heroHeading={`${clientName} requested changes.`}
       heroSubtext="A few tweaks before they accept — you're close."
-      bodyText={`${clientName} reviewed your proposal and asked for changes to the ${section} section before accepting. Re-open the composer to make your edits and resubmit an updated version.`}
+      bodyText={`${clientName} reviewed your proposal and asked for a change to ${proposalChangeSectionPhrase(section)} before accepting. Re-open the composer to make your edits and resubmit an updated version.`}
       summaryLabel="What the client asked for"
       projectTitle={note}
       calloutText="Open your proposal to revise it — your previous version is preserved. When you resubmit, the client gets the updated proposal to review."

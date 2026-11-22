@@ -5,6 +5,7 @@ import {
   projectEngagementsRepository,
   actionItemsRepository,
   engagementChangeOrdersRepository,
+  engagementClausesRepository,
   engagementMilestonesRepository,
   engagementTimeEntriesRepository,
   expertsRepository,
@@ -262,27 +263,38 @@ export default async function EngagementWorkspacePage({
   const billingPeriod = workspaceBillingPeriod(engagement, now);
   // Runs alongside the batch below; it never rejects, so awaiting it afterwards is safe.
   const expertProfileHrefRead = loadExpertProfileHref(engagement, ctx.lens);
-  const [rating, actionItems, changeOrderRows, contentEdits, timeEntries, timeSums, notified] =
-    await Promise.all([
-      offersRatingCard(engagement.status, ctx.lens)
-        ? readRatingCard({
-            engagementId: engagement.id,
-            viewerUserId: user.id,
-            requireHeldConsultation: false,
-            now: new Date(),
-          })
-        : Promise.resolve(null),
-      // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
-      // engagement graph, so the workspace loader stays a single query.
-      actionItemsRepository.listByEngagement(engagement.id),
-      // The engagement's change orders (BAL-622), oldest first — they move the effective price,
-      // lock milestones and feed the change-order panel.
-      engagementChangeOrdersRepository.listForEngagement(engagement.id),
-      // What the expert reworded after the proposal, for the "Changed since proposal" chip.
-      // Empty when no milestone carries the stamp (the repo returns without querying).
-      engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
-      ...loadTimeReads(engagement, billingPeriod),
-    ]);
+  const [
+    rating,
+    actionItems,
+    changeOrderRows,
+    contentEdits,
+    agreedTerms,
+    timeEntries,
+    timeSums,
+    notified,
+  ] = await Promise.all([
+    offersRatingCard(engagement.status, ctx.lens)
+      ? readRatingCard({
+          engagementId: engagement.id,
+          viewerUserId: user.id,
+          requireHeldConsultation: false,
+          now: new Date(),
+        })
+      : Promise.resolve(null),
+    // The engagement's LIVE action items (BAL-391) — they are not on the hydrated
+    // engagement graph, so the workspace loader stays a single query.
+    actionItemsRepository.listByEngagement(engagement.id),
+    // The engagement's change orders (BAL-622), oldest first — they move the effective price,
+    // lock milestones and feed the change-order panel.
+    engagementChangeOrdersRepository.listForEngagement(engagement.id),
+    // What the expert reworded after the proposal, for the "Changed since proposal" chip.
+    // Empty when no milestone carries the stamp (the repo returns without querying).
+    engagementMilestonesRepository.listProposalContentEdits(editedMilestoneIds),
+    // The assumptions, exclusions and additional terms snapshotted at kickoff, for the
+    // "Agreed in the proposal" card. The same read for every lens.
+    engagementClausesRepository.findAgreedTerms(engagement.id),
+    ...loadTimeReads(engagement, billingPeriod),
+  ]);
   const { from, action } = await searchParams;
   const mappedView = mapEngagementToWorkspaceView(
     engagement,
@@ -291,7 +303,8 @@ export default async function EngagementWorkspacePage({
     changeOrderRows,
     contentEdits,
     latestTimeLoggedAt(timeEntries),
-    await expertProfileHrefRead
+    await expertProfileHrefRead,
+    agreedTerms
   );
   const view = {
     ...mappedView,

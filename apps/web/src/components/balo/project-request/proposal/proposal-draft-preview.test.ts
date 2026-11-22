@@ -23,7 +23,13 @@ const EXPERT: ProposalExpertIdentity = {
   ratingCount: 12,
 };
 
-const CTX = { requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID, version: 2, expert: EXPERT };
+const CTX = {
+  requestId: REQUEST_ID,
+  relationshipId: RELATIONSHIP_ID,
+  version: 2,
+  expert: EXPERT,
+  clientCompanyName: 'Northwind',
+};
 
 function fixedDraft(): ProposalDraftState {
   return {
@@ -31,7 +37,15 @@ function fixedDraft(): ProposalDraftState {
     proposalId: 'p1',
     overview: '<p>Overview</p>',
     timeframeWeeks: 6,
-    exclusions: '<p>Not included</p>',
+    assumptions: [
+      { key: nextDraftKey(), body: 'Sandbox access by kickoff' },
+      { key: nextDraftKey(), body: '   ' },
+    ],
+    exclusions: [{ key: nextDraftKey(), body: 'Data migration' }],
+    additionalTerms: [
+      { key: nextDraftKey(), body: 'One round of revisions' },
+      { key: nextDraftKey(), body: 'Remote delivery\nonly' },
+    ],
     fixedPriceCents: 1_000_000,
     milestonePricingEnabled: true,
     milestones: [
@@ -71,6 +85,10 @@ function fixedDraft(): ProposalDraftState {
   };
 }
 
+function emptyLists(): Pick<ProposalDraftState, 'assumptions' | 'exclusions' | 'additionalTerms'> {
+  return { assumptions: [], exclusions: [], additionalTerms: [] };
+}
+
 describe('draftToReviewDoc', () => {
   it('shows the expert-typed price as-is (identity money)', () => {
     const doc = draftToReviewDoc(fixedDraft(), CTX);
@@ -85,7 +103,6 @@ describe('draftToReviewDoc', () => {
     const doc = draftToReviewDoc(s, CTX);
     expect(doc.pricingMethod).toBe(payload.pricingMethod);
     expect(doc.overviewHtml).toBe(payload.overview);
-    expect(doc.exclusionsHtml).toBe(payload.exclusions);
     expect(doc.timeframeWeeks).toBe(6);
     expect(doc.milestones.map((m) => m.descriptionHtml)).toEqual(['<p>Workshops</p>', null]);
     expect(doc.milestones.map((m) => m.acceptanceCriteria)).toEqual(['Signed-off plan', null]);
@@ -93,6 +110,25 @@ describe('draftToReviewDoc', () => {
       ['Upfront', 40],
       ['On delivery', 60],
     ]);
+  });
+
+  it('maps the clause lists from the save payload: blanks dropped, line breaks collapsed', () => {
+    const doc = draftToReviewDoc(fixedDraft(), CTX);
+    expect(doc.assumptions).toEqual(['Sandbox access by kickoff']);
+    expect(doc.exclusions).toEqual(['Data migration']);
+    expect(doc.additionalTerms).toEqual(['One round of revisions', 'Remote delivery only']);
+    expect(doc).not.toHaveProperty('exclusionsHtml');
+  });
+
+  it('carries the client company for Balo’s pricing rule', () => {
+    expect(draftToReviewDoc(fixedDraft(), CTX).clientCompanyName).toBe('Northwind');
+  });
+
+  it('yields empty lists when nothing is entered', () => {
+    const doc = draftToReviewDoc({ ...fixedDraft(), ...emptyLists() }, CTX);
+    expect(doc.assumptions).toEqual([]);
+    expect(doc.exclusions).toEqual([]);
+    expect(doc.additionalTerms).toEqual([]);
   });
 
   it('nulls milestone values while "Price each milestone" is off', () => {
@@ -123,8 +159,20 @@ describe('draftToReviewDoc', () => {
 
   it('maps documents to attachments', () => {
     expect(draftToReviewDoc(fixedDraft(), CTX).attachments).toEqual([
-      { id: 'd1', fileName: 'scope.pdf', sizeBytes: 2048, kind: 'ref' },
+      { id: 'd1', fileName: 'scope.pdf', sizeBytes: 2048 },
     ]);
+  });
+
+  it('maps every document to an attachment, with no kind', () => {
+    const s = fixedDraft();
+    const [first] = s.documents;
+    if (first === undefined) throw new Error('fixture has a document');
+    const doc = draftToReviewDoc(
+      { ...s, documents: [first, { ...first, id: 'd2', fileName: 'more.pdf' }] },
+      CTX
+    );
+    expect(doc.attachments.map((a) => a.id)).toEqual(['d1', 'd2']);
+    expect(doc.attachments.every((a) => !('kind' in a))).toBe(true);
   });
 
   it('maps T&M commercials and emits no installments', () => {
@@ -147,8 +195,7 @@ describe('draftToReviewDoc', () => {
   });
 
   it('nulls absent optionals', () => {
-    const doc = draftToReviewDoc({ ...fixedDraft(), exclusions: '', timeframeWeeks: null }, CTX);
-    expect(doc.exclusionsHtml).toBeNull();
+    const doc = draftToReviewDoc({ ...fixedDraft(), timeframeWeeks: null }, CTX);
     expect(doc.timeframeWeeks).toBeNull();
     expect(doc.rateCents).toBeNull();
     expect(doc.depositCents).toBeNull();

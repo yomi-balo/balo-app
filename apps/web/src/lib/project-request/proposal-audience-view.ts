@@ -25,9 +25,11 @@ import type {
   ProposalMilestone,
   ProposalPaymentInstallment,
   ProposalDocument,
+  ProposalClause,
   ProjectRequestWithRelations,
 } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import type {
   ProposalReviewDoc,
@@ -128,6 +130,10 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
  *
  * ⚠ `null` RATING MEANS NO REVIEWS, NEVER 0.0, and the count travels with it everywhere.
  *
+ * `clauses` are the proposal's live clause rows; the lists they group into carry no money, so
+ * every audience gets the same ones. `clientCompanyName` is the client company's display name
+ * (`request.company?.name ?? 'the client'`).
+ *
  * `publicUsername` is the expert's username ONLY when their public profile resolves (from
  * `expertsRepository.findPublicUsernamesByProfileIds`). It becomes `expert.profileHref` on a
  * `client` doc alone; the expert and admin audiences never link the header, whatever is passed.
@@ -137,8 +143,10 @@ export function hydrateReviewDoc(
   milestones: ProposalMilestone[],
   installments: ProposalPaymentInstallment[],
   documents: ProposalDocument[],
+  clauses: readonly ProposalClause[],
   relationship: Relationship,
   audience: ProposalAudience,
+  clientCompanyName: string,
   publicUsername: string | null = null
 ): ProposalReviewDoc {
   // Client sees the grossed-up figure; expert + admin-base stay at the raw quote.
@@ -156,7 +164,8 @@ export function hydrateReviewDoc(
     status: proposal.status,
     pricingMethod: proposal.pricingMethod,
     overviewHtml: proposal.overview,
-    exclusionsHtml: proposal.exclusions,
+    ...groupClauseBodies(clauses),
+    clientCompanyName,
     priceCents: priceFn(proposal.priceCents),
     currency: proposal.currency,
     timeframeWeeks: proposal.timeframeWeeks,
@@ -175,7 +184,6 @@ export function hydrateReviewDoc(
       id: d.id,
       fileName: d.fileName,
       sizeBytes: d.sizeBytes,
-      kind: d.kind,
     })),
     expert: {
       ...expertIdentityOf(relationship),

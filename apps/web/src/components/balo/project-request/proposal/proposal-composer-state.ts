@@ -13,6 +13,11 @@
  */
 
 import { deriveTmTotalCents, sumEstimatedMinutes } from '@balo/shared/pricing';
+import {
+  PROPOSAL_CLAUSE_KINDS,
+  normalizeClauseBody,
+  type ProposalClauseKind,
+} from '@balo/shared/project-requests';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { SaveProposalDraftInput } from '@/app/(dashboard)/projects/[requestId]/_actions/save-proposal-draft';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -49,6 +54,13 @@ export interface ProposalInstallmentDraft {
   pct: number;
 }
 
+/** One row of an assumptions / exclusions / additional-terms list in composer state. */
+export interface ProposalClauseDraft {
+  /** Stable client-only key for React lists + reorder (NOT persisted). */
+  key: string;
+  body: string;
+}
+
 /** The single composer form-state object. Documents persist immediately via their
  *  own confirm action — they are carried here only for display/removal. */
 export interface ProposalDraftState {
@@ -58,7 +70,10 @@ export interface ProposalDraftState {
   pricingMethod: ProposalPricingMethod;
   currency: string;
   timeframeWeeks: number | null;
-  exclusions: string;
+  /** The three clause lists, each in the order the expert set. Blank rows are dropped on save. */
+  assumptions: ProposalClauseDraft[];
+  exclusions: ProposalClauseDraft[];
+  additionalTerms: ProposalClauseDraft[];
   depositCents: number | null;
   rateCents: number | null;
   /** Fixed-only EXPERT-TYPED total (integer minor units). Null until typed. Fully
@@ -116,6 +131,10 @@ export const COMPOSER_TARGET = {
   rate: 'proposal-rate',
   deposit: 'proposal-deposit',
   changeNote: 'proposal-change-note',
+  /** The empty row at the end of each clause list (its textarea id). */
+  assumptions: 'proposal-clause-new-assumption',
+  exclusions: 'proposal-clause-new-exclusion',
+  additionalTerms: 'proposal-clause-new-additional_term',
 } as const;
 
 export function milestoneFieldId(field: 'title' | 'amount' | 'hours', key: string): string {
@@ -263,7 +282,7 @@ export function syncPerMilestoneInstallments(
 /**
  * Apply an AI-drafted patch (BAL-611): the Overview and one milestone row per drafted
  * milestone, each built from a blank row for the current pricing method. Pricing, installment
- * percentages, timeframe and exclusions are never touched; only a "One per milestone" payment
+ * percentages, timeframe and the clause lists are never touched; only a "One per milestone" payment
  * schedule follows the new rows.
  */
 export function applyDraftPatch(
@@ -326,7 +345,9 @@ export function emptyDraftState(): ProposalDraftState {
     pricingMethod: 'fixed',
     currency: 'aud',
     timeframeWeeks: null,
-    exclusions: '',
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
     depositCents: null,
     rateCents: null,
     fixedPriceCents: null,
@@ -376,7 +397,8 @@ export type ReadinessIssueId =
   | 'rate'
   | 'deposit'
   | 'milestone_hours'
-  | 'change_request';
+  | 'change_request'
+  | 'no_assumptions_or_exclusions';
 
 /** One failing readiness check. React key = `${id}:${targetId}` (`milestone_title`
  *  repeats per row). `targetId` is the DOM id the checklist jumps to. */
@@ -544,12 +566,43 @@ export function summaryReadiness(state: ProposalDraftState): ReadinessResult {
   return { ready: issues.length === 0, issues };
 }
 
+const CLAUSE_LIST_OF: Record<ProposalClauseKind, 'assumptions' | 'exclusions' | 'additionalTerms'> =
+  {
+    assumption: 'assumptions',
+    exclusion: 'exclusions',
+    additional_term: 'additionalTerms',
+  };
+
+/** How many non-blank items each clause list holds. */
+export function clauseCounts(
+  state: Pick<ProposalDraftState, 'assumptions' | 'exclusions' | 'additionalTerms'>
+): Record<ProposalClauseKind, number> {
+  const count = (items: readonly ProposalClauseDraft[]): number =>
+    items.filter((item) => normalizeClauseBody(item.body).length > 0).length;
+  return {
+    assumption: count(state.assumptions),
+    exclusion: count(state.exclusions),
+    additional_term: count(state.additionalTerms),
+  };
+}
+
+/** The flat, ordered clause array the save payload carries: assumptions, then exclusions, then
+ *  additional terms, each body normalised and blank rows dropped. */
+function toClausePayload(state: ProposalDraftState): { kind: ProposalClauseKind; body: string }[] {
+  return PROPOSAL_CLAUSE_KINDS.flatMap((kind) =>
+    state[CLAUSE_LIST_OF[kind]].flatMap((item) => {
+      const body = normalizeClauseBody(item.body);
+      return body.length > 0 ? [{ kind, body }] : [];
+    })
+  );
+}
+
 /**
  * Serialise composer state → the autosave action payload (replace-all milestone +
- * installment lists every save). A cleared optional header field is sent as `null`
- * — never omitted — so the save clears the stored column: an empty timeframe or
- * exclusions, and the T&M-only deposit/rate/cadence under Fixed. Partial-draft
- * tolerant (the autosave action never enforces readiness).
+ * installment + clause lists every save). A cleared optional header field is sent as
+ * `null` — never omitted — so the save clears the stored column: an empty timeframe, and
+ * the T&M-only deposit/rate/cadence under Fixed. `clauses` is always sent, so emptying a
+ * list clears it. Partial-draft tolerant (the autosave action never enforces readiness).
  */
 export function toSavePayload(
   state: ProposalDraftState,
@@ -565,7 +618,7 @@ export function toSavePayload(
     priceCents: computeTotalCents(state),
     currency: state.currency,
     timeframeWeeks: state.timeframeWeeks,
-    exclusions: state.exclusions.trim().length > 0 ? state.exclusions : null,
+    clauses: toClausePayload(state),
     depositCents: isFixed ? null : state.depositCents,
     rateCents: isFixed ? null : state.rateCents,
     cadence: isFixed ? null : state.cadence,

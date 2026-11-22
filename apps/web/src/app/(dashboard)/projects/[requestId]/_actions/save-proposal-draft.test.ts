@@ -22,6 +22,7 @@ const {
   mockUpdateDraft,
   mockSetMilestones,
   mockSetInstallments,
+  mockSetClauses,
   ProposalNotDraftError,
   ProposalTrackNotOpenError,
 } = vi.hoisted(() => {
@@ -46,6 +47,7 @@ const {
     mockUpdateDraft: vi.fn(),
     mockSetMilestones: vi.fn(),
     mockSetInstallments: vi.fn(),
+    mockSetClauses: vi.fn(),
     ProposalNotDraftError,
     ProposalTrackNotOpenError,
   };
@@ -61,13 +63,14 @@ vi.mock('@balo/db', () => ({
   proposalPaymentInstallmentsRepository: {
     setForProposal: (...a: unknown[]) => mockSetInstallments(...a),
   },
+  proposalClausesRepository: { setForProposal: (...a: unknown[]) => mockSetClauses(...a) },
   ProposalNotDraftError,
   ProposalTrackNotOpenError,
 }));
 
 import { z } from 'zod';
 import { saveProposalDraftAction } from './save-proposal-draft';
-import { proposalDraftBaseFields } from './proposal-schema';
+import { proposalDraftBaseFields, toClauseInputs } from './proposal-schema';
 import { log } from '@/lib/logging';
 
 const USER = { id: 'user-expert', firstName: 'Ada', lastName: 'L' };
@@ -85,7 +88,6 @@ const VALID_INPUT = {
 /** Every optional header field the composer clears by sending `null`. */
 const CLEARED_HEADER = {
   timeframeWeeks: null,
-  exclusions: null,
   depositCents: null,
   rateCents: null,
   cadence: null,
@@ -103,6 +105,64 @@ describe('proposalDraftBaseFields', () => {
   it('still accepts the optional header fields omitted', () => {
     expect(schema.safeParse(VALID_INPUT).success).toBe(true);
   });
+
+  it('strips a stale tab’s exclusions key rather than failing', () => {
+    const parsed = schema.safeParse({ ...VALID_INPUT, exclusions: '<p>old</p>' });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).not.toHaveProperty('exclusions');
+  });
+
+  it('accepts 20 items of one kind and rejects 21', () => {
+    const items = (count: number): { kind: 'assumption'; body: string }[] =>
+      Array.from({ length: count }, () => ({ kind: 'assumption' as const, body: 'x' }));
+    expect(schema.safeParse({ ...VALID_INPUT, clauses: items(20) }).success).toBe(true);
+    const tooMany = schema.safeParse({ ...VALID_INPUT, clauses: items(21) });
+    expect(tooMany.success).toBe(false);
+    expect(JSON.stringify(tooMany.error?.issues)).toContain('A list holds up to 20 items.');
+  });
+
+  it('counts each kind on its own, so 20 of each of the three kinds is accepted', () => {
+    const clauses = (['assumption', 'exclusion', 'additional_term'] as const).flatMap((kind) =>
+      Array.from({ length: 20 }, () => ({ kind, body: 'x' }))
+    );
+    expect(schema.safeParse({ ...VALID_INPUT, clauses }).success).toBe(true);
+  });
+
+  it('rejects a body over 500 characters and accepts exactly 500', () => {
+    const withBody = (body: string): unknown => ({
+      ...VALID_INPUT,
+      clauses: [{ kind: 'exclusion', body }],
+    });
+    expect(schema.safeParse(withBody('x'.repeat(500))).success).toBe(true);
+    expect(schema.safeParse(withBody('x'.repeat(501))).success).toBe(false);
+  });
+
+  it('rejects an unknown clause kind', () => {
+    const parsed = schema.safeParse({ ...VALID_INPUT, clauses: [{ kind: 'other', body: 'x' }] });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('toClauseInputs', () => {
+  it('normalises line breaks, drops blank items and keeps the order', () => {
+    expect(
+      toClauseInputs([
+        { kind: 'exclusion', body: 'a\nb ' },
+        { kind: 'assumption', body: '   ' },
+        { kind: 'additional_term', body: 'Net 14' },
+        { kind: 'assumption', body: '\n\n' },
+        { kind: 'assumption', body: 'Two rounds of review' },
+      ])
+    ).toEqual([
+      { kind: 'exclusion', body: 'a b' },
+      { kind: 'additional_term', body: 'Net 14' },
+      { kind: 'assumption', body: 'Two rounds of review' },
+    ]);
+  });
+
+  it('returns an empty list for an empty input', () => {
+    expect(toClauseInputs([])).toEqual([]);
+  });
 });
 
 describe('saveProposalDraftAction', () => {
@@ -115,6 +175,7 @@ describe('saveProposalDraftAction', () => {
     mockUpdateDraft.mockResolvedValue({ id: PROPOSAL_ID });
     mockSetMilestones.mockResolvedValue([]);
     mockSetInstallments.mockResolvedValue([]);
+    mockSetClauses.mockResolvedValue([]);
   });
 
   it('rejects when not signed in', async () => {
@@ -169,6 +230,53 @@ describe('saveProposalDraftAction', () => {
       proposalId: PROPOSAL_ID,
       installments: [{ label: 'Upfront', pct: 100 }],
     });
+  });
+
+  it('replaces the clauses with the normalised, blank-free set', async () => {
+    const result = await saveProposalDraftAction({
+      ...VALID_INPUT,
+      clauses: [
+        { kind: 'assumption', body: 'Client supplies a sandbox' },
+        { kind: 'exclusion', body: 'a\nb ' },
+        { kind: 'exclusion', body: '   ' },
+        { kind: 'additional_term', body: 'Net 14' },
+      ],
+    });
+    expect(result).toEqual({ success: true, proposalId: PROPOSAL_ID });
+    expect(mockSetClauses).toHaveBeenCalledWith({
+      proposalId: PROPOSAL_ID,
+      clauses: [
+        { kind: 'assumption', body: 'Client supplies a sandbox' },
+        { kind: 'exclusion', body: 'a b' },
+        { kind: 'additional_term', body: 'Net 14' },
+      ],
+    });
+  });
+
+  it('clears the clauses when an empty list is sent', async () => {
+    await saveProposalDraftAction({ ...VALID_INPUT, clauses: [] });
+    expect(mockSetClauses).toHaveBeenCalledWith({ proposalId: PROPOSAL_ID, clauses: [] });
+  });
+
+  it('leaves the stored clauses alone when the payload has none', async () => {
+    const result = await saveProposalDraftAction(VALID_INPUT);
+    expect(result).toEqual({ success: true, proposalId: PROPOSAL_ID });
+    expect(mockSetClauses).not.toHaveBeenCalled();
+  });
+
+  it('refuses 21 items of one kind without writing anything', async () => {
+    const clauses = Array.from({ length: 21 }, () => ({ kind: 'exclusion' as const, body: 'x' }));
+    const result = await saveProposalDraftAction({ ...VALID_INPUT, clauses });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockCreateDraft).not.toHaveBeenCalled();
+    expect(mockSetClauses).not.toHaveBeenCalled();
+  });
+
+  it('refuses a 501-character body without writing anything', async () => {
+    const clauses = [{ kind: 'assumption' as const, body: 'x'.repeat(501) }];
+    const result = await saveProposalDraftAction({ ...VALID_INPUT, clauses });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockSetClauses).not.toHaveBeenCalled();
   });
 
   it('updates the existing draft in place when one exists', async () => {
@@ -246,13 +354,14 @@ describe('saveProposalDraftAction', () => {
   it.each([
     ['milestones', mockSetMilestones],
     ['installments', mockSetInstallments],
+    ['clauses', mockSetClauses],
   ])(
     'warns and returns stale copy when the %s write hits a submitted proposal',
     async (_label, setter) => {
       mockFindCurrent.mockResolvedValue({ id: PROPOSAL_ID });
       setter.mockRejectedValue(new ProposalNotDraftError('submitted'));
 
-      const result = await saveProposalDraftAction(VALID_INPUT);
+      const result = await saveProposalDraftAction({ ...VALID_INPUT, clauses: [] });
 
       expect(result).toEqual({ success: false, error: 'This proposal can no longer be edited.' });
       expect(log.warn).toHaveBeenCalledWith(
@@ -274,6 +383,7 @@ describe('saveProposalDraftAction', () => {
     await saveProposalDraftAction(VALID_INPUT);
 
     expect(mockSetInstallments).not.toHaveBeenCalled();
+    expect(mockSetClauses).not.toHaveBeenCalled();
   });
 
   // ── The track ended under the autosave (BAL-540 fix round / Qodo #10) ─────────────

@@ -31,16 +31,24 @@ import { requestProposalChangesAction } from '@/app/(dashboard)/projects/[reques
 /** The DB `proposalChangeSectionEnum` value space — single-sourced (BAL-427). */
 type ChangeSection = ProposalChangeSection;
 
-/** Data-driven section options — friendly labels for the five enum values (default `general`). */
+/** Data-driven section options — friendly labels for the enum values (default `general`). */
 const SECTION_OPTIONS: ReadonlyArray<{ value: ChangeSection; label: string }> = [
   { value: 'general', label: 'General' },
   { value: 'milestones', label: 'Milestones / deliverables' },
+  { value: 'assumptions_exclusions', label: 'Assumptions and exclusions' },
   { value: 'pricing', label: 'Pricing' },
   { value: 'payment_terms', label: 'Payment terms' },
   { value: 'timeline', label: 'Timeline' },
+  { value: 'terms', label: 'Terms' },
 ];
 
 const DEFAULT_SECTION: ChangeSection = 'general';
+
+/** The example number to cite, for the sections whose items are numbered lists. */
+const NUMBERED_SECTION_EXAMPLE: Partial<Record<ChangeSection, string>> = {
+  assumptions_exclusions: 'Assumption 2',
+  terms: 'Term 1',
+};
 
 interface ChangesModalProps {
   open: boolean;
@@ -86,6 +94,7 @@ export function ChangesModal({
   }, [open]);
 
   const canSubmit = note.trim().length > 0;
+  const numberedExample = NUMBERED_SECTION_EXAMPLE[section];
 
   const handleSectionChange = useCallback((value: string): void => {
     const match = SECTION_OPTIONS.find((option) => option.value === value);
@@ -166,7 +175,13 @@ export function ChangesModal({
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="changes-section">What needs work?</Label>
             <Select value={section} onValueChange={handleSectionChange} disabled={pending}>
-              <SelectTrigger id="changes-section" className="w-full">
+              <SelectTrigger
+                id="changes-section"
+                className="w-full"
+                aria-describedby={
+                  numberedExample === undefined ? undefined : 'changes-section-hint'
+                }
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -177,6 +192,11 @@ export function ChangesModal({
                 ))}
               </SelectContent>
             </Select>
+            {numberedExample !== undefined && (
+              <p id="changes-section-hint" className="text-muted-foreground text-xs">
+                Say which one by its number, for example “{numberedExample}”.
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">

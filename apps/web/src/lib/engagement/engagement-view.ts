@@ -3,6 +3,7 @@ import 'server-only';
 import {
   AUTO_ACCEPT_DAYS,
   blocksMarkReady,
+  type AgreedTermsSource,
   type ChangeOrderWithLines,
   type MilestoneContentEditRow,
   type ProjectDeliveryStatus,
@@ -10,6 +11,7 @@ import {
 } from '@balo/db';
 import { isContractedMilestone } from '@balo/shared/engagements';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
@@ -342,6 +344,26 @@ export interface CompletionCardView {
   ctaLabel: string;
 }
 
+/**
+ * What the "Agreed in the proposal" card shows: the clause snapshot taken at kickoff, grouped
+ * into its three lists. Identical on every lens and carries no money.
+ */
+export interface AgreedTermsView {
+  assumptions: string[];
+  exclusions: string[];
+  additionalTerms: string[];
+  /** "2 assumptions · 1 exclusion", with empty lists skipped. */
+  summary: string;
+  pricingMethod: 'fixed' | 'tm';
+  clientCompanyName: string;
+  /** The delivering expert's name, for "{name}’s additional terms". */
+  expertName: string;
+  /** "Accepted by Dana @ Northwind on 24 November 2026.", or null when it can't be attributed. */
+  acceptedLine: string | null;
+  /** A change order has been approved since kickoff, so the card points at the change history. */
+  changedSinceStart: boolean;
+}
+
 export interface EngagementWorkspaceView {
   engagementId: string;
   lens: EngagementLens;
@@ -365,6 +387,8 @@ export interface EngagementWorkspaceView {
   completionCard: CompletionCardView | null;
   /** Time-and-materials: new milestones need the client's approval, so "Add milestone" is hidden. */
   addMilestoneNeedsChangeOrder: boolean;
+  /** The agreed assumptions, exclusions and additional terms; null when the proposal had none. */
+  agreedTerms: AgreedTermsView | null;
 }
 
 // ── Date / relative helpers (deterministic under TZ=UTC) ─────────────────────
@@ -384,6 +408,16 @@ function formatLongDate(date: Date): string {
     timeZone: 'UTC',
     day: 'numeric',
     month: 'short',
+    year: 'numeric',
+  }).format(date);
+}
+
+/** "24 November 2026" — day + full month + year, UTC. */
+function formatFullDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC',
+    day: 'numeric',
+    month: 'long',
     year: 'numeric',
   }).format(date);
 }
@@ -1015,6 +1049,50 @@ function deriveCompletionCard(
   };
 }
 
+/** "1 assumption", "2 exclusions", "3 additional terms". */
+function clauseCountLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * The agreed-terms card's view, or null when the engagement has no snapshot to show (no source
+ * read, or a proposal that carried no assumptions, exclusions or additional terms).
+ */
+function deriveAgreedTerms(
+  engagement: ProjectEngagementWithMilestones,
+  parties: EngagementParties,
+  changeOrders: readonly ChangeOrderWithLines[],
+  source: AgreedTermsSource | null
+): AgreedTermsView | null {
+  if (source === null || source.clauses.length === 0) return null;
+  const { assumptions, exclusions, additionalTerms } = groupClauseBodies(source.clauses);
+  const summary = [
+    assumptions.length > 0 ? clauseCountLabel(assumptions.length, 'assumption', 'assumptions') : '',
+    exclusions.length > 0 ? clauseCountLabel(exclusions.length, 'exclusion', 'exclusions') : '',
+    additionalTerms.length > 0
+      ? clauseCountLabel(additionalTerms.length, 'additional term', 'additional terms')
+      : '',
+  ]
+    .filter((part) => part !== '')
+    .join(' · ');
+  const { proposalAcceptedAt, proposalAcceptedBy } = source;
+  const acceptedLine =
+    proposalAcceptedAt === null || proposalAcceptedBy === null
+      ? null
+      : `Accepted by ${personAtCompany(proposalAcceptedBy, parties.clientCompanyName)} on ${formatFullDate(proposalAcceptedAt)}.`;
+  return {
+    assumptions,
+    exclusions,
+    additionalTerms,
+    summary,
+    pricingMethod: engagement.pricingMethod,
+    clientCompanyName: parties.clientCompanyName,
+    expertName: parties.expertPerson,
+    acceptedLine,
+    changedSinceStart: changeOrders.some((order) => order.status === 'approved'),
+  };
+}
+
 /**
  * Map the hydrated engagement + resolved viewer context into the single
  * serializable workspace view. SERVER-ONLY (value-imports `AUTO_ACCEPT_DAYS` from
@@ -1025,7 +1103,8 @@ function deriveCompletionCard(
  * `lastTimeLoggedAt` is when the latest live time entry was logged (T&M), a delivery signal for
  * the admin activity chip. `expertProfileHref` is the expert's public profile path, already gated
  * on the public-profile rule by the caller (null when it does not resolve); it links the expert's
- * name in the header line, and is dropped on a lens whose line names no expert.
+ * name in the header line, and is dropped on a lens whose line names no expert. `agreedTerms` is
+ * the kickoff clause snapshot for the "Agreed in the proposal" card (null leaves the card off).
  */
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
@@ -1034,7 +1113,8 @@ export function mapEngagementToWorkspaceView(
   changeOrders: readonly ChangeOrderWithLines[] = [],
   contentEdits: readonly MilestoneContentEditRow[] = [],
   lastTimeLoggedAt: Date | null = null,
-  expertProfileHref: string | null = null
+  expertProfileHref: string | null = null,
+  agreedTerms: AgreedTermsSource | null = null
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
@@ -1102,5 +1182,6 @@ export function mapEngagementToWorkspaceView(
     cancelDialog: deriveCancelDialog(engagement, parties),
     completionCard: deriveCompletionCard(engagement, ctx.lens, parties, crState, changeOrders),
     addMilestoneNeedsChangeOrder: engagement.pricingMethod === 'tm',
+    agreedTerms: deriveAgreedTerms(engagement, parties, changeOrders, agreedTerms),
   };
 }

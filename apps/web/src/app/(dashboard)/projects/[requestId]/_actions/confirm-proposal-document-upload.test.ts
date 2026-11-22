@@ -11,19 +11,15 @@ const CREATED_AT = new Date('2026-06-10T10:00:00Z');
 
 vi.mock('server-only', () => ({}));
 
-const { mockFindById, mockAddDocument, mockListByProposal, mockSoftDelete } = vi.hoisted(() => ({
+const { mockFindById, mockAddDocument } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockAddDocument: vi.fn(),
-  mockListByProposal: vi.fn(),
-  mockSoftDelete: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   proposalsRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
   proposalDocumentsRepository: {
     addDocument: (...a: unknown[]) => mockAddDocument(...a),
-    listByProposal: (...a: unknown[]) => mockListByProposal(...a),
-    softDelete: (...a: unknown[]) => mockSoftDelete(...a),
   },
 }));
 
@@ -86,8 +82,6 @@ describe('confirmProposalDocumentUploadAction', () => {
     mockResolveAccess.mockResolvedValue({ ok: true, ctx: { lens: 'expert' } });
     mockFindById.mockResolvedValue({ id: PROPOSAL_ID, relationshipId: REL_ID, status: 'draft' });
     mockSend.mockResolvedValue({ ContentLength: 2048, ContentType: 'application/pdf' });
-    mockListByProposal.mockResolvedValue([]);
-    mockSoftDelete.mockResolvedValue({ id: 'old' });
     mockAddDocument.mockResolvedValue({
       id: DOC_ID,
       kind: 'ref',
@@ -172,27 +166,15 @@ describe('confirmProposalDocumentUploadAction', () => {
     );
   });
 
-  it('replaces a prior live terms supplement when kind is terms', async () => {
-    mockListByProposal.mockResolvedValue([
-      { id: 'old-terms', r2Key: 'proposal-documents/p/u/old' },
-    ]);
-    mockAddDocument.mockResolvedValue({
-      id: DOC_ID,
+  it('refuses the retired terms kind without touching R2 or the table', async () => {
+    const result = await confirmProposalDocumentUploadAction({
+      ...BASE_INPUT,
+      // @ts-expect-error `terms` is no longer an accepted upload kind
       kind: 'terms',
-      fileName: 'terms.pdf',
-      contentType: 'application/pdf',
-      sizeBytes: 2048,
-      createdAt: CREATED_AT,
     });
-    const result = await confirmProposalDocumentUploadAction({ ...BASE_INPUT, kind: 'terms' });
-    expect(result.success).toBe(true);
-    expect(mockListByProposal).toHaveBeenCalledWith(PROPOSAL_ID, 'terms');
-    expect(mockSoftDelete).toHaveBeenCalledWith('old-terms');
-    expect(mockDelete).toHaveBeenCalledWith('proposal-documents/p/u/old');
-    expect(log.warn).toHaveBeenCalledWith(
-      'Replaced prior terms supplement on a proposal',
-      expect.any(Object)
-    );
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockAddDocument).not.toHaveBeenCalled();
   });
 
   it('maps a duplicate confirm (23505) to friendly copy with a warn', async () => {

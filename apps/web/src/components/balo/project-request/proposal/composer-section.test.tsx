@@ -21,17 +21,17 @@ describe('ComposerSection', () => {
   it('shows the Optional tag, help line and aside slot when provided', () => {
     render(
       <ComposerSection
-        id="proposal-section-exclusions"
-        title="Not included"
+        id="proposal-section-assumptions"
+        title="Assumptions"
         optional
-        help="Anything out of scope."
+        help="What your price and timeline rely on."
         aside={<button type="button">Clear</button>}
       >
         <span>child</span>
       </ComposerSection>
     );
     expect(screen.getByText('Optional')).toBeInTheDocument();
-    expect(screen.getByText('Anything out of scope.')).toBeInTheDocument();
+    expect(screen.getByText('What your price and timeline rely on.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
   });
 

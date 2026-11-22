@@ -25,6 +25,7 @@ import {
   listByProposalTx as listInstallmentsTx,
   type ProposalPaymentInstallmentInput,
 } from './proposal-payment-installments';
+import { insertClausesTx, type ProposalClauseInput } from './proposal-clauses';
 import {
   assertProposalCoherent,
   assertProposalSubmittable,
@@ -365,9 +366,9 @@ export const proposalsRepository = {
    *
    * Carries the full proposal header (A6.2 submits a complete proposal through it):
    * `overview` + `pricingMethod` + `priceCents` + optional `currency`,
-   * `timeframeWeeks`, `exclusions`, and the T&M fields
-   * `depositCents`/`rateCents`/`cadence`. Milestones / installments / documents are
-   * written via their own repos (separate calls), NOT inside `submit()`.
+   * `timeframeWeeks`, and the T&M fields `depositCents`/`rateCents`/`cadence`.
+   * Milestones / installments / clauses / documents are written via their own repos
+   * (separate calls), NOT inside `submit()`.
    * `priceCents` is integer minor units; `currency` defaults to `aud`.
    *
    * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship to
@@ -392,7 +393,6 @@ export const proposalsRepository = {
     priceCents: number;
     currency?: string;
     timeframeWeeks?: number;
-    exclusions?: string;
     depositCents?: number;
     rateCents?: number;
     cadence?: ProposalCadence;
@@ -444,7 +444,6 @@ export const proposalsRepository = {
           currency: input.currency,
           baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
-          exclusions: input.exclusions,
           depositCents: input.depositCents,
           rateCents: input.rateCents,
           cadence: input.cadence,
@@ -505,7 +504,6 @@ export const proposalsRepository = {
     priceCents: number;
     currency?: string;
     timeframeWeeks?: number | null;
-    exclusions?: string | null;
     depositCents?: number | null;
     rateCents?: number | null;
     cadence?: ProposalCadence | null;
@@ -577,7 +575,6 @@ export const proposalsRepository = {
           currency: input.currency,
           baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
-          exclusions: input.exclusions,
           depositCents: input.depositCents,
           rateCents: input.rateCents,
           cadence: input.cadence,
@@ -597,15 +594,15 @@ export const proposalsRepository = {
    * silently overwrite the submitted proposal — throws `ProposalNotDraftError`
    * (missing/soft-deleted/non-draft). On success touches `updatedAt`.
    *
-   * The optional header columns (`timeframeWeeks`, `exclusions`, `depositCents`,
-   * `rateCents`, `cadence`) take `null` to CLEAR the column; `undefined` leaves it
-   * unchanged, because Drizzle's `.set()` skips `undefined` keys. The composer sends
-   * `null` for every cleared field, so a value the expert removed never survives.
+   * The optional header columns (`timeframeWeeks`, `depositCents`, `rateCents`,
+   * `cadence`) take `null` to CLEAR the column; `undefined` leaves it unchanged,
+   * because Drizzle's `.set()` skips `undefined` keys. The composer sends `null` for
+   * every cleared field, so a value the expert removed never survives.
    *
-   * BOUNDARY: writes ONLY the proposal header. Milestones / installments /
+   * BOUNDARY: writes ONLY the proposal header. Milestones / installments / clauses /
    * documents are persisted via their own `setForProposal` / document repos by the
-   * action, NOT here — keeping autosave a single-row write. Both `setForProposal`
-   * writers take the same header lock + draft guard.
+   * action, NOT here — keeping autosave a single-row write. Every `setForProposal`
+   * writer takes the same header lock + draft guard.
    */
   async updateDraft(input: {
     proposalId: string;
@@ -614,7 +611,6 @@ export const proposalsRepository = {
     priceCents: number;
     currency?: string;
     timeframeWeeks?: number | null;
-    exclusions?: string | null;
     depositCents?: number | null;
     rateCents?: number | null;
     cadence?: ProposalCadence | null;
@@ -630,7 +626,6 @@ export const proposalsRepository = {
           priceCents: input.priceCents,
           currency: input.currency,
           timeframeWeeks: input.timeframeWeeks,
-          exclusions: input.exclusions,
           depositCents: input.depositCents,
           rateCents: input.rateCents,
           cadence: input.cadence,
@@ -1035,13 +1030,14 @@ export const proposalsRepository = {
    *      relationship/request/expert ids from the locked row.
    *
    * Flip-then-insert, NEVER insert-then-flip (which would momentarily have two
-   * `is_current=true` rows and trip the index). The v2 milestones + installments are
-   * written in the SAME transaction from the caller-supplied set (via
-   * `insertMilestonesTx`/`insertInstallmentsTx`), so a `submitted`/`is_current` v2
-   * NEVER exists with zero children — header + children commit atomically (a child
-   * write failure rolls back the whole resubmit). The composer (A6.2) carries the
-   * revised content; documents are still carried over best-effort by the action AFTER
-   * the commit. Returns the new current proposal.
+   * `is_current=true` rows and trip the index). The v2 milestones, installments and
+   * clauses are written in the SAME transaction from the caller-supplied sets (via
+   * `insertMilestonesTx`/`insertInstallmentsTx`/`insertClausesTx`), so a
+   * `submitted`/`is_current` v2 NEVER exists without its children — header + children
+   * commit atomically (a child write failure, such as a blank clause body, rolls back
+   * the whole resubmit). v1's clauses are left as they were. The composer (A6.2)
+   * carries the revised content; documents are still carried over best-effort by the
+   * action AFTER the commit. Returns the new current proposal.
    */
   async resubmit(input: {
     relationshipId: string;
@@ -1050,12 +1046,13 @@ export const proposalsRepository = {
     priceCents: number;
     currency?: string;
     timeframeWeeks?: number | null;
-    exclusions?: string | null;
     depositCents?: number | null;
     rateCents?: number | null;
     cadence?: ProposalCadence | null;
     milestones: ProposalMilestoneInput[];
     installments: ProposalPaymentInstallmentInput[];
+    /** v2's complete clause set; an empty list gives v2 no clauses. */
+    clauses: ProposalClauseInput[];
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6). `resubmit`
@@ -1129,7 +1126,6 @@ export const proposalsRepository = {
           currency: input.currency,
           baloFeeBps,
           timeframeWeeks: input.timeframeWeeks,
-          exclusions: input.exclusions,
           depositCents: input.depositCents,
           rateCents: input.rateCents,
           cadence: input.cadence,
@@ -1140,9 +1136,10 @@ export const proposalsRepository = {
       }
 
       // Write v2's children INSIDE this transaction so a current/submitted v2 can
-      // never exist without its milestones + installments (atomic with the header).
+      // never exist without its milestones, installments and clauses (atomic with the header).
       await insertMilestonesTx(tx, row.id, input.milestones);
       await insertInstallmentsTx(tx, row.id, input.installments);
+      await insertClausesTx(tx, row.id, input.clauses);
 
       return row;
     });

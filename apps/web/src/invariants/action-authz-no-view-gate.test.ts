@@ -55,14 +55,14 @@ import {
 
 const WEB_SRC = resolveRouteDir(['src', 'apps/web/src']);
 
-const VIEW_TOKENS: readonly string[] = [
+const VIEW_TOKENS: ReadonlySet<string> = new Set([
   'activeMode',
   'lens',
   'platformRole',
   'companyRole',
   'agencyRole',
   'role',
-];
+]);
 
 const CHAIN_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$.?';
 
@@ -116,7 +116,7 @@ function isNullGuard(operand: string): boolean {
 }
 
 function isViewToken(operand: string): boolean {
-  return !isQuote(operand[0]) && VIEW_TOKENS.includes(lastSegment(operand));
+  return !isQuote(operand[0]) && VIEW_TOKENS.has(lastSegment(operand));
 }
 
 function comparisonsOf(code: string, operator: '===' | '!=='): string[] {
@@ -203,7 +203,6 @@ const EXCLUSIONS: readonly ViewGateExclusion[] = [
       ['request-proposal-document-upload.ts', "access.ctx.lens !== 'expert'"],
       ['confirm-proposal-document-upload.ts', "access.ctx.lens !== 'expert'"],
       ['remove-proposal-document.ts', "access.ctx.lens !== 'expert'"],
-      ['get-proposal-document-download.ts', "access.ctx.lens !== 'expert'"],
       ['withdraw-eoi.ts', "ctx.lens !== 'expert'"],
     ] as const satisfies readonly (readonly [string, string])[]
   ).map(

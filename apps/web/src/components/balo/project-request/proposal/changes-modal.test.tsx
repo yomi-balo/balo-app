@@ -81,6 +81,51 @@ describe('ChangesModal', () => {
     expect(trigger).toHaveTextContent('General');
   });
 
+  it('offers the seven sections in order', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByRole('combobox'));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'General',
+      'Milestones / deliverables',
+      'Assumptions and exclusions',
+      'Pricing',
+      'Payment terms',
+      'Timeline',
+      'Terms',
+    ]);
+  });
+
+  it.each([
+    ['Assumptions and exclusions', 'Say which one by its number, for example “Assumption 2”.'],
+    ['Terms', 'Say which one by its number, for example “Term 1”.'],
+  ])('hints at numbering for %s and ties it to the select', async (label, hint) => {
+    const user = userEvent.setup();
+    renderModal();
+    expect(screen.queryByText(/Say which one by its number/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('option', { name: label }));
+
+    expect(screen.getByText(hint)).toHaveAttribute('id', 'changes-section-hint');
+    expect(screen.getByRole('combobox')).toHaveAttribute(
+      'aria-describedby',
+      'changes-section-hint'
+    );
+  });
+
+  it.each(['Milestones / deliverables', 'Pricing', 'Payment terms', 'Timeline'])(
+    'shows no numbering hint for %s',
+    async (label) => {
+      const user = userEvent.setup();
+      renderModal();
+      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('option', { name: label }));
+      expect(screen.queryByText(/Say which one by its number/)).not.toBeInTheDocument();
+      expect(screen.getByRole('combobox')).not.toHaveAttribute('aria-describedby');
+    }
+  );
+
   it('associates the note label with the textarea (a11y)', () => {
     renderModal();
     expect(screen.getByLabelText('Your note')).toBeInTheDocument();

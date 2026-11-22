@@ -45,6 +45,7 @@ const {
   mockFindById,
   mockListMilestones,
   mockListInstallments,
+  mockListClauses,
   mockUpdateDraft,
   mockSetMilestones,
   mockSetInstallments,
@@ -77,6 +78,7 @@ const {
     mockFindById: vi.fn(),
     mockListMilestones: vi.fn(),
     mockListInstallments: vi.fn(),
+    mockListClauses: vi.fn(),
     mockUpdateDraft: vi.fn(),
     mockSetMilestones: vi.fn(),
     mockSetInstallments: vi.fn(),
@@ -104,6 +106,9 @@ vi.mock('@balo/db', () => ({
   proposalPaymentInstallmentsRepository: {
     listByProposal: (...a: unknown[]) => mockListInstallments(...a),
     setForProposal: (...a: unknown[]) => mockSetInstallments(...a),
+  },
+  proposalClausesRepository: {
+    listByProposal: (...a: unknown[]) => mockListClauses(...a),
   },
   projectRequestsRepository: {
     // BAL-295: the request rollup is derived inside promoteToSubmit; the action
@@ -138,7 +143,6 @@ const DRAFT = {
   currency: 'aud',
   baloFeeBps: 2500,
   timeframeWeeks: 6,
-  exclusions: null,
   depositCents: null,
   rateCents: null,
   cadence: null,
@@ -174,6 +178,7 @@ describe('submitProposalAction', () => {
     mockFindById.mockResolvedValue({ ...DRAFT });
     mockListMilestones.mockResolvedValue(MILESTONES);
     mockListInstallments.mockResolvedValue(INSTALLMENTS);
+    mockListClauses.mockResolvedValue([]);
     mockInstallmentsSumTo100.mockReturnValue(true);
     mockSanitizeOverview.mockImplementation((html: string) => html);
     mockSanitizeProject.mockImplementation((html: string) => html);
@@ -597,8 +602,45 @@ describe('submitProposalAction', () => {
       balo_fee_bps: 2500,
       client_price_cents: 625000, // applyBaloFee(500000, 2500)
       ai_draft_generated: false,
+      assumption_count: 0,
+      exclusion_count: 0,
+      additional_term_count: 0,
       distinct_id: 'user-expert',
     });
+  });
+
+  it('submits a proposal with no clauses at all', async () => {
+    mockListClauses.mockResolvedValue([]);
+    const result = await submitProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    expect(mockPromote).toHaveBeenCalled();
+  });
+
+  it('puts the three clause counts on the server event', async () => {
+    mockListClauses.mockResolvedValue([
+      { kind: 'assumption', body: 'Sandbox provided' },
+      { kind: 'assumption', body: 'Two review rounds' },
+      { kind: 'exclusion', body: 'Data migration' },
+      { kind: 'additional_term', body: 'Net 14' },
+      { kind: 'additional_term', body: 'Travel billed at cost' },
+      { kind: 'additional_term', body: 'Fixed scope' },
+    ]);
+    await submitProposalAction(VALID_INPUT);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'project_proposal_submitted',
+      expect.objectContaining({
+        assumption_count: 2,
+        exclusion_count: 1,
+        additional_term_count: 3,
+      })
+    );
+  });
+
+  it('does not re-persist clauses at submit', async () => {
+    mockListClauses.mockResolvedValue([{ kind: 'exclusion', body: 'Data migration' }]);
+    await submitProposalAction(VALID_INPUT);
+    expect(mockUpdateDraft.mock.calls[0]?.[0]).not.toHaveProperty('exclusions');
+    expect(mockUpdateDraft).toHaveBeenCalledTimes(1);
   });
 
   it('records ai_draft_generated true when the relationship has a succeeded generation', async () => {

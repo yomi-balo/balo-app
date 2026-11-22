@@ -6,7 +6,7 @@ category:
   client: cases-projects
 order: 5
 published: true
-updated: 2026-10-31
+updated: 2026-11-23
 related: [reviewing-a-finished-project]
 ---
 
@@ -18,6 +18,11 @@ proposed change shows you and what happens when you approve or decline it.
 On the project page, choose **Request a change** and describe what you'd like to be different.
 Your expert is told straight away and can answer in one of two ways: with a proposed change, or
 with a plain answer if no change is needed. A project can have one change open at a time.
+
+Before you ask, if your project has one, open **Agreed in the proposal** on the project page. It lists the assumptions, the
+exclusions and the additional terms you accepted, so you can see whether what you want is already
+covered. It shows what was agreed at the start. Changes approved since then are under “Changes to
+this project”.
 
 ![The project page's Request a change box, with the What would you like to change? field highlighted above the Send request button.](01)
 

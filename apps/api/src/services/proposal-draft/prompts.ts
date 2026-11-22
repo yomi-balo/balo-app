@@ -74,7 +74,7 @@ const SYSTEM_PROMPT =
   'solution design"). The interface already labels that field "Done when", so write the ' +
   'condition only and never begin it with "Done when" or repeat the label. ' +
   'NEVER state or imply any price, rate, fee, budget figure, hours, effort estimate, date, ' +
-  'deadline or timeframe, and never propose payment terms or exclusions: the consultant sets ' +
+  'deadline or timeframe, and never propose payment terms, assumptions, exclusions or additional terms: the consultant sets ' +
   'those separately. ' +
   `Format the overview as HTML using ONLY these tags: ${OVERVIEW_TAGS}. ` +
   `Format each milestone description as HTML using ONLY these tags: ${MILESTONE_TAGS}. ` +

@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 4
 published: true
-updated: 2026-10-31
+updated: 2026-11-23
 related: [handling-a-change-request, editing-milestones-after-acceptance]
 ---
 
@@ -24,6 +24,11 @@ You can also propose a change without a request, from the project page. Only one
 open at a time. While you have a draft, **Propose a change** reads **Continue draft change**, and
 while a change is waiting on the client, **Propose a change** is unavailable and says "A change is
 already waiting on {client}".
+
+Before you answer a request or propose a change, if the project has one, open **Agreed in the
+proposal** on the project page. It lists the assumptions, exclusions and additional terms the client accepted, so you can
+see whether the request falls inside what was agreed or outside it. It shows what was agreed at
+the start. Changes approved since then are under “Changes to this project”.
 
 ![The project page, with Northwind's change request and its Propose a change and Answer without a change order buttons highlighted.](01)
 

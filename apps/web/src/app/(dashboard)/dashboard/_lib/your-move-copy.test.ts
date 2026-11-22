@@ -46,6 +46,11 @@ describe('your-move copy', () => {
     expect(YOUR_MOVE_SECTION_LABELS.pricing).toBe('Pricing');
   });
 
+  it('labels the assumptions-and-exclusions and terms change requests', () => {
+    expect(YOUR_MOVE_SECTION_LABELS.assumptions_exclusions).toBe('Assumptions and exclusions');
+    expect(YOUR_MOVE_SECTION_LABELS.terms).toBe('Terms');
+  });
+
   it('keeps the kickoff member note identical to the kickoff board notice', () => {
     expect(YOUR_MOVE_KICKOFF_MEMBER_NOTE).toBe(KICKOFF_MEMBER_BLOCKED_SUB);
   });

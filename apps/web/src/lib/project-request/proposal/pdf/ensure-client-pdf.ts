@@ -3,6 +3,7 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
+  proposalClausesRepository,
   proposalsRepository,
   type Proposal,
   type ProjectRequestWithRelations,
@@ -30,10 +31,11 @@ export interface ClientPdfTarget {
  */
 export async function generateClientProposalPdf(target: ClientPdfTarget): Promise<Uint8Array> {
   const { request, relationship, proposal } = target;
-  const [milestones, installments, documents, orgName] = await Promise.all([
+  const [milestones, installments, documents, clauses, orgName] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposal.id),
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
+    proposalClausesRepository.listByProposal(proposal.id),
     proposalsRepository.findExpertOrgName(proposal.id),
   ]);
   const doc = hydrateReviewDoc(
@@ -41,8 +43,10 @@ export async function generateClientProposalPdf(target: ClientPdfTarget): Promis
     milestones,
     installments,
     documents,
+    clauses,
     relationship,
-    'client'
+    'client',
+    request.company?.name ?? 'the client'
   );
   return renderProposalPdfToBuffer({
     doc,

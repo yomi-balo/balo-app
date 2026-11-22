@@ -20,6 +20,7 @@ import {
   proposalCadenceEnum,
   proposalChangeSectionEnum,
   proposalDocumentKindEnum,
+  proposalClauseKindEnum,
 } from './enums';
 import { projectRequests } from './project-requests';
 import { expertProfiles } from './experts';
@@ -320,7 +321,8 @@ export const proposals = pgTable(
     isCurrent: boolean('is_current').notNull().default(true),
     // Sanitised HTML main body (the design's "Overview"; renamed from `scope`).
     overview: text('overview').notNull(),
-    // "Not included" — author-optional, sanitised text/HTML.
+    // RETIRED by BAL-661: unread and unwritten, superseded by `proposal_clauses`. The
+    // follow-up ticket drops it. Never add a reader or writer.
     exclusions: text('exclusions'),
     // "~N weeks" estimate — a DURATION, not a date. Author-optional.
     timeframeWeeks: integer('timeframe_weeks'),
@@ -468,6 +470,49 @@ export const proposalMilestones = pgTable(
       sql`${t.estimatedMinutes} IS NULL OR ${t.estimatedMinutes} >= 0`
     ),
     check('proposal_milestone_sort_nonneg', sql`${t.sortOrder} >= 0`),
+  ]
+);
+
+/**
+ * proposal_clauses — the proposal's three typed, ordered lists: assumptions, exclusions ("Not
+ * included") and the expert's additional terms. `body` is PLAIN TEXT, one line per clause,
+ * rendered as a text child everywhere and never as HTML.
+ *
+ * `sortOrder` is the index WITHIN its kind, assigned by the repo (0..n per kind). There is no
+ * unique on `(proposal_id, kind, sort_order)`, for the same reason as `proposal_milestones`:
+ * a reorder transiently collides. Ties are broken by `id`.
+ *
+ * There is no length CHECK. The web schema owns the 500-character and 20-item limits, and the
+ * migration that converted the legacy `proposals.exclusions` text truncates to them. The only
+ * DB backstops are a non-negative order and a non-blank body.
+ *
+ * Copied to `engagement_clauses` at kickoff, which then outlives this row.
+ *
+ * NO RLS, like `proposal_milestones`: Balo authenticates with WorkOS + iron-session, every
+ * reader is the admin `db` client, and the boundary is the application layer. ⚠ This deviates
+ * from the `drizzle-schema` skill, as `engagement-time-entries.ts` records.
+ */
+export const proposalClauses = pgTable(
+  'proposal_clauses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    proposalId: uuid('proposal_id')
+      .notNull()
+      .references(() => proposals.id, { onDelete: 'cascade' }),
+    kind: proposalClauseKindEnum('kind').notNull(),
+    sortOrder: integer('sort_order').notNull(),
+    body: text('body').notNull(),
+    ...timestamps,
+    ...softDelete,
+  },
+  (t) => [
+    index('proposal_clause_proposal_idx').on(t.proposalId),
+    // Predicate names only `deleted_at`, never an enum literal (the ADD VALUE hazard).
+    index('proposal_clause_order_idx')
+      .on(t.proposalId, t.kind, t.sortOrder)
+      .where(sql`${t.deletedAt} IS NULL`),
+    check('proposal_clause_sort_nonneg', sql`${t.sortOrder} >= 0`),
+    check('proposal_clause_body_not_blank', sql`btrim(${t.body}) <> ''`),
   ]
 );
 
@@ -634,6 +679,7 @@ export const proposalsRelations = relations(proposals, ({ one, many }) => ({
     references: [expertProfiles.id],
   }),
   milestones: many(proposalMilestones),
+  clauses: many(proposalClauses),
   paymentInstallments: many(proposalPaymentInstallments),
   documents: many(proposalDocuments),
   changeRequests: many(proposalChangeRequests),
@@ -642,6 +688,13 @@ export const proposalsRelations = relations(proposals, ({ one, many }) => ({
 export const proposalMilestonesRelations = relations(proposalMilestones, ({ one }) => ({
   proposal: one(proposals, {
     fields: [proposalMilestones.proposalId],
+    references: [proposals.id],
+  }),
+}));
+
+export const proposalClausesRelations = relations(proposalClauses, ({ one }) => ({
+  proposal: one(proposals, {
+    fields: [proposalClauses.proposalId],
     references: [proposals.id],
   }),
 }));
@@ -691,6 +744,8 @@ export type Proposal = typeof proposals.$inferSelect;
 export type NewProposal = typeof proposals.$inferInsert;
 export type ProposalMilestone = typeof proposalMilestones.$inferSelect;
 export type NewProposalMilestone = typeof proposalMilestones.$inferInsert;
+export type ProposalClause = typeof proposalClauses.$inferSelect;
+export type NewProposalClause = typeof proposalClauses.$inferInsert;
 export type ProposalPaymentInstallment = typeof proposalPaymentInstallments.$inferSelect;
 export type NewProposalPaymentInstallment = typeof proposalPaymentInstallments.$inferInsert;
 export type ProposalDocument = typeof proposalDocuments.$inferSelect;
