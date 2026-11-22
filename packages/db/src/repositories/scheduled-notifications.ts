@@ -424,8 +424,8 @@ export const scheduledNotificationsRepository = {
   },
 
   /**
-   * How many reminder-sequence sends a recipient has had since `since`, for the 24-hour
-   * daily limit. Counts rows whose dedupe key starts with one of `dedupeKeyPrefixes` and
+   * How many reminder-sequence sends a recipient has had since `since`, for the per-local-day
+   * daily limit (the caller passes midnight in the recipient's zone). Counts rows whose dedupe key starts with one of `dedupeKeyPrefixes` and
    * whose payload names `recipientUserId`:
    *   - `published` rows with `published_at >= since`, and
    *   - `claimed` rows with `claimed_at >= since` that sort before the asking row by

@@ -4,6 +4,7 @@ import {
   REMINDER_DEFAULT_ZONE,
   REMINDER_SEQUENCE_IDS,
   REMINDER_SEQUENCE_STEPS,
+  reminderLocalDayStart,
   reminderRecipientZone,
   reminderSendAt,
   reminderSequenceKey,
@@ -100,5 +101,45 @@ describe('reminderSequenceKey', () => {
 
   it('prefix is seq:{id}:', () => {
     expect(reminderSequenceKeyPrefix('proposal_review')).toBe('seq:proposal_review:');
+  });
+});
+
+describe('reminderLocalDayStart', () => {
+  const melbourne = 'Australia/Melbourne';
+
+  it('Tuesday 09:00:00.050 Melbourne gives Tuesday 00:00 Melbourne', () => {
+    // Tue 2026-11-24 09:00:00.050 AEDT (UTC+11) = Mon 22:00:00.050Z; midnight = Mon 13:00Z
+    const out = reminderLocalDayStart(new Date('2026-11-23T22:00:00.050Z'), melbourne);
+    expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
+  });
+
+  it('23:59 local still gives that day midnight', () => {
+    // Tue 2026-11-24 23:59 AEDT = 12:59Z
+    const out = reminderLocalDayStart(new Date('2026-11-24T12:59:00Z'), melbourne);
+    expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
+  });
+
+  it('a UTC instant already tomorrow locally gives the local day midnight', () => {
+    // Mon 2026-11-23 20:00Z is Tue 07:00 Melbourne
+    const out = reminderLocalDayStart(new Date('2026-11-23T20:00:00Z'), melbourne);
+    expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
+  });
+
+  it('the DST-start day (23h, Sun 4 Oct 2026) starts at AEST midnight', () => {
+    // Sun 2026-10-04 12:00 AEDT = 01:00Z; midnight AEST (UTC+10) = Sat 14:00Z
+    const out = reminderLocalDayStart(new Date('2026-10-04T01:00:00Z'), melbourne);
+    expect(out.toISOString()).toBe('2026-10-03T14:00:00.000Z');
+  });
+
+  it('the DST-end day (25h, Sun 5 Apr 2026) starts at AEDT midnight', () => {
+    // Sun 2026-04-05 12:00 AEST = 02:00Z; midnight AEDT (UTC+11) = Sat 13:00Z
+    const out = reminderLocalDayStart(new Date('2026-04-05T02:00:00Z'), melbourne);
+    expect(out.toISOString()).toBe('2026-04-04T13:00:00.000Z');
+  });
+
+  it('works in a non-Melbourne zone', () => {
+    // Tue 2026-11-24 09:00 EST (UTC-5) = 14:00Z; midnight = 05:00Z
+    const out = reminderLocalDayStart(new Date('2026-11-24T14:00:00Z'), 'America/New_York');
+    expect(out.toISOString()).toBe('2026-11-24T05:00:00.000Z');
   });
 });

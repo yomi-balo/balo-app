@@ -43,7 +43,7 @@ export function ProjectProposalReviewReminderEmail({
       calloutText={
         single
           ? 'Open the request to ask the expert a question, ask for changes, or accept the proposal when it fits. No rush.'
-          : 'Open the request to compare them side by side, ask the experts a question, or accept the one that fits. No rush.'
+          : 'Open the request to read through each one, ask the experts a question, or accept the one that fits. No rush.'
       }
       ctaLabel={single ? 'Review the proposal →' : 'Review proposals →'}
       supportPrefix={single ? 'Questions about this proposal?' : 'Questions about these proposals?'}

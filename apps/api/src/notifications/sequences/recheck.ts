@@ -1,7 +1,12 @@
-import { scheduledNotificationsRepository, type ScheduledNotification } from '@balo/db';
+import {
+  scheduledNotificationsRepository,
+  usersRepository,
+  type ScheduledNotification,
+} from '@balo/db';
 import {
   REMINDER_DAILY_LIMIT,
-  REMINDER_DAILY_WINDOW_MS,
+  reminderLocalDayStart,
+  reminderRecipientZone,
   REMINDER_SEQUENCE_STEPS,
 } from '@balo/shared/notifications';
 import { createLogger } from '@balo/shared/logging';
@@ -95,7 +100,7 @@ function skip(reason: ReminderSkipReason): { publish: false; reason: string } {
 
 /**
  * THE REMINDER-SEQUENCE GUARD. At fire time it re-reads the entity and publishes only while the
- * reminder is still owed, to a recipient who may still receive it, within the daily limit.
+ * reminder is still owed, to a recipient who may still receive it, within the daily limit (two a day, counted per local day: since midnight in the recipient's zone).
  *
  * ⚠ ORDER MATTERS: the daily-limit check runs last, so a reminder that is no longer needed never
  * counts as over the limit. A repository throw propagates, leaving the row `claimed` for retry.
@@ -134,10 +139,13 @@ async function decide(row: ScheduledNotification): ReturnType<ScheduledRecheck> 
     return skip('recipient_gone');
   }
   if (!sequence.exemptFromDailyLimit) {
+    const now = new Date();
+    const context = await usersRepository.findTimezoneContext(parsed.recipientUserId, undefined);
+    const zone = reminderRecipientZone(context?.savedTimezone);
     const recentSends = await scheduledNotificationsRepository.countRecentSequenceSends({
       recipientUserId: parsed.recipientUserId,
       dedupeKeyPrefixes: limitedSequencePrefixes(),
-      since: new Date(Date.now() - REMINDER_DAILY_WINDOW_MS),
+      since: reminderLocalDayStart(now, zone),
       asking: { id: row.id, scheduledFor: row.scheduledFor },
     });
     if (recentSends >= REMINDER_DAILY_LIMIT) {

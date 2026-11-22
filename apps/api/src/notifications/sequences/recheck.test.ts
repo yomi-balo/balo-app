@@ -1,16 +1,20 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { ScheduledNotification } from '@balo/db';
 
-const { mockCount, mockDecided, mockEvaluate, mockResolve, mockLogger } = vi.hoisted(() => ({
-  mockCount: vi.fn(),
-  mockDecided: vi.fn(),
-  mockEvaluate: vi.fn(),
-  mockResolve: vi.fn(),
-  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
+const { mockCount, mockTimezone, mockDecided, mockEvaluate, mockResolve, mockLogger } = vi.hoisted(
+  () => ({
+    mockCount: vi.fn(),
+    mockTimezone: vi.fn(),
+    mockDecided: vi.fn(),
+    mockEvaluate: vi.fn(),
+    mockResolve: vi.fn(),
+    mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  })
+);
 
 vi.mock('@balo/db', () => ({
   scheduledNotificationsRepository: { countRecentSequenceSends: mockCount },
+  usersRepository: { findTimezoneContext: mockTimezone },
 }));
 vi.mock('@balo/shared/logging', () => ({ createLogger: () => mockLogger }));
 vi.mock('../scheduling/scheduled-key-decided.js', () => ({ isScheduledKeyDecided: mockDecided }));
@@ -86,6 +90,7 @@ beforeEach(() => {
   mockEvaluate.mockResolvedValue(entity);
   mockResolve.mockResolvedValue([USER]);
   mockCount.mockResolvedValue(0);
+  mockTimezone.mockResolvedValue({ savedTimezone: 'Australia/Melbourne' });
 });
 
 afterEach(() => {
@@ -146,7 +151,7 @@ describe('reminderSequenceRecheck', () => {
   });
 
   describe('daily limit', () => {
-    it('counts the recipient over the last 24 hours, with the asking row, and skips at two', async () => {
+    it('counts the recipient since local midnight, with the asking row, and skips at two', async () => {
       mockCount.mockResolvedValue(2);
       const asking = row();
       expect(await reminderSequenceRecheck(asking)).toEqual({
@@ -156,9 +161,35 @@ describe('reminderSequenceRecheck', () => {
       expect(mockCount).toHaveBeenCalledWith({
         recipientUserId: USER,
         dedupeKeyPrefixes: ['seq:proposal_review:'],
-        since: new Date(NOW.getTime() - 86_400_000),
+        since: new Date('2026-11-04T13:00:00.000Z'),
         asking: { id: 'row-1', scheduledFor: asking.scheduledFor },
       });
+    });
+
+    it('counts from midnight in the recipient zone (Sydney)', async () => {
+      mockTimezone.mockResolvedValue({ savedTimezone: 'Australia/Sydney' });
+      await reminderSequenceRecheck(row());
+      expect(mockTimezone).toHaveBeenCalledWith(USER, undefined);
+      expect(mockCount.mock.calls[0]?.[0].since).toEqual(new Date('2026-11-04T13:00:00.000Z'));
+    });
+
+    it('falls back to Melbourne midnight for a saved UTC (the unset default)', async () => {
+      mockTimezone.mockResolvedValue({ savedTimezone: 'UTC' });
+      await reminderSequenceRecheck(row());
+      expect(mockCount.mock.calls[0]?.[0].since).toEqual(new Date('2026-11-04T13:00:00.000Z'));
+    });
+
+    it('at 09:00:00.050 local Tuesday counts from Tuesday 00:00 local, never Monday 09:00', async () => {
+      // Tue 2026-11-24 09:00:00.050 Melbourne (UTC+11) = Mon 22:00:00.050Z
+      vi.setSystemTime(new Date('2026-11-23T22:00:00.050Z'));
+      await reminderSequenceRecheck(row());
+      expect(mockCount.mock.calls[0]?.[0].since).toEqual(new Date('2026-11-23T13:00:00.000Z'));
+    });
+
+    it('reads the zone only once the limit check runs', async () => {
+      mockEvaluate.mockResolvedValue(null);
+      await reminderSequenceRecheck(row());
+      expect(mockTimezone).not.toHaveBeenCalled();
     });
 
     it('publishes at one send in the window', async () => {

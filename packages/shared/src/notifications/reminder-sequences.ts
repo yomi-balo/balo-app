@@ -32,7 +32,6 @@ export const REMINDER_SEQUENCE_SHARED_RULES: Readonly<
 
 export const MAX_REMINDER_STEPS = 3;
 export const REMINDER_DAILY_LIMIT = 2;
-export const REMINDER_DAILY_WINDOW_MS = 86_400_000;
 export const REMINDER_ARMABLE_AFTER_DUE_MS = 86_400_000;
 export const REMINDER_DEFAULT_ZONE = 'Australia/Melbourne';
 export const REMINDER_MORNING_HOUR = 9;
@@ -88,6 +87,16 @@ export function reminderSendAt(dueAt: Date, timing: ReminderStepTiming, zone: st
     dayOffset += 1;
   }
   return dueAt;
+}
+
+/**
+ * 00:00 local on `now`'s local date in `zone`: the start of the per-day window the daily limit
+ * counts sends from. Taken from the zone's wall clock, so a 23h or 25h DST day still starts at
+ * local midnight.
+ */
+export function reminderLocalDayStart(now: Date, zone: string): Date {
+  const { year, month, day } = localParts(now, zone);
+  return zonedWallClockToUtc(zone, { year, month, day, hour: 0, minute: 0 });
 }
 
 export function reminderSequenceKey(p: {
