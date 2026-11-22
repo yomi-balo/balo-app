@@ -9,6 +9,7 @@ import type {
   ProjectRequestCloseReason,
   ProjectBriefFailureReason,
   ProjectRequestEntryPoint,
+  ProposalClauseKind,
 } from '@balo/shared/project-requests';
 
 export const PROJECT_EVENTS = {
@@ -87,6 +88,12 @@ export const PROJECT_EVENTS = {
   // BAL-611: the expert started typing while a draft was still being generated, so the draft
   // was discarded before it arrived. Fired CLIENT-side by the composer, once per discard.
   PROPOSAL_DRAFT_DISCARDED: 'project_proposal_draft_discarded',
+  // The expert pasted several lines into an assumptions / exclusions / additional-terms list and
+  // they were split into one item per line. Fired CLIENT-side by the composer's list editor.
+  PROPOSAL_CLAUSES_PASTED: 'project_proposal_clauses_pasted',
+  // A clause body that reads like a price or rate was typed into a list item, so the editor showed
+  // its "the client would see this without Balo's margin" warning. Once per item per mount.
+  PROPOSAL_CLAUSE_AMOUNT_WARNING_SHOWN: 'project_proposal_clause_amount_warning_shown',
   // BAL-324: an admin sent a "complete your billing details" reminder from the
   // kickoff board while the client-billing gate was still outstanding. Feature
   // prefix `project_` matches every constant here (the ticket's bare
@@ -291,6 +298,9 @@ export interface ProjectEventMap {
     version: number;
     price_cents: number;
     currency: string;
+    assumption_count: number;
+    exclusion_count: number;
+    additional_term_count: number;
   };
   [PROJECT_EVENTS.PROJECT_KICKOFF_APPROVED]: {
     request_id: string;
@@ -375,6 +385,15 @@ export interface ProjectEventMap {
   };
   [PROJECT_EVENTS.PROPOSAL_DRAFT_DISCARDED]: {
     relationship_id: string;
+  };
+  [PROJECT_EVENTS.PROPOSAL_CLAUSES_PASTED]: {
+    proposal_id: string;
+    kind: ProposalClauseKind;
+    line_count: number;
+  };
+  [PROJECT_EVENTS.PROPOSAL_CLAUSE_AMOUNT_WARNING_SHOWN]: {
+    proposal_id: string;
+    kind: ProposalClauseKind;
   };
   // BAL-324: admin-initiated client-billing reminder from the kickoff board.
   [PROJECT_EVENTS.BILLING_REMINDER_SENT]: {
@@ -515,6 +534,9 @@ export const PROJECT_SERVER_EVENTS = {
   // (or the web start action when the enqueue fails), fired only by the write that won the
   // row's compare-and-set, so a redelivered job never counts twice.
   PROPOSAL_DRAFT_GENERATED: 'project_proposal_draft_generated',
+  // A proposal attachment was opened. SERVER-SIDE, from the download action once the gate has
+  // passed and the signed URL is minted.
+  PROPOSAL_ATTACHMENT_DOWNLOADED: 'project_proposal_attachment_downloaded',
 } as const;
 
 /** Why a would-be participant was denied. Extend as more terminal-negative
@@ -568,6 +590,10 @@ export interface ProjectServerEventMap {
      * PROPOSAL_DRAFT_CLEARED or PROPOSAL_DRAFT_DISCARDED.
      */
     ai_draft_generated: boolean;
+    /** How many items the proposal lists under each clause heading at submit. */
+    assumption_count: number;
+    exclusion_count: number;
+    additional_term_count: number;
     distinct_id: string;
   };
   // BAL-357: emitted server-side from the client's accept action — the fee +
@@ -582,6 +608,8 @@ export interface ProjectServerEventMap {
     /** Client-charged price = applyBaloFee(proposal.price_cents, balo_fee_bps),
      *  derived SERVER-SIDE (BAL-357), never on the client. */
     client_price_cents: number;
+    /** How many additional terms the client agreed to by accepting. */
+    additional_term_count: number;
     distinct_id: string;
   };
   // BAL-358: emitted server-side from the admin fee-override action, ONLY on a real
@@ -633,6 +661,14 @@ export interface ProjectServerEventMap {
     status: 'succeeded' | 'failed';
     latency_ms: number;
     milestone_count: number;
+    distinct_id: string;
+  };
+  [PROJECT_SERVER_EVENTS.PROPOSAL_ATTACHMENT_DOWNLOADED]: {
+    request_id: string;
+    relationship_id: string;
+    proposal_id: string;
+    /** The viewer's side of the proposal: the client party, the delivering expert, or Balo staff. */
+    lens: 'client' | 'expert' | 'admin';
     distinct_id: string;
   };
 }

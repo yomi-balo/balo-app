@@ -71,7 +71,13 @@ const RESUBMIT_SUCCESS: ResubmitProposalResult = {
   proposalId: 'f0000000-0000-4000-8000-000000000006',
   version: 2,
   expertProfileId: 'exp-9',
-  analytics: { priceCents: 6_000_000, currency: 'aud' },
+  analytics: {
+    priceCents: 6_000_000,
+    currency: 'aud',
+    assumptionCount: 3,
+    exclusionCount: 2,
+    additionalTermCount: 1,
+  },
 };
 
 interface HookOptions {
@@ -334,6 +340,9 @@ describe('useSendProposal — resubmit', () => {
       version: 2,
       price_cents: 6_000_000,
       currency: 'aud',
+      assumption_count: 3,
+      exclusion_count: 2,
+      additional_term_count: 1,
     });
     expect(mockToast.success).toHaveBeenCalledWith('Version 2 sent to Northwind');
     expect(replace).toHaveBeenCalledWith(`${PATHNAME}?sent=2`, { scroll: true });

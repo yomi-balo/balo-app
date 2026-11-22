@@ -21,7 +21,8 @@ import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { acceptProposalAction } from '@/app/(dashboard)/projects/[requestId]/_actions/accept-proposal';
-import { firstName } from './proposal-name';
+import { BaloTermsBlock } from './balo-terms-block';
+import { NumberedList } from './numbered-list';
 import { pricingMethodLabel } from './proposal-summary-cells';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -35,6 +36,27 @@ interface AcceptConfirmModalProps {
   doc: ProposalReviewDoc;
   /** The accepting client's company name — woven into the binding acknowledgement. */
   clientCompanyName: string;
+}
+
+/** The additional terms shown before "Show all". */
+const COLLAPSED_TERM_COUNT = 3;
+
+/** "3 assumptions", "1 exclusion". */
+function countOf(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * The line telling the client the proposal's assumptions and exclusions are part of what
+ * they accept, or null when it has neither.
+ */
+function scopeCountLine(assumptions: number, exclusions: number): string | null {
+  const parts = [
+    assumptions > 0 ? countOf(assumptions, 'assumption', 'assumptions') : null,
+    exclusions > 0 ? countOf(exclusions, 'exclusion', 'exclusions') : null,
+  ].filter((part): part is string => part !== null);
+  if (parts.length === 0) return null;
+  return `The proposal’s ${parts.join(' and ')} are part of what you’re accepting.`;
 }
 
 interface MoneyRow {
@@ -110,18 +132,33 @@ export function AcceptConfirmModal({
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [ack, setAck] = useState(false);
+  const [showAllTerms, setShowAllTerms] = useState(false);
 
-  const expertFirst = firstName(doc.expert.name);
   const rows = moneyRows(doc);
+  const termCount = doc.additionalTerms.length;
+  const hasTerms = termCount > 0;
+  const canCollapseTerms = termCount > COLLAPSED_TERM_COUNT;
+  const shownTerms =
+    showAllTerms || !canCollapseTerms
+      ? doc.additionalTerms
+      : doc.additionalTerms.slice(0, COLLAPSED_TERM_COUNT);
+  const scopeLine = scopeCountLine(doc.assumptions.length, doc.exclusions.length);
 
   const handleOpenChange = useCallback(
     (next: boolean): void => {
       if (pending && !next) return; // no Escape-away mid-accept
-      if (!next) setAck(false); // reset the acknowledgement on close
+      if (!next) {
+        setAck(false); // reset the acknowledgement on close
+        setShowAllTerms(false);
+      }
       onOpenChange(next);
     },
     [pending, onOpenChange]
   );
+
+  const toggleShowAllTerms = useCallback((): void => {
+    setShowAllTerms((current) => !current);
+  }, []);
 
   const handleConfirm = useCallback((): void => {
     if (pending || !ack) return;
@@ -187,8 +224,11 @@ export function AcceptConfirmModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent showCloseButton={!pending} className="gap-0 p-0 sm:max-w-[460px]">
-        <DialogHeader className="from-primary/[0.07] to-primary/[0.02] border-border space-y-0 border-b bg-gradient-to-br p-6 text-left">
+      <DialogContent
+        showCloseButton={!pending}
+        className="flex max-h-[90dvh] flex-col gap-0 p-0 sm:max-w-[460px]"
+      >
+        <DialogHeader className="from-primary/[0.07] to-primary/[0.02] border-border shrink-0 space-y-0 border-b bg-gradient-to-br p-6 text-left">
           <div className="flex items-center gap-3">
             <span className="bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-semibold">
               {doc.expert.initials}
@@ -204,7 +244,7 @@ export function AcceptConfirmModal({
           </div>
         </DialogHeader>
 
-        <div className="p-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           {/* Money summary */}
           <dl className="mb-4 flex flex-col gap-2.5">
             {rows.map((row) => (
@@ -223,6 +263,39 @@ export function AcceptConfirmModal({
             ))}
           </dl>
 
+          {/* What the client is agreeing to */}
+          <div className="mb-4 flex flex-col gap-3">
+            <h3 className="text-foreground text-[13.5px] font-semibold">What you’re agreeing to</h3>
+            <BaloTermsBlock
+              where="accept"
+              pricingMethod={doc.pricingMethod}
+              companyName={clientCompanyName}
+            />
+            {hasTerms && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-foreground text-[13px] font-semibold">
+                    {doc.expert.name}’s additional terms ({termCount})
+                  </p>
+                  {canCollapseTerms && (
+                    <button
+                      type="button"
+                      onClick={toggleShowAllTerms}
+                      aria-expanded={showAllTerms}
+                      className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md px-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
+                    >
+                      {showAllTerms ? 'Show fewer' : `Show all ${termCount}`}
+                    </button>
+                  )}
+                </div>
+                <NumberedList items={shownTerms} />
+              </div>
+            )}
+            {scopeLine !== null && (
+              <p className="text-muted-foreground text-[12.5px] leading-relaxed">{scopeLine}</p>
+            )}
+          </div>
+
           {/* Binding acknowledgement */}
           <label className="bg-muted/40 flex cursor-pointer items-start gap-2.5 rounded-xl p-3.5">
             <Checkbox
@@ -236,9 +309,9 @@ export function AcceptConfirmModal({
               id="accept-ack-copy"
               className="text-muted-foreground text-[12.5px] leading-relaxed"
             >
-              I agree to <strong className="text-foreground">Balo&apos;s standard terms</strong> and{' '}
-              {expertFirst}&apos;s additional terms, and understand accepting commits{' '}
-              {clientCompanyName} to these terms.{' '}
+              I agree to <strong className="text-foreground">Balo’s Project T&amp;Cs</strong>
+              {hasTerms ? ` and ${doc.expert.name}’s additional terms above` : ''}, and understand
+              accepting commits {clientCompanyName} to them.{' '}
               {upfrontDueCents(doc) > 0
                 ? "Balo will raise the upfront invoice and tell the other experts they weren't selected."
                 : "Balo will tell the other experts they weren't selected."}
@@ -246,7 +319,7 @@ export function AcceptConfirmModal({
           </label>
         </div>
 
-        <DialogFooter className="border-border border-t p-6 pt-4">
+        <DialogFooter className="border-border shrink-0 border-t p-6 pt-4">
           <Button
             variant="ghost"
             onClick={() => handleOpenChange(false)}

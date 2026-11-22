@@ -34,7 +34,7 @@ export function ProjectProposalResubmittedEmail({
       bodyText={`${expertName} revised the proposal based on your feedback. Open the updated version (v${version}) to review the changes and decide your next step.`}
       summaryLabel="Project request"
       projectTitle={projectTitle}
-      calloutText="Take your time reviewing the updated deliverables, exclusions, and payment terms. You can keep messaging the expert with any questions before you accept or request further changes."
+      calloutText="Take your time reviewing the updated deliverables, assumptions, exclusions and payment terms. You can keep messaging the expert with any questions before you accept or request further changes."
       ctaLabel="Review the proposal →"
       supportPrefix="Questions about this proposal?"
     />

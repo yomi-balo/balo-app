@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { proposalsRepository, proposalDocumentsRepository } from '@balo/db';
 import { requireUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { readConversationAccess } from '@/lib/project-request/resolve-conversation-access';
+import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
+import {
+  authorizeRequestFileScope,
+  type RequestFileScope,
+} from '@/lib/request-files/authorize-request-file-scope';
 import { createPresignedProposalDocumentDownload } from '@/lib/storage/proposal-document';
 
 const inputSchema = z.object({
@@ -28,27 +32,49 @@ const NO_ACCESS = 'You do not have access to this document.';
 const NOT_FOUND = 'This document is no longer available.';
 const GENERIC_FAILURE = 'Could not download this document. Please try again.';
 
+/** The proposal statuses a client or Balo staff may open documents from: those reached only by sending. */
+const PARTY_READABLE_STATUSES: ReadonlySet<string> = new Set([
+  'submitted',
+  'changes_requested',
+  'resubmitted',
+  'accepted',
+]);
+
+/** Whether the viewer's scope carries the named track: the expert's own, or one the client / admin sees. */
+function canReadTrack(
+  scope: Extract<RequestFileScope, { ok: true }>,
+  relationshipId: string
+): boolean {
+  if (scope.side === 'expert') {
+    return scope.viewer.relationshipId === relationshipId;
+  }
+  return scope.tracks.some((track) => track.relationshipId === relationshipId);
+}
+
 /**
- * Short-lived presigned GET for one proposal document (A6.2 / BAL-288). These
- * documents are PRIVATE to the proposal's client↔expert pair — never
- * `R2_PUBLIC_URL`. The document must be live AND belong to the VALIDATED
- * relationship's proposal (the lookup goes through `listByProposal`, so a foreign
+ * Short-lived presigned GET for one proposal document. These documents are PRIVATE to the
+ * proposal's parties — never `R2_PUBLIC_URL`. The document must be live AND belong to the
+ * VALIDATED relationship's proposal (the lookup goes through `listByProposal`, so a foreign
  * documentId never resolves).
  *
- * LENS GATE (Q5): for THIS slice the download is EXPERT-author-only — A6.3 adds
- * the client path. Written lens-extensibly: the gate is a single explicit check
- * so the client arm is a one-line relaxation later. The proposal need NOT be a
- * draft (the author may download their attachments after submit too).
+ * THE GATE is the request-file scope (`authorizeRequestFileScope`), the same one the brief's
+ * document download uses: the client party by the membership `participate` capability, Balo
+ * staff by the platform `view_any_request_file` capability, and the expert only on their OWN
+ * track. The relationship named in the input must then be a track the viewer may see: the
+ * expert's own, or one the client / admin scope carries (the client never receives an unopened
+ * track). A mismatch answers `NO_ACCESS`.
+ *
+ * STATUS: the client and Balo staff read documents only from a proposal that was sent
+ * (`PARTY_READABLE_STATUSES`). A draft, withdrawn or declined one answers `NOT_FOUND` for them,
+ * since a draft can reach either of the latter two without ever being shared. The expert may
+ * open the files of their own proposal in any status.
  *
  * ⚠ GENUINELY READ-ONLY, AND IT MUST STAY THAT WAY. It authenticates with bare
- * `requireUser()` and sits on `onboarding-mutation-gate.test.ts`'s `READ_ONLY_ALLOWLIST`, so
- * it uses `readConversationAccess` (which `findByContext`s) rather than
- * `resolveConversationAccess` (which get-or-CREATES). That gate test reads THIS file's source
- * and cannot see a write reached through an import — and the lens check below runs AFTER
- * access resolution, so the writing variant would have let an un-onboarded CLIENT-lens member
- * of the owning company insert both rows before being rejected on `lens !== 'expert'`.
- * `conversation-access-read-only.test.ts` derives its subject list from the allowlist so this
- * cannot be missed again.
+ * `requireUser()` and sits on `onboarding-mutation-gate.test.ts`'s `READ_ONLY_ALLOWLIST`.
+ * `authorizeRequestFileScope` performs no writes on any path (unlike `resolveConversationAccess`,
+ * which get-or-CREATES the conversation), and that gate test reads THIS file's source and cannot
+ * see a write reached through an import. `conversation-access-read-only.test.ts` derives its
+ * subject list from the allowlist.
  */
 export async function getProposalDocumentDownloadAction(
   input: GetProposalDocumentDownloadInput
@@ -67,17 +93,36 @@ export async function getProposalDocumentDownloadAction(
   const { requestId, relationshipId, proposalId, documentId } = parsed.data;
 
   try {
-    const access = await readConversationAccess(user, requestId, relationshipId);
-    if (!access.ok) {
-      return { success: false, error: access.error };
+    const scope = await authorizeRequestFileScope(user, requestId);
+    if (!scope.ok) {
+      return { success: false, error: NO_ACCESS };
     }
-    // Expert-author-only for this slice (lens-extensible — A6.3 relaxes this).
-    if (access.ctx.lens !== 'expert') {
+    if (!canReadTrack(scope, relationshipId)) {
+      log.warn('Proposal document download denied', {
+        requestId,
+        relationshipId,
+        proposalId,
+        side: scope.side,
+        userId: user.id,
+        reason: 'wrong_track',
+      });
       return { success: false, error: NO_ACCESS };
     }
 
     const proposal = await proposalsRepository.findById(proposalId);
-    if (proposal === undefined || proposal.relationshipId !== relationshipId) {
+    if (proposal?.relationshipId !== relationshipId) {
+      return { success: false, error: NOT_FOUND };
+    }
+    if (scope.side !== 'expert' && !PARTY_READABLE_STATUSES.has(proposal.status)) {
+      log.warn('Proposal document download denied', {
+        requestId,
+        relationshipId,
+        proposalId,
+        side: scope.side,
+        userId: user.id,
+        reason: 'status_not_shared',
+        status: proposal.status,
+      });
       return { success: false, error: NOT_FOUND };
     }
 
@@ -88,6 +133,15 @@ export async function getProposalDocumentDownloadAction(
     }
 
     const url = await createPresignedProposalDocumentDownload(document.r2Key, document.fileName);
+
+    trackServerAndFlush(PROJECT_SERVER_EVENTS.PROPOSAL_ATTACHMENT_DOWNLOADED, {
+      request_id: requestId,
+      relationship_id: relationshipId,
+      proposal_id: proposalId,
+      lens: scope.side,
+      distinct_id: user.id,
+    });
+
     return { success: true, url };
   } catch (error) {
     log.error('Failed to presign proposal document download', {

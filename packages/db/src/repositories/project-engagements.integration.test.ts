@@ -8,6 +8,7 @@ import {
   auditEvents,
   companies,
   conversations,
+  engagementClauses,
   engagementMilestones,
   engagements,
   expertProfiles,
@@ -16,6 +17,7 @@ import {
   projectChangeRequests,
   projectEngagements,
   projectRequests,
+  proposalClauses,
   proposalMilestones,
   proposalPaymentInstallments,
   proposals,
@@ -53,6 +55,8 @@ import {
 } from './project-engagements';
 import { ChangeOrderPendingError } from './_shared/change-order-guards';
 import { engagementMilestonesRepository } from './engagement-milestones';
+import { engagementClausesRepository } from './engagement-clauses';
+import { insertClausesTx } from './proposal-clauses';
 import {
   projectDeliveryToEngagementStatus,
   EngagementTypeMismatchError,
@@ -1340,6 +1344,108 @@ describe('projectEngagementsRepository.materializeFromKickoff — milestone snap
     const events = await auditEventsForEntity(engagement.id);
     const snapshotEvent = events.find((e) => e.action === 'engagement.milestones_snapshotted');
     expect(snapshotEvent?.metadata).toMatchObject({ milestone_count: 0 });
+  });
+});
+
+describe('projectEngagementsRepository.materializeFromKickoff — clause snapshot', () => {
+  async function kickoff(seed: Awaited<ReturnType<typeof seedAcceptedKickoff>>) {
+    return projectEngagementsRepository.materializeFromKickoff({
+      requestId: seed.source.projectRequestId,
+      companyId: seed.companyId,
+      expertProfileId: seed.source.expertProfileId,
+      sourceProposalId: seed.source.proposal.id,
+      relationshipId: seed.source.relationshipId,
+      approvingAdminUserId: seed.adminId,
+      pricingMethod: 'fixed',
+      priceCents: 300_000,
+      baloFeeBps: 2500,
+    });
+  }
+
+  it('copies kind, order, body and provenance, and audits three counts after milestones_snapshotted', async () => {
+    const seed = await seedAcceptedKickoff({ bothGates: true, milestoneCount: 1 });
+    const sources = await db.transaction((tx) =>
+      insertClausesTx(tx, seed.source.proposal.id, [
+        { kind: 'additional_term', body: 'Invoices are due in 14 days.' },
+        { kind: 'assumption', body: 'Admin access from day one.' },
+        { kind: 'exclusion', body: 'Data migration.' },
+        { kind: 'assumption', body: 'One sandbox.' },
+        { kind: 'exclusion', body: 'Training.' },
+        { kind: 'exclusion', body: 'Support after go-live.' },
+      ])
+    );
+
+    const { engagement } = await kickoff(seed);
+
+    const { clauses } = await engagementClausesRepository.findAgreedTerms(engagement.id);
+    expect(clauses.map((c) => [c.kind, c.sortOrder, c.body])).toEqual([
+      ['assumption', 0, 'Admin access from day one.'],
+      ['assumption', 1, 'One sandbox.'],
+      ['exclusion', 0, 'Data migration.'],
+      ['exclusion', 1, 'Training.'],
+      ['exclusion', 2, 'Support after go-live.'],
+      ['additional_term', 0, 'Invoices are due in 14 days.'],
+    ]);
+    const sourceIdByBody = new Map(sources.map((s) => [s.body, s.id]));
+    for (const clause of clauses) {
+      expect(clause.sourceProposalClauseId).toBe(sourceIdByBody.get(clause.body));
+      expect(clause.createdByUserId).toBe(seed.adminId);
+    }
+
+    const events = await auditEventsForEntity(engagement.id);
+    const clauseEvents = events.filter((e) => e.action === 'engagement.clauses_snapshotted');
+    expect(clauseEvents).toHaveLength(1);
+    expect(clauseEvents[0]?.entityType).toBe('engagement');
+    expect(clauseEvents[0]?.actorUserId).toBe(seed.adminId);
+    expect(clauseEvents[0]?.metadata).toEqual({
+      assumption_count: 2,
+      exclusion_count: 3,
+      additional_term_count: 1,
+      source_proposal_id: seed.source.proposal.id,
+      engagementId: engagement.id,
+    });
+    const actions = events.map((e) => e.action);
+    expect(actions.indexOf('engagement.milestones_snapshotted')).toBeGreaterThanOrEqual(0);
+    expect(actions.indexOf('engagement.milestones_snapshotted')).toBeLessThan(
+      actions.indexOf('engagement.clauses_snapshotted')
+    );
+  });
+
+  it('skips soft-deleted proposal clauses', async () => {
+    const seed = await seedAcceptedKickoff({ bothGates: true });
+    const [removed] = await db.transaction((tx) =>
+      insertClausesTx(tx, seed.source.proposal.id, [
+        { kind: 'exclusion', body: 'Removed before acceptance.' },
+        { kind: 'exclusion', body: 'Kept.' },
+      ])
+    );
+    if (removed === undefined) throw new Error('clause seed failed');
+    await db
+      .update(proposalClauses)
+      .set({ deletedAt: new Date() })
+      .where(eq(proposalClauses.id, removed.id));
+
+    const { engagement } = await kickoff(seed);
+
+    const { clauses } = await engagementClausesRepository.findAgreedTerms(engagement.id);
+    expect(clauses.map((c) => c.body)).toEqual(['Kept.']);
+  });
+
+  it('a proposal with no clauses gives no rows and an audit of zeros', async () => {
+    const seed = await seedAcceptedKickoff({ bothGates: true });
+
+    const { engagement } = await kickoff(seed);
+
+    const { clauses } = await engagementClausesRepository.findAgreedTerms(engagement.id);
+    expect(clauses).toEqual([]);
+    const events = await auditEventsForEntity(engagement.id);
+    const clauseEvent = events.find((e) => e.action === 'engagement.clauses_snapshotted');
+    expect(clauseEvent?.metadata).toMatchObject({
+      assumption_count: 0,
+      exclusion_count: 0,
+      additional_term_count: 0,
+      source_proposal_id: seed.source.proposal.id,
+    });
   });
 });
 
@@ -3726,6 +3832,9 @@ describe('projectEngagementsRepository.materializeFromKickoff — call carry-ove
     const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
     const meetingId = await bookInteractionCall(source.relationshipId);
     const otherExpert = await expertDraftFactory();
+    await db.transaction((tx) =>
+      insertClausesTx(tx, source.proposal.id, [{ kind: 'assumption', body: 'Admin access.' }])
+    );
 
     const refusal = projectEngagementsRepository.materializeFromKickoff({
       ...kickoffArgs(source, companyId, adminId),
@@ -3744,6 +3853,13 @@ describe('projectEngagementsRepository.materializeFromKickoff — call carry-ove
     expect(children).toHaveLength(0);
     expect(await liveEngagementRowsForCompany(companyId)).toHaveLength(0);
     expect(await projectCallRowsFor(meetingId)).toHaveLength(0);
+    // The clause snapshot runs before the re-anchor, so it is rolled back with the rest.
+    const copiedClauses = await db
+      .select({ id: engagementClauses.id })
+      .from(engagementClauses)
+      .innerJoin(proposalClauses, eq(proposalClauses.id, engagementClauses.sourceProposalClauseId))
+      .where(eq(proposalClauses.proposalId, source.proposal.id));
+    expect(copiedClauses).toEqual([]);
   });
 });
 

@@ -4,21 +4,13 @@ import { CheckCircle2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   PROPOSAL_CHANGE_SECTIONS,
+  PROPOSAL_CHANGE_SECTION_PHRASE,
   type ProposalChangeSection,
 } from '@balo/shared/project-requests';
 import { COMPOSER_TARGET } from './proposal-composer-state';
 import { personAtCompany } from './proposal-format';
 
 type ChangeSection = ProposalChangeSection;
-
-/** "asked for a change to {phrase}". */
-const SECTION_PHRASE: Record<ChangeSection, string> = {
-  general: 'the proposal',
-  milestones: 'the milestones',
-  pricing: 'the pricing',
-  payment_terms: 'the payment schedule',
-  timeline: 'the timeline',
-};
 
 /** Short noun used in the checklist item "{name}'s note on {noun} isn't marked as addressed". */
 export const CHANGE_SECTION_NOUN: Record<ChangeSection, string> = {
@@ -27,6 +19,8 @@ export const CHANGE_SECTION_NOUN: Record<ChangeSection, string> = {
   pricing: 'pricing',
   payment_terms: 'payments',
   timeline: 'the timeline',
+  assumptions_exclusions: 'assumptions and exclusions',
+  terms: 'terms',
 };
 
 /** Narrow the DB `proposalChangeSectionEnum` string; anything unknown reads as general. */
@@ -86,7 +80,7 @@ export function ChangeRequestNote({
           <strong className="text-foreground font-semibold">
             {personAtCompany(clientName, company)}
           </strong>{' '}
-          asked for a change to {SECTION_PHRASE[asChangeSection(section)]}
+          asked for a change to {PROPOSAL_CHANGE_SECTION_PHRASE[asChangeSection(section)]}
         </p>
         {addressed ? (
           <span className="text-success-strong mt-1 inline-flex items-center gap-1.5 text-[13.5px]">

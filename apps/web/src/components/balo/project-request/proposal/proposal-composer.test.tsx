@@ -76,25 +76,26 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/projects/r1/proposal/rel1',
 }));
 
-// Replace the upload pipeline with a recording stub: the composer's two controllers
-// (`ref`, `terms`) are captured so tests can call `ensureProposalId` and assert that
-// the page-wide drop reaches the `ref` controller's `uploadFiles`.
-type UploadKind = 'ref' | 'terms';
+// Replace the upload pipeline with a recording stub: the composer's one controller is
+// captured so tests can call `ensureProposalId` and assert that the page-wide drop
+// reaches its `uploadFiles`.
 interface UploadArgs {
+  kind: string;
   ensureProposalId: () => Promise<string | null>;
-  single?: boolean;
 }
 const uploads = vi.hoisted(() => ({
-  uploadFiles: { ref: vi.fn(), terms: vi.fn() },
-  args: {} as Partial<Record<'ref' | 'terms', UploadArgs>>,
+  uploadFiles: vi.fn(),
+  calls: [] as unknown[],
+  args: undefined as UploadArgs | undefined,
 }));
 vi.mock('./proposal-document-uploader', () => ({
-  useProposalDocumentUpload: (args: UploadArgs & { kind: UploadKind }) => {
-    uploads.args[args.kind] = args;
+  useProposalDocumentUpload: (args: UploadArgs) => {
+    uploads.args = args;
+    uploads.calls.push(args);
     return {
       progress: null,
       removingId: null,
-      uploadFiles: uploads.uploadFiles[args.kind],
+      uploadFiles: uploads.uploadFiles,
       remove: vi.fn(),
     };
   },
@@ -161,7 +162,9 @@ function readyDraft(): ProposalDraftState {
     pricingMethod: 'fixed',
     currency: 'aud',
     timeframeWeeks: 6,
-    exclusions: '',
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
     depositCents: null,
     rateCents: null,
     fixedPriceCents: 500_000,
@@ -240,7 +243,8 @@ beforeEach(() => {
   resubmitProposalAction.mockReset();
   startProposalDraftAction.mockReset();
   getProposalDraftAction.mockReset();
-  uploads.args = {};
+  uploads.args = undefined;
+  uploads.calls.length = 0;
   vi.spyOn(globalThis, 'scrollTo').mockImplementation(() => {});
 });
 
@@ -250,8 +254,10 @@ describe('ProposalComposer — one page', () => {
     const sectionTitles = [
       'Overview',
       'Milestones',
-      'Price and payments',
+      'Assumptions',
       'Not included',
+      'Price and payments',
+      'Additional terms',
       'Attachments',
     ];
     const titles = screen
@@ -355,7 +361,7 @@ describe('ProposalComposer — autosave and slice setters', () => {
 
     let id: string | null | undefined;
     await act(async () => {
-      id = await uploads.args.ref?.ensureProposalId();
+      id = await uploads.args?.ensureProposalId();
     });
 
     expect(saveProposalDraftAction).toHaveBeenCalled();
@@ -367,20 +373,23 @@ describe('ProposalComposer — autosave and slice setters', () => {
 
     let id: string | null | undefined;
     await act(async () => {
-      id = await uploads.args.terms?.ensureProposalId();
+      id = await uploads.args?.ensureProposalId();
     });
 
     expect(id).toBe('p1');
     expect(saveProposalDraftAction).not.toHaveBeenCalled();
   });
 
-  it('wires the terms controller as single-document and the ref controller as multi', () => {
+  it('wires a single upload controller, for reference attachments, and no terms upload', () => {
     renderComposer(readyDraft());
-    expect(uploads.args.terms?.single).toBe(true);
-    expect(uploads.args.ref?.single).toBeUndefined();
+    expect(uploads.args?.kind).toBe('ref');
+    expect(new Set(uploads.calls.map((call) => (call as UploadArgs).kind))).toEqual(
+      new Set(['ref'])
+    );
+    expect(screen.queryByRole('button', { name: /attach your terms/i })).not.toBeInTheDocument();
   });
 
-  it('edits the timeframe and exclusions and autosaves the new values', async () => {
+  it('edits the timeframe and an exclusion and autosaves the new values', async () => {
     const user = userEvent.setup();
     renderComposer(readyDraft());
 
@@ -389,16 +398,16 @@ describe('ProposalComposer — autosave and slice setters', () => {
     await user.clear(weeks);
     await user.type(weeks, '9');
     await user.keyboard('{Escape}');
-    await user.type(screen.getByLabelText(/what's not included/i), 'No data migration');
+    await user.type(screen.getByLabelText('Add an exclusion'), 'No data migration{Enter}');
 
     await waitFor(
       () => {
         const last = saveProposalDraftAction.mock.calls.at(-1)?.[0] as {
           timeframeWeeks?: number;
-          exclusions?: string;
+          clauses?: { kind: string; body: string }[];
         };
         expect(last.timeframeWeeks).toBe(9);
-        expect(last.exclusions).toContain('No data migration');
+        expect(last.clauses).toEqual([{ kind: 'exclusion', body: 'No data migration' }]);
       },
       { timeout: 3000 }
     );
@@ -776,6 +785,17 @@ describe('ProposalComposer — jump, preview and send', () => {
     );
   });
 
+  it('Ctrl+Enter commits text left in an empty clause row before previewing', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft());
+
+    await user.type(screen.getByLabelText('Add an exclusion'), 'Data migration');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+
+    expect(await screen.findByText('Previewing as Northwind')).toBeInTheDocument();
+    expect(screen.getAllByText('Data migration').length).toBeGreaterThan(0);
+  });
+
   it('a plain Enter does not preview or jump', async () => {
     const user = userEvent.setup();
     renderComposer(readyDraft());
@@ -889,8 +909,7 @@ describe('ProposalComposer — drop anywhere', () => {
 
     dropFiles([file]);
 
-    expect(uploads.uploadFiles.ref).toHaveBeenCalledWith([file]);
-    expect(uploads.uploadFiles.terms).not.toHaveBeenCalled();
+    expect(uploads.uploadFiles).toHaveBeenCalledWith([file]);
   });
 
   it('ignores drops once the preview is open', async () => {
@@ -900,7 +919,7 @@ describe('ProposalComposer — drop anywhere', () => {
 
     dropFiles([new File(['x'], 'brief.pdf', { type: 'application/pdf' })]);
 
-    expect(uploads.uploadFiles.ref).not.toHaveBeenCalled();
+    expect(uploads.uploadFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -1633,7 +1652,7 @@ describe('ProposalComposer — AI draft (BAL-611)', () => {
     const start = deferredStart();
     renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
 
-    await user.type(screen.getByLabelText("What's not included"), 'X');
+    await user.type(screen.getByLabelText('Add an exclusion'), 'X{Enter}');
     await waitFor(() => expect(saveProposalDraftAction).toHaveBeenCalledTimes(1), {
       timeout: 2000,
     });
@@ -1648,11 +1667,11 @@ describe('ProposalComposer — AI draft (BAL-611)', () => {
     });
     const payload = saveProposalDraftAction.mock.calls[1]?.[0] as {
       overview: string;
-      exclusions: string;
+      clauses: { kind: string; body: string }[];
       milestones: { title: string }[];
     };
     expect(payload.overview).toBe('<p>Drafted overview</p>');
-    expect(payload.exclusions).toBe('X');
+    expect(payload.clauses).toEqual([{ kind: 'exclusion', body: 'X' }]);
     expect(payload.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
   });
 
@@ -1661,7 +1680,7 @@ describe('ProposalComposer — AI draft (BAL-611)', () => {
     const start = deferredStart();
     renderComposer(blankDraft(), { draftGeneration: { status: 'none' } });
 
-    await user.type(screen.getByLabelText("What's not included"), 'X');
+    await user.type(screen.getByLabelText('Add an exclusion'), 'X{Enter}');
     expect(saveProposalDraftAction).not.toHaveBeenCalled();
     await act(async () => {
       start.resolve(SUCCEEDED);
@@ -1672,11 +1691,11 @@ describe('ProposalComposer — AI draft (BAL-611)', () => {
     expect(saveProposalDraftAction).toHaveBeenCalledTimes(1);
     const payload = saveProposalDraftAction.mock.calls[0]?.[0] as {
       overview: string;
-      exclusions: string;
+      clauses: { kind: string; body: string }[];
       milestones: { title: string }[];
     };
     expect(payload.overview).toBe('<p>Drafted overview</p>');
-    expect(payload.exclusions).toBe('X');
+    expect(payload.clauses).toEqual([{ kind: 'exclusion', body: 'X' }]);
     expect(payload.milestones.map((m) => m.title)).toEqual(['Discovery', 'Build']);
   });
 
@@ -1709,5 +1728,355 @@ describe('ProposalComposer — AI draft (BAL-611)', () => {
 
     expect(startProposalDraftAction).not.toHaveBeenCalled();
     expect(screen.queryByTestId('draft-skeleton-overview')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProposalComposer — assumptions, not included and additional terms', () => {
+  const mockTrack = vi.mocked(track);
+
+  function withClauses(
+    overrides: Partial<
+      Pick<ProposalDraftState, 'assumptions' | 'exclusions' | 'additionalTerms'>
+    > = {}
+  ): ProposalDraftState {
+    return { ...readyDraft(), ...overrides };
+  }
+
+  function rows(...bodies: string[]): { key: string; body: string }[] {
+    return bodies.map((body) => ({ key: nextDraftKey(), body }));
+  }
+
+  function sectionById(id: string): HTMLElement {
+    const section = document.getElementById(id);
+    if (section === null) throw new Error(`expected #${id}`);
+    return section;
+  }
+
+  it('renders the three lists as optional sections with their help text', () => {
+    renderComposer(readyDraft());
+
+    const assumptions = sectionById('proposal-section-assumptions');
+    expect(within(assumptions).getByText('Optional')).toBeInTheDocument();
+    expect(
+      within(assumptions).getByText(
+        'What your price and timeline rely on. If one turns out not to hold, it’s your basis for proposing a change.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(sectionById('proposal-section-exclusions')).getByText(
+        'Anything explicitly out of scope, so there are no surprises later.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(sectionById('proposal-section-additional-terms')).getByText(
+        'Terms of your own for this project. They add to Balo’s Project T&Cs and can’t replace them.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('hydrates each list from state, in order', () => {
+    renderComposer(
+      withClauses({
+        assumptions: rows('Sandbox by kickoff', 'Final price list'),
+        exclusions: rows('Data migration'),
+        additionalTerms: rows('One round of revisions'),
+      })
+    );
+
+    const assumptions = sectionById('proposal-section-assumptions');
+    expect(
+      within(assumptions)
+        .getAllByRole('textbox')
+        .map((box) => (box as HTMLTextAreaElement).value)
+    ).toEqual(['Sandbox by kickoff', 'Final price list', '']);
+    expect(screen.getByLabelText('exclusion 1')).toHaveValue('Data migration');
+    expect(screen.getByLabelText('term 1')).toHaveValue('One round of revisions');
+  });
+
+  it('names the client company in the empty assumptions row', () => {
+    renderComposer(readyDraft());
+    expect(screen.getByLabelText('Add an assumption')).toHaveAttribute(
+      'placeholder',
+      'For example: Northwind gives us sandbox access by kickoff'
+    );
+  });
+
+  it('puts Balo’s terms block in Additional terms, with the rule for the pricing method', () => {
+    renderComposer(readyDraft());
+    const terms = sectionById('proposal-section-additional-terms');
+    expect(within(terms).getByText('Balo Project T&Cs apply')).toBeInTheDocument();
+    expect(
+      within(terms).getByText(/This is a fixed-price project\. .*Northwind approves it\./)
+    ).toBeInTheDocument();
+  });
+
+  it('switches the rule when the pricing method is T&M', () => {
+    renderComposer(readyTmDraft());
+    expect(
+      within(sectionById('proposal-section-additional-terms')).getByText(
+        /This is a time and materials project\./
+      )
+    ).toBeInTheDocument();
+  });
+
+  describe('the additional-terms footnote', () => {
+    const FOOTNOTE = 'Northwind sees these with the proposal and agrees to them when accepting.';
+
+    it('appears once a term is added, and never carries the precedence sentence', async () => {
+      const user = userEvent.setup();
+      renderComposer(readyDraft());
+      expect(screen.queryByText(FOOTNOTE)).not.toBeInTheDocument();
+
+      await user.type(screen.getByLabelText('Add a term'), 'Remote delivery only{Enter}');
+
+      expect(screen.getByText(FOOTNOTE)).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent(/conflicts with Balo/i);
+      expect(document.body).not.toHaveTextContent(/Balo’s apply/);
+    });
+
+    it('shows for hydrated terms', () => {
+      renderComposer(withClauses({ additionalTerms: rows('T') }));
+      expect(screen.getByText(FOOTNOTE)).toBeInTheDocument();
+    });
+
+    it('stays hidden when only the other lists have items', () => {
+      renderComposer(withClauses({ assumptions: rows('A'), exclusions: rows('E') }));
+      expect(screen.queryByText(FOOTNOTE)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('the "no assumptions or exclusions" soft issue', () => {
+    const SOFT = 'No assumptions or exclusions yet';
+
+    it('shows on a ready proposal and never blocks sending', () => {
+      renderComposer(readyDraft());
+      expect(within(rail()).getByText('Ready to send')).toBeInTheDocument();
+      expect(within(rail()).getByRole('button', { name: SOFT })).toBeInTheDocument();
+      expect(within(rail()).getByRole('button', { name: 'Preview and send' })).toBeEnabled();
+    });
+
+    it('goes away once an assumption is added, and returns when it is removed', async () => {
+      const user = userEvent.setup();
+      renderComposer(readyDraft());
+
+      await user.type(screen.getByLabelText('Add an assumption'), 'Sandbox by kickoff{Enter}');
+      expect(within(rail()).queryByRole('button', { name: SOFT })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Remove assumption 1' }));
+      expect(within(rail()).getByRole('button', { name: SOFT })).toBeInTheDocument();
+    });
+
+    it('goes away for an exclusion alone', () => {
+      renderComposer(withClauses({ exclusions: rows('Data migration') }));
+      expect(within(rail()).queryByRole('button', { name: SOFT })).not.toBeInTheDocument();
+    });
+
+    it('stays while only additional terms are set', () => {
+      renderComposer(withClauses({ additionalTerms: rows('Remote delivery only') }));
+      expect(within(rail()).getByRole('button', { name: SOFT })).toBeInTheDocument();
+    });
+
+    it('stays while the only item is blank', () => {
+      renderComposer(withClauses({ assumptions: rows('   ') }));
+      expect(within(rail()).getByRole('button', { name: SOFT })).toBeInTheDocument();
+    });
+
+    it('jumps to the empty assumptions row and tracks the issue', async () => {
+      const user = userEvent.setup();
+      renderComposer(readyDraft());
+      const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+      await user.click(within(rail()).getByRole('button', { name: SOFT }));
+
+      expect(scroll).toHaveBeenCalled();
+      expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_CHECKLIST_JUMPED, {
+        proposal_id: 'p1',
+        issue_id: 'no_assumptions_or_exclusions',
+        source: 'rail',
+      });
+      expect(document.getElementById('proposal-clause-new-assumption')).toBe(
+        screen.getByLabelText('Add an assumption')
+      );
+    });
+
+    it('sits after the change-request issue in revise mode', () => {
+      renderReviseComposer(readyDraft(), { section: 'pricing' });
+      const labels = within(rail())
+        .getAllByRole('button')
+        .map((button) => button.textContent);
+      const note = labels.findIndex((label) => /isn't marked as addressed/.test(label ?? ''));
+      const soft = labels.findIndex((label) => label === SOFT);
+      expect(note).toBeGreaterThanOrEqual(0);
+      expect(soft).toBeGreaterThan(note);
+    });
+  });
+
+  describe('revise notes', () => {
+    it('pins an assumptions-and-exclusions note above Assumptions only', () => {
+      renderReviseComposer(readyDraft(), { section: 'assumptions_exclusions' });
+
+      expect(
+        screen.getByText(/asked for a change to the assumptions and exclusions/i)
+      ).toBeInTheDocument();
+      const note = document.getElementById('proposal-change-note');
+      if (note === null) throw new Error('expected the change note');
+      expect(note.nextElementSibling).toBe(sectionById('proposal-section-assumptions'));
+      expect(document.querySelectorAll('#proposal-change-note')).toHaveLength(1);
+      expect(
+        within(rail()).getByRole('button', {
+          name: "Priya's note on assumptions and exclusions isn't marked as addressed",
+        })
+      ).toBeInTheDocument();
+    });
+
+    it('pins a terms note above Additional terms', () => {
+      renderReviseComposer(readyDraft(), { section: 'terms' });
+
+      expect(screen.getByText(/asked for a change to the terms/i)).toBeInTheDocument();
+      const note = document.getElementById('proposal-change-note');
+      if (note === null) throw new Error('expected the change note');
+      expect(note.nextElementSibling).toBe(sectionById('proposal-section-additional-terms'));
+      expect(
+        within(rail()).getByRole('button', {
+          name: "Priya's note on terms isn't marked as addressed",
+        })
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the lists editable and local-only in revise mode', async () => {
+      const user = userEvent.setup();
+      renderReviseComposer(readyDraft(), { section: 'terms' });
+
+      await user.type(screen.getByLabelText('Add a term'), 'Two rounds of revisions{Enter}');
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      expect(screen.getByLabelText('term 1')).toHaveValue('Two rounds of revisions');
+      expect(saveProposalDraftAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('autosave and resubmit payloads', () => {
+    it('autosaves all three lists in order, kinds tagged', async () => {
+      const user = userEvent.setup();
+      renderComposer(readyDraft());
+
+      await user.type(screen.getByLabelText('Add a term'), 'T1{Enter}');
+      await user.type(screen.getByLabelText('Add an assumption'), 'A1{Enter}');
+      await user.type(screen.getByLabelText('Add an exclusion'), 'E1{Enter}');
+
+      await waitFor(
+        () => {
+          const last = saveProposalDraftAction.mock.calls.at(-1)?.[0] as {
+            clauses?: { kind: string; body: string }[];
+          };
+          expect(last.clauses).toEqual([
+            { kind: 'assumption', body: 'A1' },
+            { kind: 'exclusion', body: 'E1' },
+            { kind: 'additional_term', body: 'T1' },
+          ]);
+        },
+        { timeout: 3000 }
+      );
+    });
+
+    it('sends the clauses in the resubmit payload', async () => {
+      const user = userEvent.setup();
+      resubmitProposalAction.mockResolvedValue({
+        success: true,
+        proposalId: FROM_PROPOSAL_ID,
+        version: 2,
+        expertProfileId: 'exp-1',
+        analytics: {
+          priceCents: 500_000,
+          currency: 'aud',
+          assumptionCount: 1,
+          exclusionCount: 0,
+          additionalTermCount: 0,
+        },
+      });
+      renderReviseComposer(withClauses({ assumptions: rows('Sandbox by kickoff') }));
+
+      await user.click(within(rail()).getByRole('button', { name: 'Preview and resend' }));
+      await user.click(screen.getByRole('button', { name: /^Resend/ }));
+
+      await waitFor(() => expect(resubmitProposalAction).toHaveBeenCalled());
+      const payload = resubmitProposalAction.mock.calls[0]?.[0] as {
+        clauses: { kind: string; body: string }[];
+        fromProposalId: string;
+      };
+      expect(payload.clauses).toEqual([{ kind: 'assumption', body: 'Sandbox by kickoff' }]);
+      expect(payload.fromProposalId).toBe(FROM_PROPOSAL_ID);
+    });
+  });
+
+  describe('preview', () => {
+    it('shows the lists and the pricing rule for the client company', async () => {
+      const user = userEvent.setup();
+      renderComposer(
+        withClauses({
+          assumptions: rows('Sandbox by kickoff'),
+          exclusions: rows('Data migration'),
+          additionalTerms: rows('One round of revisions'),
+        })
+      );
+
+      await user.click(within(rail()).getByRole('button', { name: 'Preview and send' }));
+
+      expect(await screen.findByText('Previewing as Northwind')).toBeInTheDocument();
+      expect(screen.getAllByText('Sandbox by kickoff').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Data migration').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('One round of revisions').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Northwind approves it\./).length).toBeGreaterThan(0);
+    });
+
+    it('dismisses the clause Undo toasts when leaving the edit screen', async () => {
+      const user = userEvent.setup();
+      renderComposer(readyDraft());
+
+      await user.click(within(rail()).getByRole('button', { name: 'Preview and send' }));
+
+      expect(toast.dismiss).toHaveBeenCalledWith('proposal-clause-removed-assumption');
+      expect(toast.dismiss).toHaveBeenCalledWith('proposal-clause-removed-exclusion');
+      expect(toast.dismiss).toHaveBeenCalledWith('proposal-clause-removed-additional_term');
+    });
+  });
+
+  it('shows the three counts in the rail', () => {
+    renderComposer(
+      withClauses({
+        assumptions: rows('A1', 'A2'),
+        exclusions: rows('E1'),
+        additionalTerms: rows('T1'),
+      })
+    );
+    const summary = within(rail());
+    expect(summary.getByText('Assumptions').nextElementSibling).toHaveTextContent('2');
+    expect(summary.getByText('Not included').nextElementSibling).toHaveTextContent('1');
+    expect(summary.getByText('Terms').nextElementSibling).toHaveTextContent(
+      'Balo’s and 1 of yours'
+    );
+  });
+
+  it('has no Terms chip in the property bar', () => {
+    renderComposer(readyDraft());
+    expect(screen.queryByRole('button', { name: 'Balo standard terms' })).not.toBeInTheDocument();
+  });
+
+  it('names the T&M price section in the amount warning', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyTmDraft());
+
+    await user.type(screen.getByLabelText('Add an assumption'), 'Capped at $5,000{Enter}');
+
+    expect(await screen.findByText(/Keep prices in Rates and billing\./)).toBeInTheDocument();
+  });
+
+  it('names the Fixed price section in the amount warning', async () => {
+    const user = userEvent.setup();
+    renderComposer(readyDraft());
+
+    await user.type(screen.getByLabelText('Add a term'), 'Billed at $200/hr{Enter}');
+
+    expect(await screen.findByText(/Keep prices in Price and payments\./)).toBeInTheDocument();
   });
 });

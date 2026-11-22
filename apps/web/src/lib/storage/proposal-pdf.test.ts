@@ -42,7 +42,7 @@ beforeEach(() => {
 describe('proposalPdfKey', () => {
   it('is a deterministic layout-versioned key under the proposals prefix', () => {
     const key = proposalPdfKey(PROPOSAL_ID);
-    expect(key).toBe(`proposals/${PROPOSAL_ID}/client-v2.pdf`);
+    expect(key).toBe(`proposals/${PROPOSAL_ID}/client-v3.pdf`);
     expect(key.startsWith(PROPOSAL_PDF_PREFIX)).toBe(true);
   });
 
@@ -50,7 +50,7 @@ describe('proposalPdfKey', () => {
     // BAL-392 (F3): the download route is a read-through cache. If the key did not
     // move with the layout, every already-generated PDF would serve the retired
     // two-item banner forever.
-    expect(PROPOSAL_PDF_LAYOUT_VERSION).toBe('v2');
+    expect(PROPOSAL_PDF_LAYOUT_VERSION).toBe('v3');
     expect(proposalPdfKey(PROPOSAL_ID)).toContain(`/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`);
     expect(proposalPdfKey(PROPOSAL_ID)).not.toBe(`proposals/${PROPOSAL_ID}/client.pdf`);
   });
@@ -106,7 +106,7 @@ describe('putProposalPdfToR2', () => {
     const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
     expect(command.input).toMatchObject({
       Bucket: 'test-bucket',
-      Key: `proposals/${PROPOSAL_ID}/client-v2.pdf`,
+      Key: `proposals/${PROPOSAL_ID}/client-v3.pdf`,
       Body: body,
       ContentType: 'application/pdf',
     });

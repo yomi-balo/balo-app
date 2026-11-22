@@ -30,6 +30,11 @@ vi.mock('@balo/db', () => ({
   blocksMarkReady: () => false,
   engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
   engagementMilestonesRepository: { listProposalContentEdits: vi.fn().mockResolvedValue([]) },
+  engagementClausesRepository: {
+    findAgreedTerms: vi
+      .fn()
+      .mockResolvedValue({ clauses: [], proposalAcceptedAt: null, proposalAcceptedBy: null }),
+  },
   projectEngagementsRepository: { findWithMilestones: mockFindWithMilestones },
   actionItemsRepository: { listByEngagement: vi.fn().mockResolvedValue([]) },
   expertsRepository: { findPublicUsernamesByProfileIds: vi.fn().mockResolvedValue(new Map()) },

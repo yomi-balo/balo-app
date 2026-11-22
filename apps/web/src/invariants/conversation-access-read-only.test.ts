@@ -72,21 +72,22 @@ describe('read-only Server Actions never reach the writing access resolver', () 
      * ⚠ THE FLOOR IS A VACUOUS-PASS GUARD, NOT A BEHAVIOURAL ASSERTION — it exists so an
      * emptied subject list fails loudly rather than passing every case below for free.
      *
-     * It was 3 and is now 2 because BAL-431 (OSD-2) DELETED one of the three subjects,
-     * `get-conversation-file-download.ts` — the request surface retired its in-thread file
-     * affordance, so that action no longer exists. Lowering the floor is therefore recording
-     * a real, deliberate change in the subject set, not relaxing the invariant: the two
-     * survivors (`fetch-thread.ts` and `get-proposal-document-download.ts`) are each still
-     * asserted individually below, and any NEW allowlist entry that resolves conversation
-     * access is enrolled automatically. Do not lower this again without deleting an action.
+     * It was 3, then 2, and is now 1. BAL-431 (OSD-2) deleted `get-conversation-file-download.ts`
+     * (the request surface retired its in-thread file affordance). `get-proposal-document-download.ts`
+     * then left the subject set because it now resolves access through
+     * `authorizeRequestFileScope`, which is a resolver swap, not a deletion: it stays on the
+     * read-only allowlist and is still covered by the gate tests. The one survivor,
+     * `fetch-thread.ts`, is asserted individually below, and any NEW allowlist entry that
+     * resolves conversation access is enrolled automatically. Do not lower this again without
+     * removing an action from the subject set.
      *
-     * ⚠ AND DO NOT "STRENGTHEN" IT INTO A LITERAL LIST OF THE TWO. This file's whole design
+     * ⚠ AND DO NOT "STRENGTHEN" IT INTO A LITERAL LIST OF SUBJECTS. This file's whole design
      * (see its opening docblock) is that the subject set is DERIVED from the allowlist,
      * because the hand-maintained version already missed a subject once. A pinned list would
-     * reintroduce exactly that failure mode; the `it.each` cases below name each survivor in
-     * their own titles, which is where "which two" belongs.
+     * reintroduce exactly that failure mode; the `it.each` cases below name each subject in
+     * their own titles, which is where "which one" belongs.
      */
-    expect(CONVERSATION_ACTIONS.length).toBeGreaterThanOrEqual(2);
+    expect(CONVERSATION_ACTIONS.length).toBeGreaterThanOrEqual(1);
   });
 
   it.each(CONVERSATION_ACTIONS.map((a) => a.rel))(

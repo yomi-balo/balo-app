@@ -281,6 +281,11 @@ export type {
 } from './proposal-coherence';
 export { proposalMilestonesRepository } from './proposal-milestones';
 export type { ProposalMilestoneInput } from './proposal-milestones';
+// BAL-661 — the proposal's assumptions, exclusions and additional terms, and their kickoff copy.
+export { proposalClausesRepository } from './proposal-clauses';
+export type { ProposalClauseInput } from './proposal-clauses';
+export { engagementClausesRepository } from './engagement-clauses';
+export type { AgreedTermsSource } from './engagement-clauses';
 export {
   proposalPaymentInstallmentsRepository,
   installmentsSumTo100,

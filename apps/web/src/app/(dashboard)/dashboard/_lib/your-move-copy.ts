@@ -29,9 +29,11 @@ export const YOUR_MOVE_ACTION_FINISH_PROPOSAL = 'Finish proposal';
 export const YOUR_MOVE_SECTION_LABELS: Record<ProposalChangeSection, string | null> = {
   general: null,
   milestones: 'Milestones / deliverables',
+  assumptions_exclusions: 'Assumptions and exclusions',
   pricing: 'Pricing',
   payment_terms: 'Payment terms',
   timeline: 'Timeline',
+  terms: 'Terms',
 };
 
 export const yourMoveUnreadTitle = (unread: number, conversations: number): string =>

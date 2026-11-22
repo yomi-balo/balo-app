@@ -6,7 +6,7 @@ category:
   expert: projects
 order: 2
 published: true
-updated: 2026-11-02
+updated: 2026-11-23
 related: [project-requests-for-experts]
 ---
 
@@ -20,10 +20,13 @@ The sections always appear in the same order:
 
 1. **Overview** — what you'll do and how you'll approach it.
 2. **Milestones** — the stages of the work.
-3. **Price and payments** — one price for the project and how it's paid. For **Time & materials**
-   this section is called **Rates and billing**.
+3. **Assumptions** — what your price and timeline rely on. This one is optional.
 4. **Not included** — anything out of scope, so there are no surprises later. This one is optional.
-5. **Attachments** — reference documents you want the client to see. This one is optional too.
+5. **Price and payments** — one price for the project and how it's paid. For **Time & materials**
+   this section is called **Rates and billing**.
+6. **Additional terms** — terms of your own for this project, shown under Balo's Project T&Cs. This
+   one is optional.
+7. **Attachments** — reference documents you want the client to see. This one is optional too.
 
 Above the first section, the client's request is summarised for you. Choose **Show brief** to read
 the full request while you write, and **Hide brief** to tuck it away again.
@@ -47,7 +50,7 @@ and you write it yourself just as you would without a draft.
 
 ## The property bar
 
-Three choices sit at the top of the page, because they shape everything below them:
+Two choices sit at the top of the page, because they shape everything below them:
 
 - **Pricing method** — **Fixed price** or **Time & materials**. If you switch, your typed price
   and your hour estimates are kept, so switching back brings them back. A message confirms the
@@ -55,10 +58,8 @@ Three choices sit at the top of the page, because they shape everything below th
 - **Timeframe** — choose **Add timeframe**, then use the stepper to say roughly how many weeks the
   work will take. It's a duration, not a date. Choose **Remove timeframe** if you'd rather leave
   it open.
-- **Terms** — Balo standard terms apply to every proposal. Choose **Attach your terms** to add
-  your own alongside them. The chip changes to "Balo standard and your terms" once they're attached.
 
-![The top of a proposal, with the Fixed price, Add timeframe and Balo standard terms chips highlighted.](02)
+![The top of a proposal, with the Fixed price and Add timeframe chips highlighted.](02)
 
 ## Fixed price: price first
 
@@ -118,7 +119,7 @@ You can also press **Cmd+Enter** (Mac) or **Ctrl+Enter** to preview.
 The preview shows the proposal the way the client will read it. Nothing is sent until you choose
 **Send** there, or **Back to editing** to keep working.
 
-![The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.](06)
+![The proposal summary beside the page, with its Assumptions, Not included and Terms rows, and the checklist showing the project price still to set highlighted above Preview and send.](06)
 
 ## What the client sees
 
@@ -128,6 +129,10 @@ are higher than the ones on your page. You never need to work that out yourself.
 
 If a milestone has no amount, none is shown for it.
 
+The client reads your assumptions, exclusions and additional terms as numbered lists on the
+proposal, in the PDF and on a shared link. They agree to your additional terms when they accept.
+Your attachments open as files from the proposal page.
+
 Once you send, you'll see a confirmation. The client gets an email and a notification, and from
 there it's their call.
 
@@ -136,7 +141,9 @@ there it's their call.
 If the client asks for changes, you'll see their note beside the section it's about, or above the
 **Overview** if it's about the proposal as a whole, with a summary at the top of the page and a
 **Go to note** link. Update the proposal as needed, then choose **Mark as addressed** on the note.
-You can bring the note back any time with **Show note**.
+You can bring the note back any time with **Show note**. A note about the assumptions or the
+exclusions sits above **Assumptions**, and a note about the terms sits above **Additional terms**.
+The client names an item by its number, for example "Assumption 2", so you can find it in the list.
 
 A revision isn't saved as you go: the page says "Not saved until you resend". Your changes go to
 the client when you choose **Preview and resend**, then **Resend**. If you leave before that, the
@@ -144,3 +151,30 @@ version the client last saw stays as it was. You can't add or remove documents w
 ones already attached carry over to the version you resend.
 
 ![A proposal being revised, with the summary of Dana's change request and its Go to note link, and Dana's note with its Mark as addressed link highlighted.](08)
+
+## Assumptions, exclusions and additional terms
+
+These three sections are lists, and each one is optional. You can add up to 20 items to a list, and
+each item can run to 500 characters. An item is one line of plain text, so a line break becomes a
+space and formatting isn't kept.
+
+- **Assumptions** — what your price and timeline rely on. If one turns out not to hold, it's your
+  basis for proposing a change.
+- **Not included** — anything explicitly out of scope.
+- **Additional terms** — terms of your own for this project. They add to Balo's Project T&Cs and
+  can't replace them. Balo's terms sit at the top of the section, with the rule for the pricing
+  method you chose, so you can see what already applies before you add your own.
+
+To work in a list:
+
+- Type an item and press **Enter** to start the next one. An empty item is dropped when you leave it.
+- Paste a list and each line becomes its own item, with any bullet or number removed.
+- Move an item with the arrow keys or the reorder controls. Items keep the order you give them.
+- Remove an item, then choose **Undo** if you change your mind.
+- Once an item gets close to the limit, a character counter appears.
+
+If an item looks like it names a price or a rate, the editor warns you. Keep amounts in the price
+section: the client sees your list items exactly as you typed them, without Balo's service added.
+
+If you leave **Assumptions** and **Not included** both empty, the checklist adds a gentle reminder.
+It never stops you from sending. The summary beside the page shows how many items each list holds.

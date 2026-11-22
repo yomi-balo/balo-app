@@ -42,6 +42,7 @@ import {
   proposalPaymentInstallmentsRepository,
   type ProposalPaymentInstallmentInput,
 } from './proposal-payment-installments';
+import { insertClausesTx, proposalClausesRepository } from './proposal-clauses';
 import { auditEventsRepository } from './audit-events';
 
 /**
@@ -138,7 +139,6 @@ describe('proposalsRepository.submit', () => {
       priceCents: 0,
       currency: 'usd',
       timeframeWeeks: 10,
-      exclusions: '<p>Not included.</p>',
       depositCents: 25000,
       rateCents: 18000,
       cadence: 'monthly',
@@ -147,7 +147,6 @@ describe('proposalsRepository.submit', () => {
     expect(proposal.currency).toBe('usd');
     expect(proposal.pricingMethod).toBe('tm');
     expect(proposal.timeframeWeeks).toBe(10);
-    expect(proposal.exclusions).toBe('<p>Not included.</p>');
     expect(proposal.depositCents).toBe(25000);
     expect(proposal.rateCents).toBe(18000);
     expect(proposal.cadence).toBe('monthly');
@@ -733,6 +732,7 @@ describe('proposalsRepository.resubmit', () => {
       priceCents: 2000,
       milestones: [{ title: 'Build', valueCents: 2000 }],
       installments: [{ label: 'Upfront', pct: 100 }],
+      clauses: [],
     });
 
     expect(v2.version).toBe(2);
@@ -793,6 +793,7 @@ describe('proposalsRepository.resubmit', () => {
         priceCents: 2000,
         milestones: [{ title: 'Build', valueCents: 2000 }],
         installments: [{ label: 'Upfront', pct: 100 }],
+        clauses: [],
       })
     ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
   });
@@ -831,6 +832,7 @@ describe('proposalsRepository.resubmit', () => {
         { label: 'Upfront', pct: 50 },
         { label: 'On completion', pct: 50 },
       ],
+      clauses: [],
     });
 
     expect(v2.version).toBe(2);
@@ -898,6 +900,7 @@ describe('proposalsRepository.resubmit', () => {
       priceCents: 2000,
       milestones: [{ title: 'Build', valueCents: 2000 }],
       installments: [{ label: 'Upfront', pct: 100 }],
+      clauses: [],
     });
 
     expect(v2.baloFeeBps).toBe(4000);
@@ -905,6 +908,73 @@ describe('proposalsRepository.resubmit', () => {
     // v1's stamped fee is untouched by the resubmit.
     const [oldRaw] = await db.select().from(proposals).where(eq(proposals.id, v1.id));
     expect(oldRaw?.baloFeeBps).toBe(3000);
+  });
+
+  /** `seedChangesRequestedV1`, with two clauses on v1. */
+  async function seedChangesRequestedWithClauses(): Promise<{
+    relationshipId: string;
+    v1Id: string;
+  }> {
+    const seeded = await seedChangesRequestedV1();
+    await db.transaction((tx) =>
+      insertClausesTx(tx, seeded.v1Id, [
+        { kind: 'assumption', body: 'v1 assumption.' },
+        { kind: 'exclusion', body: 'v1 exclusion.' },
+      ])
+    );
+    return seeded;
+  }
+
+  const fixedV2 = {
+    overview: '<p>v2.</p>',
+    pricingMethod: 'fixed' as const,
+    priceCents: 2000,
+    milestones: [{ title: 'Build', valueCents: 2000 }],
+    installments: [{ label: 'Upfront', pct: 100 }],
+  };
+
+  it("writes v2's clauses in the same transaction and leaves v1's as they were", async () => {
+    const { relationshipId, v1Id } = await seedChangesRequestedWithClauses();
+
+    const v2 = await proposalsRepository.resubmit({
+      relationshipId,
+      ...fixedV2,
+      clauses: [
+        { kind: 'exclusion', body: 'Data migration.' },
+        { kind: 'additional_term', body: 'Invoices are due in 14 days.' },
+        { kind: 'exclusion', body: 'Training.' },
+      ],
+    });
+
+    const v2Clauses = await proposalClausesRepository.listByProposal(v2.id);
+    expect(v2Clauses.map((c) => [c.kind, c.sortOrder, c.body])).toEqual([
+      ['exclusion', 0, 'Data migration.'],
+      ['exclusion', 1, 'Training.'],
+      ['additional_term', 0, 'Invoices are due in 14 days.'],
+    ]);
+    const v1Clauses = await proposalClausesRepository.listByProposal(v1Id);
+    expect(v1Clauses.map((c) => c.body)).toEqual(['v1 assumption.', 'v1 exclusion.']);
+  });
+
+  it('a blank clause body rolls the whole resubmit back (23514), leaving v1 current', async () => {
+    const { relationshipId, v1Id } = await seedChangesRequestedWithClauses();
+
+    await expect(
+      proposalsRepository.resubmit({
+        relationshipId,
+        ...fixedV2,
+        clauses: [{ kind: 'assumption', body: '   ' }],
+      })
+    ).rejects.toMatchObject({ code: '23514', constraint_name: 'proposal_clause_body_not_blank' });
+
+    const all = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.relationshipId, relationshipId));
+    expect(all).toHaveLength(1);
+    expect(all[0]?.id).toBe(v1Id);
+    expect(all[0]?.isCurrent).toBe(true);
+    expect(all[0]?.status).toBe('changes_requested');
   });
 });
 
@@ -1064,7 +1134,6 @@ describe('proposalsRepository.createDraft', () => {
       priceCents: 0,
       currency: 'usd',
       timeframeWeeks: 8,
-      exclusions: '<p>Out of scope.</p>',
       depositCents: 50000,
       rateCents: 20000,
       cadence: 'fortnightly',
@@ -1074,7 +1143,6 @@ describe('proposalsRepository.createDraft', () => {
     expect(draft.pricingMethod).toBe('tm');
     expect(draft.currency).toBe('usd');
     expect(draft.timeframeWeeks).toBe(8);
-    expect(draft.exclusions).toBe('<p>Out of scope.</p>');
     expect(draft.depositCents).toBe(50000);
     expect(draft.rateCents).toBe(20000);
     expect(draft.cadence).toBe('fortnightly');
@@ -1321,7 +1389,6 @@ describe('proposalsRepository.updateDraft', () => {
       priceCents: 750000,
       currency: 'usd',
       timeframeWeeks: 12,
-      exclusions: '<p>Excludes data migration.</p>',
       depositCents: 100000,
       rateCents: 25000,
       cadence: 'monthly',
@@ -1334,7 +1401,6 @@ describe('proposalsRepository.updateDraft', () => {
     expect(updated.priceCents).toBe(750000);
     expect(updated.currency).toBe('usd');
     expect(updated.timeframeWeeks).toBe(12);
-    expect(updated.exclusions).toBe('<p>Excludes data migration.</p>');
     expect(updated.depositCents).toBe(100000);
     expect(updated.rateCents).toBe(25000);
     expect(updated.cadence).toBe('monthly');
@@ -1351,13 +1417,11 @@ describe('proposalsRepository.updateDraft', () => {
       pricingMethod: 'tm',
       priceCents: 500000,
       timeframeWeeks: 6,
-      exclusions: '<p>Excludes data migration.</p>',
       depositCents: 100000,
       rateCents: 25000,
       cadence: 'fortnightly',
     });
     expect(draft.timeframeWeeks).toBe(6);
-    expect(draft.exclusions).toBe('<p>Excludes data migration.</p>');
     expect(draft.depositCents).toBe(100000);
     expect(draft.rateCents).toBe(25000);
     expect(draft.cadence).toBe('fortnightly');
@@ -1368,7 +1432,6 @@ describe('proposalsRepository.updateDraft', () => {
       pricingMethod: 'fixed',
       priceCents: 500000,
       timeframeWeeks: null,
-      exclusions: null,
       depositCents: null,
       rateCents: null,
       cadence: null,
@@ -1377,7 +1440,6 @@ describe('proposalsRepository.updateDraft', () => {
     const [raw] = await db.select().from(proposals).where(eq(proposals.id, draft.id));
     expect(raw?.pricingMethod).toBe('fixed');
     expect(raw?.timeframeWeeks).toBeNull();
-    expect(raw?.exclusions).toBeNull();
     expect(raw?.depositCents).toBeNull();
     expect(raw?.rateCents).toBeNull();
     expect(raw?.cadence).toBeNull();
@@ -1393,7 +1455,6 @@ describe('proposalsRepository.updateDraft', () => {
       pricingMethod: 'fixed',
       priceCents: 0,
       timeframeWeeks: 3,
-      exclusions: '<p>Excludes training.</p>',
     });
 
     await proposalsRepository.updateDraft({
@@ -1405,7 +1466,6 @@ describe('proposalsRepository.updateDraft', () => {
 
     const [raw] = await db.select().from(proposals).where(eq(proposals.id, draft.id));
     expect(raw?.timeframeWeeks).toBe(3);
-    expect(raw?.exclusions).toBe('<p>Excludes training.</p>');
   });
 
   it('leaves baloFeeBps unchanged (fee is immutable within a version)', async () => {
@@ -1986,6 +2046,7 @@ describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
           { label: 'Upfront', pct: 60 },
           { label: 'End', pct: 30 },
         ],
+        clauses: [],
       })
       .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);
@@ -2034,6 +2095,7 @@ describe('proposalsRepository.resubmit — coherence guard (BAL-293)', () => {
         { label: 'Upfront', pct: 50 },
         { label: 'End', pct: 50 },
       ],
+      clauses: [],
     });
     expect(v2.version).toBe(2);
     expect(v2.status).toBe('submitted');
@@ -2280,6 +2342,7 @@ describe('proposalsRepository.resubmit — Fixed pricing completeness', () => {
           priceCents,
           milestones,
           installments: [{ label: 'On completion', pct: 100 }],
+          clauses: [],
         })
         .catch((error: unknown) => error);
       expect(err).toBeInstanceOf(ProposalCoherenceError);
@@ -2516,6 +2579,7 @@ describe('proposalsRepository.resubmit — T&M effort/total coherence (BAL-294)'
         { title: 'Build', estimatedMinutes: 180 },
       ],
       installments: [],
+      clauses: [],
     });
     expect(v2.version).toBe(2);
     expect(v2.status).toBe('submitted');
@@ -2558,6 +2622,7 @@ describe('proposalsRepository.resubmit — T&M effort/total coherence (BAL-294)'
         cadence: 'monthly',
         milestones: [{ title: 'No effort', estimatedMinutes: null }],
         installments: [],
+        clauses: [],
       })
       .catch((error: unknown) => error);
     expect(err).toBeInstanceOf(ProposalCoherenceError);

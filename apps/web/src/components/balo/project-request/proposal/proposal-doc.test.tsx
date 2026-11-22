@@ -4,6 +4,10 @@ import { render, screen, within } from '@/test/utils';
 import { axe } from '@/test/axe';
 import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { ProposalDoc } from './proposal-doc';
+import {
+  BALO_TERMS_ADDITIVE_SENTENCE,
+  BALO_TERMS_PRECEDENCE_SENTENCE,
+} from './proposal-standard-terms';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
 // The real viewer is a ssr:false dynamic Tiptap render — swap for a div that
@@ -22,7 +26,10 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
     status: 'submitted',
     pricingMethod: 'fixed',
     overviewHtml: '<p>We will deliver CPQ.</p>',
-    exclusionsHtml: '<p>Data migration is out of scope.</p>',
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
+    clientCompanyName: 'Northwind',
     priceCents: 1_000_000,
     currency: 'aud',
     timeframeWeeks: 6,
@@ -283,42 +290,161 @@ describe('ProposalDoc — expert profile link', () => {
   });
 });
 
-describe('ProposalDoc — attachments split + exclusions', () => {
-  it('folds a kind:"terms" attachment into Terms, not Attachments', () => {
-    render(
-      <ProposalDoc
-        doc={baseDoc({
-          attachments: [{ id: 'a-1', fileName: 'msa.pdf', sizeBytes: 120_000, kind: 'terms' }],
-        })}
-      />
-    );
-    // Supplement row appears under Terms.
-    expect(screen.getByText('msa.pdf')).toBeInTheDocument();
-    expect(screen.getByText(/additional terms/)).toBeInTheDocument();
-    // No Attachments section heading when there are no non-terms files.
-    expect(screen.queryByText('Attachments')).not.toBeInTheDocument();
-  });
-
-  it('lists a non-terms attachment under Attachments', () => {
-    render(
-      <ProposalDoc
-        doc={baseDoc({
-          attachments: [
-            { id: 'a-2', fileName: 'architecture.pdf', sizeBytes: 200_000, kind: 'ref' },
-          ],
-        })}
-      />
-    );
-    expect(screen.getByText('Attachments')).toBeInTheDocument();
-    expect(screen.getByText('architecture.pdf')).toBeInTheDocument();
-  });
-
-  it('hides "Not included" when exclusions are absent', () => {
-    const { rerender } = render(<ProposalDoc doc={baseDoc()} />);
-    expect(screen.getByText('Not included')).toBeInTheDocument();
-
-    rerender(<ProposalDoc doc={baseDoc({ exclusionsHtml: null })} />);
+describe('ProposalDoc — assumptions and exclusions', () => {
+  it('omits the section when both lists are empty', () => {
+    const { container } = render(<ProposalDoc doc={baseDoc()} sectionIdPrefix="sec-" />);
+    expect(screen.queryByText('Assumptions and exclusions')).not.toBeInTheDocument();
     expect(screen.queryByText('Not included')).not.toBeInTheDocument();
+    expect(container.querySelector('#sec-scope')).toBeNull();
+  });
+
+  it('renders numbered assumptions with the expert first-name lead', () => {
+    const { container } = render(
+      <ProposalDoc
+        doc={baseDoc({ assumptions: ['Sandbox access by kickoff', 'Price list is final'] })}
+        sectionIdPrefix="sec-"
+      />
+    );
+    expect(screen.getByText('Assumptions and exclusions')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assumptions' })).toBeInTheDocument();
+    expect(screen.getByText('Priya’s price and timeline rely on these.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Not included' })).not.toBeInTheDocument();
+    const list = container.querySelector('#sec-scope ol');
+    expect(list).toHaveClass('list-decimal');
+    expect(
+      within(list as HTMLElement)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual(['Sandbox access by kickoff', 'Price list is final']);
+  });
+
+  it('renders the exclusions list with "Not included" and its lead on its own', () => {
+    render(<ProposalDoc doc={baseDoc({ exclusions: ['Data migration'] })} />);
+    expect(screen.getByRole('heading', { name: 'Not included' })).toBeInTheDocument();
+    expect(screen.getByText('Outside this proposal.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Assumptions' })).not.toBeInTheDocument();
+    expect(screen.getByText('Data migration')).toBeInTheDocument();
+  });
+
+  it('renders markup in a body literally, never as HTML or rich text', () => {
+    const { container } = render(
+      <ProposalDoc
+        doc={baseDoc({
+          assumptions: ['<b>x</b>'],
+          additionalTerms: ['<i>y</i>'],
+        })}
+      />
+    );
+    expect(screen.getByText('<b>x</b>')).toBeInTheDocument();
+    expect(screen.getByText('<i>y</i>')).toBeInTheDocument();
+    expect(container.querySelector('b')).toBeNull();
+    expect(container.querySelector('i')).toBeNull();
+  });
+
+  it('keeps a repeated body as separate list items', () => {
+    render(<ProposalDoc doc={baseDoc({ exclusions: ['Same', 'Same'] })} />);
+    expect(screen.getAllByText('Same')).toHaveLength(2);
+  });
+
+  it('orders the sections: milestones, scope, payment, terms, attachments', () => {
+    const { container } = render(
+      <ProposalDoc
+        doc={baseDoc({
+          assumptions: ['A'],
+          attachments: [{ id: 'a-1', fileName: 'spec.pdf', sizeBytes: 1000 }],
+        })}
+        sectionIdPrefix="sec-"
+      />
+    );
+    const ids = Array.from(container.querySelectorAll('section[id^="sec-"]')).map((el) => el.id);
+    expect(ids).toEqual([
+      'sec-overview',
+      'sec-milestones',
+      'sec-scope',
+      'sec-payment',
+      'sec-terms',
+      'sec-attachments',
+    ]);
+  });
+});
+
+describe('ProposalDoc — terms', () => {
+  it('shows the Balo block with the client company in the pricing rule', () => {
+    render(<ProposalDoc doc={baseDoc({ clientCompanyName: 'Globex' })} />);
+    expect(screen.getByText('Balo Project T&Cs apply')).toBeInTheDocument();
+    expect(screen.getByText('The same terms for every project on Balo.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This is a fixed-price project. Any increase in cost is only charged if Globex approves it.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(BALO_TERMS_PRECEDENCE_SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it('omits the additional-terms heading when the expert added none', () => {
+    render(<ProposalDoc doc={baseDoc()} />);
+    expect(screen.queryByText(/additional terms/)).not.toBeInTheDocument();
+    expect(screen.queryByText(BALO_TERMS_ADDITIVE_SENTENCE)).not.toBeInTheDocument();
+  });
+
+  it('lists the additional terms under the expert’s name with the additive lead', () => {
+    render(<ProposalDoc doc={baseDoc({ additionalTerms: ['One revision round', 'Net 14'] })} />);
+    expect(
+      screen.getByRole('heading', { name: 'Priya Sharma’s additional terms' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(BALO_TERMS_ADDITIVE_SENTENCE)).toBeInTheDocument();
+    expect(screen.getByText('One revision round')).toBeInTheDocument();
+    expect(screen.getByText('Net 14')).toBeInTheDocument();
+  });
+
+  it('renders no supplement tile for an attachment, whatever the file is', () => {
+    render(
+      <ProposalDoc
+        doc={baseDoc({ attachments: [{ id: 'a-1', fileName: 'msa.pdf', sizeBytes: 120_000 }] })}
+      />
+    );
+    expect(screen.getByText('msa.pdf')).toBeInTheDocument();
+    expect(screen.queryByText(/additional terms ·/)).not.toBeInTheDocument();
+    expect(screen.getByText('Attachments')).toBeInTheDocument();
+  });
+});
+
+describe('ProposalDoc — attachments', () => {
+  const attachments = [
+    { id: 'a-2', fileName: 'architecture.pdf', sizeBytes: 200_000 },
+    { id: 'a-3', fileName: 'terms.pdf', sizeBytes: 1_000 },
+  ];
+
+  it('renders each attachment as a plain row when no download handler is given', () => {
+    render(<ProposalDoc doc={baseDoc({ attachments })} />);
+    expect(screen.getByText('architecture.pdf')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
+  });
+
+  it('renders each attachment as a Download button that calls onDownload', async () => {
+    const user = userEvent.setup();
+    const onDownload = vi.fn();
+    render(<ProposalDoc doc={baseDoc({ attachments })} onDownload={onDownload} />);
+
+    await user.click(screen.getByRole('button', { name: 'Download architecture.pdf' }));
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(onDownload).toHaveBeenCalledWith(attachments[0]);
+    expect(screen.getByRole('button', { name: 'Download terms.pdf' })).toBeEnabled();
+  });
+
+  it('disables only the row that is downloading', () => {
+    render(<ProposalDoc doc={baseDoc({ attachments })} onDownload={vi.fn()} downloadingId="a-2" />);
+    expect(screen.getByRole('button', { name: 'Download architecture.pdf' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download terms.pdf' })).toBeEnabled();
+  });
+
+  it('keeps the 44px target on both row kinds', () => {
+    const { rerender } = render(<ProposalDoc doc={baseDoc({ attachments })} />);
+    expect(screen.getByText('architecture.pdf').closest('div.min-h-11')).not.toBeNull();
+    rerender(<ProposalDoc doc={baseDoc({ attachments })} onDownload={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Download architecture.pdf' })).toHaveClass(
+      'min-h-11'
+    );
   });
 });
 

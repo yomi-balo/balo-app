@@ -34,6 +34,8 @@ export * from './project-engagements';
 export * from './case-engagements';
 export * from './case-engagement-products';
 export * from './engagement-milestones';
+// BAL-661 — the proposal's assumptions, exclusions and additional terms, copied at kickoff.
+export * from './engagement-clauses';
 // BAL-621 — client change-request rounds on a project, and their optional milestone tags.
 export * from './project-change-requests';
 // BAL-622 — change orders on a live project, and the milestone lines each one proposes.

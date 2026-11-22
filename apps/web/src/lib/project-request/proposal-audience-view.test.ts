@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type {
   Proposal,
+  ProposalClause,
   ProposalMilestone,
   ProposalPaymentInstallment,
   ProposalDocument,
@@ -96,6 +97,20 @@ function makeDocument(overrides: Partial<ProposalDocument> = {}): ProposalDocume
   };
 }
 
+function makeClause(
+  overrides: Pick<ProposalClause, 'kind' | 'body'> & Partial<ProposalClause>
+): ProposalClause {
+  return {
+    id: `clause-${overrides.kind}-${overrides.body}`,
+    proposalId: 'proposal-1',
+    sortOrder: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 type Relationship = ProjectRequestWithRelations['relationships'][number];
 
 function makeRelationship(): Relationship {
@@ -137,6 +152,15 @@ const proposal = makeProposal();
 const milestones = [makeMilestone()];
 const installments = [makeInstallment()];
 const documents = [makeDocument()];
+const COMPANY = 'Northwind Industrial';
+// Interleaved on purpose: the lists must group by kind and keep each kind's own order.
+const CLAUSES = [
+  makeClause({ kind: 'exclusion', body: 'Data migration', sortOrder: 0 }),
+  makeClause({ kind: 'assumption', body: 'A sandbox is provided', sortOrder: 0 }),
+  makeClause({ kind: 'additional_term', body: 'Net 14 days', sortOrder: 0 }),
+  makeClause({ kind: 'assumption', body: 'Two rounds of review', sortOrder: 1 }),
+  makeClause({ kind: 'exclusion', body: 'Training', sortOrder: 1 }),
+];
 const relationship = makeRelationship();
 
 /**
@@ -147,7 +171,14 @@ const relationship = makeRelationship();
  */
 describe('hydrateReviewDoc — the expert rating aggregate', () => {
   const hydrate = (rel = relationship) =>
-    hydrateReviewDoc(proposal, milestones, installments, documents, rel, 'client');
+    hydrateReviewDoc(proposal, rel, {
+      audience: 'client',
+      milestones,
+      installments,
+      documents,
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
   it('parses the numeric rating STRING into a number and carries the count', () => {
     const doc = hydrate();
@@ -179,8 +210,14 @@ describe('hydrateReviewDoc — the expert rating aggregate', () => {
   it('is identical across every audience', () => {
     const ratings = (['client', 'expert', 'admin'] as const).map(
       (audience) =>
-        hydrateReviewDoc(proposal, milestones, installments, documents, relationship, audience)
-          .expert
+        hydrateReviewDoc(proposal, relationship, {
+          audience,
+          milestones,
+          installments,
+          documents,
+          clauses: CLAUSES,
+          clientCompanyName: COMPANY,
+        }).expert
     );
     for (const expert of ratings) {
       expect(expert.rating).toBe(4.3);
@@ -191,14 +228,14 @@ describe('hydrateReviewDoc — the expert rating aggregate', () => {
 
 describe('expertIdentityOf', () => {
   it('equals the expert block of hydrateReviewDoc for the same relationship', () => {
-    const doc = hydrateReviewDoc(
-      proposal,
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'expert',
       milestones,
       installments,
       documents,
-      relationship,
-      'expert'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
     expect(expertIdentityOf(relationship)).toEqual(doc.expert);
   });
 
@@ -233,15 +270,15 @@ describe('hydrateReviewDoc — the expert profile link', () => {
     audience: 'client' | 'expert' | 'admin',
     publicUsername?: string | null
   ): string | null =>
-    hydrateReviewDoc(
-      proposal,
+    hydrateReviewDoc(proposal, relationship, {
+      audience,
       milestones,
       installments,
       documents,
-      relationship,
-      audience,
-      publicUsername
-    ).expert.profileHref;
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+      publicUsername,
+    }).expert.profileHref;
 
   it('links the client header to the public profile when it resolves', () => {
     expect(hrefFor('client', 'priya-sharma')).toBe('/experts/priya-sharma');
@@ -260,14 +297,14 @@ describe('hydrateReviewDoc — the expert profile link', () => {
 
 describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
   it('expert: raw figures, no adminPricing, no fee rate at any level', () => {
-    const doc = hydrateReviewDoc(
-      proposal,
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'expert',
       milestones,
       installments,
       documents,
-      relationship,
-      'expert'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
     // Raw expert quote passes through untouched.
     expect(doc.priceCents).toBe(100_000);
@@ -285,14 +322,14 @@ describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
   });
 
   it('client: every money figure marked up, no adminPricing, no fee rate', () => {
-    const doc = hydrateReviewDoc(
-      proposal,
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'client',
       milestones,
       installments,
       documents,
-      relationship,
-      'client'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
     // applyBaloFee(x, 2500) grosses up by 25%.
     expect(doc.priceCents).toBe(125_000);
@@ -311,14 +348,14 @@ describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
   });
 
   it('admin: raw base figures PLUS an adminPricing breakdown with both sides + margin', () => {
-    const doc = hydrateReviewDoc(
-      proposal,
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'admin',
       milestones,
       installments,
       documents,
-      relationship,
-      'admin'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
     // Admin base body stays the raw expert quote.
     expect(doc.priceCents).toBe(100_000);
@@ -345,14 +382,14 @@ describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
   it('client: null-safe markup leaves null deposit/rate/milestone values null', () => {
     const nullTerms = makeProposal({ depositCents: null, rateCents: null });
     const nullMilestone = [makeMilestone({ valueCents: null })];
-    const doc = hydrateReviewDoc(
-      nullTerms,
-      nullMilestone,
+    const doc = hydrateReviewDoc(nullTerms, relationship, {
+      audience: 'client',
+      milestones: nullMilestone,
       installments,
       documents,
-      relationship,
-      'client'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
     expect(doc.depositCents).toBeNull();
     expect(doc.rateCents).toBeNull();
@@ -363,18 +400,89 @@ describe('hydrateReviewDoc — audience boundary (BAL-357)', () => {
 
   it('admin: null-safe breakdown carries null client deposit/rate when the raw terms are null', () => {
     const nullTerms = makeProposal({ depositCents: null, rateCents: null });
-    const doc = hydrateReviewDoc(
-      nullTerms,
+    const doc = hydrateReviewDoc(nullTerms, relationship, {
+      audience: 'admin',
       milestones,
       installments,
       documents,
-      relationship,
-      'admin'
-    );
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
 
     expect(doc.adminPricing?.expertDepositCents).toBeNull();
     expect(doc.adminPricing?.clientDepositCents).toBeNull();
     expect(doc.adminPricing?.expertRateCents).toBeNull();
     expect(doc.adminPricing?.clientRateCents).toBeNull();
+  });
+});
+
+describe('hydrateReviewDoc — clauses and attachments', () => {
+  const hydrate = (audience: 'client' | 'expert' | 'admin', company = COMPANY) =>
+    hydrateReviewDoc(proposal, relationship, {
+      audience,
+      milestones,
+      installments,
+      documents,
+      clauses: CLAUSES,
+      clientCompanyName: company,
+    });
+
+  it('groups the clauses by kind, each list in its own order', () => {
+    const doc = hydrate('client');
+    expect(doc.assumptions).toEqual(['A sandbox is provided', 'Two rounds of review']);
+    expect(doc.exclusions).toEqual(['Data migration', 'Training']);
+    expect(doc.additionalTerms).toEqual(['Net 14 days']);
+  });
+
+  it('gives all three lists empty when the proposal has no clauses', () => {
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'client',
+      milestones,
+      installments,
+      documents,
+      clauses: [],
+      clientCompanyName: COMPANY,
+    });
+    expect([doc.assumptions, doc.exclusions, doc.additionalTerms]).toEqual([[], [], []]);
+  });
+
+  it('serialises identical lists for the client, the expert and the admin', () => {
+    const lists = (['client', 'expert', 'admin'] as const).map((audience) => {
+      const { assumptions, exclusions, additionalTerms } = hydrate(audience);
+      return { assumptions, exclusions, additionalTerms };
+    });
+    expect(lists[1]).toEqual(lists[0]);
+    expect(lists[2]).toEqual(lists[0]);
+  });
+
+  it('no longer carries the retired exclusions HTML field', () => {
+    expect(hydrate('client')).not.toHaveProperty('exclusionsHtml');
+  });
+
+  it('passes the client company name through, whatever the audience', () => {
+    expect(hydrate('client').clientCompanyName).toBe(COMPANY);
+    expect(hydrate('expert').clientCompanyName).toBe(COMPANY);
+    expect(hydrate('admin', 'the client').clientCompanyName).toBe('the client');
+  });
+
+  it('lists every live document as an attachment without a kind', () => {
+    const doc = hydrateReviewDoc(proposal, relationship, {
+      audience: 'client',
+      milestones,
+      installments,
+      documents: [
+        makeDocument({ id: 'doc-ref', kind: 'ref', fileName: 'brief.pdf', sizeBytes: 10 }),
+        makeDocument({ id: 'doc-terms', kind: 'terms', fileName: 'terms.pdf', sizeBytes: 20 }),
+      ],
+      clauses: CLAUSES,
+      clientCompanyName: COMPANY,
+    });
+    expect(doc.attachments).toEqual([
+      { id: 'doc-ref', fileName: 'brief.pdf', sizeBytes: 10 },
+      { id: 'doc-terms', fileName: 'terms.pdf', sizeBytes: 20 },
+    ]);
+    for (const attachment of doc.attachments) {
+      expect(attachment).not.toHaveProperty('kind');
+    }
   });
 });

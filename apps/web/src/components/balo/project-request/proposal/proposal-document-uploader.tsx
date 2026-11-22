@@ -14,16 +14,14 @@ import { requestProposalDocumentUploadAction } from '@/app/(dashboard)/projects/
 import { confirmProposalDocumentUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 
-export type ProposalDocumentKind = 'terms' | 'ref';
+/** The only kind a proposal document can be: a reference attachment. */
+export type ProposalDocumentKind = 'ref';
 
 interface UseProposalDocumentUploadArgs {
   requestId: string;
   relationshipId: string;
   kind: ProposalDocumentKind;
-  /** Single-document mode (the terms supplement): one file at a time, the
-   *  server soft-deletes the one it replaces. */
-  single?: boolean;
-  /** Documents of THIS controller's kind. Owned by the composer. */
+  /** The proposal's documents. Owned by the composer. */
   documents: ProposalDocumentView[];
   /**
    * Resolves the proposalId, FORCING a draft-create first if none exists yet
@@ -56,16 +54,14 @@ function validateFile(file: File): string | null {
   return null;
 }
 
-function successMessage(added: number, single: boolean): string {
-  if (single) return 'Your terms are attached';
+function successMessage(added: number): string {
   return added === 1 ? 'Attachment added' : `${added} files attached`;
 }
 
 /**
  * Proposal-document upload pipeline (A6.2 / BAL-288): presign → XHR PUT (with
- * progress) → confirm, plus removal. One controller per kind (`ref` attachments,
- * the single `terms` supplement); the composer owns both so the page-wide drop,
- * the Attachments section and the terms popover share one pipeline. Client-side
+ * progress) → confirm, plus removal. The composer owns the one controller so the
+ * page-wide drop and the Attachments section share one pipeline. Client-side
  * allow-list + cap are UX pre-checks; the confirm action HEAD-verifies in R2 as the
  * source of truth.
  */
@@ -73,7 +69,6 @@ export function useProposalDocumentUpload({
   requestId,
   relationshipId,
   kind,
-  single = false,
   documents,
   ensureProposalId,
   onAdded,
@@ -129,8 +124,7 @@ export function useProposalDocumentUpload({
 
   const uploadFiles = useCallback(
     async (files: File[]): Promise<void> => {
-      const candidates = single ? files.slice(0, 1) : files;
-      const valid = candidates.filter((file) => {
+      const valid = files.filter((file) => {
         const validationError = validateFile(file);
         if (validationError !== null) toast.error(validationError);
         return validationError === null;
@@ -148,12 +142,12 @@ export function useProposalDocumentUpload({
         for (const file of valid) {
           if (await uploadOne(file, proposalId)) added += 1;
         }
-        if (added > 0) toast.success(successMessage(added, single));
+        if (added > 0) toast.success(successMessage(added));
       } finally {
         setProgress(null);
       }
     },
-    [ensureProposalId, single, uploadOne]
+    [ensureProposalId, uploadOne]
   );
 
   const remove = useCallback(
@@ -190,13 +184,10 @@ export function useProposalDocumentUpload({
 
 interface ProposalDocumentUploaderViewProps {
   controller: ProposalDocumentUploadController;
-  /** Documents of the controller's kind. */
   documents: ProposalDocumentView[];
   /** Id of the element that names the file input. */
   labelId: string;
-  /** Single-document mode: one file max, the picker turns into "Replace". */
-  single?: boolean;
-  /** Picker copy; defaults per mode. Ignored when replacing in single mode. */
+  /** Picker copy; defaults to "Attach a file". */
   pickLabel?: string;
   /** Disabled while the proposal is no longer editable (defensive). */
   disabled?: boolean;
@@ -204,23 +195,18 @@ interface ProposalDocumentUploaderViewProps {
 
 /**
  * Document list, upload progress bar and dashed picker for one
- * {@link useProposalDocumentUpload} controller. In single mode with a file already
- * attached the picker stays and reads "Replace your terms".
+ * {@link useProposalDocumentUpload} controller.
  */
 export function ProposalDocumentUploaderView({
   controller,
   documents,
   labelId,
-  single = false,
-  pickLabel,
+  pickLabel = 'Attach a file',
   disabled = false,
 }: Readonly<ProposalDocumentUploaderViewProps>): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   const { progress, removingId, uploadFiles, remove } = controller;
   const uploading = progress !== null;
-  const replacing = single && documents.length > 0;
-  const defaultLabel = single ? 'Attach your terms' : 'Attach a file';
-  const label = replacing ? 'Replace your terms' : (pickLabel ?? defaultLabel);
 
   const handlePick = useCallback((): void => {
     inputRef.current?.click();
@@ -245,7 +231,7 @@ export function ProposalDocumentUploaderView({
       <input
         ref={inputRef}
         type="file"
-        multiple={!single}
+        multiple
         accept={PROPOSAL_DOCUMENT_ACCEPT}
         className="sr-only"
         tabIndex={-1}
@@ -271,7 +257,7 @@ export function ProposalDocumentUploaderView({
                   </span>
                 </span>
                 <span className="bg-muted text-muted-foreground shrink-0 rounded-full px-2.5 py-0.5 text-[12.5px] whitespace-nowrap">
-                  {doc.kind === 'terms' ? 'Your terms' : 'Reference'}
+                  Reference
                 </span>
                 <button
                   type="button"
@@ -319,7 +305,7 @@ export function ProposalDocumentUploaderView({
         ) : (
           <Paperclip className="size-4" aria-hidden="true" />
         )}
-        {label}
+        {pickLabel}
       </button>
     </div>
   );

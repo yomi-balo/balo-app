@@ -6,6 +6,7 @@
  * never set, so no client-side (marked-up) figure can render.
  */
 
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import type { ProposalExpertIdentity, ProposalReviewDoc } from './proposal-review-types';
 import { toSavePayload, type ProposalDraftState } from './proposal-composer-state';
 
@@ -14,6 +15,8 @@ export interface DraftPreviewContext {
   relationshipId: string;
   version: number;
   expert: ProposalExpertIdentity;
+  /** The client company the proposal is for, named in Balo's pricing rule. */
+  clientCompanyName: string;
 }
 
 export function draftToReviewDoc(
@@ -28,7 +31,8 @@ export function draftToReviewDoc(
     status: 'draft',
     pricingMethod: payload.pricingMethod,
     overviewHtml: payload.overview,
-    exclusionsHtml: payload.exclusions ?? null,
+    ...groupClauseBodies(payload.clauses ?? []),
+    clientCompanyName: ctx.clientCompanyName,
     priceCents: payload.priceCents,
     currency: payload.currency ?? state.currency,
     timeframeWeeks: payload.timeframeWeeks ?? null,
@@ -53,7 +57,6 @@ export function draftToReviewDoc(
       id: d.id,
       fileName: d.fileName,
       sizeBytes: d.sizeBytes,
-      kind: d.kind,
     })),
     expert: ctx.expert,
   };

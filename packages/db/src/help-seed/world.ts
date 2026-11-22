@@ -29,6 +29,8 @@ import {
   projectRequestTags,
   projectTags,
   proposalChangeRequests,
+  proposalClauses,
+  proposalDocuments,
   proposalDraftGenerations,
   proposalMilestones,
   proposalPaymentInstallments,
@@ -2108,6 +2110,62 @@ async function insertClientRequests(db: HelpExecutor, ctx: HelpWorldContext): Pr
       pct: 50,
     },
   ]);
+  // The lists and attachment the client reads before accepting (reviewing-a-proposal). No
+  // figures: a list item is shown to the client exactly as the expert typed it.
+  await db.insert(proposalClauses).values([
+    {
+      id: DB_.approvalAssumption1,
+      proposalId: DB_.approvalProposal,
+      kind: 'assumption',
+      sortOrder: 0,
+      body: 'Your sales leads can join two workshops in the first two weeks.',
+    },
+    {
+      id: DB_.approvalAssumption2,
+      proposalId: DB_.approvalProposal,
+      kind: 'assumption',
+      sortOrder: 1,
+      body: 'The discount bands stay the same while the approval flow is built.',
+    },
+    {
+      id: DB_.approvalExclusion1,
+      proposalId: DB_.approvalProposal,
+      kind: 'exclusion',
+      sortOrder: 0,
+      body: 'Changes to CPQ pricing rules or price books.',
+    },
+    {
+      id: DB_.approvalExclusion2,
+      proposalId: DB_.approvalProposal,
+      kind: 'exclusion',
+      sortOrder: 1,
+      body: 'Approvals for contracts and orders. This covers quotes only.',
+    },
+    {
+      id: DB_.approvalTerm1,
+      proposalId: DB_.approvalProposal,
+      kind: 'additional_term',
+      sortOrder: 0,
+      body: 'Training is delivered remotely, in up to two sessions.',
+    },
+    {
+      id: DB_.approvalTerm2,
+      proposalId: DB_.approvalProposal,
+      kind: 'additional_term',
+      sortOrder: 1,
+      body: 'Your team signs off each milestone within five working days of its delivery.',
+    },
+  ]);
+  await db.insert(proposalDocuments).values({
+    id: DB_.approvalDocument,
+    proposalId: DB_.approvalProposal,
+    uploadedByUserId: ctx.priyaId,
+    kind: 'ref',
+    r2Key: `help-fixture/proposals/${DB_.approvalProposal}/approval-matrix.pdf`,
+    fileName: 'Approval matrix.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 184_320,
+  });
 }
 
 /**

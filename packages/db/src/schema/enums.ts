@@ -191,20 +191,41 @@ export const pricingMethodEnum = pgEnum('pricing_method', ['fixed', 'tm']);
 /** T&M invoice cadence. */
 export const proposalCadenceEnum = pgEnum('proposal_cadence', ['monthly', 'fortnightly']);
 
-/** Section a client change-request targets (the composer ChangesModal select). */
+/**
+ * Section a client change-request targets (the composer ChangesModal select). Mirrored by
+ * `PROPOSAL_CHANGE_SECTIONS` in `@balo/shared/project-requests`, order included
+ * (`proposal-change-sections-match-the-pgenum.test.ts`). APPEND-ONLY: a new value goes at the
+ * END, and the migration that adds it must not use it (55P04).
+ */
 export const proposalChangeSectionEnum = pgEnum('proposal_change_section', [
   'general',
   'milestones',
   'pricing',
   'payment_terms',
   'timeline',
+  'assumptions_exclusions',
+  'terms',
 ]);
 
 /**
- * Proposal-scoped attachment kind: a terms supplement (the expert's additional
- * terms document) vs a reference / supporting doc.
+ * Proposal-scoped attachment kind. `ref` is a reference / supporting document, and every live
+ * document is one. `terms` is legacy: no writer since BAL-661, and every row was converted to
+ * `ref`. The value stays because a Postgres enum value cannot be dropped in place.
  */
 export const proposalDocumentKindEnum = pgEnum('proposal_document_kind', ['terms', 'ref']);
+
+/**
+ * The three typed lists a proposal carries (`proposal_clauses.kind`), copied to the engagement
+ * at kickoff (`engagement_clauses.kind`). Mirrored by `PROPOSAL_CLAUSE_KINDS` in
+ * `@balo/shared/project-requests`, order included
+ * (`proposal-clause-kinds-match-the-pgenum.test.ts`). The order is also the reading order of
+ * the lists. APPEND-ONLY.
+ */
+export const proposalClauseKindEnum = pgEnum('proposal_clause_kind', [
+  'assumption',
+  'exclusion',
+  'additional_term',
+]);
 
 /**
  * BAL-611 — the lifecycle of ONE AI proposal-draft generation

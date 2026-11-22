@@ -163,6 +163,9 @@ export function useSendProposal({
         version: result.version,
         price_cents: result.analytics.priceCents,
         currency: result.analytics.currency,
+        assumption_count: result.analytics.assumptionCount,
+        exclusion_count: result.analytics.exclusionCount,
+        additional_term_count: result.analytics.additionalTermCount,
       });
 
       toast.success(`Version ${result.version} sent to ${companyName}`);

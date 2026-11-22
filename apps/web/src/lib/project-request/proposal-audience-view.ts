@@ -25,9 +25,11 @@ import type {
   ProposalMilestone,
   ProposalPaymentInstallment,
   ProposalDocument,
+  ProposalClause,
   ProjectRequestWithRelations,
 } from '@balo/db';
 import { applyBaloFee } from '@balo/shared/pricing';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import type {
   ProposalReviewDoc,
@@ -110,6 +112,17 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
   };
 }
 
+/** The proposal's children and the viewing context that {@link hydrateReviewDoc} resolves against. */
+export interface HydrateReviewDocContext {
+  audience: ProposalAudience;
+  milestones: ProposalMilestone[];
+  installments: ProposalPaymentInstallment[];
+  documents: ProposalDocument[];
+  clauses: readonly ProposalClause[];
+  clientCompanyName: string;
+  publicUsername?: string | null;
+}
+
 /**
  * Map a persisted proposal (+ its children) into the serialisable, presentation-
  * only {@link ProposalReviewDoc} the read/submitted views render, resolving money
@@ -128,18 +141,26 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
  *
  * ⚠ `null` RATING MEANS NO REVIEWS, NEVER 0.0, and the count travels with it everywhere.
  *
+ * `clauses` are the proposal's live clause rows; the lists they group into carry no money, so
+ * every audience gets the same ones. `clientCompanyName` is the client company's display name
+ * (`request.company?.name ?? 'the client'`).
+ *
  * `publicUsername` is the expert's username ONLY when their public profile resolves (from
  * `expertsRepository.findPublicUsernamesByProfileIds`). It becomes `expert.profileHref` on a
  * `client` doc alone; the expert and admin audiences never link the header, whatever is passed.
  */
 export function hydrateReviewDoc(
   proposal: Proposal,
-  milestones: ProposalMilestone[],
-  installments: ProposalPaymentInstallment[],
-  documents: ProposalDocument[],
   relationship: Relationship,
-  audience: ProposalAudience,
-  publicUsername: string | null = null
+  {
+    audience,
+    milestones,
+    installments,
+    documents,
+    clauses,
+    clientCompanyName,
+    publicUsername = null,
+  }: HydrateReviewDocContext
 ): ProposalReviewDoc {
   // Client sees the grossed-up figure; expert + admin-base stay at the raw quote.
   const priceFn =
@@ -156,7 +177,8 @@ export function hydrateReviewDoc(
     status: proposal.status,
     pricingMethod: proposal.pricingMethod,
     overviewHtml: proposal.overview,
-    exclusionsHtml: proposal.exclusions,
+    ...groupClauseBodies(clauses),
+    clientCompanyName,
     priceCents: priceFn(proposal.priceCents),
     currency: proposal.currency,
     timeframeWeeks: proposal.timeframeWeeks,
@@ -175,7 +197,6 @@ export function hydrateReviewDoc(
       id: d.id,
       fileName: d.fileName,
       sizeBytes: d.sizeBytes,
-      kind: d.kind,
     })),
     expert: {
       ...expertIdentityOf(relationship),

@@ -29,6 +29,7 @@ import {
   type NewProjectEngagement,
   type ProjectEngagement,
   type ProjectRequest,
+  type ProposalClause,
 } from '../schema';
 import { UNTITLED_ENGAGEMENT_LABEL, type RatingNudgeCandidate } from './reviews';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
@@ -42,6 +43,8 @@ import { conversationsRepository } from './conversations';
 import { reanchorRequestCallsToEngagementTx } from './meeting-contexts';
 import { listByProposalTx } from './proposal-milestones';
 import { listByProposalTx as listInstallmentsTx } from './proposal-payment-installments';
+import { listClausesByProposalTx } from './proposal-clauses';
+import { snapshotClausesFromProposalTx } from './engagement-clauses';
 import {
   engagementMilestonesRepository,
   revertMilestoneTx,
@@ -1172,9 +1175,11 @@ export const projectEngagementsRepository = {
     sourceProposalId: string;
     relationshipId: string;
     /**
-     * The approving admin (BAL-330). Recorded as the milestone snapshot author
-     * (`engagement_milestones.created_by_user_id`) and the actor on the
-     * `engagement.milestones_snapshotted` audit event. `admin.id` in the caller.
+     * The approving admin (BAL-330). Recorded as the milestone and clause snapshot
+     * author (`engagement_milestones.created_by_user_id`,
+     * `engagement_clauses.created_by_user_id`) and the actor on the
+     * `engagement.milestones_snapshotted` and `engagement.clauses_snapshotted` audit
+     * events. `admin.id` in the caller.
      */
     approvingAdminUserId: string;
     pricingMethod: PricingMethod;
@@ -1308,6 +1313,31 @@ export const projectEngagementsRepository = {
         entityId: parent.id,
         engagementId: parent.id,
         metadata: { milestone_count: sources.length, source_proposal_id: input.sourceProposalId },
+      });
+
+      // Snapshot the accepted proposal's assumptions, exclusions and additional terms the
+      // same way (same tx, FK to the supertype). A proposal with no clauses gives no rows, and
+      // the ADR-1030 audit still records zero counts, as `milestones_snapshotted` does.
+      const clauseSources = await listClausesByProposalTx(tx, input.sourceProposalId);
+      await snapshotClausesFromProposalTx(tx, {
+        engagementId: parent.id,
+        approvingAdminUserId: input.approvingAdminUserId,
+        sources: clauseSources,
+      });
+      const clauseCount = (kind: ProposalClause['kind']): number =>
+        clauseSources.filter((clause) => clause.kind === kind).length;
+      await recordDeliveryAudit(tx, {
+        actorUserId: input.approvingAdminUserId,
+        action: 'engagement.clauses_snapshotted',
+        entityType: 'engagement',
+        entityId: parent.id,
+        engagementId: parent.id,
+        metadata: {
+          assumption_count: clauseCount('assumption'),
+          exclusion_count: clauseCount('exclusion'),
+          additional_term_count: clauseCount('additional_term'),
+          source_proposal_id: input.sourceProposalId,
+        },
       });
 
       /**

@@ -22,7 +22,8 @@ import React from 'react';
 //     (page 1 only; "know the shape of the deal at a glance")
 //   • Overview
 //   • Milestones & deliverables — each with title, value (Fixed), and DESCRIPTION
-//   • Payment terms · Not included · Attachments · Balo standard terms
+//   • Assumptions and exclusions (omitted when both lists are empty) · Payment terms
+//   • Terms (Balo Project T&Cs, then the expert's additional terms) · Attachments
 //   • Footer (version + generated date + page N of M), fixed on every page
 //
 // HARD RULE: every money figure is the CLIENT price (through applyBaloFee).
@@ -104,13 +105,18 @@ const P = {
     ['Midpoint', 40, '$6,250'],
     ['On completion', 30, '$4,687'],
   ],
-  exclusions:
-    'Third-party license costs and ongoing managed support beyond the training period are not included.',
+  assumptions: [
+    'Acme gives the team sandbox access by kickoff.',
+    'The current price list is final before the build starts.',
+  ],
+  exclusions: ['Third-party license costs.', 'Managed support beyond the training period.'],
+  additionalTerms: ['One round of revisions is included per milestone.'],
+  pricingRule:
+    'This is a fixed-price project. Any increase in cost is only charged if Acme Industries approves it.',
   attachments: ['Solution architecture overview.pdf', 'Reference implementation — case study.pdf'],
   standardTerms: [
-    'Work is delivered through Balo; payment is handled by Balo, not directly with the expert.',
-    'Either party may raise issues through Balo support during the engagement.',
-    'Balo standard service terms and privacy policy apply to this proposal.',
+    'Work is delivered against the milestones and scope set out in this proposal.',
+    'Confidential information shared during the engagement stays confidential.',
   ],
   generatedDate: '14 July 2026',
 };
@@ -118,6 +124,18 @@ const P = {
 const Label = ({ children, style }) => (
   <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.08em', color: c.muted, ...style }}>
     {children}
+  </div>
+);
+
+/** A numbered plain-text list, printed exactly as typed. */
+const NumberedRows = ({ items }) => (
+  <div style={{ marginTop: 4 }}>
+    {items.map((item, i) => (
+      <div key={item} style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
+        <span style={{ fontSize: 9, color: c.muted, minWidth: 16 }}>{i + 1}.</span>
+        <span style={{ flex: 1, fontSize: 9, color: c.muted, lineHeight: 1.5 }}>{item}</span>
+      </div>
+    ))}
   </div>
 );
 
@@ -285,6 +303,19 @@ export default function ProposalPdfReference() {
             </div>
           </div>
 
+          {/* Assumptions and exclusions */}
+          <div style={{ marginTop: 18 }}>
+            <Label style={{ letterSpacing: '0.09em' }}>ASSUMPTIONS AND EXCLUSIONS</Label>
+            <div style={{ marginTop: 6 }}>
+              <Label>ASSUMPTIONS</Label>
+              <NumberedRows items={P.assumptions} />
+              <div style={{ marginTop: 10 }}>
+                <Label>NOT INCLUDED</Label>
+                <NumberedRows items={P.exclusions} />
+              </div>
+            </div>
+          </div>
+
           {/* Payment terms */}
           <div style={{ marginTop: 18 }}>
             <Label style={{ letterSpacing: '0.09em' }}>PAYMENT TERMS</Label>
@@ -310,11 +341,44 @@ export default function ProposalPdfReference() {
             </div>
           </div>
 
-          {/* Not included */}
+          {/* Terms */}
           <div style={{ marginTop: 18 }}>
-            <Label style={{ letterSpacing: '0.09em' }}>NOT INCLUDED</Label>
-            <div style={{ fontSize: 9.5, lineHeight: 1.6, color: '#334155', marginTop: 6 }}>
-              {P.exclusions}
+            <Label style={{ letterSpacing: '0.09em' }}>TERMS</Label>
+            <div
+              style={{
+                marginTop: 6,
+                border: `1px solid ${c.border}`,
+                background: c.subtleBg,
+                borderRadius: 8,
+                padding: 12,
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 600, marginBottom: 5 }}>
+                Balo Project T&amp;Cs apply
+              </div>
+              <div style={{ fontSize: 9, color: c.muted, lineHeight: 1.5 }}>
+                The same terms for every project on Balo.
+              </div>
+              <div style={{ fontSize: 9, color: c.muted, lineHeight: 1.5, margin: '4px 0' }}>
+                {P.pricingRule}
+              </div>
+              {P.standardTerms.map((term) => (
+                <div key={term} style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
+                  <span style={{ fontSize: 9, color: c.muted }}>•</span>
+                  <span style={{ flex: 1, fontSize: 9, color: c.muted, lineHeight: 1.5 }}>
+                    {term}
+                  </span>
+                </div>
+              ))}
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, marginBottom: 5 }}>
+                  Priya’s additional terms
+                </div>
+                <div style={{ fontSize: 9, color: c.muted, marginBottom: 4 }}>
+                  These add to Balo’s Project T&amp;Cs.
+                </div>
+                <NumberedRows items={P.additionalTerms} />
+              </div>
             </div>
           </div>
 
@@ -336,32 +400,6 @@ export default function ProposalPdfReference() {
                 >
                   <FileText />
                   <span style={{ fontSize: 9, fontWeight: 600 }}>{name}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Standard terms */}
-          <div style={{ marginTop: 18 }}>
-            <Label style={{ letterSpacing: '0.09em' }}>TERMS</Label>
-            <div
-              style={{
-                marginTop: 6,
-                border: `1px solid ${c.border}`,
-                background: c.subtleBg,
-                borderRadius: 8,
-                padding: 12,
-              }}
-            >
-              <div style={{ fontSize: 10, fontWeight: 600, marginBottom: 5 }}>
-                Balo standard terms apply
-              </div>
-              {P.standardTerms.map((term) => (
-                <div key={term} style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
-                  <span style={{ fontSize: 9, color: c.muted }}>•</span>
-                  <span style={{ flex: 1, fontSize: 9, color: c.muted, lineHeight: 1.5 }}>
-                    {term}
-                  </span>
                 </div>
               ))}
             </div>

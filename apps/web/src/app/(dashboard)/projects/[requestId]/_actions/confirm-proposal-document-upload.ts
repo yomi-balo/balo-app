@@ -24,7 +24,7 @@ const inputSchema = z.object({
   requestId: z.uuid(),
   relationshipId: z.uuid(),
   proposalId: z.uuid(),
-  kind: z.enum(['terms', 'ref']),
+  kind: z.literal('ref'),
   key: z.string().min(1).max(512),
   fileName: z.string().trim().min(1).max(255),
   contentType: z.string().min(1).max(255),
@@ -41,7 +41,7 @@ export type ConfirmProposalDocumentUploadInput = z.infer<typeof inputSchema>;
 export interface ProposalDocumentView {
   id: string;
   proposalId: string;
-  kind: 'terms' | 'ref';
+  kind: 'ref';
   fileName: string;
   contentType: string;
   sizeBytes: number;
@@ -123,47 +123,15 @@ async function verifyUploadedObject(
  */
 async function isEditableDraft(proposalId: string, relationshipId: string): Promise<boolean> {
   const proposal = await proposalsRepository.findById(proposalId);
-  return (
-    proposal !== undefined &&
-    proposal.relationshipId === relationshipId &&
-    proposal.status === 'draft'
-  );
-}
-
-/**
- * Replace-semantics for the single `terms` supplement: soft-delete every prior
- * live `terms` doc and best-effort R2-delete its object (one supplement max). A
- * no-op for `ref` docs. Extracted to keep the action's cognitive complexity low.
- */
-async function replacePriorTermsSupplement(context: {
-  proposalId: string;
-  requestId: string;
-  relationshipId: string;
-  userId: string;
-}): Promise<void> {
-  const { proposalId, requestId, relationshipId, userId } = context;
-  const priorTerms = await proposalDocumentsRepository.listByProposal(proposalId, 'terms');
-  for (const prior of priorTerms) {
-    const removed = await proposalDocumentsRepository.softDelete(prior.id);
-    if (removed === undefined) continue;
-    deleteProposalDocumentFromR2(prior.r2Key).catch(() => {});
-    log.warn('Replaced prior terms supplement on a proposal', {
-      requestId,
-      relationshipId,
-      proposalId,
-      userId,
-      replacedDocumentId: prior.id,
-    });
-  }
+  return proposal?.relationshipId === relationshipId && proposal.status === 'draft';
 }
 
 /**
  * Confirm an uploaded proposal document (A6.2 / BAL-288, step 3): validates key
  * shape + provenance (proposal from VALIDATED ownership, user from session),
  * HEAD-checks the real size/type in R2, then inserts the `proposal_documents`
- * row. The TERMS supplement is single — before confirming a new `terms` doc, any
- * existing live `terms` doc is soft-deleted and best-effort R2-deleted (replace
- * semantics, one supplement max).
+ * row. Every document is a `ref` attachment: terms are the proposal's
+ * additional-terms list, not an upload.
  *
  * `addDocument` is called STANDALONE (no wider transaction) so its bare-insert
  * contract is satisfied; a duplicate r2Key (23505) maps to friendly copy.
@@ -210,17 +178,7 @@ export async function confirmProposalDocumentUploadAction(
       return { success: false, error: verified.error };
     }
 
-    // 3. Terms supplement is single — replace any prior live `terms` doc first.
-    if (kind === 'terms') {
-      await replacePriorTermsSupplement({
-        proposalId,
-        requestId,
-        relationshipId,
-        userId: user.id,
-      });
-    }
-
-    // 4. Insert the row (standalone — isolate dup r2Key 23505 below).
+    // 3. Insert the row (standalone — isolate dup r2Key 23505 below).
     const row = await proposalDocumentsRepository.addDocument({
       proposalId,
       uploadedByUserId: user.id,
@@ -234,7 +192,7 @@ export async function confirmProposalDocumentUploadAction(
     const document: ProposalDocumentView = {
       id: row.id,
       proposalId,
-      kind: row.kind,
+      kind,
       fileName: row.fileName,
       contentType: row.contentType,
       sizeBytes: row.sizeBytes,

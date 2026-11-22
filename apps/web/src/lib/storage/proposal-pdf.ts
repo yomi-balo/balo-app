@@ -27,12 +27,13 @@ export const PROPOSAL_PDF_PREFIX = 'proposals/';
  * PDF's layout changes.** The download route is a read-through cache, so without a
  * bump every proposal whose PDF was already generated would keep serving the OLD
  * layout forever. `v2` = BAL-392's four-cell summary box (replacing BAL-385's
- * two-item money/timeframe banner). Objects under a superseded version are
+ * two-item money/timeframe banner); `v3` = the assumptions-and-exclusions section, Balo's
+ * Project T&Cs with the expert's numbered additional terms, and Attachments last. Objects under a superseded version are
  * orphaned in R2; that is accepted — there is no purge job.
  */
-export const PROPOSAL_PDF_LAYOUT_VERSION = 'v2';
+export const PROPOSAL_PDF_LAYOUT_VERSION = 'v3';
 
-/** Deterministic cache key for a proposal's client PDF: `proposals/{id}/client-v2.pdf`. */
+/** Deterministic cache key for a proposal's client PDF: `proposals/{id}/client-v3.pdf`. */
 export function proposalPdfKey(proposalId: string): string {
   return `${PROPOSAL_PDF_PREFIX}${proposalId}/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`;
 }

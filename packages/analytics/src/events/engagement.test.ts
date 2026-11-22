@@ -80,6 +80,7 @@ describe('ENGAGEMENT_SERVER_EVENTS — time entries (BAL-624)', () => {
 describe('ENGAGEMENT_EVENTS', () => {
   it('exposes exactly the client-side engagement events', () => {
     expect(Object.keys(ENGAGEMENT_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'AGREED_TERMS_OPENED',
       'CANCEL_DIALOG_KEPT',
       'CANCEL_DIALOG_OPENED',
       'COMPLETION_BLOCKED_VIEW',
@@ -94,6 +95,7 @@ describe('ENGAGEMENT_EVENTS', () => {
   it('maps the cancel-dialog constants to their exact event names', () => {
     expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED).toBe('engagement_cancel_dialog_opened');
     expect(ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT).toBe('engagement_cancel_dialog_kept');
+    expect(ENGAGEMENT_EVENTS.AGREED_TERMS_OPENED).toBe('engagement_agreed_terms_opened');
   });
 });
 

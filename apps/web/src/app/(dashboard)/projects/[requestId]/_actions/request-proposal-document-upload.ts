@@ -16,7 +16,7 @@ const inputSchema = z.object({
   requestId: z.uuid(),
   relationshipId: z.uuid(),
   proposalId: z.uuid(),
-  kind: z.enum(['terms', 'ref']),
+  kind: z.literal('ref'),
   contentType: z.string().min(1).max(255),
   fileName: z.string().trim().min(1).max(255),
 });
@@ -39,7 +39,8 @@ const GENERIC_FAILURE = "Attaching documents isn't available right now.";
  * presign → PUT → confirm). Guards: expert lens, the proposal belongs to the
  * VALIDATED relationship, and the proposal is still a live `draft` (no edits
  * after submit). The key is scoped to the validated proposal + the session user
- * — never client-supplied. `kind` carries through to the confirm/insert.
+ * — never client-supplied. `kind` is always `ref`: terms are the proposal's
+ * additional-terms list, not an upload.
  */
 export async function requestProposalDocumentUploadAction(
   input: RequestProposalDocumentUploadInput
@@ -68,11 +69,7 @@ export async function requestProposalDocumentUploadAction(
 
     // The proposal must belong to this relationship and still be an editable draft.
     const proposal = await proposalsRepository.findById(proposalId);
-    if (
-      proposal === undefined ||
-      proposal.relationshipId !== relationshipId ||
-      proposal.status !== 'draft'
-    ) {
+    if (proposal?.relationshipId !== relationshipId || proposal.status !== 'draft') {
       return { success: false, error: STALE_PROPOSAL };
     }
 

@@ -9,15 +9,18 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   proposalDocumentsRepository,
+  proposalClausesRepository,
   proposalChangeRequestsRepository,
   proposalShareLinksRepository,
   type Proposal,
   type ProposalMilestone,
   type ProposalPaymentInstallment,
   type ProposalDocument,
+  type ProposalClause,
   type ProposalShareLink,
   type ProjectRequestWithRelations,
 } from '@balo/db';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
@@ -112,12 +115,26 @@ function documentToView(document: ProposalDocument): ProposalDocumentView {
   return {
     id: document.id,
     proposalId: document.proposalId,
-    kind: document.kind,
+    kind: 'ref',
     fileName: document.fileName,
     contentType: document.contentType,
     sizeBytes: document.sizeBytes,
     uploadedByUserId: document.uploadedByUserId,
     createdAtIso: document.createdAt.toISOString(),
+  };
+}
+
+/** The three clause lists as composer rows, each in the order the expert set them. */
+function clauseDraftLists(
+  clauses: readonly ProposalClause[]
+): Pick<ProposalDraftState, 'assumptions' | 'exclusions' | 'additionalTerms'> {
+  const grouped = groupClauseBodies(clauses);
+  const toRows = (bodies: string[]): { key: string; body: string }[] =>
+    bodies.map((body) => ({ key: nextDraftKey(), body }));
+  return {
+    assumptions: toRows(grouped.assumptions),
+    exclusions: toRows(grouped.exclusions),
+    additionalTerms: toRows(grouped.additionalTerms),
   };
 }
 
@@ -131,7 +148,8 @@ function hydrateDraftState(
   draft: Proposal | undefined,
   milestones: ProposalMilestone[],
   installments: ProposalPaymentInstallment[],
-  documents: ProposalDocument[]
+  documents: ProposalDocument[],
+  clauses: readonly ProposalClause[]
 ): ProposalDraftState {
   if (draft === undefined) {
     return emptyDraftState();
@@ -165,7 +183,7 @@ function hydrateDraftState(
     pricingMethod: draft.pricingMethod,
     currency: draft.currency,
     timeframeWeeks: draft.timeframeWeeks,
-    exclusions: draft.exclusions ?? '',
+    ...clauseDraftLists(clauses),
     depositCents: draft.depositCents,
     rateCents: draft.rateCents,
     // The persisted `priceCents` IS the typed Fixed total (BAL-294); seed it only
@@ -184,33 +202,36 @@ function hydrateDraftState(
  * into an audience-resolved {@link ProposalReviewDoc} (BAL-357 — money is resolved
  * for `audience`: raw for expert/admin-base, `applyBaloFee`'d for client). Returns
  * `null` when the relationship has no current proposal, or its status isn't
- * reviewable (e.g. `draft`/`withdrawn`). `publicUsernameRead` is the expert's
+ * reviewable (e.g. `draft`/`withdrawn`). `clientCompanyName` is the client company's display
+ * name, carried into the doc for the copy that names the party. `publicUsernameRead` is the expert's
  * public-profile username, read alongside the proposal and awaited with its children.
  */
 async function loadReviewDoc(
   relationship: Relationship,
   audience: ProposalAudience,
+  clientCompanyName: string,
   publicUsernameRead: Promise<string | null> = Promise.resolve(null)
 ): Promise<ProposalReviewDoc | null> {
   const proposal = await proposalsRepository.findCurrentByRelationship(relationship.id);
   if (proposal === undefined || !REVIEWABLE_PROPOSAL_STATUSES.has(proposal.status)) {
     return null;
   }
-  const [milestones, installments, documents, publicUsername] = await Promise.all([
+  const [milestones, installments, documents, clauses, publicUsername] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposal.id),
     proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
     proposalDocumentsRepository.listByProposal(proposal.id),
+    proposalClausesRepository.listByProposal(proposal.id),
     publicUsernameRead,
   ]);
-  return hydrateReviewDoc(
-    proposal,
+  return hydrateReviewDoc(proposal, relationship, {
+    audience,
     milestones,
     installments,
     documents,
-    relationship,
-    audience,
-    publicUsername
-  );
+    clauses,
+    clientCompanyName,
+    publicUsername,
+  });
 }
 
 /**
@@ -235,21 +256,22 @@ async function loadPublicUsernames(
 }
 
 /**
- * Load a proposal's children (milestones, installments, documents) in parallel and
+ * Load a proposal's children (milestones, installments, documents, clauses) in parallel and
  * hydrate the composer's initial {@link ProposalDraftState}. Shared by the draft
  * composer (A6.2) and the revise composer (A6.4) — same hydration either way. When
  * `proposal` is `undefined` (no draft yet) the composer starts from an empty draft.
  */
 async function hydrateComposerState(proposal: Proposal | undefined): Promise<ProposalDraftState> {
-  const [milestones, installments, documents] =
+  const [milestones, installments, documents, clauses] =
     proposal === undefined
-      ? [[], [], []]
+      ? [[], [], [], []]
       : await Promise.all([
           proposalMilestonesRepository.listByProposal(proposal.id),
           proposalPaymentInstallmentsRepository.listByProposal(proposal.id),
           proposalDocumentsRepository.listByProposal(proposal.id),
+          proposalClausesRepository.listByProposal(proposal.id),
         ]);
-  return hydrateDraftState(proposal, milestones, installments, documents);
+  return hydrateDraftState(proposal, milestones, installments, documents, clauses);
 }
 
 /** Outer layout wrapper shared by the composer and its in-place sent screen. */
@@ -510,7 +532,7 @@ async function renderExpertSurface(
   }
   // Submitted view: read-only "awaiting the client" once a proposal exists.
   if (SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
-    const doc = await loadReviewDoc(relationship, 'expert');
+    const doc = await loadReviewDoc(relationship, 'expert', companyNameOf(request));
     if (doc !== null) {
       return (
         <ReviewShell requestId={requestId} title={request.title}>
@@ -557,6 +579,7 @@ async function renderClientReview(
       loadReviewDoc(
         r,
         'client',
+        companyNameOf(request),
         usernamesRead.then((usernames) => usernames.get(r.expertProfileId) ?? null)
       )
     )
@@ -621,7 +644,7 @@ async function renderAdminSurface(
   if (ctx.lens !== 'admin' || !SUBMITTED_RELATIONSHIP_STATUSES.has(relationship.status)) {
     return null;
   }
-  const doc = await loadReviewDoc(relationship, 'admin');
+  const doc = await loadReviewDoc(relationship, 'admin', companyNameOf(request));
   if (doc !== null) {
     return (
       <ReviewShell requestId={requestId} title={request.title}>

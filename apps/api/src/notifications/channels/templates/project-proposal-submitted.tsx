@@ -31,7 +31,7 @@ export function ProjectProposalSubmittedEmail({
       bodyText={`${expertName} has put together a formal proposal for your project: scope, deliverables, payment schedule, and terms. Open it to review the details and decide your next step.`}
       summaryLabel="Project request"
       projectTitle={projectTitle}
-      calloutText="Take your time reviewing the deliverables, exclusions, and payment terms. You can keep messaging the expert with any questions before you accept or request changes."
+      calloutText="Take your time reviewing the deliverables, assumptions, exclusions and payment terms. You can keep messaging the expert with any questions before you accept or request changes."
       ctaLabel="Review the proposal →"
       supportPrefix="Questions about this proposal?"
     />

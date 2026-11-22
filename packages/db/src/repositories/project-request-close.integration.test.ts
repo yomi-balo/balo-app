@@ -819,6 +819,7 @@ describe('close() — §10 sequential determinism: whichever writer commits firs
         cadence: 'monthly',
         milestones: [],
         installments: [],
+        clauses: [],
       })
     ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
   });

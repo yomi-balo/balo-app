@@ -23,6 +23,7 @@ import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 import { CASE_INACTIVITY_DAYS, joinTitles } from '@balo/shared/engagements';
 import { readMilestoneTitles } from './engagement-review-decision-emails.js';
 import { personWithOrgLabel } from '@balo/shared/parties';
+import { proposalChangeSectionPhrase } from '@balo/shared/project-requests';
 import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
 import { timeEntryChangedSentence } from './engagement-time-entry-changed.js';
 import { formatCallTimeForRecipient } from './call-missed.js';
@@ -812,10 +813,11 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   'project-changes-requested': (data) => {
     const title = (data.projectTitle as string) ?? 'a project';
     const clientName = (data.clientName as string) ?? 'The client';
+    const section = typeof data.section === 'string' ? data.section : 'general';
     const projectRequestId = data.projectRequestId as string | undefined;
     return {
       title: 'Changes requested',
-      body: `${clientName} requested changes to your proposal for "${title}"`,
+      body: `${clientName} asked for a change to ${proposalChangeSectionPhrase(section)} in your proposal for "${title}"`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },

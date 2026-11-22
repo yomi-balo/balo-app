@@ -37,6 +37,7 @@ vi.mock('@balo/db', () => ({
   proposalMilestonesRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
   proposalPaymentInstallmentsRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
   proposalDocumentsRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
+  proposalClausesRepository: { listByProposal: vi.fn().mockResolvedValue([]) },
 }));
 
 const mockHeaders = vi.fn();

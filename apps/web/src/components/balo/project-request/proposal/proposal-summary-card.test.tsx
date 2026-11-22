@@ -53,7 +53,6 @@ function renderCard(props: Partial<React.ComponentProps<typeof ProposalSummaryCa
       totalCents={500_000}
       readiness={READY}
       softIssues={[]}
-      termsAttached={false}
       reviseMode={false}
       nudgeKey={0}
       onJump={onJump}
@@ -117,7 +116,6 @@ describe('ProposalSummaryCard', () => {
     expect(screen.getByText('Fixed price')).toBeInTheDocument();
     expect(screen.getByText('About 6 weeks')).toBeInTheDocument();
     expect(screen.getByText('30% / 70%')).toBeInTheDocument();
-    expect(screen.getByText('Balo standard')).toBeInTheDocument();
   });
 
   it('prompts for a price and shows unset rows when nothing is filled in', () => {
@@ -131,9 +129,47 @@ describe('ProposalSummaryCard', () => {
     expect(screen.getAllByText('Not set')).toHaveLength(2);
   });
 
-  it('names the expert terms when a terms document is attached', () => {
-    renderCard({ termsAttached: true });
-    expect(screen.getByText('Balo and yours')).toBeInTheDocument();
+  it('shows None for assumptions and not-included, and Balo’s terms only, when the lists are empty', () => {
+    renderCard();
+
+    expect(screen.getByText('Assumptions').nextElementSibling).toHaveTextContent('None');
+    expect(screen.getByText('Not included').nextElementSibling).toHaveTextContent('None');
+    expect(screen.getByText('Terms').nextElementSibling).toHaveTextContent('Balo’s only');
+  });
+
+  it('counts the items in each list and names the expert’s own terms', () => {
+    const rows = (...bodies: string[]): { key: string; body: string }[] =>
+      bodies.map((body) => ({ key: nextDraftKey(), body }));
+    renderCard({
+      state: fixedState({
+        assumptions: rows('A1', 'A2', '  '),
+        exclusions: rows('E1'),
+        additionalTerms: rows('T1', 'T2'),
+      }),
+    });
+
+    expect(screen.getByText('Assumptions').nextElementSibling).toHaveTextContent('2');
+    expect(screen.getByText('Not included').nextElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('Terms').nextElementSibling).toHaveTextContent('Balo’s and 2 of yours');
+  });
+
+  it('no longer shows the old terms-attached wording', () => {
+    renderCard();
+    expect(screen.queryByText('Balo standard')).not.toBeInTheDocument();
+    expect(screen.queryByText('Balo and yours')).not.toBeInTheDocument();
+  });
+
+  it('lists the soft issue once the proposal is ready, and jumps to it', async () => {
+    const user = userEvent.setup();
+    const soft: ReadinessIssue = {
+      id: 'no_assumptions_or_exclusions',
+      label: 'No assumptions or exclusions yet',
+      targetId: 'proposal-clause-new-assumption',
+    };
+    const { onJump } = renderCard({ softIssues: [soft] });
+
+    await user.click(screen.getByRole('button', { name: 'No assumptions or exclusions yet' }));
+    expect(onJump).toHaveBeenCalledWith(soft);
   });
 
   it('shows the hourly rate, hours and estimate for time and materials', () => {
@@ -180,7 +216,6 @@ describe('ProposalSummaryCard', () => {
         totalCents={500_000}
         readiness={NOT_READY}
         softIssues={[]}
-        termsAttached={false}
         reviseMode={false}
         nudgeKey={0}
         onJump={vi.fn()}
@@ -197,7 +232,6 @@ describe('ProposalSummaryCard', () => {
         totalCents={500_000}
         readiness={NOT_READY}
         softIssues={[]}
-        termsAttached={false}
         reviseMode={false}
         nudgeKey={1}
         onJump={vi.fn()}
@@ -214,7 +248,6 @@ describe('ProposalSummaryCard', () => {
         totalCents={500_000}
         readiness={READY}
         softIssues={[]}
-        termsAttached={false}
         reviseMode={false}
         nudgeKey={0}
         onJump={vi.fn()}

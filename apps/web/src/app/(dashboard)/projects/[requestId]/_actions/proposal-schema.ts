@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import type { ProposalClauseInput } from '@balo/db';
+import {
+  PROPOSAL_CLAUSE_KINDS,
+  PROPOSAL_CLAUSE_MAX_CHARS,
+  PROPOSAL_CLAUSE_MAX_ITEMS,
+  normalizeClauseBody,
+  type ProposalClauseKind,
+} from '@balo/shared/project-requests';
 
 /**
  * Shared Zod validation for the proposal composer payload (BAL-288 / BAL-294).
@@ -45,6 +53,48 @@ const installmentSchema = z.object({
 });
 
 /**
+ * The assumptions / exclusions / additional-terms lists as one flat, ordered array. Each kind
+ * holds at most `PROPOSAL_CLAUSE_MAX_ITEMS`; the outer cap is the sum across the kinds.
+ */
+const clauseListSchema = z
+  .array(
+    z.object({
+      kind: z.enum(PROPOSAL_CLAUSE_KINDS),
+      body: z.string().max(PROPOSAL_CLAUSE_MAX_CHARS),
+    })
+  )
+  .max(PROPOSAL_CLAUSE_MAX_ITEMS * PROPOSAL_CLAUSE_KINDS.length)
+  .superRefine((clauses, ctx) => {
+    const counts = new Map<string, number>();
+    for (const clause of clauses) {
+      counts.set(clause.kind, (counts.get(clause.kind) ?? 0) + 1);
+    }
+    for (const count of counts.values()) {
+      if (count > PROPOSAL_CLAUSE_MAX_ITEMS) {
+        ctx.addIssue({ code: 'custom', message: 'A list holds up to 20 items.' });
+        return;
+      }
+    }
+  });
+
+/**
+ * Normalise a validated clause array for storage: each body through `normalizeClauseBody`,
+ * blank items dropped, order preserved.
+ */
+export function toClauseInputs(
+  clauses: readonly { kind: ProposalClauseKind; body: string }[]
+): ProposalClauseInput[] {
+  const inputs: ProposalClauseInput[] = [];
+  for (const clause of clauses) {
+    const body = normalizeClauseBody(clause.body);
+    if (body.length > 0) {
+      inputs.push({ kind: clause.kind, body });
+    }
+  }
+  return inputs;
+}
+
+/**
  * Header + replace-all list fields shared by the autosave and resubmit payloads.
  * Spread into each action's `z.object(...)` (resubmit adds `fromProposalId`). All
  * fields are partial-draft tolerant: a brand-new draft may have a near-empty
@@ -59,10 +109,12 @@ export const proposalDraftBaseFields = {
   priceCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG),
   currency: z.string().min(1).max(8).optional(),
   // The optional header fields take `null` to CLEAR the stored column (a removed
-  // timeframe, emptied exclusions, or the T&M terms after a switch to Fixed);
-  // `undefined` leaves the column as it is.
+  // timeframe, or the T&M terms after a switch to Fixed); `undefined` leaves the
+  // column as it is.
   timeframeWeeks: z.number().int().positive().nullable().optional(),
-  exclusions: z.string().max(20_000).nullable().optional(),
+  // The three clause lists, replace-all. `undefined` leaves the stored clauses alone, so a
+  // stale tab that predates the lists cannot wipe them.
+  clauses: clauseListSchema.optional(),
   depositCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).nullable().optional(),
   rateCents: z.number().int().nonnegative().max(MAX_CENTS, CENTS_MSG).nullable().optional(),
   cadence: z.enum(['monthly', 'fortnightly']).nullable().optional(),

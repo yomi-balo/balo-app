@@ -10,14 +10,15 @@ export interface ReviewSection {
 }
 
 /**
- * The canonical client-review section list (A6.4 / BAL-289). 'Not included' is
- * deliberately absent — it's a contextual aside in the document, not a nav stop.
- * Attachments is the only conditionally-present entry (the parent filters it out
- * when there are no non-terms files).
+ * The canonical client-review section list (A6.4 / BAL-289). "Assumptions and exclusions"
+ * covers both lists, including "Not included". Scope and Attachments are the conditionally
+ * present entries: the parent filters scope out when both lists are empty and attachments
+ * out when the proposal has no files.
  */
 export const REVIEW_SECTIONS: ReviewSection[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'milestones', label: 'Milestones' },
+  { key: 'scope', label: 'Assumptions and exclusions' },
   { key: 'payment', label: 'Payment terms' },
   { key: 'terms', label: 'Terms' },
   { key: 'attachments', label: 'Attachments' },

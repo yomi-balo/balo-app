@@ -67,6 +67,8 @@ export const ENGAGEMENT_EVENTS = {
   CANCEL_DIALOG_OPENED: 'engagement_cancel_dialog_opened',
   /** The cancel-project dialog was closed without cancelling. */
   CANCEL_DIALOG_KEPT: 'engagement_cancel_dialog_kept',
+  /** The "Agreed in the proposal" card on the delivery workspace was expanded. */
+  AGREED_TERMS_OPENED: 'engagement_agreed_terms_opened',
 } as const;
 
 export interface EngagementEventMap {
@@ -85,6 +87,10 @@ export interface EngagementEventMap {
   [ENGAGEMENT_EVENTS.CANCEL_DIALOG_OPENED]: {
     engagement_id: string;
     delivery_status: 'active' | 'pending_acceptance';
+  };
+  [ENGAGEMENT_EVENTS.AGREED_TERMS_OPENED]: {
+    engagement_id: string;
+    lens: EngagementWorkspaceLens;
   };
   [ENGAGEMENT_EVENTS.CANCEL_DIALOG_KEPT]: {
     engagement_id: string;

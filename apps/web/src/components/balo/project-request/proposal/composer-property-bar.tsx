@@ -1,15 +1,9 @@
 'use client';
 
-import { useCallback, useId, useState } from 'react';
-import { Check, ChevronDown, Clock, Coins, FileText, Minus, Plus } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Check, ChevronDown, Clock, Coins, Minus, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
-import {
-  ProposalDocumentUploaderView,
-  type ProposalDocumentUploadController,
-} from './proposal-document-uploader';
-import { STANDARD_TERMS } from './proposal-standard-terms';
 import { pricingMethodLabel } from './proposal-summary-cells';
 import type { ProposalPricingMethod } from './proposal-composer-state';
 
@@ -18,9 +12,6 @@ interface ComposerPropertyBarProps {
   onPricingMethodChange: (method: ProposalPricingMethod) => void;
   timeframeWeeks: number | null;
   onTimeframeChange: (weeks: number | null) => void;
-  /** The expert's own terms supplement (`kind:'terms'`), if attached. */
-  termsDocuments: ProposalDocumentView[];
-  termsUpload: ProposalDocumentUploadController;
   /** Trailing slot of the row, announced politely (the draft save status). */
   trailing?: React.ReactNode;
 }
@@ -180,69 +171,21 @@ function TimeframeChip({ weeks, onChange }: Readonly<TimeframeChipProps>): React
   );
 }
 
-interface TermsChipProps {
-  documents: ProposalDocumentView[];
-  upload: ProposalDocumentUploadController;
-}
-
-function TermsChip({ documents, upload }: Readonly<TermsChipProps>): React.JSX.Element {
-  const labelId = useId();
-  const hasOwnTerms = documents.length > 0;
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button type="button" className={CHIP_CLASS}>
-          <FileText className="text-muted-foreground size-3.5" aria-hidden="true" />
-          {hasOwnTerms ? 'Balo standard and your terms' : 'Balo standard terms'}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        aria-label="Terms"
-        className={cn(POPOVER_CLASS, 'w-[min(24rem,calc(100vw-2rem))]')}
-      >
-        <div className="px-3 pt-2.5 pb-3">
-          <p id={labelId} className="text-muted-foreground mb-2 text-[13.5px]">
-            Balo standard terms apply to every proposal. You can attach your own terms to sit
-            alongside them.
-          </p>
-          <ul className="text-muted-foreground mb-3 list-disc space-y-1 pl-4 text-[12.5px]">
-            {STANDARD_TERMS.map((term) => (
-              <li key={term}>{term}</li>
-            ))}
-          </ul>
-          <ProposalDocumentUploaderView
-            controller={upload}
-            documents={documents}
-            labelId={labelId}
-            single
-            pickLabel="Attach your terms"
-          />
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /**
- * The choices that shape everything below, as three popover chips: pricing method,
- * timeframe and terms. The trailing slot carries the draft save status and owns its own live-region semantics.
+ * The choices that shape everything below, as two popover chips: pricing method and
+ * timeframe. The trailing slot carries the draft save status and owns its own live-region semantics.
  */
 export function ComposerPropertyBar({
   pricingMethod,
   onPricingMethodChange,
   timeframeWeeks,
   onTimeframeChange,
-  termsDocuments,
-  termsUpload,
   trailing,
 }: Readonly<ComposerPropertyBarProps>): React.JSX.Element {
   return (
     <div className="mb-5 flex flex-wrap items-center gap-2">
       <PricingChip pricingMethod={pricingMethod} onChange={onPricingMethodChange} />
       <TimeframeChip weeks={timeframeWeeks} onChange={onTimeframeChange} />
-      <TermsChip documents={termsDocuments} upload={termsUpload} />
       <div className="ml-auto">{trailing}</div>
     </div>
   );

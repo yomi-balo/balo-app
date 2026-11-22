@@ -333,6 +333,7 @@ export const AUDIT_ACTION_SENTENCES: Record<
   'engagement.created': (m) =>
     readString(m, 'engagement_type') === 'case' ? 'Case created' : 'Project created',
   'engagement.milestones_snapshotted': () => 'Milestones snapshotted from the accepted proposal',
+  'engagement.clauses_snapshotted': () => 'Agreed terms copied from the accepted proposal',
   'engagement.calls_reanchored': () => 'Booked calls moved into the project',
   'engagement.completion_requested': () => 'Completion requested',
   'engagement.completion_withdrawn': () => 'Completion request withdrawn',

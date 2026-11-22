@@ -171,6 +171,42 @@ describe('AI-drafted proposal events (BAL-611)', () => {
   });
 });
 
+describe('proposal clause events', () => {
+  it('maps the client and server constants to their exact snake_case names', () => {
+    expect(PROJECT_EVENTS.PROPOSAL_CLAUSES_PASTED).toBe('project_proposal_clauses_pasted');
+    expect(PROJECT_EVENTS.PROPOSAL_CLAUSE_AMOUNT_WARNING_SHOWN).toBe(
+      'project_proposal_clause_amount_warning_shown'
+    );
+    expect(PROJECT_SERVER_EVENTS.PROPOSAL_ATTACHMENT_DOWNLOADED).toBe(
+      'project_proposal_attachment_downloaded'
+    );
+  });
+
+  it('carries the three clause counts on resubmit and submit, and the term count on accept', () => {
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_RESUBMITTED]>().toHaveProperty(
+      'assumption_count'
+    );
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_RESUBMITTED]>().toHaveProperty(
+      'exclusion_count'
+    );
+    expectTypeOf<ProjectEventMap[typeof PROJECT_EVENTS.PROPOSAL_RESUBMITTED]>().toHaveProperty(
+      'additional_term_count'
+    );
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_SUBMITTED]
+    >().toHaveProperty('additional_term_count');
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED]
+    >().toHaveProperty('additional_term_count');
+  });
+
+  it('types the download lens as the three viewer sides', () => {
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROPOSAL_ATTACHMENT_DOWNLOADED]['lens']
+    >().toEqualTypeOf<'client' | 'expert' | 'admin'>();
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386 / BAL-604)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([
@@ -184,6 +220,7 @@ describe('PROJECT_SERVER_EVENTS', () => {
       'PROPOSAL_SHARE_REVOKED',
       'PROJECT_TRACK_PASSED',
       'PROPOSAL_DRAFT_GENERATED',
+      'PROPOSAL_ATTACHMENT_DOWNLOADED',
     ]);
   });
 

@@ -220,7 +220,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "cases-projects"
     },
     "order": 5,
-    "updated": "2026-10-31",
+    "updated": "2026-11-23",
     "related": [
       "reviewing-a-finished-project"
     ],
@@ -238,7 +238,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>On the project page, choose <strong>Request a change</strong> and describe what you'd like to be different.\nYour expert is told straight away and can answer in one of two ways: with a proposed change, or\nwith a plain answer if no change is needed. A project can have one change open at a time.</p>",
+            "html": "<p>On the project page, choose <strong>Request a change</strong> and describe what you'd like to be different.\nYour expert is told straight away and can answer in one of two ways: with a proposed change, or\nwith a plain answer if no change is needed. A project can have one change open at a time.</p>\n<p>Before you ask, if your project has one, open <strong>Agreed in the proposal</strong> on the project page. It lists the assumptions, the\nexclusions and the additional terms you accepted, so you can see whether what you want is already\ncovered. It shows what was agreed at the start. Changes approved since then are under “Changes to\nthis project”.</p>",
             "id": "s1-b0"
           }
         ],
@@ -1711,7 +1711,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 4,
-    "updated": "2026-10-31",
+    "updated": "2026-11-23",
     "related": [
       "handling-a-change-request",
       "editing-milestones-after-acceptance"
@@ -1730,7 +1730,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>When a client asks for a change, you get an email and a notification, and the request appears on\nthe project page with their note. You can <strong>Propose a change</strong> from it, or <strong>Answer without a\nchange order</strong> if the plan and price can stay as they are. Your answer is shown to the client as\n<strong>Answered</strong>, and the request closes.</p>\n<p>You can also propose a change without a request, from the project page. Only one change can be\nopen at a time. While you have a draft, <strong>Propose a change</strong> reads <strong>Continue draft change</strong>, and\nwhile a change is waiting on the client, <strong>Propose a change</strong> is unavailable and says \"A change is\nalready waiting on {client}\".</p>",
+            "html": "<p>When a client asks for a change, you get an email and a notification, and the request appears on\nthe project page with their note. You can <strong>Propose a change</strong> from it, or <strong>Answer without a\nchange order</strong> if the plan and price can stay as they are. Your answer is shown to the client as\n<strong>Answered</strong>, and the request closes.</p>\n<p>You can also propose a change without a request, from the project page. Only one change can be\nopen at a time. While you have a draft, <strong>Propose a change</strong> reads <strong>Continue draft change</strong>, and\nwhile a change is waiting on the client, <strong>Propose a change</strong> is unavailable and says \"A change is\nalready waiting on {client}\".</p>\n<p>Before you answer a request or propose a change, if the project has one, open <strong>Agreed in the\nproposal</strong> on the project page. It lists the assumptions, exclusions and additional terms the client accepted, so you can\nsee whether the request falls inside what was agreed or outside it. It shows what was agreed at\nthe start. Changes approved since then are under “Changes to this project”.</p>",
             "id": "s1-b0"
           }
         ],
@@ -2100,6 +2100,103 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "darkSrc": "/help/requesting-a-project/04-dark.png",
           "width": 1228,
           "height": 480
+        }
+      }
+    ]
+  },
+  {
+    "slug": "reviewing-a-proposal",
+    "title": "Reviewing a proposal",
+    "summary": "Read each part of a proposal, ask for changes and know what accepting commits you to.",
+    "audience": [
+      "client"
+    ],
+    "category": {
+      "client": "cases-projects"
+    },
+    "order": 3,
+    "updated": "2026-11-23",
+    "related": [
+      "approving-a-change-to-your-project"
+    ],
+    "intro": [
+      {
+        "kind": "html",
+        "html": "<p>When an expert sends a proposal, you review it on one page. This guide covers what each part\nmeans, how to ask for a change, what accepting commits your company to and how to open the\nattachments.</p>",
+        "id": "intro-b0"
+      }
+    ],
+    "sections": [
+      {
+        "n": 1,
+        "title": "What each part means",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<ul>\n<li><strong>Overview</strong> — what the expert will do and how they'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work, with what has to be true for each to be done.</li>\n<li><strong>Assumptions and exclusions</strong> — the assumptions are what the price and timeline rely on. The\nexclusions are what's explicitly not included. Each is a numbered list. This section only\nappears when the expert has added at least one.</li>\n<li><strong>Payment terms</strong> — the price and when each payment falls due. On a time and materials\nproject it shows the hourly rate and how often you're invoiced.</li>\n<li><strong>Terms</strong> — Balo's Project T&amp;Cs, which are the same for every project on Balo, then the expert's\nadditional terms as a numbered list, when they've added any.</li>\n<li><strong>Attachments</strong> — reference documents the expert included.</li>\n</ul>",
+            "id": "s1-b0"
+          }
+        ],
+        "screenshot": {
+          "alt": "The Assumptions and exclusions section of a proposal, with numbered Assumptions and Not included lists, highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/01-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/01-dark.png",
+          "width": 1232,
+          "height": 544
+        }
+      },
+      {
+        "n": 2,
+        "title": "Requesting changes",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>If something needs work, choose <strong>Request changes</strong>, pick what needs work and say what you'd like\ndifferent. Your expert revises the proposal and sends it back as a new version. Nothing is\naccepted in the meantime.</p>\n<p>The choices are <strong>General</strong>, <strong>Milestones / deliverables</strong>, <strong>Assumptions and exclusions</strong>,\n<strong>Pricing</strong>, <strong>Payment terms</strong>, <strong>Timeline</strong> and <strong>Terms</strong>. For assumptions, exclusions and terms,\nname the item by its number, for example \"Assumption 2\" or \"Term 1\", so your expert knows exactly\nwhich one you mean.</p>",
+            "id": "s2-b0"
+          }
+        ],
+        "screenshot": {
+          "alt": "The Request changes dialog with Assumptions and exclusions chosen and a note about Exclusion 2, with the hint to name the item by its number highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/02-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/02-dark.png",
+          "width": 920,
+          "height": 896
+        }
+      },
+      {
+        "n": 3,
+        "title": "What accepting commits you to",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>When you choose to accept, the dialog shows <strong>What you're agreeing to</strong>: Balo's Project T&amp;Cs with\nthe rule for your pricing method, and the expert's additional terms, when there are any. If there\nare more than three, choose <strong>Show all</strong> to read the rest. A line also tells you how many\nassumptions and exclusions are part of the proposal.</p>\n<p>You then tick the box to confirm you agree. Accepting commits your company to those terms. If\nyour project has any agreed lists, they appear on the project page under <strong>Agreed in the\nproposal</strong> once the project kicks off.</p>",
+            "id": "s3-b0"
+          }
+        ],
+        "screenshot": {
+          "alt": "The accept dialog, with What you're agreeing to highlighted: Balo's Project T&Cs with the fixed-price rule, Priya Raman's two additional terms and the count of assumptions and exclusions, above the box to confirm.",
+          "lightSrc": "/help/reviewing-a-proposal/03-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/03-dark.png",
+          "width": 920,
+          "height": 916
+        }
+      },
+      {
+        "n": 4,
+        "title": "Opening attachments",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>Choose an attachment on the proposal page to open the file. Attachments are only available once\nthe expert has sent the proposal.</p>",
+            "id": "s4-b0"
+          }
+        ],
+        "screenshot": {
+          "alt": "The Attachments section of a proposal, with the Approval matrix PDF highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/04-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/04-dark.png",
+          "width": 1184,
+          "height": 242
         }
       }
     ]
@@ -2772,7 +2869,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 2,
-    "updated": "2026-11-02",
+    "updated": "2026-11-23",
     "related": [
       "project-requests-for-experts"
     ],
@@ -2790,7 +2887,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>The sections always appear in the same order:</p>\n<ol>\n<li><strong>Overview</strong> — what you'll do and how you'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work.</li>\n<li><strong>Price and payments</strong> — one price for the project and how it's paid. For <strong>Time &amp; materials</strong>\nthis section is called <strong>Rates and billing</strong>.</li>\n<li><strong>Not included</strong> — anything out of scope, so there are no surprises later. This one is optional.</li>\n<li><strong>Attachments</strong> — reference documents you want the client to see. This one is optional too.</li>\n</ol>\n<p>Above the first section, the client's request is summarised for you. Choose <strong>Show brief</strong> to read\nthe full request while you write, and <strong>Hide brief</strong> to tuck it away again.</p>\n<p>The first time you open a new proposal, Balo drafts the <strong>Overview</strong> and the <strong>Milestones</strong> from the\nclient's request, so you start with something to edit instead of a blank page. A moment of\n<strong>Drafting from {name}'s request…</strong> shows while it works, then the draft appears with a\n<strong>Drafted from {name}'s request</strong> label on the Overview and <strong>Suggested from the brief</strong> on the\nMilestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and\ndrafted text never includes links. Edit anything you like, or choose <strong>Clear</strong> to empty a section\nand start from scratch. You'll see <strong>Overview cleared.</strong> (or <strong>Suggested milestones cleared.</strong>)\nwith <strong>Undo</strong>, which puts the drafted section back. If you start typing in the <strong>Overview</strong> before\nthe draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made\nonce per request, so it won't change if you come back to the page later.</p>",
+            "html": "<p>The sections always appear in the same order:</p>\n<ol>\n<li><strong>Overview</strong> — what you'll do and how you'll approach it.</li>\n<li><strong>Milestones</strong> — the stages of the work.</li>\n<li><strong>Assumptions</strong> — what your price and timeline rely on. This one is optional.</li>\n<li><strong>Not included</strong> — anything out of scope, so there are no surprises later. This one is optional.</li>\n<li><strong>Price and payments</strong> — one price for the project and how it's paid. For <strong>Time &amp; materials</strong>\nthis section is called <strong>Rates and billing</strong>.</li>\n<li><strong>Additional terms</strong> — terms of your own for this project, shown under Balo's Project T&amp;Cs. This\none is optional.</li>\n<li><strong>Attachments</strong> — reference documents you want the client to see. This one is optional too.</li>\n</ol>\n<p>Above the first section, the client's request is summarised for you. Choose <strong>Show brief</strong> to read\nthe full request while you write, and <strong>Hide brief</strong> to tuck it away again.</p>\n<p>The first time you open a new proposal, Balo drafts the <strong>Overview</strong> and the <strong>Milestones</strong> from the\nclient's request, so you start with something to edit instead of a blank page. A moment of\n<strong>Drafting from {name}'s request…</strong> shows while it works, then the draft appears with a\n<strong>Drafted from {name}'s request</strong> label on the Overview and <strong>Suggested from the brief</strong> on the\nMilestones. It never fills in prices, hours, dates or payment terms. Those are yours to set, and\ndrafted text never includes links. Edit anything you like, or choose <strong>Clear</strong> to empty a section\nand start from scratch. You'll see <strong>Overview cleared.</strong> (or <strong>Suggested milestones cleared.</strong>)\nwith <strong>Undo</strong>, which puts the drafted section back. If you start typing in the <strong>Overview</strong> before\nthe draft arrives, Balo drops the whole draft so it never overwrites your words. The draft is made\nonce per request, so it won't change if you come back to the page later.</p>",
             "id": "s1-b0"
           },
           {
@@ -2813,12 +2910,12 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>Three choices sit at the top of the page, because they shape everything below them:</p>\n<ul>\n<li><strong>Pricing method</strong> — <strong>Fixed price</strong> or <strong>Time &amp; materials</strong>. If you switch, your typed price\nand your hour estimates are kept, so switching back brings them back. A message confirms the\nswitch and offers <strong>Undo</strong>.</li>\n<li><strong>Timeframe</strong> — choose <strong>Add timeframe</strong>, then use the stepper to say roughly how many weeks the\nwork will take. It's a duration, not a date. Choose <strong>Remove timeframe</strong> if you'd rather leave\nit open.</li>\n<li><strong>Terms</strong> — Balo standard terms apply to every proposal. Choose <strong>Attach your terms</strong> to add\nyour own alongside them. The chip changes to \"Balo standard and your terms\" once they're attached.</li>\n</ul>",
+            "html": "<p>Two choices sit at the top of the page, because they shape everything below them:</p>\n<ul>\n<li><strong>Pricing method</strong> — <strong>Fixed price</strong> or <strong>Time &amp; materials</strong>. If you switch, your typed price\nand your hour estimates are kept, so switching back brings them back. A message confirms the\nswitch and offers <strong>Undo</strong>.</li>\n<li><strong>Timeframe</strong> — choose <strong>Add timeframe</strong>, then use the stepper to say roughly how many weeks the\nwork will take. It's a duration, not a date. Choose <strong>Remove timeframe</strong> if you'd rather leave\nit open.</li>\n</ul>",
             "id": "s2-b0"
           }
         ],
         "screenshot": {
-          "alt": "The top of a proposal, with the Fixed price, Add timeframe and Balo standard terms chips highlighted.",
+          "alt": "The top of a proposal, with the Fixed price and Add timeframe chips highlighted.",
           "lightSrc": "/help/writing-and-sending-a-proposal/02-light.png",
           "darkSrc": "/help/writing-and-sending-a-proposal/02-dark.png",
           "width": 1270,
@@ -2890,11 +2987,11 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           }
         ],
         "screenshot": {
-          "alt": "The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.",
+          "alt": "The proposal summary beside the page, with its Assumptions, Not included and Terms rows, and the checklist showing the project price still to set highlighted above Preview and send.",
           "lightSrc": "/help/writing-and-sending-a-proposal/06-light.png",
           "darkSrc": "/help/writing-and-sending-a-proposal/06-dark.png",
           "width": 600,
-          "height": 770
+          "height": 888
         }
       },
       {
@@ -2903,7 +3000,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>In the preview, the amounts are the figures you typed, and the preview says so: \"Amounts are what\nyou receive.\" The client sees the price with Balo's service added, so the numbers on their screen\nare higher than the ones on your page. You never need to work that out yourself.</p>\n<p>If a milestone has no amount, none is shown for it.</p>\n<p>Once you send, you'll see a confirmation. The client gets an email and a notification, and from\nthere it's their call.</p>",
+            "html": "<p>In the preview, the amounts are the figures you typed, and the preview says so: \"Amounts are what\nyou receive.\" The client sees the price with Balo's service added, so the numbers on their screen\nare higher than the ones on your page. You never need to work that out yourself.</p>\n<p>If a milestone has no amount, none is shown for it.</p>\n<p>The client reads your assumptions, exclusions and additional terms as numbered lists on the\nproposal, in the PDF and on a shared link. They agree to your additional terms when they accept.\nYour attachments open as files from the proposal page.</p>\n<p>Once you send, you'll see a confirmation. The client gets an email and a notification, and from\nthere it's their call.</p>",
             "id": "s7-b0"
           }
         ],
@@ -2915,7 +3012,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>If the client asks for changes, you'll see their note beside the section it's about, or above the\n<strong>Overview</strong> if it's about the proposal as a whole, with a summary at the top of the page and a\n<strong>Go to note</strong> link. Update the proposal as needed, then choose <strong>Mark as addressed</strong> on the note.\nYou can bring the note back any time with <strong>Show note</strong>.</p>\n<p>A revision isn't saved as you go: the page says \"Not saved until you resend\". Your changes go to\nthe client when you choose <strong>Preview and resend</strong>, then <strong>Resend</strong>. If you leave before that, the\nversion the client last saw stays as it was. You can't add or remove documents while revising: the\nones already attached carry over to the version you resend.</p>",
+            "html": "<p>If the client asks for changes, you'll see their note beside the section it's about, or above the\n<strong>Overview</strong> if it's about the proposal as a whole, with a summary at the top of the page and a\n<strong>Go to note</strong> link. Update the proposal as needed, then choose <strong>Mark as addressed</strong> on the note.\nYou can bring the note back any time with <strong>Show note</strong>. A note about the assumptions or the\nexclusions sits above <strong>Assumptions</strong>, and a note about the terms sits above <strong>Additional terms</strong>.\nThe client names an item by its number, for example \"Assumption 2\", so you can find it in the list.</p>\n<p>A revision isn't saved as you go: the page says \"Not saved until you resend\". Your changes go to\nthe client when you choose <strong>Preview and resend</strong>, then <strong>Resend</strong>. If you leave before that, the\nversion the client last saw stays as it was. You can't add or remove documents while revising: the\nones already attached carry over to the version you resend.</p>",
             "id": "s8-b0"
           }
         ],
@@ -2924,8 +3021,20 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "lightSrc": "/help/writing-and-sending-a-proposal/08-light.png",
           "darkSrc": "/help/writing-and-sending-a-proposal/08-dark.png",
           "width": 1304,
-          "height": 992
+          "height": 928
         }
+      },
+      {
+        "n": 9,
+        "title": "Assumptions, exclusions and additional terms",
+        "blocks": [
+          {
+            "kind": "html",
+            "html": "<p>These three sections are lists, and each one is optional. You can add up to 20 items to a list, and\neach item can run to 500 characters. An item is one line of plain text, so a line break becomes a\nspace and formatting isn't kept.</p>\n<ul>\n<li><strong>Assumptions</strong> — what your price and timeline rely on. If one turns out not to hold, it's your\nbasis for proposing a change.</li>\n<li><strong>Not included</strong> — anything explicitly out of scope.</li>\n<li><strong>Additional terms</strong> — terms of your own for this project. They add to Balo's Project T&amp;Cs and\ncan't replace them. Balo's terms sit at the top of the section, with the rule for the pricing\nmethod you chose, so you can see what already applies before you add your own.</li>\n</ul>\n<p>To work in a list:</p>\n<ul>\n<li>Type an item and press <strong>Enter</strong> to start the next one. An empty item is dropped when you leave it.</li>\n<li>Paste a list and each line becomes its own item, with any bullet or number removed.</li>\n<li>Move an item with the arrow keys or the reorder controls. Items keep the order you give them.</li>\n<li>Remove an item, then choose <strong>Undo</strong> if you change your mind.</li>\n<li>Once an item gets close to the limit, a character counter appears.</li>\n</ul>\n<p>If an item looks like it names a price or a rate, the editor warns you. Keep amounts in the price\nsection: the client sees your list items exactly as you typed them, without Balo's service added.</p>\n<p>If you leave <strong>Assumptions</strong> and <strong>Not included</strong> both empty, the checklist adds a gentle reminder.\nIt never stops you from sending. The summary beside the page shows how many items each list holds.</p>",
+            "id": "s9-b0"
+          }
+        ],
+        "screenshot": null
       }
     ]
   },

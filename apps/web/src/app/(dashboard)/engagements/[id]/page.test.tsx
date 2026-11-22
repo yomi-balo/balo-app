@@ -34,6 +34,7 @@ const {
   mockReadRatingCard,
   mockListChangeOrders,
   mockListContentEdits,
+  mockFindAgreedTerms,
   mockLoadProjectSettlement,
   mockHasCapability,
   mockHasDeliveryCapability,
@@ -56,6 +57,7 @@ const {
   mockReadRatingCard: vi.fn(),
   mockListChangeOrders: vi.fn(),
   mockListContentEdits: vi.fn(),
+  mockFindAgreedTerms: vi.fn(),
   mockLoadProjectSettlement: vi.fn(),
   mockHasCapability: vi.fn(),
   mockHasDeliveryCapability: vi.fn(),
@@ -69,6 +71,7 @@ vi.mock('@balo/db', () => ({
   blocksMarkReady: () => false,
   engagementChangeOrdersRepository: { listForEngagement: mockListChangeOrders },
   engagementMilestonesRepository: { listProposalContentEdits: mockListContentEdits },
+  engagementClausesRepository: { findAgreedTerms: mockFindAgreedTerms },
   projectEngagementsRepository: {
     findWithMilestones: mockFindWithMilestones,
     findByProjectRequestId: mockFindIdByProjectRequestId,
@@ -206,6 +209,11 @@ beforeEach(() => {
   mockReadRatingCard.mockResolvedValue(null);
   mockListChangeOrders.mockResolvedValue([]);
   mockListContentEdits.mockResolvedValue([]);
+  mockFindAgreedTerms.mockResolvedValue({
+    clauses: [],
+    proposalAcceptedAt: null,
+    proposalAcceptedBy: null,
+  });
   mockHasCapability.mockResolvedValue(true);
   mockHasDeliveryCapability.mockResolvedValue(false);
   mockFindPublicUsernames.mockResolvedValue(new Map());
@@ -619,6 +627,34 @@ describe('EngagementWorkspacePage (RSC) — readRatingCard wiring', () => {
     await renderPage();
 
     expect(mockReadRatingCard).not.toHaveBeenCalled();
+  });
+});
+
+describe('EngagementWorkspacePage (RSC) — agreed terms', () => {
+  it('reads the kickoff clauses and renders the "Agreed in the proposal" card', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+    mockFindAgreedTerms.mockResolvedValue({
+      clauses: [{ kind: 'assumption', body: 'Sandbox access is provided.' }],
+      proposalAcceptedAt: null,
+      proposalAcceptedBy: null,
+    });
+
+    await renderPage();
+
+    expect(mockFindAgreedTerms).toHaveBeenCalledWith(ENGAGEMENT_ID);
+    expect(screen.getByRole('button', { name: /Agreed in the proposal/ })).toBeInTheDocument();
+  });
+
+  it('renders no card when the proposal carried no clauses', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindWithMilestones.mockResolvedValue(engagement());
+
+    await renderPage();
+
+    expect(
+      screen.queryByRole('button', { name: /Agreed in the proposal/ })
+    ).not.toBeInTheDocument();
   });
 });
 

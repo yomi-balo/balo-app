@@ -41,6 +41,28 @@ describe('proposalChangeRequestsRepository.create', () => {
     expect(cr.section).toBe('milestones');
   });
 
+  it.each(['assumptions_exclusions', 'terms'] as const)(
+    'persists the %s section',
+    async (section) => {
+      const { proposal } = await proposalFactory();
+      const requester = await userFactory();
+
+      const cr = await proposalChangeRequestsRepository.create({
+        proposalId: proposal.id,
+        requestedByUserId: requester.id,
+        section,
+        note: 'Please change item 2.',
+        proposalVersion: 1,
+      });
+
+      const [stored] = await db
+        .select({ section: proposalChangeRequests.section })
+        .from(proposalChangeRequests)
+        .where(eq(proposalChangeRequests.id, cr.id));
+      expect(stored?.section).toBe(section);
+    }
+  );
+
   it('throws for an unknown proposalId (FK cascade) and an unknown requester (FK restrict)', async () => {
     const { proposal } = await proposalFactory();
     const requester = await userFactory();

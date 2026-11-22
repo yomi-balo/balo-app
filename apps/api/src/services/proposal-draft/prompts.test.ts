@@ -41,6 +41,12 @@ describe('proposalDraftPrompt', () => {
     );
   });
 
+  it('forbids proposing payment terms, assumptions, exclusions or additional terms', () => {
+    expect(rendered.system).toContain(
+      'never propose payment terms, assumptions, exclusions or additional terms: the consultant sets those separately'
+    );
+  });
+
   it('asks for first person and 2-5 milestones', () => {
     expect(rendered.system).toContain('first person');
     expect(rendered.system).toContain('between 2 and 5 milestones');

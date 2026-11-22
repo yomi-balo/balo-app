@@ -6,6 +6,7 @@ import {
   proposalsRepository,
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
+  proposalClausesRepository,
   projectRequestsRepository,
   proposalDraftGenerationsRepository,
   InvalidProposalTransitionError,
@@ -19,6 +20,7 @@ import {
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
 import { applyBaloFee, sumEstimatedMinutes } from '@balo/shared/pricing';
+import { groupClauseBodies } from '@balo/shared/project-requests';
 import type { SessionUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { plainTextLength } from '@/components/balo/rich-text/plain-text';
@@ -177,9 +179,6 @@ async function sanitiseAndPersistDraft(
     return { ok: false, error: 'Add an overview before submitting.' };
   }
 
-  const sanitisedExclusions =
-    draft.exclusions === null ? null : sanitizeProjectHtml(draft.exclusions);
-
   const sanitisedMilestones: ProposalMilestoneInput[] = milestones.map((m) => ({
     title: m.title,
     descriptionHtml: m.descriptionHtml === null ? null : sanitizeProjectHtml(m.descriptionHtml),
@@ -201,7 +200,6 @@ async function sanitiseAndPersistDraft(
       priceCents: draft.priceCents,
       currency: draft.currency,
       timeframeWeeks: draft.timeframeWeeks,
-      exclusions: sanitisedExclusions,
       depositCents: draft.depositCents,
       rateCents: draft.rateCents,
       cadence: draft.cadence,
@@ -320,9 +318,10 @@ async function runSubmit(
   }
 
   // 6. Re-read the persisted children — the action trusts the stored draft.
-  const [milestones, installments] = await Promise.all([
+  const [milestones, installments, clauses] = await Promise.all([
     proposalMilestonesRepository.listByProposal(proposalId),
     proposalPaymentInstallmentsRepository.listByProposal(proposalId),
+    proposalClausesRepository.listByProposal(proposalId),
   ]);
 
   // 7. Server-side readiness re-validation (never trust the client).
@@ -372,6 +371,7 @@ async function runSubmit(
 
   const totalEstimatedMinutes = sumEstimatedMinutes(milestones);
   const clientPriceCents = applyBaloFee(draft.priceCents, draft.baloFeeBps);
+  const { assumptions, exclusions, additionalTerms } = groupClauseBodies(clauses);
 
   // 12. Key business event (after promotion).
   log.info('Proposal submitted', {
@@ -401,6 +401,9 @@ async function runSubmit(
     balo_fee_bps: draft.baloFeeBps,
     client_price_cents: clientPriceCents,
     ai_draft_generated: aiDraftGenerated,
+    assumption_count: assumptions.length,
+    exclusion_count: exclusions.length,
+    additional_term_count: additionalTerms.length,
     distinct_id: user.id,
   });
 

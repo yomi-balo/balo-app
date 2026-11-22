@@ -9,6 +9,11 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
+const mockCaptureException = vi.fn();
+vi.mock('@sentry/nextjs', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
 const requestProposalChangesAction =
   vi.fn<(input: unknown) => Promise<RequestProposalChangesResult>>();
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-changes', () => ({
@@ -80,6 +85,51 @@ describe('ChangesModal', () => {
     const trigger = screen.getByRole('combobox');
     expect(trigger).toHaveTextContent('General');
   });
+
+  it('offers the seven sections in order', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByRole('combobox'));
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'General',
+      'Milestones / deliverables',
+      'Assumptions and exclusions',
+      'Pricing',
+      'Payment terms',
+      'Timeline',
+      'Terms',
+    ]);
+  });
+
+  it.each([
+    ['Assumptions and exclusions', 'Say which one by its number, for example “Assumption 2”.'],
+    ['Terms', 'Say which one by its number, for example “Term 1”.'],
+  ])('hints at numbering for %s and ties it to the select', async (label, hint) => {
+    const user = userEvent.setup();
+    renderModal();
+    expect(screen.queryByText(/Say which one by its number/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox'));
+    await user.click(screen.getByRole('option', { name: label }));
+
+    expect(screen.getByText(hint)).toHaveAttribute('id', 'changes-section-hint');
+    expect(screen.getByRole('combobox')).toHaveAttribute(
+      'aria-describedby',
+      'changes-section-hint'
+    );
+  });
+
+  it.each(['Milestones / deliverables', 'Pricing', 'Payment terms', 'Timeline'])(
+    'shows no numbering hint for %s',
+    async (label) => {
+      const user = userEvent.setup();
+      renderModal();
+      await user.click(screen.getByRole('combobox'));
+      await user.click(screen.getByRole('option', { name: label }));
+      expect(screen.queryByText(/Say which one by its number/)).not.toBeInTheDocument();
+      expect(screen.getByRole('combobox')).not.toHaveAttribute('aria-describedby');
+    }
+  );
 
   it('associates the note label with the textarea (a11y)', () => {
     renderModal();
@@ -185,7 +235,8 @@ describe('ChangesModal', () => {
 
   it('toasts a generic error and stays open when the action throws (catch path)', async () => {
     const user = userEvent.setup();
-    requestProposalChangesAction.mockRejectedValue(new Error('boom'));
+    const failure = new Error('boom');
+    requestProposalChangesAction.mockRejectedValue(failure);
     const { onOpenChange } = renderModal();
 
     await user.type(screen.getByLabelText('Your note'), 'Adjust scope');
@@ -195,6 +246,10 @@ describe('ChangesModal', () => {
       expect(mockToast.error).toHaveBeenCalledWith(
         'Could not send your change request. Please try again.'
       )
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      failure,
+      expect.objectContaining({ tags: expect.objectContaining({ step: 'request_changes' }) })
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });

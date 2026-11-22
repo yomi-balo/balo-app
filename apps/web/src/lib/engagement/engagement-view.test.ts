@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { ProjectEngagementWithMilestones } from '@balo/db';
+import type { AgreedTermsSource, ProjectEngagementWithMilestones } from '@balo/db';
+import type { ProposalClauseKind } from '@balo/shared/project-requests';
 import type { EngagementViewerContext, EngagementLens } from './resolve-engagement-lens';
 import { makeLine, makeOrder } from '@/test/change-order-fixtures';
 import {
@@ -7,6 +8,8 @@ import {
   mapEngagementToWorkspaceView,
   offersRatingCard,
   type EngagementWorkspaceStatus,
+  type EngagementWorkspaceViewOptions,
+  type EngagementWorkspaceView,
 } from './engagement-view';
 
 // Deterministic "now" — all date math runs under TZ=UTC (see vitest env).
@@ -107,11 +110,132 @@ function ctxFor(lens: EngagementLens): EngagementViewerContext {
   };
 }
 
+describe('mapEngagementToWorkspaceView — agreed terms', () => {
+  const ACCEPTED_AT = new Date('2026-06-10T09:30:00.000Z');
+  const DANA = { firstName: 'Dana', lastName: 'Lee' };
+
+  function clause(kind: ProposalClauseKind, body: string): AgreedTermsSource['clauses'][number] {
+    return { kind, body } as AgreedTermsSource['clauses'][number];
+  }
+
+  function source(over: Partial<AgreedTermsSource> = {}): AgreedTermsSource {
+    return {
+      clauses: [
+        clause('assumption', 'Sandbox access is provided.'),
+        clause('assumption', 'Two review rounds.'),
+        clause('exclusion', 'Data migration.'),
+        clause('additional_term', 'Work pauses if feedback takes over 5 days.'),
+      ],
+      proposalAcceptedAt: ACCEPTED_AT,
+      proposalAcceptedBy: DANA,
+      ...over,
+    };
+  }
+
+  const agreedFor = (
+    terms: AgreedTermsSource | null | undefined,
+    lens: EngagementLens = 'client',
+    orders: EngagementWorkspaceViewOptions['changeOrders'] = [],
+    engagement = makeEngagement()
+  ): EngagementWorkspaceView['agreedTerms'] =>
+    mapEngagementToWorkspaceView(engagement, ctxFor(lens), {
+      now: NOW,
+      changeOrders: orders,
+      agreedTerms: terms,
+    }).agreedTerms;
+
+  it('is null when the page passes no source', () => {
+    expect(agreedFor(undefined)).toBeNull();
+    expect(agreedFor(null)).toBeNull();
+  });
+
+  it('is null when the proposal carried no clauses', () => {
+    expect(agreedFor(source({ clauses: [] }))).toBeNull();
+  });
+
+  it('groups the lists in order and summarises the counts', () => {
+    expect(agreedFor(source())).toMatchObject({
+      assumptions: ['Sandbox access is provided.', 'Two review rounds.'],
+      exclusions: ['Data migration.'],
+      additionalTerms: ['Work pauses if feedback takes over 5 days.'],
+      summary: '2 assumptions · 1 exclusion · 1 additional term',
+    });
+  });
+
+  it('skips an empty kind in the summary and singularises one', () => {
+    const only = source({ clauses: [clause('exclusion', 'Data migration.')] });
+    expect(agreedFor(only)?.summary).toBe('1 exclusion');
+    const noTerms = source({
+      clauses: [clause('assumption', 'A.'), clause('assumption', 'B.'), clause('exclusion', 'C.')],
+    });
+    expect(agreedFor(noTerms)?.summary).toBe('2 assumptions · 1 exclusion');
+    const terms = source({
+      clauses: [clause('additional_term', 'A.'), clause('additional_term', 'B.')],
+    });
+    expect(agreedFor(terms)?.summary).toBe('2 additional terms');
+  });
+
+  it('names the parties and the pricing method', () => {
+    expect(agreedFor(source())).toMatchObject({
+      clientCompanyName: 'Northwind Industrial',
+      expertName: 'Priya Sharma',
+      pricingMethod: 'fixed',
+    });
+    expect(
+      agreedFor(source(), 'client', [], makeEngagement({ pricingMethod: 'tm' }))
+    ).toMatchObject({ pricingMethod: 'tm' });
+  });
+
+  it('attributes the acceptance to the person at the company, on the full date', () => {
+    expect(agreedFor(source())?.acceptedLine).toBe(
+      'Accepted by Dana @ Northwind Industrial on 10 June 2026.'
+    );
+  });
+
+  it('has no accepted line when there is no actor', () => {
+    expect(agreedFor(source({ proposalAcceptedBy: null }))?.acceptedLine).toBeNull();
+  });
+
+  it('has no accepted line when the acceptance time is unknown', () => {
+    expect(agreedFor(source({ proposalAcceptedAt: null }))?.acceptedLine).toBeNull();
+  });
+
+  it('is the same on every lens, carrying the same lists and line', () => {
+    const [client, expert, admin] = (['client', 'expert', 'admin'] as const).map((lens) =>
+      agreedFor(source(), lens)
+    );
+    expect(expert).toEqual(client);
+    expect(admin).toEqual(client);
+  });
+
+  describe('changedSinceStart', () => {
+    it('is false with no change orders', () => {
+      expect(agreedFor(source())?.changedSinceStart).toBe(false);
+    });
+
+    it.each(['requested', 'draft', 'sent', 'declined', 'withdrawn'] as const)(
+      'is false for a %s change order',
+      (status) => {
+        expect(agreedFor(source(), 'client', [makeOrder({ status })])?.changedSinceStart).toBe(
+          false
+        );
+      }
+    );
+
+    it('is true once a change order has been approved', () => {
+      const orders = [makeOrder({ status: 'declined' }), makeOrder({ status: 'approved' })];
+      expect(agreedFor(source(), 'client', orders)?.changedSinceStart).toBe(true);
+    });
+  });
+});
+
 describe('mapEngagementToWorkspaceView — header line profile link', () => {
   const HREF = '/experts/priya-sharma';
   const headerLineFor = (lens: EngagementLens, href: string | null = HREF) =>
-    mapEngagementToWorkspaceView(makeEngagement(), ctxFor(lens), NOW, [], [], null, href).header
-      .headerLine;
+    mapEngagementToWorkspaceView(makeEngagement(), ctxFor(lens), {
+      now: NOW,
+      expertProfileHref: href,
+    }).header.headerLine;
 
   it('client lens: the expert person carries the gated profile href', () => {
     expect(headerLineFor('client')).toEqual({
@@ -151,14 +275,14 @@ describe('mapEngagementToWorkspaceView — header line profile link', () => {
   });
 
   it('defaults to no href when the caller passes none', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), { now: NOW });
     expect(view.header.headerLine.expertProfileHref).toBeNull();
   });
 });
 
 describe('mapEngagementToWorkspaceView — header & title', () => {
   it('uses the source request title when present', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), { now: NOW });
     expect(view.header.engagementTitle).toBe('CPQ implementation to replace legacy quoting tool');
     expect(view.header.provenance).toEqual({ requestId: 'req-1', href: '/projects/req-1' });
   });
@@ -167,7 +291,7 @@ describe('mapEngagementToWorkspaceView — header & title', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ projectRequestId: null, projectRequest: null }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.engagementTitle).toBe('Delivery with Priya');
     expect(view.header.provenance).toBeNull();
@@ -177,7 +301,7 @@ describe('mapEngagementToWorkspaceView — header & title', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ projectRequest: { id: 'req-1', title: '   ' } }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.engagementTitle).toBe('Delivery with Priya');
     // The present-but-empty-title branch still resolves provenance from the request.
@@ -188,7 +312,7 @@ describe('mapEngagementToWorkspaceView — header & title', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.statusChip).toEqual({
       status: 'pending_acceptance',
@@ -201,7 +325,7 @@ describe('mapEngagementToWorkspaceView — header & title', () => {
 
 describe('mapEngagementToWorkspaceView — terms strip', () => {
   it('pricing pill formats fixed price + whole currency; kicked-off date derived', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), { now: NOW });
     const [pricing] = view.header.terms;
     expect(pricing?.value).toBe('Fixed price · A$58,000');
     const kicked = view.header.terms.find((t) => t.label === 'Kicked off');
@@ -217,7 +341,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ pricingMethod: 'tm' }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const [pricing] = view.header.terms;
     expect(pricing?.label).toBe('Pricing');
@@ -230,7 +354,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
       const view = mapEngagementToWorkspaceView(
         makeEngagement({ pricingMethod: 'tm', cadence: 'monthly', rateCents: 15_000 }),
         ctxFor(lens),
-        NOW
+        { now: NOW }
       );
       const terms = view.header.terms.filter((t) => t.label !== 'Last delivery activity');
       expect(terms.map((t) => t.value)).toEqual([
@@ -247,7 +371,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ pricingMethod: 'tm', cadence: 'fortnightly' }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.terms.map((t) => t.value)).toContain('Billed fortnightly');
   });
@@ -260,7 +384,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
         milestones: [makeMilestone({ estimatedMinutes: 600 })],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.terms.map((t) => t.value)).toEqual([
       'Time & materials',
@@ -272,7 +396,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ cadence: 'monthly', pricingMethod: 'fixed' }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const timeframe = view.header.terms.find((t) => t.label === 'Timeframe');
     expect(timeframe?.value).toBe('Monthly retainer');
@@ -288,7 +412,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
         ],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const timeframe = view.header.terms.find((t) => t.label === 'Timeframe');
     expect(timeframe?.value).toBe('~15h estimated');
@@ -298,7 +422,7 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ cadence: null, milestones: [makeMilestone()] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.header.terms.find((t) => t.label === 'Timeframe')).toBeUndefined();
   });
@@ -313,12 +437,12 @@ describe('mapEngagementToWorkspaceView — Balo fee gross-up (client lens only)'
   });
 
   const pricingValue = (lens: EngagementLens): string | undefined =>
-    mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW).header.terms.find(
+    mapEngagementToWorkspaceView(withFee, ctxFor(lens), { now: NOW }).header.terms.find(
       (t) => t.label === 'Pricing'
     )?.value;
 
   const milestoneValue = (lens: EngagementLens): string | null | undefined =>
-    mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW).milestones[0]?.valueLabel;
+    mapEngagementToWorkspaceView(withFee, ctxFor(lens), { now: NOW }).milestones[0]?.valueLabel;
 
   it('Pricing pill: client sees the grossed-up figure', () => {
     // applyBaloFee(5_800_000, 2500) = 7_250_000 → A$72,500.
@@ -342,7 +466,7 @@ describe('mapEngagementToWorkspaceView — Balo fee gross-up (client lens only)'
 
   it('never emits baloFeeBps / a fee field on the view model for ANY lens', () => {
     for (const lens of ['client', 'expert', 'admin'] as const) {
-      const view = mapEngagementToWorkspaceView(withFee, ctxFor(lens), NOW);
+      const view = mapEngagementToWorkspaceView(withFee, ctxFor(lens), { now: NOW });
       // Top-level, header, terms items, and milestone nodes carry formatted strings
       // only — the raw fee/bps must never leak into the serialized contract.
       expect(view).not.toHaveProperty('baloFeeBps');
@@ -371,7 +495,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         ],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.progress).toMatchObject({ done: 1, total: 4, pct: 25 });
     expect(view.progress.reviewCopy).toContain('accept, or request changes within 7 days');
@@ -381,7 +505,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone()] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.progress.reviewCopy).toBeNull();
   });
@@ -390,7 +514,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const { done, total, pct } = view.progress;
     expect({ done, total, pct }).toEqual({ done: 0, total: 0, pct: 0 });
@@ -400,7 +524,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'active', milestones: [makeMilestone()] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.progress.reviewCopy).toContain('accept, or request changes within 7 days');
   });
@@ -422,7 +546,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         changeRequestRoundCount: 1,
       } as Partial<ProjectEngagementWithMilestones>),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.changeRequestBanner).toMatchObject({ variant: 'client_waiting' });
     expect(view.progress.reviewCopy).toBeNull();
@@ -437,7 +561,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         milestones: [makeMilestone({ status: 'completed' })],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.progress.reviewCopy).toBeNull();
   });
@@ -446,7 +570,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'cancelled', cancelledAt: NOW, milestones: [makeMilestone()] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.progress.reviewCopy).toBeNull();
   });
@@ -466,7 +590,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         ],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const [node] = view.milestones;
     expect(node?.nodeVariant).toBe('completed');
@@ -501,7 +625,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
           ],
         }),
         ctxFor(lens),
-        NOW
+        { now: NOW }
       ).milestones[0]?.completedLabel;
 
     it('names the agency owner/admin who completed it, not the delivering expert', () => {
@@ -537,7 +661,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         ],
       }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     const [withText, blank, emptyTags] = view.milestones;
     expect(withText?.descriptionText).toBe('Do the work.');
@@ -561,7 +685,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
         ],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const [node] = view.milestones;
     const html = node?.descriptionHtml ?? '';
@@ -578,7 +702,7 @@ describe('mapEngagementToWorkspaceView — progress & milestones', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ status: 'pending' })] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     const [node] = view.milestones;
     expect(node?.connectorFilled).toBe(false);
@@ -597,7 +721,7 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
         milestones: [makeMilestone({ status: 'completed' })],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.reviewBanner?.title).toBe('Priya says the project is ready');
     // requested 4 Jul + 7 days = 11 Jul.
@@ -621,19 +745,19 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
       ...base,
       completionRequestedBy: { id: 'user-charles', firstName: 'Charles', lastName: 'Obi' },
     });
-    expect(mapEngagementToWorkspaceView(named, ctxFor('client'), NOW).reviewBanner?.title).toBe(
-      'Charles @ CloudPeak says the project is ready'
-    );
-    expect(mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).reviewBanner?.body).toContain(
-      'by Charles @ CloudPeak.'
-    );
     expect(
-      mapEngagementToWorkspaceView(named, ctxFor('admin'), NOW).cancelDialog?.reviewNote
+      mapEngagementToWorkspaceView(named, ctxFor('client'), { now: NOW }).reviewBanner?.title
+    ).toBe('Charles @ CloudPeak says the project is ready');
+    expect(
+      mapEngagementToWorkspaceView(named, ctxFor('admin'), { now: NOW }).reviewBanner?.body
+    ).toContain('by Charles @ CloudPeak.');
+    expect(
+      mapEngagementToWorkspaceView(named, ctxFor('admin'), { now: NOW }).cancelDialog?.reviewNote
     ).toMatch(/^Charles @ CloudPeak has marked the project ready/);
     const unnamed = makeEngagement({ ...base, completionRequestedBy: null });
-    expect(mapEngagementToWorkspaceView(unnamed, ctxFor('client'), NOW).reviewBanner?.title).toBe(
-      'Priya @ CloudPeak says the project is ready'
-    );
+    expect(
+      mapEngagementToWorkspaceView(unnamed, ctxFor('client'), { now: NOW }).reviewBanner?.title
+    ).toBe('Priya @ CloudPeak says the project is ready');
   });
 
   it('carries no countdown wording in any lens', () => {
@@ -642,7 +766,7 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
       completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
     });
     for (const lens of ['client', 'expert', 'admin'] as const) {
-      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), NOW).reviewBanner;
+      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), { now: NOW }).reviewBanner;
       expect(banner).not.toHaveProperty('countdown');
       expect(`${banner?.title} ${banner?.body}`).not.toMatch(/Auto-accepts/i);
     }
@@ -653,10 +777,14 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
       status: 'pending_acceptance',
       completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
     });
-    expect(mapEngagementToWorkspaceView(pending, ctxFor('expert'), NOW).reviewBanner?.body).toBe(
+    expect(
+      mapEngagementToWorkspaceView(pending, ctxFor('expert'), { now: NOW }).reviewBanner?.body
+    ).toBe(
       "Requested 4 Jul. The delivery plan is locked while the project is in review. If Northwind Industrial doesn't respond, it's accepted on 11 Jul 2026 and the final invoice is raised then."
     );
-    expect(mapEngagementToWorkspaceView(pending, ctxFor('admin'), NOW).reviewBanner?.body).toBe(
+    expect(
+      mapEngagementToWorkspaceView(pending, ctxFor('admin'), { now: NOW }).reviewBanner?.body
+    ).toBe(
       "Requested 4 Jul by Priya. If Northwind Industrial doesn't respond, it's accepted on 11 Jul 2026 and the final invoice is raised then."
     );
   });
@@ -665,7 +793,7 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'pending_acceptance', completionRequestedAt: null }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.reviewBanner?.autoAcceptOn).toBeNull();
     expect(view.reviewBanner?.body).toContain("it's accepted at the end of the review window.");
@@ -675,7 +803,7 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.reviewBanner?.title).toBe(
       "Completion requested — awaiting Northwind Industrial's review"
@@ -683,14 +811,14 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
   });
 
   it('no review banner outside pending_acceptance', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), { now: NOW });
     expect(view.reviewBanner).toBeNull();
   });
 
   it('client review banner carries the accept + request-changes decision copy (D7)', () => {
     const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
-    const clientDecision = mapEngagementToWorkspaceView(pending, ctxFor('client'), NOW).reviewBanner
-      ?.clientDecision;
+    const clientDecision = mapEngagementToWorkspaceView(pending, ctxFor('client'), { now: NOW })
+      .reviewBanner?.clientDecision;
     expect(clientDecision).not.toBeNull();
     expect(clientDecision?.acceptModalBody).toContain("can't be un-accepted");
     expect(clientDecision?.acceptModalBody).toContain('Balo raises the final invoice');
@@ -701,10 +829,12 @@ describe('mapEngagementToWorkspaceView — review banner', () => {
   it('expert/admin review banners carry no client decision copy', () => {
     const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
     expect(
-      mapEngagementToWorkspaceView(pending, ctxFor('expert'), NOW).reviewBanner?.clientDecision
+      mapEngagementToWorkspaceView(pending, ctxFor('expert'), { now: NOW }).reviewBanner
+        ?.clientDecision
     ).toBeNull();
     expect(
-      mapEngagementToWorkspaceView(pending, ctxFor('admin'), NOW).reviewBanner?.clientDecision
+      mapEngagementToWorkspaceView(pending, ctxFor('admin'), { now: NOW }).reviewBanner
+        ?.clientDecision
     ).toBeNull();
   });
 });
@@ -740,7 +870,7 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
   }
 
   it('has no banner, pill or feedback before any round', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), { now: NOW });
     expect(view.changeRequestBanner).toBeNull();
     expect(view.progress.reviewPill).toBeNull();
     expect(view.milestones.every((m) => m.feedback === null)).toBe(true);
@@ -750,7 +880,7 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
     const view = mapEngagementToWorkspaceView(
       afterRound({ changeRequestNote: null, changeRequestedBy: null }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.changeRequestBanner).toMatchObject({
       variant: 'work_outstanding',
@@ -761,15 +891,15 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
 
   it('client sees their own waiting banner; admin sees the banner without guidance', () => {
     expect(
-      mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), NOW).changeRequestBanner
+      mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), { now: NOW }).changeRequestBanner
     ).toMatchObject({ variant: 'client_waiting' });
     expect(
-      mapEngagementToWorkspaceView(afterRound(), ctxFor('admin'), NOW).changeRequestBanner
+      mapEngagementToWorkspaceView(afterRound(), ctxFor('admin'), { now: NOW }).changeRequestBanner
     ).toMatchObject({ variant: 'work_outstanding', guidance: null });
   });
 
   it('wires the pill, the reopened segment and the tagged milestone feedback', () => {
-    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), NOW);
+    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('client'), { now: NOW });
     expect(view.progress.reviewPill).toEqual({ label: 'Changes requested', tone: 'warning' });
     expect(view.progress.segments.map((segment) => segment.tone)).toEqual([
       'completed',
@@ -791,13 +921,13 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
         makeMilestone({ id: 'ms-2', status: 'completed' }),
       ],
     });
-    const view = mapEngagementToWorkspaceView(done, ctxFor('expert'), NOW);
+    const view = mapEngagementToWorkspaceView(done, ctxFor('expert'), { now: NOW });
     expect(view.changeRequestBanner).toMatchObject({ variant: 'changes_made' });
     expect(view.completionCard).toBeNull();
   });
 
   it('work_outstanding keeps the card as the single control, labelled "again"', () => {
-    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('expert'), NOW);
+    const view = mapEngagementToWorkspaceView(afterRound(), ctxFor('expert'), { now: NOW });
     expect(view.changeRequestBanner).toMatchObject({ variant: 'work_outstanding' });
     expect(view.completionCard?.ctaLabel).toBe('Mark project ready again');
   });
@@ -806,7 +936,7 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ status: 'completed' })] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard?.ctaLabel).toBe('Mark project ready');
   });
@@ -826,7 +956,7 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
         ],
       } as Partial<ProjectEngagementWithMilestones>),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.reviewBanner?.lastRequest).toEqual({
       heading: 'Your last request · 4 Jul',
@@ -842,7 +972,7 @@ describe('mapEngagementToWorkspaceView — change-request wiring', () => {
   it('expert and admin review banners carry no last-request quote or milestone picker', () => {
     const pending = makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW });
     for (const lens of ['expert', 'admin'] as const) {
-      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), NOW).reviewBanner;
+      const banner = mapEngagementToWorkspaceView(pending, ctxFor(lens), { now: NOW }).reviewBanner;
       expect(banner?.lastRequest).toBeNull();
       expect(banner?.clientDecision).toBeNull();
     }
@@ -861,16 +991,16 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
         makeMilestone({ id: 'm2', status: 'completed' }),
       ],
     });
-    const expertView = mapEngagementToWorkspaceView(engagement, ctxFor('expert'), NOW);
+    const expertView = mapEngagementToWorkspaceView(engagement, ctxFor('expert'), { now: NOW });
     expect(expertView.completedBanner?.title).toBe('Project delivered');
     expect(expertView.completedBanner?.body).toContain(
       'accepted by Dana @ Northwind Industrial on 30 Aug 2026'
     );
 
-    const clientView = mapEngagementToWorkspaceView(engagement, ctxFor('client'), NOW);
+    const clientView = mapEngagementToWorkspaceView(engagement, ctxFor('client'), { now: NOW });
     expect(clientView.completedBanner?.body).toContain('You accepted the project on 30 Aug 2026');
 
-    const adminView = mapEngagementToWorkspaceView(engagement, ctxFor('admin'), NOW);
+    const adminView = mapEngagementToWorkspaceView(engagement, ctxFor('admin'), { now: NOW });
     expect(adminView.completedBanner?.readyToInvoice).toBe(true);
     expect(adminView.completedBanner?.body).toContain('2 milestones delivered');
   });
@@ -883,7 +1013,7 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
       acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
       milestones: [makeMilestone({ status: 'completed' })],
     });
-    const clientView = mapEngagementToWorkspaceView(engagement, ctxFor('client'), NOW);
+    const clientView = mapEngagementToWorkspaceView(engagement, ctxFor('client'), { now: NOW });
     expect(clientView.completedBanner?.body).toContain(
       'accepted automatically on 30 Aug 2026 after the 7-day review window'
     );
@@ -899,19 +1029,19 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
 
     // total === 1 → singular, never "1 milestones".
     const one = makeEngagement({ ...base, milestones: [makeMilestone({ status: 'completed' })] });
-    const expertOne = mapEngagementToWorkspaceView(one, ctxFor('expert'), NOW);
+    const expertOne = mapEngagementToWorkspaceView(one, ctxFor('expert'), { now: NOW });
     expect(expertOne.completedBanner?.body).toContain('All 1 milestone delivered and the project');
     expect(expertOne.completedBanner?.body).not.toContain('1 milestones');
-    const adminOne = mapEngagementToWorkspaceView(one, ctxFor('admin'), NOW);
+    const adminOne = mapEngagementToWorkspaceView(one, ctxFor('admin'), { now: NOW });
     expect(adminOne.completedBanner?.body).toContain('— 1 milestone delivered.');
     expect(adminOne.completedBanner?.body).not.toContain('1 milestones');
 
     // total === 0 → no count at all.
     const zero = makeEngagement({ ...base, milestones: [] });
-    const expertZero = mapEngagementToWorkspaceView(zero, ctxFor('expert'), NOW);
+    const expertZero = mapEngagementToWorkspaceView(zero, ctxFor('expert'), { now: NOW });
     expect(expertZero.completedBanner?.body).toContain('The project was delivered and the project');
     expect(expertZero.completedBanner?.body).not.toContain('0 milestones');
-    const adminZero = mapEngagementToWorkspaceView(zero, ctxFor('admin'), NOW);
+    const adminZero = mapEngagementToWorkspaceView(zero, ctxFor('admin'), { now: NOW });
     expect(adminZero.completedBanner?.body).not.toContain('0 milestones');
     // The count clause is omitted → the body ends right after the acceptance clause.
     expect(adminZero.completedBanner?.body).toMatch(/review window\.$/);
@@ -924,16 +1054,18 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
       acceptedBy: { id: 'u-dana', firstName: 'Dana', lastName: 'Lee' },
       acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
     });
-    const clientCta = mapEngagementToWorkspaceView(completed, ctxFor('client'), NOW).completedBanner
-      ?.clientCta;
+    const clientCta = mapEngagementToWorkspaceView(completed, ctxFor('client'), { now: NOW })
+      .completedBanner?.clientCta;
     expect(clientCta?.messageHref).toMatch(/^\/projects\//);
     expect(clientCta?.messagePersonLabel).toContain('Priya');
 
     expect(
-      mapEngagementToWorkspaceView(completed, ctxFor('expert'), NOW).completedBanner?.clientCta
+      mapEngagementToWorkspaceView(completed, ctxFor('expert'), { now: NOW }).completedBanner
+        ?.clientCta
     ).toBeNull();
     expect(
-      mapEngagementToWorkspaceView(completed, ctxFor('admin'), NOW).completedBanner?.clientCta
+      mapEngagementToWorkspaceView(completed, ctxFor('admin'), { now: NOW }).completedBanner
+        ?.clientCta
     ).toBeNull();
   });
 
@@ -945,8 +1077,8 @@ describe('mapEngagementToWorkspaceView — completed banner attribution', () => 
       acceptedAt: new Date('2026-08-30T00:00:00.000Z'),
       projectRequest: null,
     });
-    const clientCta = mapEngagementToWorkspaceView(retainer, ctxFor('client'), NOW).completedBanner
-      ?.clientCta;
+    const clientCta = mapEngagementToWorkspaceView(retainer, ctxFor('client'), { now: NOW })
+      .completedBanner?.clientCta;
     expect(clientCta?.messageHref).toBeNull();
   });
 });
@@ -960,7 +1092,7 @@ describe('mapEngagementToWorkspaceView — cancelled banner', () => {
         cancellationReason: 'Programme paused after the acquisition.',
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.cancelledBanner?.title).toBe('Project cancelled');
     expect(view.cancelledBanner?.body).toBe('Cancelled by Balo on 24 Jul 2026.');
@@ -973,7 +1105,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.hasMilestones).toBe(false);
     expect(view.emptyState?.title).toBe('Priya is shaping the delivery plan');
@@ -983,7 +1115,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState?.title).toBe('Shape the delivery plan');
     expect(view.emptyState?.body).toMatch(/^Add your first milestone so Northwind/);
@@ -993,7 +1125,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [] }),
       { ...ctxFor('expert'), isDeliveringExpert: false },
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState?.body).toBe(
       'Add the first milestone so Northwind Industrial can follow progress. When everything is delivered, Priya marks the project ready and Northwind Industrial reviews it as a whole.'
@@ -1004,7 +1136,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [], pricingMethod: 'tm' }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState?.body).toMatch(
       /^Propose the first milestone — Northwind Industrial approves it before work is tracked against it\./
@@ -1015,7 +1147,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone()] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState).toBeNull();
   });
@@ -1029,7 +1161,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
         milestones: [],
       }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState).toBeNull();
   });
@@ -1038,7 +1170,7 @@ describe('mapEngagementToWorkspaceView — empty state', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'cancelled', cancelledAt: NOW, milestones: [] }),
       ctxFor('client'),
-      NOW
+      { now: NOW }
     );
     expect(view.emptyState).toBeNull();
   });
@@ -1049,9 +1181,9 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
     over: Partial<ProjectEngagementWithMilestones>,
     lens: EngagementLens
   ): { icon: string; label: string; value: string; tone?: string } | undefined {
-    return mapEngagementToWorkspaceView(makeEngagement(over), ctxFor(lens), NOW).header.terms.find(
-      (t) => t.label === 'Last delivery activity'
-    );
+    return mapEngagementToWorkspaceView(makeEngagement(over), ctxFor(lens), {
+      now: NOW,
+    }).header.terms.find((t) => t.label === 'Last delivery activity');
   }
 
   it('shows how long since the last delivery signal on the admin lens', () => {
@@ -1099,10 +1231,7 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
     const chip = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'active', activatedAt: quiet, createdAt: quiet }),
       ctxFor('admin'),
-      NOW,
-      [],
-      [],
-      loggedYesterday
+      { now: NOW, lastTimeLoggedAt: loggedYesterday }
     ).header.terms.find((t) => t.label === 'Last delivery activity');
     expect(chip).toEqual({
       icon: 'Clock',
@@ -1133,7 +1262,7 @@ describe('mapEngagementToWorkspaceView — admin last-activity chip', () => {
 
 describe('mapEngagementToWorkspaceView — cancel dialog', () => {
   it('states the consequence and who sees the reason, naming the parties', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), NOW);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), { now: NOW });
     expect(view.cancelDialog).toEqual({
       body: "Delivery stops straight away for Northwind Industrial and Priya Sharma, and it can't be undone. Both are told, with your reason.",
       reasonHint: 'Northwind Industrial and Priya Sharma both see this.',
@@ -1155,7 +1284,7 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
         },
       }),
       ctxFor('admin'),
-      NOW
+      { now: NOW }
     );
     expect(view.cancelDialog?.reasonHint).toBe(
       'Northwind Industrial and CloudPeak Consulting both see this.'
@@ -1169,7 +1298,7 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
         completionRequestedAt: new Date('2026-07-04T00:00:00.000Z'),
       }),
       ctxFor('admin'),
-      NOW
+      { now: NOW }
     );
     expect(view.cancelDialog?.reviewNote).toBe(
       "Priya has marked the project ready and Northwind Industrial is reviewing it. If they don't respond, it's accepted on 11 Jul 2026."
@@ -1181,14 +1310,14 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
       mapEngagementToWorkspaceView(
         makeEngagement({ status: 'completed', acceptedAt: NOW, acceptanceMethod: 'auto' }),
         ctxFor('admin'),
-        NOW
+        { now: NOW }
       ).cancelDialog
     ).toBeNull();
     expect(
       mapEngagementToWorkspaceView(
         makeEngagement({ status: 'cancelled', cancelledAt: NOW }),
         ctxFor('admin'),
-        NOW
+        { now: NOW }
       ).cancelDialog
     ).toBeNull();
   });
@@ -1197,10 +1326,10 @@ describe('mapEngagementToWorkspaceView — cancel dialog', () => {
 describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
   it('is null for the client and admin lenses', () => {
     expect(
-      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), NOW).completionCard
+      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('client'), { now: NOW }).completionCard
     ).toBeNull();
     expect(
-      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), NOW).completionCard
+      mapEngagementToWorkspaceView(makeEngagement(), ctxFor('admin'), { now: NOW }).completionCard
     ).toBeNull();
   });
 
@@ -1208,7 +1337,7 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard).toBeNull();
   });
@@ -1217,7 +1346,7 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard).toMatchObject({
       hasMilestones: false,
@@ -1234,7 +1363,7 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ status: 'completed' })] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard).toMatchObject({
       hasMilestones: true,
@@ -1263,7 +1392,7 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
         ],
       }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard).toMatchObject({
       hasMilestones: true,
@@ -1281,7 +1410,7 @@ describe('mapEngagementToWorkspaceView — completionCard (D4)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ status: 'pending' })] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.completionCard).toMatchObject({
       hasMilestones: true,
@@ -1340,24 +1469,23 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
     const expert = mapEngagementToWorkspaceView(
       makeEngagement({ baloFeeBps: 2500 }),
       ctxFor('expert'),
-      NOW,
-      [approvedWithLines]
+      { now: NOW, changeOrders: [approvedWithLines] }
     );
     expect(expert.header.terms[0]?.value).toBe('Fixed price · A$60,000');
 
     const client = mapEngagementToWorkspaceView(
       makeEngagement({ baloFeeBps: 2500 }),
       ctxFor('client'),
-      NOW,
-      [approvedWithLines]
+      { now: NOW, changeOrders: [approvedWithLines] }
     );
     expect(client.header.terms[0]?.value).toBe('Fixed price · A$75,000');
   });
 
   it('ignores a change order that is not approved when pricing the strip', () => {
-    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), NOW, [
-      makeOrder({ ...sentOrder, priceDeltaCents: 900_000 }),
-    ]);
+    const view = mapEngagementToWorkspaceView(makeEngagement(), ctxFor('expert'), {
+      now: NOW,
+      changeOrders: [makeOrder({ ...sentOrder, priceDeltaCents: 900_000 })],
+    });
     expect(view.header.terms[0]?.value).toBe('Fixed price · A$58,000');
   });
 
@@ -1367,24 +1495,20 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       makeMilestone({ id: 'ms-2', sortOrder: 1 }),
       makeMilestone({ id: 'ms-3', sortOrder: 2 }),
     ];
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ milestones }),
-      ctxFor('expert'),
-      NOW,
-      [sentOrder]
-    );
+    const view = mapEngagementToWorkspaceView(makeEngagement({ milestones }), ctxFor('expert'), {
+      now: NOW,
+      changeOrders: [sentOrder],
+    });
     expect(view.milestones.map((m) => m.changePending)).toEqual([true, true, false]);
   });
 
   it('locks nothing while the open order is only a draft or a request', () => {
     const milestones = [makeMilestone({ id: 'ms-1' })];
     const draft = makeOrder({ ...sentOrder, status: 'draft', sentAt: null });
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ milestones }),
-      ctxFor('expert'),
-      NOW,
-      [draft]
-    );
+    const view = mapEngagementToWorkspaceView(makeEngagement({ milestones }), ctxFor('expert'), {
+      now: NOW,
+      changeOrders: [draft],
+    });
     expect(view.milestones[0]?.changePending).toBe(false);
   });
 
@@ -1394,12 +1518,10 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       makeMilestone({ id: 'ms-edit', sortOrder: 1 }),
       makeMilestone({ id: 'ms-plain', sortOrder: 2 }),
     ];
-    const view = mapEngagementToWorkspaceView(
-      makeEngagement({ milestones }),
-      ctxFor('client'),
-      NOW,
-      [approvedWithLines]
-    );
+    const view = mapEngagementToWorkspaceView(makeEngagement({ milestones }), ctxFor('client'), {
+      now: NOW,
+      changeOrders: [approvedWithLines],
+    });
     expect(view.milestones.map((m) => m.changeProvenance)).toEqual(['added', 'updated', null]);
   });
 
@@ -1407,7 +1529,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone()] }),
       ctxFor('expert'),
-      NOW
+      { now: NOW }
     );
     expect(view.milestones[0]).toMatchObject({ changePending: false, changeProvenance: null });
   });
@@ -1423,8 +1545,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       const card = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: done }),
         ctxFor('expert'),
-        NOW,
-        [requested]
+        { now: NOW, changeOrders: [requested] }
       ).completionCard;
       expect(card?.canRequest).toBe(false);
       expect(card?.bodyCopy).toBe(
@@ -1436,8 +1557,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       const card = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: done }),
         ctxFor('expert'),
-        NOW,
-        [sentOrder]
+        { now: NOW, changeOrders: [sentOrder] }
       ).completionCard;
       expect(card?.canRequest).toBe(false);
       expect(card?.bodyCopy).toBe(
@@ -1453,8 +1573,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       const card = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: done }),
         ctxFor('expert'),
-        NOW,
-        [draft]
+        { now: NOW, changeOrders: [draft] }
       ).completionCard;
       expect(card?.canRequest).toBe(false);
     });
@@ -1463,8 +1582,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       const card = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: done }),
         ctxFor('expert'),
-        NOW,
-        [makeOrder({ status: 'draft' })]
+        { now: NOW, changeOrders: [makeOrder({ status: 'draft' })] }
       ).completionCard;
       expect(card?.canRequest).toBe(true);
     });
@@ -1473,8 +1591,7 @@ describe('mapEngagementToWorkspaceView — change orders (BAL-622)', () => {
       const card = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: done }),
         ctxFor('expert'),
-        NOW,
-        [approvedWithLines]
+        { now: NOW, changeOrders: [approvedWithLines] }
       ).completionCard;
       expect(card?.canRequest).toBe(true);
     });
@@ -1503,9 +1620,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     return mapEngagementToWorkspaceView(
       makeEngagement({ status: 'pending_acceptance', completionRequestedAt: NOW, milestones }),
       ctxFor(lens),
-      NOW,
-      [],
-      edits
+      { now: NOW, contentEdits: edits }
     );
   }
 
@@ -1513,9 +1628,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [reworded] }),
       ctxFor('client'),
-      NOW,
-      [],
-      [directEdit]
+      { now: NOW, contentEdits: [directEdit] }
     );
     expect(view.milestones[0]?.proposalChanges).toEqual([
       { field: 'title', label: 'Title', before: 'Discovery', after: 'Discovery & design' },
@@ -1526,9 +1639,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [makeMilestone({ id: 'ms-reworded' })] }),
       ctxFor('client'),
-      NOW,
-      [],
-      [directEdit]
+      { now: NOW, contentEdits: [directEdit] }
     );
     expect(view.milestones[0]?.proposalChanges).toEqual([]);
   });
@@ -1537,9 +1648,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ milestones: [{ ...reworded, title: 'Discovery' }] }),
       ctxFor('client'),
-      NOW,
-      [],
-      [directEdit]
+      { now: NOW, contentEdits: [directEdit] }
     );
     expect(view.milestones[0]?.proposalChanges).toEqual([]);
   });
@@ -1569,9 +1678,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
         expertProfile: { ...makeEngagement().expertProfile, type: 'agency' },
       }),
       ctxFor('client'),
-      NOW,
-      [],
-      [directEdit]
+      { now: NOW, contentEdits: [directEdit] }
     );
     expect(view.reviewBanner?.changedSinceProposal?.intro).toBe(
       'CloudPeak revised the wording of 1 milestone after the proposal was accepted. Each is marked below.'
@@ -1588,7 +1695,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
       mapEngagementToWorkspaceView(
         makeEngagement({ milestones: [milestone], ...over }),
         ctxFor('expert'),
-        NOW
+        { now: NOW }
       ).milestones[0]?.removalNeedsChangeOrder;
 
     it('is true for proposal-origin and valued milestones', () => {
@@ -1614,8 +1721,7 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
       const view = mapEngagementToWorkspaceView(
         makeEngagement({ milestones: [makeMilestone()] }),
         ctxFor('expert'),
-        NOW,
-        [approved]
+        { now: NOW, changeOrders: [approved] }
       );
       expect(view.milestones[0]?.removalNeedsChangeOrder).toBe(true);
     });
@@ -1623,8 +1729,9 @@ describe('mapEngagementToWorkspaceView — scope guards and changed-since-propos
 
   it('flags adding a milestone as needing a change order on time and materials only', () => {
     const add = (pricingMethod: 'fixed' | 'tm'): boolean =>
-      mapEngagementToWorkspaceView(makeEngagement({ pricingMethod }), ctxFor('expert'), NOW)
-        .addMilestoneNeedsChangeOrder;
+      mapEngagementToWorkspaceView(makeEngagement({ pricingMethod }), ctxFor('expert'), {
+        now: NOW,
+      }).addMilestoneNeedsChangeOrder;
     expect(add('tm')).toBe(true);
     expect(add('fixed')).toBe(false);
   });

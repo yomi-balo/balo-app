@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
+import { getProposalDocumentDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download';
 import { ProposalReview, presentSections } from './proposal-review';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -46,6 +47,9 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/proposal/[relationshipId]/_actio
   shareProposalWithColleague: vi.fn(),
   revokeProposalShareLink: vi.fn(),
 }));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download', () => ({
+  getProposalDocumentDownloadAction: vi.fn(),
+}));
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
@@ -61,7 +65,10 @@ function doc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc {
     status: 'submitted',
     pricingMethod: 'fixed',
     overviewHtml: 'Priya overview',
-    exclusionsHtml: null,
+    assumptions: [],
+    exclusions: [],
+    additionalTerms: [],
+    clientCompanyName: 'Northwind',
     priceCents: 5_800_000,
     currency: 'aud',
     timeframeWeeks: 8,
@@ -126,18 +133,35 @@ describe('presentSections', () => {
     expect(keys).toEqual(['overview', 'milestones', 'payment', 'terms']);
   });
 
-  it('hides Attachments when only terms docs are attached', () => {
+  it('includes Attachments whenever a file is attached', () => {
     const keys = presentSections(
-      doc({ attachments: [{ id: 'a', fileName: 'msa.pdf', sizeBytes: 10, kind: 'terms' }] })
-    ).map((s) => s.key);
-    expect(keys).not.toContain('attachments');
-  });
-
-  it('includes Attachments when a non-terms file is attached', () => {
-    const keys = presentSections(
-      doc({ attachments: [{ id: 'a', fileName: 'spec.pdf', sizeBytes: 10, kind: 'ref' }] })
+      doc({ attachments: [{ id: 'a', fileName: 'spec.pdf', sizeBytes: 10 }] })
     ).map((s) => s.key);
     expect(keys).toContain('attachments');
+  });
+
+  it('hides the assumptions-and-exclusions chip when both lists are empty', () => {
+    expect(presentSections(doc()).map((s) => s.key)).not.toContain('scope');
+  });
+
+  it.each([
+    ['assumptions', { assumptions: ['Sandbox access by kickoff'] }],
+    ['exclusions', { exclusions: ['Data migration'] }],
+  ])('shows the chip between milestones and payment for %s alone', (_label, overrides) => {
+    expect(presentSections(doc(overrides)).map((s) => s.key)).toEqual([
+      'overview',
+      'milestones',
+      'scope',
+      'payment',
+      'terms',
+    ]);
+  });
+
+  it('does not count additional terms towards the chip', () => {
+    const keys = presentSections(doc({ additionalTerms: ['One revision round'] })).map(
+      (s) => s.key
+    );
+    expect(keys).not.toContain('scope');
   });
 });
 
@@ -321,6 +345,50 @@ describe('ProposalReview', () => {
   it('openAccept never opens the confirmation for a proposal that is not submitted', () => {
     renderReview([doc({ status: 'changes_requested' })], 'rel-priya', true);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('wires attachment download to the proposal document action on both doc renders', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getProposalDocumentDownloadAction).mockResolvedValue({
+      success: false,
+      error: 'nope',
+    });
+    renderReview([doc({ attachments: [{ id: 'att-1', fileName: 'spec.pdf', sizeBytes: 10 }] })]);
+
+    // Desktop and mobile each render the doc, so there are two download rows.
+    const rows = screen.getAllByRole('button', { name: 'Download spec.pdf' });
+    expect(rows).toHaveLength(2);
+    const [first] = rows;
+    if (first === undefined) throw new Error('expected a download row');
+    await user.click(first);
+
+    expect(getProposalDocumentDownloadAction).toHaveBeenCalledWith({
+      requestId: 'req-1',
+      relationshipId: 'rel-priya',
+      proposalId: 'prop-priya',
+      documentId: 'att-1',
+    });
+  });
+
+  it('renders the assumptions-and-exclusions chip only when the proposal has that section', () => {
+    const { unmount } = render(
+      <ProposalReview
+        requestId="req-1"
+        proposals={[doc()]}
+        activeRelationshipId="rel-priya"
+        clientCompanyName="Northwind"
+        clientFirstName="Dana"
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Assumptions and exclusions' })
+    ).not.toBeInTheDocument();
+    unmount();
+
+    renderReview([doc({ exclusions: ['Data migration'] })]);
+    expect(
+      screen.getAllByRole('button', { name: 'Assumptions and exclusions' }).length
+    ).toBeGreaterThan(0);
   });
 
   it('does not render the changes actions when the proposal is not submitted (accepted)', () => {
