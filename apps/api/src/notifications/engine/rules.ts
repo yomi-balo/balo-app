@@ -1,3 +1,9 @@
+import {
+  MEETING_REMINDER_OFFSETS,
+  type MeetingReminderAudience,
+  type MeetingReminderOffset,
+} from '../events.js';
+
 export type NotificationChannel = 'email' | 'sms' | 'in-app';
 
 export type SmsRecipientSide = 'client' | 'expert';
@@ -83,6 +89,51 @@ function emailAndInApp(
       template,
       timing: 'immediate',
       ...(condition ? { condition } : {}),
+    },
+  ];
+}
+
+/**
+ * BAL-658 — one rule per (offset channel) for a pre-call reminder audience, derived from
+ * `MEETING_REMINDER_OFFSETS` so the channel mapping has one home. Every rule is `recipient: 'self'`
+ * (the recheck wrote the single `recipientUserId`) and fires only when the payload's offset lists
+ * the rule's channel. Email and in-app share one template name, resolved per channel.
+ */
+function meetingReminderRules(audience: MeetingReminderAudience): NotificationRule[] {
+  const offsetUses = (channel: NotificationChannel): NotificationRule['condition'] => {
+    return (ctx) => {
+      const offset = ctx.payload.offset;
+      if (typeof offset !== 'string' || !Object.hasOwn(MEETING_REMINDER_OFFSETS, offset))
+        return false;
+      const channels: readonly NotificationChannel[] =
+        MEETING_REMINDER_OFFSETS[offset as MeetingReminderOffset].channels;
+      return channels.includes(channel);
+    };
+  };
+  return [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: `meeting-reminder-${audience}`,
+      timing: 'immediate',
+      priority: 'normal',
+      condition: offsetUses('email'),
+    },
+    {
+      channel: 'in-app',
+      recipient: 'self',
+      template: `meeting-reminder-${audience}`,
+      timing: 'immediate',
+      condition: offsetUses('in-app'),
+    },
+    {
+      channel: 'sms',
+      recipient: 'self',
+      recipientSide: audience,
+      template: 'meeting-reminder-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: offsetUses('sms'),
     },
   ];
 }
@@ -495,7 +546,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // always present so UNCONDITIONED). Email + in-app to each; NO admin fan-out. NO SMS — the
   // legacy SMS rule was structurally incapable of firing (resolver.ts hydrates data.user
   // from payload.userId only, which this payload never carries) and the ticket's own spec
-  // puts SMS at the ~2h reminder, a separate, unbuilt event.
+  // puts SMS at the pre-call reminder, which is `meeting.reminder_to_client` / `_to_expert`.
   'booking.confirmed': [
     ...emailAndInApp('client', 'booking-confirmed-client', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'booking-confirmed-expert'),
@@ -1581,6 +1632,13 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+
+  // BAL-658 — PRE-CALL REMINDERS, one event per audience. The scheduled recheck
+  // (`scheduling/meeting-reminders.ts`) has already resolved the single recipient and gated SMS
+  // eligibility, so the rules only map the payload's offset onto its channels (24h email; 1h email
+  // + in-app; 30m SMS). The SMS adapter re-gates client opt-in by `recipientSide`.
+  'meeting.reminder_to_client': meetingReminderRules('client'),
+  'meeting.reminder_to_expert': meetingReminderRules('expert'),
 
   // MISSED CALL, BELL — one item per missed ring. ⚠ KEEP AT LEAST ONE RULE: the delayed email
   // is scheduled by the worker's follow-up (`scheduleMissedCallEmailFromContext`), and an event

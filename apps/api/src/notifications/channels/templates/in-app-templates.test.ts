@@ -1875,4 +1875,36 @@ describe('getInAppTemplate', () => {
       expect(getInAppTemplate('call-ringing-expert', {}).title).toBe('Your client is calling');
     });
   });
+
+  describe.each([
+    ['meeting-reminder-client', 'the expert'],
+    ['meeting-reminder-expert', 'the client'],
+  ])('%s (BAL-658)', (template, fallback) => {
+    it('names the counterparty and the call, and links straight into the call', () => {
+      expect(
+        getInAppTemplate(template, {
+          counterpartyName: 'CloudPeak',
+          callLabel: 'Consultation',
+          joinPath: '/meetings/m-1/call',
+        })
+      ).toEqual({
+        title: 'Starting in 1 hour',
+        body: 'Your consultation with CloudPeak starts in 1 hour.',
+        actionUrl: '/meetings/m-1/call',
+      });
+    });
+
+    it('falls back to a name-free body and omits the action without a join path', () => {
+      const item = getInAppTemplate(template, {});
+
+      expect(item.body).toBe(`Your call with ${fallback} starts in 1 hour.`);
+      expect(item).not.toHaveProperty('actionUrl');
+    });
+
+    it('carries no address', () => {
+      const item = getInAppTemplate(template, { counterpartyName: 'CloudPeak' });
+
+      expect(`${item.title} ${item.body}`).not.toContain('@');
+    });
+  });
 });

@@ -272,6 +272,30 @@ describe('deliverCalendarInvite — happy path (user recipient)', () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ['a member with a page', 'https://balo.expert/cases/ctx-1'],
+    ['a member with no page', undefined],
+  ])('hands the template the Reschedule URL for %s', async (_label, rescheduleUrl) => {
+    mockResolveFacts.mockResolvedValue({ ...FACTS, memberRescheduleUrl: rescheduleUrl });
+    const job = makeJob({
+      recipientId: 'user-1',
+      template: 'meeting-calendar-invite',
+      event: 'meeting.calendar_invite',
+      data: {},
+      payload: { correlationId: 'corr-1' },
+      calendarInvite: USER_SPEC,
+    });
+
+    await deliverCalendarInvite(job, FAKE_TRANSPORT);
+
+    const [, data] = mockGetEmailTemplate.mock.calls[0] as [
+      string,
+      { memberJoinUrl: string; memberRescheduleUrl: string | undefined },
+    ];
+    expect(data.memberJoinUrl).toBe(FACTS.memberJoinUrl);
+    expect(data.memberRescheduleUrl).toBe(rescheduleUrl);
+  });
+
   it('guest arm: the "Add to calendar" token carries no location and no call URL', async () => {
     vi.stubEnv('INTERNAL_API_SECRET', 'test-secret');
     vi.stubEnv('APP_URL', 'https://app.balo.test');

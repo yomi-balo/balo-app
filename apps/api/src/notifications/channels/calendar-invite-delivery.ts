@@ -598,6 +598,7 @@ export async function deliverCalendarInvite(
     transition: spec.transition,
     audience,
     memberJoinUrl: facts.memberJoinUrl,
+    memberRescheduleUrl: facts.memberRescheduleUrl,
     // Same title/window/description/location as the ICS above. The template drops it on a
     // withdrawal, so building it unconditionally is harmless.
     addToCalendarUrl: buildAddToCalendarUrl({

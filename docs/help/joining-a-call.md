@@ -7,7 +7,7 @@ category:
   expert: calls-cases
 order: 2
 published: true
-updated: 2026-11-19
+updated: 2026-11-20
 related: [booking-a-consultation, your-cases]
 ---
 
@@ -21,6 +21,12 @@ scheduled end, or until the call itself ends. Try earlier and you'll see "This c
 — you can join from {time}." — the time is shown in your device's timezone, and you can come back
 to the same page when it arrives. A call started without a booking has no join window to wait for:
 it's marked **Unscheduled call** on the case, and **Join** opens the call room while it's ringing.
+
+Balo reminds you before a booked call: an email a day before (only for calls booked more than a day
+ahead), an email and a notification an hour before, and a text 30 minutes before. The text goes to
+experts with a verified phone number and to clients who have turned texts on, and it's skipped if
+you're active in Balo at the time. The emails link to the call and to the page where you can
+reschedule; the text and the notification link to the call.
 
 On your project request page, **Join** also appears in the conversation header once a call with your
 expert is booked. It opens at the same time and shows a countdown until then.

@@ -24,6 +24,7 @@ function memberProps(
     endIso: string;
     transition: CalendarInviteEmailTransition;
     memberJoinUrl: string;
+    memberRescheduleUrl: string;
     baseUrl: string;
   }> = {}
 ): Props {
@@ -101,6 +102,40 @@ describe('MeetingCalendarInviteEmail', () => {
   it('member audience: the "Open in Balo" CTA href is the memberJoinUrl', async () => {
     const html = await render(MeetingCalendarInviteEmail(memberProps()));
     expect(hrefsIn(html)).toContain(`${SITE}/meetings/meeting-1/call`);
+  });
+
+  it('member audience: renders a "Reschedule in Balo" link to the page the call lives on', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail(memberProps({ memberRescheduleUrl: `${SITE}/cases/case-1` }))
+    );
+    expect(hrefsIn(html)).toContain(`${SITE}/cases/case-1`);
+    expect(html).toContain('Reschedule in Balo');
+  });
+
+  it('member audience: no Reschedule link when the context has no page', async () => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps()));
+    expect(html).not.toContain('Reschedule in Balo');
+  });
+
+  it('guest audience: never renders a Reschedule link', async () => {
+    const html = await render(MeetingCalendarInviteEmail(guestProps()));
+    expect(html).not.toContain('Reschedule in Balo');
+  });
+
+  it('the registry maps memberRescheduleUrl into the member arm only', async () => {
+    const member = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation with Northwind Industrial',
+      audience: 'member',
+      memberJoinUrl: `${SITE}/meetings/meeting-1/call`,
+      memberRescheduleUrl: `${SITE}/cases/case-1`,
+    });
+    const guest = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation with Northwind Industrial',
+      audience: 'guest',
+      memberRescheduleUrl: `${SITE}/cases/case-1`,
+    });
+    expect(await render(member.component)).toContain('Reschedule in Balo');
+    expect(await render(guest.component)).not.toContain('Reschedule in Balo');
   });
 
   it('guest audience: no /join/ href anywhere in the render', async () => {

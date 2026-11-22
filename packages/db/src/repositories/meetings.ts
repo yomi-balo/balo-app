@@ -239,6 +239,16 @@ export interface ListUnprovisionedScheduledInput {
   limit: number;
 }
 
+/** BAL-658 — {@link meetingsRepository.listScheduledStartingBetween}'s input. */
+export interface ListScheduledStartingBetweenInput {
+  /** Inclusive lower bound on `scheduled_start`. */
+  startFrom: Date;
+  /** Inclusive upper bound on `scheduled_start`. */
+  startTo: Date;
+  /** Hard bound. ⚠ The CALLER must `log.warn` when the result length equals it. */
+  limit: number;
+}
+
 /** BAL-581 — one live `scheduled` meeting whose call room is NOT ready. No venue column. */
 export interface UnprovisionedScheduledMeeting {
   readonly meetingId: string;
@@ -1775,6 +1785,36 @@ export const meetingsRepository = {
           gte(meetings.scheduledStart, input.scheduledStartAfter),
           lte(meetings.createdAt, input.createdBefore),
           sql`NOT ${meetingVenueReadySql}`
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(input.limit);
+  },
+
+  /**
+   * BAL-658 — live `scheduled` meetings whose `scheduled_start` falls in `[startFrom, startTo]`
+   * (both inclusive), soonest first then by id. The pre-call reminder arm pass reads one narrow
+   * window per offset so a busy day's batch limit can never starve a meeting that is further
+   * out. Rides `meeting_status_scheduled_start_idx`: `status` equality then a `scheduled_start`
+   * range under the index's own `deleted_at IS NULL` predicate. Returns ids and starts only.
+   *
+   * ⚠ **THE CALLER MUST `log.warn` WHEN THE RESULT LENGTH EQUALS `limit`** — the same no-silent-caps
+   * rule as {@link meetingsRepository.listUnprovisionedScheduled}. A `limit <= 0` returns `[]`
+   * without a query.
+   */
+  async listScheduledStartingBetween(
+    input: ListScheduledStartingBetweenInput
+  ): Promise<Pick<Meeting, 'id' | 'scheduledStart'>[]> {
+    if (input.limit <= 0) return [];
+    return db
+      .select({ id: meetings.id, scheduledStart: meetings.scheduledStart })
+      .from(meetings)
+      .where(
+        and(
+          eq(meetings.status, 'scheduled'),
+          isNull(meetings.deletedAt),
+          gte(meetings.scheduledStart, input.startFrom),
+          lte(meetings.scheduledStart, input.startTo)
         )
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
