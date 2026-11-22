@@ -1112,7 +1112,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "client": "getting-started"
     },
     "order": 5,
-    "updated": "2026-10-31",
+    "updated": "2026-11-23",
     "related": [
       "dashboard-up-next",
       "requesting-a-project"
@@ -1154,7 +1154,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           },
           {
             "kind": "html",
-            "html": "<p>A card stays until the thing it points to is done: the balance is settled, a time is chosen, the\nwork is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear\nit. Once the thing is done, the card leaves on its own.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
+            "html": "<p>A card stays until the thing it points to is done: the balance is settled, a time is chosen, the\nwork is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear\nit. Once the thing is done, the card leaves on its own. If proposals are still waiting, the person\nwho posted the request gets a short reminder email 2, 5 and 9 days after the first one arrived, on\na weekday morning their time.</p>\n<p>When nothing is waiting on you, the row shows a single line instead.</p>",
             "id": "s2-b1"
           }
         ],

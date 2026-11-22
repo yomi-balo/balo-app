@@ -2,6 +2,7 @@ import { describe, it, expect, expectTypeOf } from 'vitest';
 import {
   NOTIFICATION_EVENTS,
   NOTIFICATION_SERVER_EVENTS,
+  REMINDER_SERVER_EVENTS,
   type NotificationEventMap,
 } from './notifications';
 
@@ -98,6 +99,26 @@ describe('NOTIFICATION_SERVER_EVENTS', () => {
   it('values follow the notification_ prefix convention', () => {
     for (const value of Object.values(NOTIFICATION_SERVER_EVENTS)) {
       expect(value).toMatch(/^notification_[a-z]+(_[a-z]+)*$/);
+    }
+  });
+});
+
+describe('REMINDER_SERVER_EVENTS', () => {
+  it('exposes exactly the expected keys', () => {
+    expect(Object.keys(REMINDER_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      'SENT',
+      'SKIPPED',
+    ]);
+  });
+
+  it('maps each constant to its exact value', () => {
+    expect(REMINDER_SERVER_EVENTS.SENT).toBe('reminder_sent');
+    expect(REMINDER_SERVER_EVENTS.SKIPPED).toBe('reminder_skipped');
+  });
+
+  it('values follow the reminder_ prefix convention', () => {
+    for (const value of Object.values(REMINDER_SERVER_EVENTS)) {
+      expect(value).toMatch(/^reminder_[a-z]+$/);
     }
   });
 });

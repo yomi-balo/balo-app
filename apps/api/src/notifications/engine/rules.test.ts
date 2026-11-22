@@ -2246,3 +2246,27 @@ describe('change order rules (BAL-622)', () => {
     }
   );
 });
+
+describe('project.proposal_review_reminder rules (BAL-663)', () => {
+  it('has exactly one rule: an immediate email to the recipient named in the payload', () => {
+    const rules = notificationRules['project.proposal_review_reminder'];
+    expect(rules).toEqual([
+      {
+        channel: 'email',
+        recipient: 'self',
+        template: 'project-proposal-review-reminder',
+        timing: 'immediate',
+        priority: 'normal',
+      },
+    ]);
+  });
+
+  it('names a template the email registry renders', () => {
+    const built = getEmailTemplate('project-proposal-review-reminder', {
+      title: 'CRM rollout',
+      projectRequestId: 'req-1',
+      awaitingCount: 2,
+    });
+    expect(built.subject).toContain('2 proposals are ready');
+  });
+});

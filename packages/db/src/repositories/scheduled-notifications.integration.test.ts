@@ -752,3 +752,148 @@ describe('scheduledNotificationsRepository.findByDedupeKey', () => {
     expect(await scheduledNotificationsRepository.findByDedupeKey(dedupeKey)).toHaveLength(0);
   });
 });
+
+// ── countRecentSequenceSends ────────────────────────────────────────────
+
+describe('scheduledNotificationsRepository.countRecentSequenceSends', () => {
+  const PREFIX = 'seq:proposal_review:';
+  const HOUR_MS = 60 * MINUTE_MS;
+  const DAY_MS = 24 * HOUR_MS;
+
+  function sequenceKey(recipient: string, prefix = PREFIX): string {
+    return `${prefix}${randomUUID()}:day_2:${recipient}:2026-11-01T00:00:00.000Z`;
+  }
+
+  async function seed(
+    recipient: string,
+    values: Partial<typeof scheduledNotifications.$inferInsert> = {},
+    prefix = PREFIX
+  ) {
+    return scheduledNotificationFactory({
+      dedupeKey: sequenceKey(recipient, prefix),
+      values: { payload: { recipientUserId: recipient }, ...values },
+    });
+  }
+
+  function count(
+    recipient: string,
+    asking: { id: string; scheduledFor: Date },
+    opts: { prefixes?: readonly string[]; since?: Date } = {}
+  ): Promise<number> {
+    return scheduledNotificationsRepository.countRecentSequenceSends({
+      recipientUserId: recipient,
+      dedupeKeyPrefixes: opts.prefixes ?? [PREFIX],
+      since: opts.since ?? new Date(Date.now() - DAY_MS),
+      asking,
+    });
+  }
+
+  const asking = () => ({ id: randomUUID(), scheduledFor: new Date() });
+
+  it('counts published rows inside the window and ignores older ones', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date(Date.now() - HOUR_MS) });
+    await seed(user, { status: 'published', publishedAt: new Date(Date.now() - 2 * HOUR_MS) });
+    await seed(user, { status: 'published', publishedAt: new Date(Date.now() - 25 * HOUR_MS) });
+
+    expect(await count(user, asking())).toBe(2);
+  });
+
+  it('ignores another recipient', async () => {
+    const user = randomUUID();
+    await seed(randomUUID(), { status: 'published', publishedAt: new Date() });
+
+    expect(await count(user, asking())).toBe(0);
+  });
+
+  it('ignores a key outside the given prefixes (exempt sequence)', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date() }, 'seq:other_sequence:');
+
+    expect(await count(user, asking())).toBe(0);
+    expect(await count(user, asking(), { prefixes: ['seq:other_sequence:'] })).toBe(1);
+  });
+
+  it('does not treat the underscore in a prefix as a wildcard', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date() }, 'seq:proposalXreview:');
+
+    expect(await count(user, asking())).toBe(0);
+  });
+
+  it('counts a row under any of several prefixes', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date() });
+    await seed(user, { status: 'published', publishedAt: new Date() }, 'seq:second:');
+
+    expect(await count(user, asking(), { prefixes: [PREFIX, 'seq:second:'] })).toBe(2);
+  });
+
+  it('returns 0 without a query when there are no prefixes', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date() });
+
+    expect(await count(user, asking(), { prefixes: [] })).toBe(0);
+  });
+
+  it('ignores pending, skipped, cancelled and failed rows', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'pending' });
+    await seed(user, { status: 'skipped', skipReason: 'no_longer_waiting' });
+    await seed(user, { status: 'cancelled' });
+    await seed(user, { status: 'failed', lastError: 'boom' });
+
+    expect(await count(user, asking())).toBe(0);
+  });
+
+  it('ignores soft-deleted rows', async () => {
+    const user = randomUUID();
+    await seed(user, { status: 'published', publishedAt: new Date(), deletedAt: new Date() });
+
+    expect(await count(user, asking())).toBe(0);
+  });
+
+  it('counts a claimed row that sorts before the asking row, not one that sorts after', async () => {
+    const user = randomUUID();
+    const base = Date.now();
+    const asker = { id: randomUUID(), scheduledFor: new Date(base) };
+    await seed(user, {
+      status: 'claimed',
+      claimedAt: new Date(),
+      scheduledFor: new Date(base - MINUTE_MS),
+    });
+    await seed(user, {
+      status: 'claimed',
+      claimedAt: new Date(),
+      scheduledFor: new Date(base + MINUTE_MS),
+    });
+
+    expect(await count(user, asker)).toBe(1);
+  });
+
+  it('breaks a scheduled_for tie by id and never counts the asking row itself', async () => {
+    const user = randomUUID();
+    const scheduledFor = new Date(Date.now() - 5 * MINUTE_MS);
+    const [low, high] = [
+      await seed(user, { status: 'claimed', claimedAt: new Date(), scheduledFor }),
+      await seed(user, { status: 'claimed', claimedAt: new Date(), scheduledFor }),
+    ].sort((a, b) => a.id.localeCompare(b.id));
+    if (low === undefined || high === undefined) {
+      throw new Error('seed failed');
+    }
+
+    expect(await count(user, { id: low.id, scheduledFor })).toBe(0);
+    expect(await count(user, { id: high.id, scheduledFor })).toBe(1);
+  });
+
+  it('ignores a claimed row claimed before the window', async () => {
+    const user = randomUUID();
+    await seed(user, {
+      status: 'claimed',
+      claimedAt: new Date(Date.now() - 25 * HOUR_MS),
+      scheduledFor: new Date(Date.now() - 26 * HOUR_MS),
+    });
+
+    expect(await count(user, asking())).toBe(0);
+  });
+});

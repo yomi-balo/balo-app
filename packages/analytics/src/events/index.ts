@@ -50,6 +50,8 @@ export {
 export {
   NOTIFICATION_SERVER_EVENTS,
   type NotificationServerEventMap,
+  REMINDER_SERVER_EVENTS,
+  type ReminderServerEventMap,
   NOTIFICATION_EVENTS,
   type NotificationEventMap,
 } from './notifications';

@@ -79,6 +79,7 @@ import type {
   ExpertApplicationDeclinedPayload,
   ExpertApplicationEditedPayload,
   ExpertApplicationSubmittedPayload,
+  ReminderSequenceId,
 } from '@balo/shared/notifications';
 // BAL-475 — the calendar-invite engine contract lives in this app (not `@balo/shared`), since
 // it is server-only vocabulary (no publish-route Zod arm ever reads it).
@@ -211,6 +212,23 @@ export interface ProjectProposalSubmittedPayload {
   recipientId: string; // = client user id → resolves recipient:'client'
   expertName: string; // submitting expert's display name — email/in-app body
   title: string; // request title — email/in-app body
+}
+
+/**
+ * BAL-663 — the proposal-review follow-up. Armed by the reminder-sequence sweep; the
+ * `reminder_sequence` recheck refreshes `awaitingCount` and `title` at fire time. Names no
+ * price, budget or email address.
+ */
+export interface ProposalReviewReminderPayload {
+  correlationId: string; // fresh uuid per promise
+  sequenceId: ReminderSequenceId;
+  step: string; // the step key, e.g. 'day_2'
+  entityId: string; // the project request id
+  anchorIso: string; // the oldest awaiting proposal's submit time the sequence is keyed to
+  recipientUserId: string; // → resolves recipient:'self'
+  projectRequestId: string; // → the email CTA
+  title: string; // request title — email body
+  awaitingCount: number; // proposals awaiting the client's review
 }
 
 export interface ProjectProposalAcceptedPayload {
@@ -558,6 +576,9 @@ export type NotificationEvent =
   | 'project.eoi_submitted'
   | 'project.proposal_requested'
   | 'project.proposal_submitted'
+  // BAL-663: the 2 / 5 / 9 day follow-up while proposals still await the client. SERVER-ONLY
+  // (see `ServerOnlyNotificationEvent` below).
+  | 'project.proposal_review_reminder'
   | 'project.proposal_accepted'
   | 'project.kickoff_approved'
   | 'project.changes_requested'
@@ -858,6 +879,9 @@ export type ServerOnlyNotificationEvent =
   // and fail `tsc`. ⚠ `reschedule_proposal.sent` / `reschedule_proposal.declined` are
   // deliberately NOT listed: both are published by web Server Actions and need their arms.
   | 'reschedule_proposal.unanswered'
+  // BAL-663: scheduled by the reminder-sequence sweep and published by the dispatch tick only —
+  // no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+  | 'project.proposal_review_reminder'
   // BAL-521 §3: published from BOTH doors in apps/api — the Stripe webhook applier
   // (`services/stripe/dispatch.ts`) and `detachSavedCard` (`services/stripe/mandate.ts`) —
   // never from apps/web, so it has NO `publishBodySchema` arm; adding one would be a
@@ -967,6 +991,7 @@ export interface EventPayloadMap {
   'project.eoi_submitted': ProjectEoiSubmittedPayload;
   'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.proposal_submitted': ProjectProposalSubmittedPayload;
+  'project.proposal_review_reminder': ProposalReviewReminderPayload;
   'project.proposal_accepted': ProjectProposalAcceptedPayload;
   'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;

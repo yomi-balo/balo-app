@@ -70,3 +70,28 @@ export interface NotificationEventMap {
     count: number;
   };
 }
+
+/**
+ * `reminder_sent` fires when the promise is handed to the notification engine, not on delivery;
+ * delivery is tracked by each channel's own events.
+ */
+export const REMINDER_SERVER_EVENTS = {
+  SENT: 'reminder_sent',
+  SKIPPED: 'reminder_skipped',
+} as const;
+
+export interface ReminderServerEventMap {
+  [REMINDER_SERVER_EVENTS.SENT]: {
+    sequence: string;
+    step: string;
+    channel: 'email' | 'sms' | 'in_app';
+    audience: 'client' | 'expert';
+    distinct_id: string;
+  };
+  [REMINDER_SERVER_EVENTS.SKIPPED]: {
+    sequence: string;
+    step: string;
+    reason: string;
+    distinct_id: string;
+  };
+}

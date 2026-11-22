@@ -65,6 +65,8 @@ try {
     ['exec', 'eslint', '--config', CONFIG, '--no-config-lookup', '--no-inline-config', ...files],
     {
       stdio: 'inherit',
+      // The optional-chain rule loads every touched TypeScript project; give it headroom.
+      env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=8192' },
     }
   );
   console.log('SonarJS: clean ✓');

@@ -36,6 +36,21 @@ import type { PricingMethod, ProposalCadence, ProposalChangeSection } from './pr
 export type ProposalStatus = Proposal['status'];
 
 /**
+ * One live `proposal_submitted` relationship on an open request, with its current proposal's
+ * status and submit time (both null when the relationship has no live current proposal row).
+ */
+export interface ProposalReviewCandidateRow {
+  projectRequestId: string;
+  companyId: string;
+  createdByUserId: string;
+  title: string;
+  relationshipId: string;
+  relationshipStatus: string;
+  proposalStatus: ProposalStatus | null;
+  submittedAt: Date | null;
+}
+
+/**
  * Allowed proposal status transitions (A6 / BAL-287).
  *
  *   draft             → submitted | withdrawn      (composer "Submit" / discard)
@@ -758,6 +773,57 @@ export const proposalsRepository = {
       .from(proposals)
       .where(and(eq(proposals.projectRequestId, projectRequestId), isNull(proposals.deletedAt)))
       .orderBy(desc(proposals.submittedAt));
+  },
+
+  /**
+   * Candidates for the proposal-review reminder sequence: every live relationship in
+   * `proposal_submitted` on a live request whose own status is `proposal_submitted` (the same gate as the "Review N proposals" card — once one proposal is accepted the request moves on while the losing relationships keep `proposal_submitted`), with its current live proposal's
+   * status and `submitted_at` (null when it has none). Ordered by request, then
+   * `submitted_at`. Uncapped on purpose — a cap could split one request's rows across
+   * batches. The SQL only narrows the rows; whether a row still awaits review is decided by
+   * the shared rule, not here. `projectRequestId` narrows to one request.
+   */
+  async listReviewCandidates(
+    input: { projectRequestId?: string } = {}
+  ): Promise<ProposalReviewCandidateRow[]> {
+    return db
+      .select({
+        projectRequestId: projectRequests.id,
+        companyId: projectRequests.companyId,
+        createdByUserId: projectRequests.createdByUserId,
+        title: projectRequests.title,
+        relationshipId: requestExpertRelationships.id,
+        relationshipStatus: requestExpertRelationships.status,
+        proposalStatus: proposals.status,
+        submittedAt: proposals.submittedAt,
+      })
+      .from(requestExpertRelationships)
+      .innerJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, requestExpertRelationships.projectRequestId),
+          isNull(projectRequests.deletedAt),
+          eq(projectRequests.status, 'proposal_submitted')
+        )
+      )
+      .leftJoin(
+        proposals,
+        and(
+          eq(proposals.relationshipId, requestExpertRelationships.id),
+          eq(proposals.isCurrent, true),
+          isNull(proposals.deletedAt)
+        )
+      )
+      .where(
+        and(
+          eq(requestExpertRelationships.status, 'proposal_submitted'),
+          isNull(requestExpertRelationships.deletedAt),
+          input.projectRequestId === undefined
+            ? undefined
+            : eq(projectRequests.id, input.projectRequestId)
+        )
+      )
+      .orderBy(asc(projectRequests.id), asc(proposals.submittedAt));
   },
 
   /** All live proposals for a relationship, oldest-submitted first (revision order). */

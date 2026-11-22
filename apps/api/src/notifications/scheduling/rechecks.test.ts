@@ -52,7 +52,7 @@ describe('SCHEDULED_RECHECKS', () => {
    * BAL-134's expert-absent alert is the one Balo has operationally committed to. Registering a
    * name without its consumer, or shipping a consumer without its name, must come past here.
    */
-  it('carries exactly six guards: BAL-424 conversation_unread + BAL-134 absence pair + BAL-411 reschedule_proposal_unanswered + BAL-652 call_missed_email + BAL-654 meeting_waiting_sms', () => {
+  it('carries exactly seven guards: BAL-424 conversation_unread + BAL-134 absence pair + BAL-411 reschedule_proposal_unanswered + BAL-652 call_missed_email + BAL-654 meeting_waiting_sms + BAL-663 reminder_sequence', () => {
     expect(Object.keys(BUILT_IN_RECHECKS)).toEqual([
       'conversation_unread',
       'meeting_expert_absent',
@@ -60,6 +60,7 @@ describe('SCHEDULED_RECHECKS', () => {
       'reschedule_proposal_unanswered',
       'call_missed_email',
       'meeting_waiting_sms',
+      'reminder_sequence',
     ]);
   });
 

@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url';
 import tseslint from 'typescript-eslint';
 import sonarjs from 'eslint-plugin-sonarjs';
 import unicorn from 'eslint-plugin-unicorn';
@@ -29,9 +30,14 @@ import react from 'eslint-plugin-react';
  *   unicorn/no-typeof-undefined          — S7741, compare with `undefined` directly (not `typeof`)
  *   unicorn/catch-error-name             — S7718, name the catch parameter `error` (or `…Error`)
  *   unicorn/prefer-set-has               — S7776, a membership-only array should be a `Set`
+ *   no-await-in-loop                     — "Unexpected `await` inside a loop" (ESLint core)
+ *   @typescript-eslint/prefer-optional-chain — S6582, "Prefer using an optional chain expression"
+ *   @typescript-eslint/no-floating-promises  — S4822-family "Promises must be awaited…"; a single
+ *                                              one on new code drops Reliability to C and fails the gate
  *
- * All rules are syntactic, so no TypeScript type information
- * (parserOptions.project) is required — the bare parser is enough to parse TS/TSX.
+ * Every rule except `prefer-optional-chain` is syntactic, so the bare parser is enough to
+ * parse TS/TSX. `prefer-optional-chain` needs type information, so it sits in its own block
+ * that is scoped to the `src` trees SonarCloud scans and uses the TypeScript project service.
  *
  * @type {import("eslint").Linter.Config[]}
  */
@@ -74,6 +80,35 @@ export default [
       'unicorn/no-typeof-undefined': 'error',
       'unicorn/catch-error-name': 'error',
       'unicorn/prefer-set-has': 'error',
+      'no-await-in-loop': 'error',
+    },
+  },
+  {
+    // SonarCloud does not raise the await-in-loop finding on test sources, where sequential
+    // seeding is the norm.
+    files: ['**/*.test.{ts,tsx}', '**/test/**/*.{ts,tsx}'],
+    rules: {
+      'no-await-in-loop': 'off',
+    },
+  },
+  {
+    // S6582 and the floating-promise rule are type-aware, so this block alone loads type information.
+    // Test files are left out: some sit outside every tsconfig (the project service can't
+    // type them), and the gate this mirrors is on shipped source.
+    files: ['apps/*/src/**/*.{ts,tsx}', 'packages/*/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', '**/test/**'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: fileURLToPath(new URL('../..', import.meta.url)),
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: {
+      '@typescript-eslint/prefer-optional-chain': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
     },
   },
   {

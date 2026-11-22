@@ -6,7 +6,7 @@ category:
   client: getting-started
 order: 5
 published: true
-updated: 2026-10-31
+updated: 2026-11-23
 related: [dashboard-up-next, requesting-a-project]
 ---
 
@@ -41,7 +41,9 @@ Select a card, or its button, to go straight to the project, case or page it bel
 
 A card stays until the thing it points to is done: the balance is settled, a time is chosen, the
 work is reviewed, the proposal is answered. Opening a card or reading a notification doesn't clear
-it. Once the thing is done, the card leaves on its own.
+it. Once the thing is done, the card leaves on its own. If proposals are still waiting, the person
+who posted the request gets a short reminder email 2, 5 and 9 days after the first one arrived, on
+a weekday morning their time.
 
 When nothing is waiting on you, the row shows a single line instead.
 
