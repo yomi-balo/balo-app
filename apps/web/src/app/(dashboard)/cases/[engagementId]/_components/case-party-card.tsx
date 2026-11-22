@@ -2,6 +2,7 @@
 
 import { useCallback } from 'react';
 import Link from 'next/link';
+import { motion, useReducedMotion } from 'motion/react';
 import { Video } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -99,6 +100,7 @@ export function CasePartyCard({
   callNow = null,
   onCallNow,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
+  const reduceMotion = useReducedMotion();
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
   }, [lens]);
@@ -215,7 +217,16 @@ export function CasePartyCard({
       )}
 
       {callNow !== null && onCallNow !== undefined && (
-        <CallNowEntry callNow={callNow} lens={lens} onCallNow={onCallNow} />
+        // The entry streams in after the page renders, so it opens its own room rather than
+        // shoving the earnings block and the rail cards below it down in one jump.
+        <motion.div
+          className="overflow-hidden"
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: 'easeOut' }}
+        >
+          <CallNowEntry callNow={callNow} lens={lens} onCallNow={onCallNow} />
+        </motion.div>
       )}
 
       {earnings !== undefined && <CaseEarningsBlock earnings={earnings} />}

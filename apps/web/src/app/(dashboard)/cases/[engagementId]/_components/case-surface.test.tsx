@@ -1856,6 +1856,28 @@ describe('CaseSurface — Call now (BAL-651)', () => {
     expect(globalThis.location.search).toBe('');
   });
 
+  it('?call=1 pushed while a refreshed read is in flight waits for that read, not the stale view', async () => {
+    const stale = Promise.resolve<CaseCallNowView | null>(null);
+    const { rerender } = render(<CaseSurface view={clientView()} callNowView={stale} />);
+    await act(async () => {
+      await stale;
+    });
+
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1`);
+    let land: (view: CaseCallNowView) => void = () => undefined;
+    const fresh = new Promise<CaseCallNowView>((resolve) => {
+      land = resolve;
+    });
+    rerender(<CaseSurface view={clientView()} callNowView={fresh} />);
+
+    expect(globalThis.location.search).toBe('?call=1');
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+
+    act(() => land(CALL_NOW));
+    expect(await screen.findByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+    expect(globalThis.location.search).toBe('');
+  });
+
   it('?call=1 opens the confirm, strips the param and tracks the missed-call entry', async () => {
     globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1&x=1`);
     render(<CaseSurface view={clientView()} callNowView={Promise.resolve(CALL_NOW)} />);

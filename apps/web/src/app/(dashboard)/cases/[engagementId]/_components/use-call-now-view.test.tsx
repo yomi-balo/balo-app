@@ -45,7 +45,7 @@ describe('useCallNowView', () => {
     await waitFor(() => expect(result.current).toEqual({ settled: true, callNow: VIEW }));
   });
 
-  it('keeps the last view on screen while a refreshed read is in flight', async () => {
+  it('keeps the last view on screen, unsettled, while a refreshed read is in flight', async () => {
     const { result, rerender } = renderHook(({ read }) => useCallNowView(read), {
       initialProps: { read: Promise.resolve<CaseCallNowView | null>(VIEW) },
     });
@@ -53,7 +53,7 @@ describe('useCallNowView', () => {
 
     const next = deferred<CaseCallNowView | null>();
     rerender({ read: next.promise });
-    expect(result.current).toEqual({ settled: true, callNow: VIEW });
+    expect(result.current).toEqual({ settled: false, callNow: VIEW });
 
     act(() => next.resolve(null));
     await waitFor(() => expect(result.current).toEqual({ settled: true, callNow: null }));
@@ -72,6 +72,25 @@ describe('useCallNowView', () => {
       await Promise.resolve();
     });
     expect(result.current.callNow).toBeNull();
+  });
+
+  it('does not report a rejected read that was already superseded', async () => {
+    let failFirst: (error: Error) => void = () => undefined;
+    const failing = new Promise<CaseCallNowView | null>((_, reject) => {
+      failFirst = reject;
+    });
+    const { result, rerender } = renderHook(({ read }) => useCallNowView(read), {
+      initialProps: { read: failing },
+    });
+    rerender({ read: Promise.resolve<CaseCallNowView | null>(VIEW) });
+    await waitFor(() => expect(result.current).toEqual({ settled: true, callNow: VIEW }));
+
+    act(() => failFirst(new Error('dropped')));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(result.current.callNow).toBe(VIEW);
   });
 
   it('reports a rejected read and shows no entry', async () => {
