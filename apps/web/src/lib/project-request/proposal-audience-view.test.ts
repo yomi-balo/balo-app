@@ -29,7 +29,6 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     version: 1,
     isCurrent: true,
     overview: '<p>Overview</p>',
-    exclusions: null,
     timeframeWeeks: 6,
     priceCents: 100_000,
     currency: 'aud',
