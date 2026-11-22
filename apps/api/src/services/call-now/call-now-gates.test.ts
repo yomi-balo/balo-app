@@ -181,6 +181,48 @@ describe('loadCallNowGates — each fact feeds the shared predicate', () => {
     expect(gates.availability).toMatchObject({ canCallNow: false });
   });
 
+  it('missing expert settings: an expert caller gets no callee either, though the booker was read', async () => {
+    mocks.findResolverSettings.mockResolvedValue(null);
+    mocks.resolveCallee.mockResolvedValue({ ok: true, userId: BOOKER, timeZone: 'UTC' });
+
+    const gates = await loadCallNowGates(base({ side: 'expert', userId: EXPERT_USER }));
+
+    expect(gates.callee).toBeNull();
+    expect(gates.availability).toMatchObject({ canCallNow: false });
+  });
+
+  it('a client caller resolves the expert from the settings it waited for', async () => {
+    await loadCallNowGates(base());
+
+    expect(mocks.resolveCallee).toHaveBeenCalledWith({
+      caseRow: OPEN_CASE,
+      callerUserId: CLIENT,
+      side: 'client',
+      expertSettings: { userId: EXPERT_USER, timezone: 'Australia/Sydney', availableForWork: true },
+    });
+  });
+
+  it('⚠ an expert caller resolves the booker alongside the expert settings, not after them', async () => {
+    let releaseSettings: (settings: null) => void = () => undefined;
+    mocks.findResolverSettings.mockReturnValue(
+      new Promise<null>((resolve) => {
+        releaseSettings = resolve;
+      })
+    );
+
+    const gates = loadCallNowGates(base({ side: 'expert', userId: EXPERT_USER }));
+    await vi.waitFor(() => {
+      expect(mocks.resolveCallee).toHaveBeenCalledWith({
+        caseRow: OPEN_CASE,
+        callerUserId: EXPERT_USER,
+        side: 'expert',
+      });
+    });
+    releaseSettings(null);
+
+    await expect(gates).resolves.toMatchObject({ callee: null });
+  });
+
   it('calleeInLiveMeeting ← isUserInLiveMeeting(callee)', async () => {
     mocks.isUserInLiveMeeting.mockResolvedValue(true);
 

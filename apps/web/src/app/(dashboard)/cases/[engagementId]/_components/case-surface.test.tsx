@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@/test/utils';
+import { act, render, screen, waitFor } from '@/test/utils';
 import type { CaseCallNowView } from '@/lib/call-now/call-now-types';
 import { buildReviewCaptureSeeds } from '@/test/fixtures/review-capture-seeds';
 import userEvent from '@testing-library/user-event';
@@ -1773,10 +1773,10 @@ describe('CaseSurface — Call now (BAL-651)', () => {
 
   it('opens the confirm from the entry and closes it again', async () => {
     const user = userEvent.setup();
-    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+    render(<CaseSurface view={clientView()} callNowView={Promise.resolve(CALL_NOW)} />);
     expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    await user.click(await screen.findByRole('button', { name: 'Call Amara now' }));
     expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
     expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('online: true');
 
@@ -1786,8 +1786,8 @@ describe('CaseSurface — Call now (BAL-651)', () => {
 
   it('hands the dialog the attempt id the entry tap minted, and a new one on the next tap', async () => {
     const user = userEvent.setup();
-    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
-    const entry = screen.getByRole('button', { name: 'Call Amara now' });
+    render(<CaseSurface view={clientView()} callNowView={Promise.resolve(CALL_NOW)} />);
+    const entry = await screen.findByRole('button', { name: 'Call Amara now' });
 
     await user.click(entry);
     const first = screen.getByTestId('call-now-dialog-stub').textContent;
@@ -1800,8 +1800,8 @@ describe('CaseSurface — Call now (BAL-651)', () => {
 
   it('the confirm’s Book a time asks the quick-pick for the call_now follow-up', async () => {
     const user = userEvent.setup();
-    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
-    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    render(<CaseSurface view={clientView()} callNowView={Promise.resolve(CALL_NOW)} />);
+    await user.click(await screen.findByRole('button', { name: 'Call Amara now' }));
     await user.click(screen.getByRole('button', { name: 'stub book' }));
     expect(screen.getByTestId('quick-pick-stub')).toHaveTextContent('request: 1 source: call_now');
   });
@@ -1811,18 +1811,56 @@ describe('CaseSurface — Call now (BAL-651)', () => {
     render(
       <CaseSurface
         view={clientView({ party: { ...BASE.party, profileHref: null } })}
-        callNow={CALL_NOW}
+        callNowView={Promise.resolve(CALL_NOW)}
       />
     );
-    await user.click(screen.getByRole('button', { name: 'Call Amara now' }));
+    await user.click(await screen.findByRole('button', { name: 'Call Amara now' }));
     expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('book: none');
   });
 
-  it('?call=1 opens the confirm, strips the param and tracks the missed-call entry', () => {
-    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1&x=1`);
-    render(<CaseSurface view={clientView()} callNow={CALL_NOW} />);
+  it('shows the page before the Call now read lands, and the entry once it does', async () => {
+    let land: (view: CaseCallNowView) => void = () => undefined;
+    const read = new Promise<CaseCallNowView>((resolve) => {
+      land = resolve;
+    });
+    render(<CaseSurface view={clientView()} callNowView={read} />);
 
-    expect(screen.getByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+    expect(screen.getByTestId('quick-pick-stub')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Call Amara now' })).not.toBeInTheDocument();
+
+    act(() => land(CALL_NOW));
+    expect(await screen.findByRole('button', { name: 'Call Amara now' })).toBeInTheDocument();
+  });
+
+  it('renders no entry when the read resolves to nothing', async () => {
+    render(<CaseSurface view={clientView()} callNowView={Promise.resolve(null)} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole('button', { name: 'Call Amara now' })).not.toBeInTheDocument();
+  });
+
+  it('?call=1 waits for the Call now read before it opens the confirm or drops the param', async () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1`);
+    let land: (view: CaseCallNowView) => void = () => undefined;
+    const read = new Promise<CaseCallNowView>((resolve) => {
+      land = resolve;
+    });
+    render(<CaseSurface view={clientView()} callNowView={read} />);
+
+    expect(globalThis.location.search).toBe('?call=1');
+    expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
+
+    act(() => land(CALL_NOW));
+    expect(await screen.findByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
+    expect(globalThis.location.search).toBe('');
+  });
+
+  it('?call=1 opens the confirm, strips the param and tracks the missed-call entry', async () => {
+    globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1&x=1`);
+    render(<CaseSurface view={clientView()} callNowView={Promise.resolve(CALL_NOW)} />);
+
+    expect(await screen.findByTestId('call-now-dialog-stub')).toHaveTextContent('callee: Amara');
     expect(globalThis.location.pathname + globalThis.location.search).toBe(
       `/cases/${ENGAGEMENT_ID}?x=1`
     );
@@ -1832,15 +1870,18 @@ describe('CaseSurface — Call now (BAL-651)', () => {
     );
   });
 
-  it('?call=1 opens nothing when Call now is not offered, and still strips the param', () => {
+  it('?call=1 opens nothing when Call now is not offered, and still strips the param', async () => {
     globalThis.history.replaceState({}, '', `/cases/${ENGAGEMENT_ID}?call=1`);
     render(
-      <CaseSurface view={clientView()} callNow={{ ...CALL_NOW, entry: 'busy', confirm: null }} />
+      <CaseSurface
+        view={clientView()}
+        callNowView={Promise.resolve({ ...CALL_NOW, entry: 'busy', confirm: null })}
+      />
     );
 
+    await waitFor(() => expect(globalThis.location.search).toBe(''));
     expect(screen.queryByTestId('call-now-dialog-stub')).not.toBeInTheDocument();
     expect(trackMock).not.toHaveBeenCalledWith(CALL_NOW_EVENTS.CLICKED, expect.anything());
-    expect(globalThis.location.search).toBe('');
   });
 
   it('opens the follow-up once for ?book=1 and drops the param', () => {

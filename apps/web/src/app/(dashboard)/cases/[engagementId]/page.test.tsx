@@ -319,18 +319,27 @@ describe('CasePage — Call now (BAL-651)', () => {
     mockLoadCaseCallNow.mockResolvedValue(CALL_NOW_VIEW);
   });
 
-  it('starts the read for this case and passes the shaped view to the surface', async () => {
+  it('starts the read for this case and hands the surface the pending view, unawaited', async () => {
+    let land: (view: typeof CALL_NOW_VIEW) => void = () => undefined;
+    const pending = new Promise<typeof CALL_NOW_VIEW>((resolve) => {
+      land = resolve;
+    });
+    mockLoadCaseCallNow.mockReturnValue(pending);
+
     const element = await CasePage(props());
     render(element);
 
     expect(mockReadCallNowView).toHaveBeenCalledWith(ENGAGEMENT_ID);
     expect(mockLoadCaseCallNow).toHaveBeenCalledWith({ view: CLIENT_VIEW, read: READ });
-    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
-      expect.objectContaining({ callNow: CALL_NOW_VIEW })
-    );
+    const { callNowView } = mockCaseSurfaceProps.mock.lastCall?.[0] as {
+      callNowView: Promise<unknown>;
+    };
+    expect(callNowView).toBe(pending);
+    land(CALL_NOW_VIEW);
+    await expect(callNowView).resolves.toBe(CALL_NOW_VIEW);
   });
 
-  it('does not call the api and passes callNow null under an impersonated session', async () => {
+  it('does not call the api and passes callNowView null under an impersonated session', async () => {
     mockGetCurrentUser.mockResolvedValue({
       id: USER_ID,
       email: USER_EMAIL,
@@ -341,14 +350,9 @@ describe('CasePage — Call now (BAL-651)', () => {
 
     expect(mockReadCallNowView).not.toHaveBeenCalled();
     expect(mockLoadCaseCallNow).not.toHaveBeenCalled();
-    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(expect.objectContaining({ callNow: null }));
-  });
-
-  it('degrades to callNow null when the loader has nothing to show', async () => {
-    mockLoadCaseCallNow.mockResolvedValue(null);
-    const element = await CasePage(props());
-    render(element);
-    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(expect.objectContaining({ callNow: null }));
+    expect(mockCaseSurfaceProps).toHaveBeenCalledWith(
+      expect.objectContaining({ callNowView: null })
+    );
   });
 });
 

@@ -19,10 +19,16 @@ import type {
  */
 
 /**
- * How long the case page waits for the Call now read. The balo-api client has no abort signal, so
- * the read is raced instead: a slow or hung api hides the entry rather than stalling the page.
+ * How long the Call now read may take before the entry is dropped. The balo-api client has no abort
+ * signal, so the read is raced instead, and a hung api hides the entry rather than holding the
+ * page's stream open.
+ *
+ * ⚠ THE PAGE DOES NOT WAIT FOR THIS READ: the entry streams into the party card after the page has
+ * rendered, so this cap costs nothing on a normal load. It sits well above the api's answer from a
+ * distant database: at 2.5 s the expert's read (about 2.8 s) was always cut off and the expert
+ * never saw the entry.
  */
-const READ_TIMEOUT_MS = 2500;
+const READ_TIMEOUT_MS = 6000;
 
 async function fetchCallNowView(engagementId: string): Promise<CallNowViewRead | null> {
   try {

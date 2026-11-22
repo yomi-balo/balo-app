@@ -14,8 +14,13 @@
  *
  * ⚠ THE EXPERT ARM IS SAFE ON A CLIENT-SUPPLIED `engagementId` ONLY BECAUSE STEP 1 ALREADY
  * RESOLVED THE OWNING PARTY FROM THE CASE'S OWN ROW — the tenancy obligation
- * `resolveHostContext`'s header assigns to its callers. The expert arm runs only for a user with
- * NO company role (the client arm wins, mirroring `participation.ts`).
+ * `resolveHostContext`'s header assigns to its callers. The expert arm's answer is used only for a
+ * user with NO company role (the client arm wins, mirroring `participation.ts`).
+ *
+ * ⚠ THE EXPERT ARM'S READS START WITH THE MEMBERSHIP READ, NOT AFTER IT. This runs before every
+ * Call now view, start and answer, and in series the expert waited on three reads, one after
+ * another, from a distant database. A client caller is answered as soon as its role lands and
+ * never waits on the expert reads, whose result it discards.
  *
  * ⚠ ON THE EXPERT SIDE ONLY THE DELIVERING EXPERT MAY RING (`mayRing`). `host_meetings` is the
  * capability check and is also held by the expert's agency owner/admin, who join as OBSERVERS — a
@@ -73,6 +78,17 @@ export async function authorizeCallNow(
     return deny(input, 'no_case');
   }
 
+  const expertRead = Promise.all([
+    hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.HOST_MEETINGS, {
+      contextType: 'case',
+      contextId: engagementId,
+    }),
+    expertsRepository.findUserIdByProfileId(caseRow.expertProfileId),
+  ]);
+  // A client caller returns without awaiting the expert read; its failure must not surface as an
+  // unhandled rejection. The expert arm awaits it below and sees any failure there.
+  expertRead.catch(() => undefined);
+
   const role = await partyMembershipsRepository.getMemberRole('company', caseRow.companyId, userId);
   if (role !== undefined) {
     if (!roleHasCapability(role, CAPABILITIES.PARTICIPATE)) {
@@ -81,16 +97,8 @@ export async function authorizeCallNow(
     return { ok: true, side: 'client', caseRow, mayRing: true };
   }
 
-  const isHost = await hasEngagementCapability(
-    { id: userId },
-    ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
-    {
-      contextType: 'case',
-      contextId: engagementId,
-    }
-  );
+  const [isHost, delivering] = await expertRead;
   if (isHost) {
-    const delivering = await expertsRepository.findUserIdByProfileId(caseRow.expertProfileId);
     const mayRing = delivering?.user.id === userId;
     if (!mayRing) {
       log.info(
