@@ -237,6 +237,13 @@ export const HELP_WORLD_IDS = {
     'approvalInstallment1',
     'approvalInstallment2',
     'waitingOnBalo',
+    'approvalAssumption1',
+    'approvalAssumption2',
+    'approvalExclusion1',
+    'approvalExclusion2',
+    'approvalTerm1',
+    'approvalTerm2',
+    'approvalDocument',
   ]),
   agency: helpIdBlock(0x1501, [
     'routingRequest',

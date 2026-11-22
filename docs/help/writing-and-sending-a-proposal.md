@@ -119,7 +119,7 @@ You can also press **Cmd+Enter** (Mac) or **Ctrl+Enter** to preview.
 The preview shows the proposal the way the client will read it. Nothing is sent until you choose
 **Send** there, or **Back to editing** to keep working.
 
-![The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.](06)
+![The proposal summary beside the page, with its Assumptions, Not included and Terms rows, and the checklist showing the project price still to set highlighted above Preview and send.](06)
 
 ## What the client sees
 

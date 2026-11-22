@@ -2137,7 +2137,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s1-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Assumptions and exclusions section of a proposal, with numbered Assumptions and Not included lists, highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/01-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/01-dark.png",
+          "width": 1232,
+          "height": 544
+        }
       },
       {
         "n": 2,
@@ -2149,7 +2155,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s2-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Request changes dialog with Assumptions and exclusions chosen and a note about Exclusion 2, with the hint to name the item by its number highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/02-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/02-dark.png",
+          "width": 920,
+          "height": 896
+        }
       },
       {
         "n": 3,
@@ -2161,7 +2173,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s3-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The accept dialog, with What you're agreeing to highlighted: Balo's Project T&Cs with the fixed-price rule, Priya Raman's two additional terms and the count of assumptions and exclusions, above the box to confirm.",
+          "lightSrc": "/help/reviewing-a-proposal/03-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/03-dark.png",
+          "width": 920,
+          "height": 916
+        }
       },
       {
         "n": 4,
@@ -2173,7 +2191,13 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
             "id": "s4-b0"
           }
         ],
-        "screenshot": null
+        "screenshot": {
+          "alt": "The Attachments section of a proposal, with the Approval matrix PDF highlighted.",
+          "lightSrc": "/help/reviewing-a-proposal/04-light.png",
+          "darkSrc": "/help/reviewing-a-proposal/04-dark.png",
+          "width": 1184,
+          "height": 242
+        }
       }
     ]
   },
@@ -2963,11 +2987,11 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           }
         ],
         "screenshot": {
-          "alt": "The proposal summary beside the page, with the checklist showing the project price still to set highlighted above Preview and send.",
+          "alt": "The proposal summary beside the page, with its Assumptions, Not included and Terms rows, and the checklist showing the project price still to set highlighted above Preview and send.",
           "lightSrc": "/help/writing-and-sending-a-proposal/06-light.png",
           "darkSrc": "/help/writing-and-sending-a-proposal/06-dark.png",
           "width": 600,
-          "height": 770
+          "height": 888
         }
       },
       {
@@ -2997,7 +3021,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
           "lightSrc": "/help/writing-and-sending-a-proposal/08-light.png",
           "darkSrc": "/help/writing-and-sending-a-proposal/08-dark.png",
           "width": 1304,
-          "height": 992
+          "height": 928
         }
       },
       {

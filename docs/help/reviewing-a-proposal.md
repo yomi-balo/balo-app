@@ -27,6 +27,8 @@ attachments.
   additional terms as a numbered list, when they've added any.
 - **Attachments** — reference documents the expert included.
 
+![The Assumptions and exclusions section of a proposal, with numbered Assumptions and Not included lists, highlighted.](01)
+
 ## Requesting changes
 
 If something needs work, choose **Request changes**, pick what needs work and say what you'd like
@@ -37,6 +39,8 @@ The choices are **General**, **Milestones / deliverables**, **Assumptions and ex
 **Pricing**, **Payment terms**, **Timeline** and **Terms**. For assumptions, exclusions and terms,
 name the item by its number, for example "Assumption 2" or "Term 1", so your expert knows exactly
 which one you mean.
+
+![The Request changes dialog with Assumptions and exclusions chosen and a note about Exclusion 2, with the hint to name the item by its number highlighted.](02)
 
 ## What accepting commits you to
 
@@ -49,7 +53,11 @@ You then tick the box to confirm you agree. Accepting commits your company to th
 your project has any agreed lists, they appear on the project page under **Agreed in the
 proposal** once the project kicks off.
 
+![The accept dialog, with What you're agreeing to highlighted: Balo's Project T&Cs with the fixed-price rule, Priya Raman's two additional terms and the count of assumptions and exclusions, above the box to confirm.](03)
+
 ## Opening attachments
 
 Choose an attachment on the proposal page to open the file. Attachments are only available once
 the expert has sent the proposal.
+
+![The Attachments section of a proposal, with the Approval matrix PDF highlighted.](04)

@@ -39,7 +39,7 @@ async function boxOf(locator: Locator): Promise<Box> {
 
 const section = (page: Page, name: string): Locator => page.getByRole('region', { name });
 
-/** The row of three property chips (Pricing method, Timeframe, Terms). */
+/** The row of two property chips (Pricing method, Timeframe). */
 const propertyBar = (page: Page): Locator =>
   page.getByRole('button', { name: /^(Fixed price|Time & materials)/ }).locator('xpath=..');
 
