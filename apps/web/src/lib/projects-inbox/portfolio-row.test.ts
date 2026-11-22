@@ -11,7 +11,6 @@ import {
   needsYouFor,
   needsYouForExpert,
   deriveEngagementRow,
-  proposalAwaitsClientReview,
   adminStallDays,
   rowMatchesFilter,
   tilesFromRows,
@@ -426,18 +425,6 @@ describe('needsYouFor — client lens', () => {
   it('closed → not needs-you, closed (BAL-540 — the largest silent surface, now a compile error)', () => {
     const res = needsYouFor('client', makeRequest({ status: 'closed' }), SIGNAL_UNREAD, NOW);
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed', clientMoveKind: null });
-  });
-});
-
-describe('proposalAwaitsClientReview', () => {
-  it.each([
-    ['proposal_submitted', null, true],
-    ['proposal_submitted', 'submitted', true],
-    ['proposal_submitted', 'changes_requested', false],
-    ['accepted', 'submitted', false],
-    ['eoi_submitted', null, false],
-  ] as const)('%s with current proposal %s → %s', (relationship, proposal, expected) => {
-    expect(proposalAwaitsClientReview(relationship, proposal)).toBe(expected);
   });
 });
 

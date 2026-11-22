@@ -8,6 +8,7 @@ import {
   meetingExpertAbsentRecheck,
 } from './meeting-absence.js';
 import { MEETING_WAITING_SMS_RECHECK, meetingWaitingSmsRecheck } from './meeting-waiting-sms.js';
+import { REMINDER_SEQUENCE_RECHECK, reminderSequenceRecheck } from '../sequences/recheck.js';
 import {
   RESCHEDULE_PROPOSAL_UNANSWERED_RECHECK,
   rescheduleProposalUnansweredRecheck,
@@ -76,6 +77,9 @@ export const SCHEDULED_RECHECKS: Record<string, ScheduledRecheck> = {
   // BAL-654 — "is the same party STILL alone, and is the single recipient reachable by SMS now?"
   // See `meeting-waiting-sms.ts`.
   [MEETING_WAITING_SMS_RECHECK]: meetingWaitingSmsRecheck,
+  // BAL-663 — "does the entity STILL wait, for a recipient who may still receive it, within the
+  // daily limit?" See `../sequences/recheck.ts`.
+  [REMINDER_SEQUENCE_RECHECK]: reminderSequenceRecheck,
 };
 
 /**

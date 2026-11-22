@@ -1,11 +1,8 @@
 import type { ClientMoveDetail } from '@balo/db';
 import type { ExpertCounterpartyNameFields } from '@/lib/meetings/expert-counterparty';
 import { formatPostedRelative } from '@/lib/project-request/request-detail-view';
-import {
-  proposalAwaitsClientReview,
-  type ClientMoveKind,
-  type PortfolioRowView,
-} from '@/lib/projects-inbox/portfolio-row';
+import { proposalAwaitsClientReview } from '@balo/shared/project-requests';
+import { type ClientMoveKind, type PortfolioRowView } from '@/lib/projects-inbox/portfolio-row';
 import {
   actionItemCards,
   cut,

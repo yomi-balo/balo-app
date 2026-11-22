@@ -12,6 +12,8 @@ const mockStartStalenessCheck = vi.fn();
 const mockRegisterStalenessCron = vi.fn().mockResolvedValue(undefined);
 const mockStartDeliveryReviewSweep = vi.fn();
 const mockRegisterDeliveryReviewSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartReminderSequenceSweep = vi.fn();
+const mockRegisterReminderSequenceSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartOnboardingReminderSweep = vi.fn();
 const mockRegisterOnboardingReminderSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartWalletDormancySweep = vi.fn();
@@ -65,6 +67,11 @@ vi.mock('./availability-cache.js', () => ({
 vi.mock('./auto-accept-sweep.js', () => ({
   startDeliveryReviewSweepWorker: () => mockStartDeliveryReviewSweep(),
   registerDeliveryReviewSweepCron: () => mockRegisterDeliveryReviewSweepCron(),
+}));
+// BAL-663: mandatory — the real module constructs a Worker on a live Redis connection and hangs CI.
+vi.mock('./reminder-sequence-sweep.js', () => ({
+  startReminderSequenceSweepWorker: () => mockStartReminderSequenceSweep(),
+  registerReminderSequenceSweepCron: () => mockRegisterReminderSequenceSweepCron(),
 }));
 vi.mock('./onboarding-reminder-sweep.js', () => ({
   startOnboardingReminderSweepWorker: () => mockStartOnboardingReminderSweep(),
@@ -291,6 +298,8 @@ describe('startWorkers', () => {
     expect(mockStartProposalDraftGenerate).not.toHaveBeenCalled();
     expect(mockStartCallNowRingExpiry).not.toHaveBeenCalled();
     expect(mockStartCallNowRingReping).not.toHaveBeenCalled();
+    expect(mockStartReminderSequenceSweep).not.toHaveBeenCalled();
+    expect(mockRegisterReminderSequenceSweepCron).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueRepairSweep).not.toHaveBeenCalled();
     expect(mockRegisterMeetingVenueRepairSweepCron).not.toHaveBeenCalled();
     expect(mockStartMeetingVenueProvision).not.toHaveBeenCalled();
@@ -317,6 +326,8 @@ describe('startWorkers', () => {
     expect(mockRegisterDeliveryReviewSweepCron).toHaveBeenCalled();
     expect(mockStartOnboardingReminderSweep).toHaveBeenCalled();
     expect(mockRegisterOnboardingReminderSweepCron).toHaveBeenCalled();
+    expect(mockStartReminderSequenceSweep).toHaveBeenCalled();
+    expect(mockRegisterReminderSequenceSweepCron).toHaveBeenCalled();
     expect(mockStartWalletDormancySweep).toHaveBeenCalled();
     expect(mockRegisterWalletDormancySweepCron).toHaveBeenCalled();
     expect(mockStartFxDisplayRateSweep).toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
   scheduledNotifications,
@@ -421,5 +421,65 @@ export const scheduledNotificationsRepository = {
         )
       )
       .orderBy(desc(scheduledNotifications.createdAt), desc(scheduledNotifications.id));
+  },
+
+  /**
+   * How many reminder-sequence sends a recipient has had since `since`, for the 24-hour
+   * daily limit. Counts rows whose dedupe key starts with one of `dedupeKeyPrefixes` and
+   * whose payload names `recipientUserId`:
+   *   - `published` rows with `published_at >= since`, and
+   *   - `claimed` rows with `claimed_at >= since` that sort before the asking row by
+   *     `(scheduled_for, id)` — a sibling replica working an earlier row at the same moment
+   *     is about to send, a later one is not. The asking row itself never counts.
+   *
+   * Prefixes are matched with `starts_with`, never `LIKE`: the `_` in a sequence id is a
+   * `LIKE` wildcard. No prefixes means nothing is limited, so no query runs.
+   */
+  async countRecentSequenceSends(
+    input: {
+      recipientUserId: string;
+      dedupeKeyPrefixes: readonly string[];
+      since: Date;
+      asking: { id: string; scheduledFor: Date };
+    },
+    exec: DbExecutor = db
+  ): Promise<number> {
+    if (input.dedupeKeyPrefixes.length === 0) {
+      return 0;
+    }
+    const prefixMatch = or(
+      ...input.dedupeKeyPrefixes.map(
+        (prefix) => sql`starts_with(${scheduledNotifications.dedupeKey}, ${prefix})`
+      )
+    );
+    const sortsBeforeAsking = or(
+      lt(scheduledNotifications.scheduledFor, input.asking.scheduledFor),
+      and(
+        eq(scheduledNotifications.scheduledFor, input.asking.scheduledFor),
+        lt(scheduledNotifications.id, input.asking.id)
+      )
+    );
+    const [row] = await exec
+      .select({ count: sql<number>`count(*)::int` })
+      .from(scheduledNotifications)
+      .where(
+        and(
+          isNull(scheduledNotifications.deletedAt),
+          prefixMatch,
+          sql`${scheduledNotifications.payload}->>'recipientUserId' = ${input.recipientUserId}`,
+          or(
+            and(
+              eq(scheduledNotifications.status, 'published'),
+              gte(scheduledNotifications.publishedAt, input.since)
+            ),
+            and(
+              eq(scheduledNotifications.status, 'claimed'),
+              gte(scheduledNotifications.claimedAt, input.since),
+              sortsBeforeAsking
+            )
+          )
+        )
+      );
+    return row?.count ?? 0;
   },
 };

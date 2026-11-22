@@ -14,6 +14,7 @@ import {
   type RecheckResult,
 } from '../notifications/scheduling/rechecks.js';
 import type { EventPayloadMap, NotificationEvent } from '../notifications/events.js';
+import { reportReminderOutcome } from '../notifications/sequences/analytics.js';
 
 /**
  * BAL-420 (ADR-1047 Decision 3) — THE TICKER. Postgres is the clock; BullMQ only asks it
@@ -191,6 +192,8 @@ async function dispatchRow(candidate: ScheduledNotification): Promise<RowOutcome
       { id: row.id, key: row.dedupeKey, event: row.event, reason: result.reason },
       'Scheduled notification skipped by fire-time recheck'
     );
+    // After the terminal mark, so a mark that throws leaves the row claimed and the retry emits once.
+    reportReminderOutcome(row, { kind: 'skipped', reason: result.reason });
     return 'skipped';
   }
 
@@ -228,6 +231,7 @@ async function dispatchRow(candidate: ScheduledNotification): Promise<RowOutcome
   // The payload the RECHECK returned — the stored one is only the default answer.
   await publishStoredEvent(row.event, result.payload);
   await scheduledNotificationsRepository.markPublished(row.id);
+  reportReminderOutcome(row, { kind: 'published' });
   return 'published';
 }
 

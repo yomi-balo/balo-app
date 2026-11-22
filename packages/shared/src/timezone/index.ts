@@ -728,3 +728,18 @@ export function localIsoDate(now: Date, timeZone: string | null | undefined): st
   const { year, month, day } = tzWallClock(zone, now);
   return `${year}-${pad2(month)}-${pad2(day)}`;
 }
+
+/**
+ * The UTC instant at which `timeZone`'s wall clock reads `wall`. Two passes of the zone offset
+ * settle it across a DST change; a wall time the zone skips resolves to the instant just after
+ * the gap, and a repeated one to its first occurrence.
+ */
+export function zonedWallClockToUtc(
+  timeZone: string,
+  wall: { year: number; month: number; day: number; hour: number; minute: number }
+): Date {
+  const asUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute);
+  const firstGuess = asUtc - tzOffsetMinutes(timeZone, new Date(asUtc)) * MS_PER_MINUTE;
+  const secondGuess = asUtc - tzOffsetMinutes(timeZone, new Date(firstGuess)) * MS_PER_MINUTE;
+  return new Date(secondGuess);
+}

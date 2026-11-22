@@ -2603,3 +2603,172 @@ describe('proposalsRepository.findExpertOrgName', () => {
     expect(await proposalsRepository.findExpertOrgName(randomUUID())).toBeNull();
   });
 });
+
+async function setRequestStatus(
+  projectRequestId: string,
+  status: (typeof projectRequests.$inferInsert)['status']
+): Promise<void> {
+  await db
+    .update(projectRequests)
+    .set({ status, ...(status === 'closed' ? { closedAt: new Date() } : {}) })
+    .where(eq(projectRequests.id, projectRequestId));
+}
+
+describe('proposalsRepository.listReviewCandidates', () => {
+  it('returns a live proposal_submitted relationship with its current proposal and request', async () => {
+    const { proposal, relationshipId, projectRequestId } = await proposalFactory({
+      values: { submittedAt: new Date('2026-11-01T00:00:00.000Z') },
+    });
+    await setRequestStatus(projectRequestId, 'proposal_submitted');
+    const [request] = await db
+      .select()
+      .from(projectRequests)
+      .where(eq(projectRequests.id, projectRequestId));
+
+    const rows = await proposalsRepository.listReviewCandidates({ projectRequestId });
+
+    expect(rows).toEqual([
+      {
+        projectRequestId,
+        companyId: request?.companyId,
+        createdByUserId: request?.createdByUserId,
+        title: request?.title,
+        relationshipId,
+        relationshipStatus: 'proposal_submitted',
+        proposalStatus: proposal.status,
+        submittedAt: new Date('2026-11-01T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('excludes relationships that are not proposal_submitted or are soft-deleted', async () => {
+    const { projectRequestId } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    await setRequestStatus(projectRequestId, 'proposal_submitted');
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_submitted' },
+    });
+    await setRequestStatus(relationship.projectRequestId, 'proposal_submitted');
+    await db
+      .update(requestExpertRelationships)
+      .set({ deletedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, relationship.id));
+
+    expect(
+      await proposalsRepository.listReviewCandidates({
+        projectRequestId: relationship.projectRequestId,
+      })
+    ).toEqual([]);
+    expect(await proposalsRepository.listReviewCandidates({ projectRequestId })).toEqual([]);
+  });
+
+  it('uses only the current proposal version, not a superseded one', async () => {
+    const first = await proposalFactory({
+      values: {
+        status: 'resubmitted',
+        isCurrent: false,
+        version: 1,
+        submittedAt: new Date('2026-10-01T00:00:00.000Z'),
+      },
+    });
+    await setRequestStatus(first.projectRequestId, 'proposal_submitted');
+    await db.insert(proposals).values({
+      relationshipId: first.relationshipId,
+      projectRequestId: first.projectRequestId,
+      expertProfileId: first.expertProfileId,
+      status: 'submitted',
+      pricingMethod: 'fixed',
+      version: 2,
+      isCurrent: true,
+      overview: '<p>v2</p>',
+      priceCents: 500_000,
+      submittedAt: new Date('2026-11-02T00:00:00.000Z'),
+    });
+
+    const rows = await proposalsRepository.listReviewCandidates({
+      projectRequestId: first.projectRequestId,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.proposalStatus).toBe('submitted');
+    expect(rows[0]?.submittedAt).toEqual(new Date('2026-11-02T00:00:00.000Z'));
+  });
+
+  it('returns a null proposal status and submittedAt when the relationship has no proposal row', async () => {
+    const { relationship, projectRequestId } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_submitted' },
+    });
+    await setRequestStatus(projectRequestId, 'proposal_submitted');
+
+    const rows = await proposalsRepository.listReviewCandidates({ projectRequestId });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      relationshipId: relationship.id,
+      proposalStatus: null,
+      submittedAt: null,
+    });
+  });
+
+  it.each([
+    'draft',
+    'requested',
+    'exploratory_meeting_requested',
+    'experts_invited',
+    'eoi_submitted',
+    'proposal_requested',
+    'accepted',
+    'kickoff_approved',
+    'closed',
+  ] as const)('excludes a request whose own status is %s', async (status) => {
+    const { projectRequestId } = await proposalFactory();
+    await setRequestStatus(projectRequestId, status);
+
+    expect(await proposalsRepository.listReviewCandidates({ projectRequestId })).toEqual([]);
+  });
+
+  it('excludes the losing proposals of an accepted request, whose relationships stay proposal_submitted', async () => {
+    const winner = await proposalFactory();
+    const loser = await requestExpertRelationshipFactory({
+      projectRequestId: winner.projectRequestId,
+      values: { status: 'proposal_submitted' },
+    });
+    await proposalFactory({ relationship: loser });
+    await setRequestStatus(winner.projectRequestId, 'accepted');
+
+    expect(
+      await proposalsRepository.listReviewCandidates({ projectRequestId: winner.projectRequestId })
+    ).toEqual([]);
+  });
+
+  it('excludes a soft-deleted request', async () => {
+    const deleted = await proposalFactory();
+    await setRequestStatus(deleted.projectRequestId, 'proposal_submitted');
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, deleted.projectRequestId));
+
+    expect(
+      await proposalsRepository.listReviewCandidates({ projectRequestId: deleted.projectRequestId })
+    ).toEqual([]);
+  });
+
+  it('filters by projectRequestId and returns every request when unfiltered', async () => {
+    const a = await proposalFactory();
+    const b = await proposalFactory();
+    await setRequestStatus(a.projectRequestId, 'proposal_submitted');
+    await setRequestStatus(b.projectRequestId, 'proposal_submitted');
+
+    const only = await proposalsRepository.listReviewCandidates({
+      projectRequestId: a.projectRequestId,
+    });
+    const all = await proposalsRepository.listReviewCandidates();
+
+    expect(only.map((r) => r.relationshipId)).toEqual([a.relationshipId]);
+    expect(all.map((r) => r.relationshipId)).toEqual(
+      expect.arrayContaining([a.relationshipId, b.relationshipId])
+    );
+  });
+});

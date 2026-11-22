@@ -428,6 +428,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       timing: 'immediate',
     },
   ],
+  // BAL-663: the follow-up while proposals still await review — email only. The recipient is
+  // already resolved to a user id at schedule time (`payload.recipientUserId`), so `self`.
+  'project.proposal_review_reminder': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'project-proposal-review-reminder',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   // BAL-289: the client accepted an expert's proposal — a decision that fans out
   // to THREE audiences in one event. The WINNING expert (recipient:'expert',
   // resolved from the hydrated data.expert) gets a congratulatory in-app + email;

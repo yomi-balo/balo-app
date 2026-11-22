@@ -7,7 +7,11 @@ import type { ExpertPayoutEventMap, ExpertPayoutServerEventMap } from './events/
 import type { AvatarEventMap } from './events/avatar';
 import type { PhoneEventMap } from './events/phone';
 import type { CalendarEventMap, CalendarServerEventMap } from './events/calendar';
-import type { NotificationServerEventMap, NotificationEventMap } from './events/notifications';
+import type {
+  NotificationServerEventMap,
+  NotificationEventMap,
+  ReminderServerEventMap,
+} from './events/notifications';
 import type { SearchEventMap, SearchServerEventMap } from './events/search';
 import type { ExpertProfileEventMap } from './events/expert-profile';
 import type { ProjectEventMap, ProjectServerEventMap } from './events/project';
@@ -166,6 +170,7 @@ export type EventName = keyof AllEvents;
 export type ServerEvents = ExpertServerEventMap &
   ExpertPayoutServerEventMap &
   NotificationServerEventMap &
+  ReminderServerEventMap &
   CalendarServerEventMap &
   SearchServerEventMap &
   ProjectServerEventMap &

@@ -7,7 +7,7 @@ export { trackServer } from './track-server';
 export type { ServerEvents, ServerEventName } from '../types';
 export { EXPERT_SERVER_EVENTS } from '../events/expert';
 export { EXPERT_PAYOUT_SERVER_EVENTS } from '../events/expert-payouts';
-export { NOTIFICATION_SERVER_EVENTS } from '../events/notifications';
+export { NOTIFICATION_SERVER_EVENTS, REMINDER_SERVER_EVENTS } from '../events/notifications';
 export { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from '../events/calendar';
 // BAL-414 — server-only by construction (§F): `apps/api`'s credential-break/repair triggers
 // AND `apps/web`'s `import 'server-only'` dashboard read path both need this from here.

@@ -10,6 +10,7 @@ const {
   mockMarkFailed,
   mockPublish,
   mockRunRecheck,
+  mockTrackServer,
   mockLogger,
 } = vi.hoisted(() => ({
   mockListDue: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockMarkFailed: vi.fn(),
   mockPublish: vi.fn(),
   mockRunRecheck: vi.fn(),
+  mockTrackServer: vi.fn(),
   // One STABLE logger instance (not a fresh object per createLogger call) so the
   // backlog `warn` is assertable.
   mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -32,6 +34,11 @@ vi.mock('@balo/db', () => ({
     markSkipped: mockMarkSkipped,
     markFailed: mockMarkFailed,
   },
+}));
+
+vi.mock('@balo/analytics/server', () => ({
+  trackServer: mockTrackServer,
+  REMINDER_SERVER_EVENTS: { SENT: 'reminder_sent', SKIPPED: 'reminder_skipped' },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -310,6 +317,80 @@ describe('runScheduledNotificationDispatch — the fire-time recheck', () => {
 
     expect(mockMarkPublished).not.toHaveBeenCalled();
     expect(counts).toEqual({ published: 0, skipped: 0, failed: 0 });
+  });
+});
+
+describe('runScheduledNotificationDispatch — reminder-sequence analytics (BAL-663)', () => {
+  const sequenceRow = (overrides: Partial<ScheduledNotification> = {}): ScheduledNotification =>
+    row({
+      recheck: 'reminder_sequence',
+      event: 'project.proposal_review_reminder',
+      payload: {
+        correlationId: 'c-1',
+        sequenceId: 'proposal_review',
+        step: 'day_2',
+        recipientUserId: 'user-1',
+      },
+      ...overrides,
+    });
+
+  it('emits reminder_sent once, after the published mark', async () => {
+    mockListDue.mockResolvedValue([sequenceRow()]);
+    mockClaim.mockImplementation(async () => sequenceRow({ status: 'claimed' }));
+
+    await runScheduledNotificationDispatch(NOW);
+
+    expect(mockTrackServer).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('reminder_sent', {
+      sequence: 'proposal_review',
+      step: 'day_2',
+      channel: 'email',
+      audience: 'client',
+      distinct_id: 'user-1',
+    });
+    expect(mockMarkPublished.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTrackServer.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('emits reminder_skipped with the reason, after the skipped mark', async () => {
+    mockListDue.mockResolvedValue([sequenceRow()]);
+    mockClaim.mockImplementation(async () => sequenceRow({ status: 'claimed' }));
+    mockRunRecheck.mockResolvedValue({ publish: false, reason: 'over_daily_limit' });
+
+    await runScheduledNotificationDispatch(NOW);
+
+    expect(mockTrackServer).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('reminder_skipped', {
+      sequence: 'proposal_review',
+      step: 'day_2',
+      reason: 'over_daily_limit',
+      distinct_id: 'user-1',
+    });
+    expect(mockMarkSkipped.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTrackServer.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('emits nothing when the terminal mark throws', async () => {
+    mockListDue.mockResolvedValue([sequenceRow()]);
+    mockClaim.mockImplementation(async () => sequenceRow({ status: 'claimed' }));
+    mockMarkPublished.mockRejectedValue(new Error('db blip'));
+
+    await runScheduledNotificationDispatch(NOW);
+
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('emits nothing for a row that is not a reminder-sequence step', async () => {
+    mockListDue.mockResolvedValue([row(), row({ id: 'row-2' })]);
+    mockRunRecheck
+      .mockResolvedValueOnce({ publish: true, payload: { correlationId: 'c-1' } })
+      .mockResolvedValueOnce({ publish: false, reason: 'gone' });
+
+    await runScheduledNotificationDispatch(NOW);
+
+    expect(mockTrackServer).not.toHaveBeenCalled();
   });
 });
 

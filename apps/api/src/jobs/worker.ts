@@ -47,6 +47,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     },
     { startCallNowRingExpiryWorker },
     { startCallNowRingRepingWorker },
+    { startReminderSequenceSweepWorker, registerReminderSequenceSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -81,6 +82,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./meeting-venue-repair.js'),
     import('./call-now-ring-expiry.js'),
     import('./call-now-ring-reping.js'),
+    import('./reminder-sequence-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -185,5 +187,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // The Call now ring re-ping: delayed jobs scheduled per ring at start, no cron. A lost
   // `notification.created` ping otherwise leaves the callee's tab silent for the whole ring.
   startCallNowRingRepingWorker();
+  // BAL-663: the hourly reminder-sequence sweep, which arms due steps as scheduled-notification
+  // promises (the per-minute dispatch tick fires them). `worker.test.ts` must mock this module:
+  // the real one opens a Redis connection, and the test hangs without the mock.
+  startReminderSequenceSweepWorker();
+  await registerReminderSequenceSweepCron();
   logger?.info('BullMQ workers started');
 }

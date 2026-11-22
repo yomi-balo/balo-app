@@ -2,9 +2,8 @@ import type {
   PortfolioRequestRow,
   PortfolioInvitationRow,
   PortfolioProjectEngagementView,
-  ProposalStatus,
 } from '@balo/db';
-import { relationshipIsOpened } from '@balo/shared/project-requests';
+import { proposalAwaitsClientReview, relationshipIsOpened } from '@balo/shared/project-requests';
 import {
   DIRECT_CHOICE_LABEL,
   directExpertOwesChoice,
@@ -404,19 +403,6 @@ const EMPTY_SIGNAL: RequestThreadSignal = {
   freshestSignal: null,
   viewerHasSentMessage: false,
 };
-
-/**
- * A submitted proposal awaits the client's review unless the client already asked for changes —
- * then the move is the expert's. The one definition of "awaiting client review".
- */
-export function proposalAwaitsClientReview(
-  relationshipStatus: string,
-  currentProposalStatus: ProposalStatus | null
-): boolean {
-  return (
-    relationshipStatus === 'proposal_submitted' && currentProposalStatus !== 'changes_requested'
-  );
-}
 
 /** Count of relationships awaiting the client's proposal review — "Review N proposals". */
 function proposalSubmittedCount(row: PortfolioRequestRow): number {

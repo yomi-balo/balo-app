@@ -266,6 +266,7 @@ export {
   // BAL-432 / ADR-1030 — `transitionStatus`'s attributed-transition guard.
   ProposalAcceptanceRequiresActorError,
   type ProposalStatus,
+  type ProposalReviewCandidateRow,
 } from './proposals';
 export {
   assertProposalCoherent,
