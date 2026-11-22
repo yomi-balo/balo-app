@@ -65,6 +65,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('resolving');
   const [resolvedStatus, setResolvedStatus] = useState<'new' | 'blocked'>('new');
+  // True only when the create field was actually prefilled — gates the
+  // "we suggested this" helper so it never sits under an empty field.
+  const [wasPrefilled, setWasPrefilled] = useState(false);
   const [joinCompany, setJoinCompany] = useState<JoinCompany | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -97,6 +100,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
     let live = true;
     const applyCreate = (status: 'new' | 'blocked', suggestion: string): void => {
       initialSuggestionRef.current = suggestion;
+      setWasPrefilled(suggestion !== '');
       setResolvedStatus(status);
       form.reset({ companyName: suggestion });
       setPhase('create');
@@ -196,6 +200,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
     const suggestion = matchedSuggestionRef.current;
     resolveFailedOpenRef.current = false;
     initialSuggestionRef.current = suggestion; // keeps prefill_used analytics correct
+    setWasPrefilled(suggestion !== '');
     setJoinCompany(null);
     setResolvedStatus('new');
     setActionError(null);
@@ -373,9 +378,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
 
   // CREATE branch (status: new | blocked).
   const helperCopy =
-    resolvedStatus === 'blocked'
-      ? 'Tell us your company or team name.'
-      : 'We suggested this from your email — edit if it’s not right.';
+    resolvedStatus === 'new' && wasPrefilled
+      ? 'We suggested this from your email — edit if it’s not right.'
+      : 'Tell us your company or team name.';
 
   return (
     <div className="flex w-full flex-col items-center text-center">
@@ -384,7 +389,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         tabIndex={-1}
         className="text-foreground text-xl font-semibold outline-none sm:text-2xl"
       >
-        Name your workspace
+        What is your company name?
       </h1>
       <p className="text-muted-foreground mt-2 max-w-md text-sm leading-relaxed">
         This is how your company appears to consultants on Balo. You can change it anytime in

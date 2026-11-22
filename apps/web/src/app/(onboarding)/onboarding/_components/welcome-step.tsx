@@ -37,8 +37,7 @@ export const WelcomeStep = forwardRef<HTMLHeadingElement, WelcomeStepProps>(func
       </h1>
 
       <p className="text-muted-foreground mt-4 max-w-md text-base leading-relaxed">
-        Your gateway to expert technology consultants. Whether you need help with Salesforce, or
-        you&apos;re an expert ready to grow your practice — you&apos;re in the right place.
+        Fast, affordable engagements, delivered by vetted, high-quality experts.
       </p>
 
       <Button size="lg" onClick={handleContinue} className="mt-8 w-full min-w-[200px] sm:w-auto">

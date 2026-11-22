@@ -155,7 +155,7 @@ describe('OnboardingWizard', () => {
     // Selecting "Find an Expert" (client) advances — it does NOT complete onboarding.
     await user.click(screen.getByRole('button', { name: /find an expert/i }));
     expect(
-      await screen.findByRole('heading', { name: /name your workspace/i })
+      await screen.findByRole('heading', { name: /what is your company name/i })
     ).toBeInTheDocument();
     expect(mockCompleteOnboarding).not.toHaveBeenCalled();
 
@@ -175,7 +175,9 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(mockCompleteOnboarding).toHaveBeenCalledWith('expert'));
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
     expect(mockNameWorkspace).not.toHaveBeenCalled();
-    expect(screen.queryByRole('heading', { name: /name your workspace/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /what is your company name/i })
+    ).not.toBeInTheDocument();
   });
 
   // BAL-361: landing analytics on wizard mount.
