@@ -188,7 +188,7 @@ Before Phase 2/3, write `.implement/bal-<NNN>-build-contract.md`. It is shared b
 - edit only the files your package Owns, and report rather than edit anything outside them;
 - never `Write` over an existing file (check `git ls-files` first);
 - no git writes except `git mv`, and do mutation proofs with Edit only;
-- scoped gates only (your own tests, plus the per-app typecheck);
+- scoped gates only (your own tests, plus the per-app typecheck), and `pnpm lint:sonar:diff`, which must exit clean (it lints every changed file, the same findings SonarCloud reports on the PR);
 - the reply format: 200 words or fewer.
 
 Group the plan's work packages into dependency-ordered stages. For a small ticket, one builder for all of them is cheaper (see **Context budget**). Run the packages within a stage as parallel builders, one per package or small group. Packages whose types are coupled land in the same stage. Spawn each builder like this:
@@ -207,7 +207,7 @@ After each stage, the orchestrator checks the work before starting the next:
 - run `git diff --stat` to catch large deletions in `*.test.*` files;
 - read the one or two files that later packages depend on.
 
-After the last stage, run the integration gates once: a forced full typecheck (`turbo … --force`) and every invariants suite: `apps/web/src/invariants`, `apps/api/src/invariants` and `packages/db/src/invariants`. Those suites only run when someone owns their package, so this pass is the one that catches cross-cutting breaks.
+After the last stage, run the integration gates once: a forced full typecheck (`turbo … --force`), `pnpm lint:sonar:diff` (any finding goes back to the owning builder before review), and every invariants suite: `apps/web/src/invariants`, `apps/api/src/invariants` and `packages/db/src/invariants`. Those suites only run when someone owns their package, so this pass is the one that catches cross-cutting breaks.
 
 ### Phase 4: UX Validation (if UI changes)
 

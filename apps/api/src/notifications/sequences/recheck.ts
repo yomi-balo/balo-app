@@ -81,8 +81,7 @@ function parsePayload(row: ScheduledNotification): ParsedPayload | null {
   }
   const sequence = findReminderSequence(sequenceId);
   if (
-    sequence === undefined ||
-    sequence.event !== row.event ||
+    sequence?.event !== row.event ||
     !REMINDER_SEQUENCE_STEPS[sequence.id].some((known) => known.key === step)
   ) {
     return null;

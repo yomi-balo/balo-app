@@ -9,6 +9,7 @@ import {
 } from '@balo/shared/notifications';
 import { createRedisConnection } from '../lib/redis.js';
 import { getQueue } from '../lib/queue.js';
+import { mapWithConcurrency } from '../lib/map-with-concurrency.js';
 import { scheduleNotification } from '../notifications/scheduling/schedule.js';
 import { isScheduledKeyDecided } from '../notifications/scheduling/scheduled-key-decided.js';
 import { planDueSteps } from '../notifications/sequences/plan.js';
@@ -48,12 +49,19 @@ export const REMINDER_SEQUENCE_SWEEP_LEAD_MS: Readonly<Record<ReminderCadence, n
   hourly: 60 * 60 * 1000,
 };
 
+/** Entities armed at once per sequence; bounds DB load when a backlog arrives. */
+export const REMINDER_SEQUENCE_ENTITY_CONCURRENCY = 4;
+
 const REMINDER_CADENCES: readonly ReminderCadence[] = ['hourly'];
 
 const logger = createLogger('reminder-sequence-sweep');
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 export interface ReminderSequenceSweepResult {
@@ -79,32 +87,31 @@ async function armRecipient(
     zone,
   });
 
-  let armed = 0;
-  for (const { stepKey, fireAt } of due) {
-    const key = reminderSequenceKey({
-      sequenceId: sequence.id,
-      entityId: entity.entityId,
-      stepKey,
-      userId,
-      anchorIso,
-    });
-    if (await isScheduledKeyDecided(key, REARMABLE_REMINDER_SKIP_REASONS)) {
-      continue;
-    }
-    const { outcome } = await scheduleNotification(
-      sequence.event,
-      sequence.buildPayload(entity, stepKey, userId, randomUUID()),
-      { key, at: fireAt, mode: 'first_wins', recheck: REMINDER_SEQUENCE_RECHECK }
-    );
-    logger.info(
-      { sequence: sequence.id, step: stepKey, entityId: entity.entityId, outcome },
-      'Reminder step armed'
-    );
-    if (outcome === 'scheduled') {
-      armed += 1;
-    }
-  }
-  return armed;
+  const armedPerStep = await Promise.all(
+    due.map(async ({ stepKey, fireAt }) => {
+      const key = reminderSequenceKey({
+        sequenceId: sequence.id,
+        entityId: entity.entityId,
+        stepKey,
+        userId,
+        anchorIso,
+      });
+      if (await isScheduledKeyDecided(key, REARMABLE_REMINDER_SKIP_REASONS)) {
+        return 0;
+      }
+      const { outcome } = await scheduleNotification(
+        sequence.event,
+        sequence.buildPayload(entity, stepKey, userId, randomUUID()),
+        { key, at: fireAt, mode: 'first_wins', recheck: REMINDER_SEQUENCE_RECHECK }
+      );
+      logger.info(
+        { sequence: sequence.id, step: stepKey, entityId: entity.entityId, outcome },
+        'Reminder step armed'
+      );
+      return outcome === 'scheduled' ? 1 : 0;
+    })
+  );
+  return sum(armedPerStep);
 }
 
 type FindResult =
@@ -143,11 +150,11 @@ async function armEntity(
   jobLog: (message: string) => void
 ): Promise<number> {
   try {
-    let armed = 0;
-    for (const userId of await sequence.resolveRecipients(entity)) {
-      armed += await armRecipient(sequence, entity, userId, now, leadMs);
-    }
-    return armed;
+    const recipients = await sequence.resolveRecipients(entity);
+    const armedPerRecipient = await Promise.all(
+      recipients.map((userId) => armRecipient(sequence, entity, userId, now, leadMs))
+    );
+    return sum(armedPerRecipient);
   } catch (error) {
     const message = errorMessage(error);
     jobLog(`reminder sequence ${sequence.id} failed for ${entity.entityId}: ${message}`);
@@ -174,26 +181,28 @@ export async function runReminderSequenceSweep(
   jobLog: (message: string) => void = () => {}
 ): Promise<ReminderSequenceSweepResult> {
   const leadMs = REMINDER_SEQUENCE_SWEEP_LEAD_MS[cadence];
-  let armed = 0;
-  let entityCount = 0;
-
-  for (const sequence of allReminderSequences()) {
-    if (sequence.cadence !== cadence) {
-      continue;
-    }
-    const found = await findEntities(sequence, now, jobLog);
-    if (!found.ok) {
-      continue;
-    }
-    entityCount += found.entities.length;
-    logger.info(
-      { sequence: sequence.id, cadence, entities: found.entities.length },
-      'Reminder sequence entities found'
-    );
-    for (const entity of found.entities) {
-      armed += await armEntity(sequence, entity, now, leadMs, jobLog);
-    }
-  }
+  const perSequence = await Promise.all(
+    allReminderSequences()
+      .filter((sequence) => sequence.cadence === cadence)
+      .map(async (sequence) => {
+        const found = await findEntities(sequence, now, jobLog);
+        if (!found.ok) {
+          return { armed: 0, entities: 0 };
+        }
+        logger.info(
+          { sequence: sequence.id, cadence, entities: found.entities.length },
+          'Reminder sequence entities found'
+        );
+        const armedPerEntity = await mapWithConcurrency(
+          found.entities,
+          REMINDER_SEQUENCE_ENTITY_CONCURRENCY,
+          (entity) => armEntity(sequence, entity, now, leadMs, jobLog)
+        );
+        return { armed: sum(armedPerEntity), entities: found.entities.length };
+      })
+  );
+  const armed = sum(perSequence.map((result) => result.armed));
+  const entityCount = sum(perSequence.map((result) => result.entities));
 
   logger.info({ cadence, armed, entities: entityCount }, 'Reminder sequence sweep complete');
   jobLog(`reminder sequence sweep (${cadence}): ${armed} armed across ${entityCount} entities`);
@@ -215,11 +224,13 @@ export function startReminderSequenceSweepWorker(): Worker {
 /** Register one repeatable per cadence. */
 export async function registerReminderSequenceSweepCron(): Promise<void> {
   const queue = getQueue(REMINDER_SEQUENCE_SWEEP_QUEUE);
-  for (const cadence of REMINDER_CADENCES) {
-    await queue.add(
-      REMINDER_SEQUENCE_SWEEP_JOB_NAMES[cadence],
-      { cadence },
-      { repeat: { pattern: REMINDER_SEQUENCE_SWEEP_CRONS[cadence] }, removeOnComplete: true }
-    );
-  }
+  await Promise.all(
+    REMINDER_CADENCES.map((cadence) =>
+      queue.add(
+        REMINDER_SEQUENCE_SWEEP_JOB_NAMES[cadence],
+        { cadence },
+        { repeat: { pattern: REMINDER_SEQUENCE_SWEEP_CRONS[cadence] }, removeOnComplete: true }
+      )
+    )
+  );
 }

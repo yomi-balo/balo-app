@@ -133,8 +133,13 @@ SonarCloud runs on every PR. Write code that passes its quality gate from the st
 - **Never use an array index as a React `key`** (S6479) — map over stable ids, or a fixed array of literal keys (`['a','b','c'].map((k) => …)`); never `key={i}` or `key={\`row-${i}\`}` (even an interpolated index is flagged).
 - **`Array.reduce()` must pass an initial value** (S6959) — always give the seed (`arr.reduce(fn, seed)`); a seedless reduce is a reliability bug under `noUncheckedIndexedAccess`.
 - **No negated condition that has an `else`** (S7735, "Unexpected negated condition") — lead with the positive branch: `cond ? A : B` not `!cond ? B : A`, and `if (cond) … else …` not `if (!cond) … else …`.
+- **No `await` inside a loop** ("Unexpected `await` inside a loop") — `for`/`for…of`/`while` bodies that `await` are flagged in source files (not tests). Pick by intent:
+  - Independent and few (a registry, a handful of steps or recipients): `await Promise.all(items.map(fn))`.
+  - Independent but unbounded (finder results, backlog rows): `mapWithConcurrency(items, N, fn)` from `apps/api/src/lib/map-with-concurrency.ts`, so a backlog can't flood the DB pool.
+  - Order is load-bearing (each step must see the previous one's write, e.g. the dispatch tick): `mapWithConcurrency(items, 1, fn)` plus a comment saying why. Never `reduce` a promise chain to dodge the rule, and never `eslint-disable` it: the Sonar runner ignores inline config.
+- **Prefer optional chaining** (S6582) — write `x?.y`, never `x && x.y`, `x !== undefined && x.y`, or `x === undefined || x.y !== z` (use `x?.y !== z` when `z` is never undefined). SonarCloud flags the `=== undefined ||` comparison shape even where the local type-aware rule stays quiet, so write it optional-chained from the start.
 
-The four rules above — plus nested ternaries, nested template literals, and cognitive complexity > 15 — are now caught locally by `pnpm lint:sonar:diff` (the pre-PR gate). Write to them up front so they never reach CI.
+The rules above — plus nested ternaries, nested template literals, and cognitive complexity > 15 — are caught locally by `pnpm lint:sonar:diff`. **Run it before you report done, as one of your gates; it must exit clean.** It lints every file changed vs `origin/main`, so a pre-existing finding in a file you touched fails it too, and SonarCloud counts that finding against the PR as well. Fix it, or report it if the file is outside your Owns list.
 
 ## Performance Rules
 

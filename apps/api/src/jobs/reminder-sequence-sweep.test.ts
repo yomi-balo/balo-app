@@ -48,6 +48,7 @@ vi.mock('../lib/queue.js', () => ({ getQueue: vi.fn(() => ({ add: mockQueueAdd }
 vi.mock('bullmq', () => ({ Worker: class MockWorker {} }));
 
 import {
+  REMINDER_SEQUENCE_ENTITY_CONCURRENCY,
   REMINDER_SEQUENCE_SWEEP_CRONS,
   REMINDER_SEQUENCE_SWEEP_QUEUE,
   registerReminderSequenceSweepCron,
@@ -93,6 +94,18 @@ describe('runReminderSequenceSweep', () => {
     await runReminderSequenceSweep(NOW, 'hourly');
     const ids = mockSchedule.mock.calls.map(([, payload]) => payload.correlationId);
     expect(new Set(ids).size).toBe(2);
+  });
+
+  it('arms every entity when there are more than the concurrency cap', async () => {
+    const count = REMINDER_SEQUENCE_ENTITY_CONCURRENCY + 2;
+    mockFind.mockResolvedValue(
+      Array.from({ length: count }, (_, i) => ({ ...entity, entityId: `req-${i}` }))
+    );
+    expect(await runReminderSequenceSweep(NOW, 'hourly')).toEqual({
+      armed: count,
+      entities: count,
+    });
+    expect(mockSchedule).toHaveBeenCalledTimes(count);
   });
 
   it('arms nothing when the step is not yet within the lead', async () => {

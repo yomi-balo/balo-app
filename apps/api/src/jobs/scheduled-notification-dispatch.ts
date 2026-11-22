@@ -15,6 +15,7 @@ import {
 } from '../notifications/scheduling/rechecks.js';
 import type { EventPayloadMap, NotificationEvent } from '../notifications/events.js';
 import { reportReminderOutcome } from '../notifications/sequences/analytics.js';
+import { mapWithConcurrency } from '../lib/map-with-concurrency.js';
 
 /**
  * BAL-420 (ADR-1047 Decision 3) — THE TICKER. Postgres is the clock; BullMQ only asks it
@@ -258,7 +259,9 @@ export async function runScheduledNotificationDispatch(
 
   // Each row isolated in its own try/catch — the house pattern; one bad row never aborts
   // the batch, and a row left `claimed` by a throw is picked up by the TTL reconcile.
-  for (const candidate of due) {
+  // Rows are handled one at a time: each publish is marked before the next row's recheck
+  // counts it, which the reminder daily limit relies on.
+  await mapWithConcurrency(due, 1, async (candidate) => {
     try {
       const outcome = await dispatchRow(candidate);
       if (outcome !== 'none') {
@@ -279,7 +282,7 @@ export async function runScheduledNotificationDispatch(
         'Scheduled notification dispatch failed'
       );
     }
-  }
+  });
 
   logger.info(counts, 'Scheduled notification dispatch complete');
   return counts;

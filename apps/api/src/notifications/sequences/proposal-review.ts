@@ -88,18 +88,12 @@ export const proposalReviewSequence: ReminderSequence = {
   },
 
   async resolveRecipients(entity) {
-    const recipients: string[] = [];
-    for (const userId of entity.candidateUserIds) {
-      if (
-        await clientPartyRecipientsRepository.bookerStillParticipatesInCompany(
-          entity.companyId,
-          userId
-        )
-      ) {
-        recipients.push(userId);
-      }
-    }
-    return recipients;
+    const participates = await Promise.all(
+      entity.candidateUserIds.map((userId) =>
+        clientPartyRecipientsRepository.bookerStillParticipatesInCompany(entity.companyId, userId)
+      )
+    );
+    return entity.candidateUserIds.filter((_, index) => participates[index] === true);
   },
 
   buildPayload(entity, stepKey, recipientUserId, correlationId): ReminderPayload {
