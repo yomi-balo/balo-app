@@ -693,105 +693,71 @@ describe('ProjectProposalNotSelectedEmail', () => {
 });
 
 describe('getEmailTemplate — A2 templates', () => {
-  it('resolves project-exploratory-requested with a scoping subject', () => {
-    const { component, subject } = getEmailTemplate('project-exploratory-requested', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Dana',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe("Let's scope your project: CPQ implementation");
-  });
+  const PROJECT_BASE = {
+    title: 'CPQ implementation',
+    projectRequestId: 'req-1',
+  };
 
-  it('resolves project-expert-invited with an invite subject', () => {
-    const { component, subject } = getEmailTemplate('project-expert-invited', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Priya',
-    });
+  it.each([
+    {
+      template: 'project-exploratory-requested',
+      data: { ...PROJECT_BASE, recipientName: 'Dana' },
+      subject: "Let's scope your project: CPQ implementation",
+    },
+    {
+      template: 'project-expert-invited',
+      data: { ...PROJECT_BASE, recipientName: 'Priya' },
+      subject: "You're invited: CPQ implementation",
+    },
+    {
+      template: 'project-eoi-submitted',
+      data: { ...PROJECT_BASE, recipientName: 'Dana', expertName: 'Priya Nair' },
+      subject: 'An expert is interested in CPQ implementation',
+    },
+    {
+      template: 'project-proposal-requested',
+      data: { ...PROJECT_BASE, recipientName: 'Priya' },
+      subject: 'Proposal requested: CPQ implementation',
+    },
+    {
+      template: 'project-proposal-submitted',
+      data: { ...PROJECT_BASE, recipientName: 'Dana', expertName: 'Priya Nair' },
+      subject: 'Priya Nair sent your proposal: CPQ implementation',
+    },
+    {
+      template: 'project-proposal-accepted',
+      data: { ...PROJECT_BASE, recipientName: 'Priya', clientName: 'Dana Whitfield' },
+      subject: 'Your proposal was accepted: CPQ implementation',
+    },
+    {
+      template: 'project-kickoff-approved-expert',
+      data: {
+        ...PROJECT_BASE,
+        recipientName: 'Priya',
+        clientName: 'Dana Whitfield',
+        clientCompanyName: 'Acme Corp',
+      },
+      subject: 'Kickoff approved — time to deliver: CPQ implementation',
+    },
+    {
+      template: 'project-kickoff-approved-client',
+      data: { ...PROJECT_BASE, recipientName: 'Dana', expertName: 'Priya Nair' },
+      subject: 'Kickoff approved — Priya Nair is ready: CPQ implementation',
+    },
+    {
+      template: 'project-proposal-not-selected',
+      data: { ...PROJECT_BASE, recipientName: 'Priya' },
+      subject: 'An update on your proposal: CPQ implementation',
+    },
+  ])('resolves $template with its subject', ({ template, data, subject: expected }) => {
+    const { component, subject } = getEmailTemplate(template, data);
     expect(component).toBeDefined();
-    expect(subject).toBe("You're invited: CPQ implementation");
-  });
-
-  it('resolves project-eoi-submitted with an interest subject + carries the expert name', () => {
-    const { component, subject } = getEmailTemplate('project-eoi-submitted', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Dana',
-      expertName: 'Priya Nair',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('An expert is interested in CPQ implementation');
-  });
-
-  it('resolves project-proposal-requested with a proposal subject', () => {
-    const { component, subject } = getEmailTemplate('project-proposal-requested', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Priya',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('Proposal requested: CPQ implementation');
-  });
-
-  it('resolves project-proposal-submitted with an expert-named subject', () => {
-    const { component, subject } = getEmailTemplate('project-proposal-submitted', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Dana',
-      expertName: 'Priya Nair',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('Priya Nair sent your proposal: CPQ implementation');
+    expect(subject).toBe(expected);
   });
 
   it('falls back to default names when project-proposal-submitted payload is sparse', () => {
     const { subject } = getEmailTemplate('project-proposal-submitted', {});
     expect(subject).toBe('Your expert sent your proposal: a project');
-  });
-
-  it('resolves project-proposal-accepted with a congratulatory subject (BAL-289)', () => {
-    const { component, subject } = getEmailTemplate('project-proposal-accepted', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Priya',
-      clientName: 'Dana Whitfield',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('Your proposal was accepted: CPQ implementation');
-  });
-
-  it('resolves project-kickoff-approved-expert with a deliver subject (BAL-291)', () => {
-    const { component, subject } = getEmailTemplate('project-kickoff-approved-expert', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Priya',
-      clientName: 'Dana Whitfield',
-      clientCompanyName: 'Acme Corp',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('Kickoff approved — time to deliver: CPQ implementation');
-  });
-
-  it('resolves project-kickoff-approved-client with an expert-ready subject (BAL-291)', () => {
-    const { component, subject } = getEmailTemplate('project-kickoff-approved-client', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Dana',
-      expertName: 'Priya Nair',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('Kickoff approved — Priya Nair is ready: CPQ implementation');
-  });
-
-  it('resolves project-proposal-not-selected with an update subject (BAL-289)', () => {
-    const { component, subject } = getEmailTemplate('project-proposal-not-selected', {
-      title: 'CPQ implementation',
-      projectRequestId: 'req-1',
-      recipientName: 'Priya',
-    });
-    expect(component).toBeDefined();
-    expect(subject).toBe('An update on your proposal: CPQ implementation');
   });
 
   it('resolves project-billing-reminder-owner with a complete-billing subject + CTA (BAL-324)', async () => {

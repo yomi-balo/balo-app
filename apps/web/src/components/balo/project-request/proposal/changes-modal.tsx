@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, RotateCcw } from 'lucide-react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import type { ProposalChangeSection } from '@balo/shared/project-requests';
 import {
@@ -131,13 +132,16 @@ export function ChangesModal({
         toast.success(`Change request sent to ${expertFirstName}`);
         onOpenChange(false);
         router.refresh();
-      } catch {
-        toast.error('Could not send your change request. Please try again.');
       } finally {
         setPending(false);
       }
     };
-    run();
+    run().catch((error: unknown) => {
+      Sentry.captureException(error, {
+        tags: { feature: 'project_proposal', step: 'request_changes' },
+      });
+      toast.error('Could not send your change request. Please try again.');
+    });
   }, [
     pending,
     canSubmit,

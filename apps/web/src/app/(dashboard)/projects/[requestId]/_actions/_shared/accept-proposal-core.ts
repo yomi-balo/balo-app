@@ -138,8 +138,7 @@ async function loadCurrentSubmittedProposal(
 ): Promise<Proposal | undefined> {
   const proposal = await proposalsRepository.findById(proposalId);
   if (
-    proposal === undefined ||
-    proposal.status !== 'submitted' ||
+    proposal?.status !== 'submitted' ||
     proposal.relationshipId !== relationshipId ||
     !proposal.isCurrent
   ) {

@@ -69,11 +69,7 @@ export async function requestProposalDocumentUploadAction(
 
     // The proposal must belong to this relationship and still be an editable draft.
     const proposal = await proposalsRepository.findById(proposalId);
-    if (
-      proposal === undefined ||
-      proposal.relationshipId !== relationshipId ||
-      proposal.status !== 'draft'
-    ) {
+    if (proposal?.relationshipId !== relationshipId || proposal.status !== 'draft') {
       return { success: false, error: STALE_PROPOSAL };
     }
 

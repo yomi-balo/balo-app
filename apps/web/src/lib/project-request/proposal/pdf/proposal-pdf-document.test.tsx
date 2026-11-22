@@ -150,16 +150,14 @@ interface ClientDocLists {
 }
 
 function clientDoc(proposalOverrides: Partial<Proposal> = {}, lists: ClientDocLists = {}) {
-  return hydrateReviewDoc(
-    makeProposal(proposalOverrides),
-    lists.milestones ?? [makeMilestone()],
-    lists.installments ?? [makeInstallment()],
-    lists.documents ?? [makeDocument()],
-    lists.clauses ?? [],
-    makeRelationship(),
-    'client',
-    'Northwind Industrial'
-  );
+  return hydrateReviewDoc(makeProposal(proposalOverrides), makeRelationship(), {
+    audience: 'client',
+    milestones: lists.milestones ?? [makeMilestone()],
+    installments: lists.installments ?? [makeInstallment()],
+    documents: lists.documents ?? [makeDocument()],
+    clauses: lists.clauses ?? [],
+    clientCompanyName: 'Northwind Industrial',
+  });
 }
 
 /**
@@ -199,16 +197,14 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
 
     // Sanity: the same proposal at the admin audience WOULD carry the fee — proof the
     // difference is the audience argument, and the PDF is built with `client`.
-    const adminView = hydrateReviewDoc(
-      makeProposal(),
-      [makeMilestone()],
-      [makeInstallment()],
-      [makeDocument()],
-      [],
-      makeRelationship(),
-      'admin',
-      'Northwind Industrial'
-    );
+    const adminView = hydrateReviewDoc(makeProposal(), makeRelationship(), {
+      audience: 'admin',
+      milestones: [makeMilestone()],
+      installments: [makeInstallment()],
+      documents: [makeDocument()],
+      clauses: [],
+      clientCompanyName: 'Northwind Industrial',
+    });
     expect(adminView.adminPricing?.baloFeeBps).toBe(2500);
   });
 
@@ -393,7 +389,7 @@ describe('ProposalPdfDocument — conditional branches', () => {
     it('prints the time-and-materials rule for a T&M proposal', () => {
       const text = renderTree(clientDoc({ pricingMethod: 'tm' }));
       expect(text).toContain(
-        'This is a time and materials project. Any increase in cost is only charged if Northwind Industrial approves it.'
+        "This is a time and materials project. Northwind Industrial is billed for the hours logged each billing period. If a milestone goes over its estimate, Northwind Industrial is told, and raising an estimate needs Northwind Industrial's approval."
       );
     });
 

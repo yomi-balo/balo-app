@@ -1093,6 +1093,16 @@ function deriveAgreedTerms(
   };
 }
 
+/** The optional inputs of {@link mapEngagementToWorkspaceView}; each defaults to "none". */
+export interface EngagementWorkspaceViewOptions {
+  now?: Date;
+  changeOrders?: readonly ChangeOrderWithLines[];
+  contentEdits?: readonly MilestoneContentEditRow[];
+  lastTimeLoggedAt?: Date | null;
+  expertProfileHref?: string | null;
+  agreedTerms?: AgreedTermsSource | null;
+}
+
 /**
  * Map the hydrated engagement + resolved viewer context into the single
  * serializable workspace view. SERVER-ONLY (value-imports `AUTO_ACCEPT_DAYS` from
@@ -1109,12 +1119,14 @@ function deriveAgreedTerms(
 export function mapEngagementToWorkspaceView(
   engagement: ProjectEngagementWithMilestones,
   ctx: EngagementViewerContext,
-  now: Date = new Date(),
-  changeOrders: readonly ChangeOrderWithLines[] = [],
-  contentEdits: readonly MilestoneContentEditRow[] = [],
-  lastTimeLoggedAt: Date | null = null,
-  expertProfileHref: string | null = null,
-  agreedTerms: AgreedTermsSource | null = null
+  {
+    now = new Date(),
+    changeOrders = [],
+    contentEdits = [],
+    lastTimeLoggedAt = null,
+    expertProfileHref = null,
+    agreedTerms = null,
+  }: EngagementWorkspaceViewOptions = {}
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;

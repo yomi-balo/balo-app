@@ -123,11 +123,7 @@ async function verifyUploadedObject(
  */
 async function isEditableDraft(proposalId: string, relationshipId: string): Promise<boolean> {
   const proposal = await proposalsRepository.findById(proposalId);
-  return (
-    proposal !== undefined &&
-    proposal.relationshipId === relationshipId &&
-    proposal.status === 'draft'
-  );
+  return proposal?.relationshipId === relationshipId && proposal.status === 'draft';
 }
 
 /**

@@ -112,6 +112,17 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
   };
 }
 
+/** The proposal's children and the viewing context that {@link hydrateReviewDoc} resolves against. */
+export interface HydrateReviewDocContext {
+  audience: ProposalAudience;
+  milestones: ProposalMilestone[];
+  installments: ProposalPaymentInstallment[];
+  documents: ProposalDocument[];
+  clauses: readonly ProposalClause[];
+  clientCompanyName: string;
+  publicUsername?: string | null;
+}
+
 /**
  * Map a persisted proposal (+ its children) into the serialisable, presentation-
  * only {@link ProposalReviewDoc} the read/submitted views render, resolving money
@@ -140,14 +151,16 @@ export function expertIdentityOf(relationship: Relationship): ProposalExpertIden
  */
 export function hydrateReviewDoc(
   proposal: Proposal,
-  milestones: ProposalMilestone[],
-  installments: ProposalPaymentInstallment[],
-  documents: ProposalDocument[],
-  clauses: readonly ProposalClause[],
   relationship: Relationship,
-  audience: ProposalAudience,
-  clientCompanyName: string,
-  publicUsername: string | null = null
+  {
+    audience,
+    milestones,
+    installments,
+    documents,
+    clauses,
+    clientCompanyName,
+    publicUsername = null,
+  }: HydrateReviewDocContext
 ): ProposalReviewDoc {
   // Client sees the grossed-up figure; expert + admin-base stay at the raw quote.
   const priceFn =

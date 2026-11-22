@@ -364,19 +364,74 @@ describe('ClauseListEditor — keys in an item', () => {
 });
 
 describe('ClauseListEditor — paste', () => {
-  it('inserts one item per line after the current item, stripping list markers', async () => {
+  it('splices one item per line in at the cursor, stripping list markers', async () => {
     const user = userEvent.setup();
     const state = renderEditor(items('A', 'B'));
 
     await user.click(box('assumption 1'));
     await user.paste('- One\n2. Two\n• Three');
 
-    expect(state.bodies()).toEqual(['A', 'One', 'Two', 'Three', 'B']);
+    expect(state.bodies()).toEqual(['AOne', 'Two', 'Three', 'B']);
     expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROPOSAL_CLAUSES_PASTED, {
       proposal_id: 'p1',
       kind: 'assumption',
       line_count: 3,
     });
+  });
+
+  it('keeps the typed text: the first line joins it and the last becomes the next item', async () => {
+    const user = userEvent.setup();
+    const state = renderEditor(items('Alpha'));
+
+    await user.click(box('assumption 1'));
+    box('assumption 1').setSelectionRange(5, 5);
+    await user.paste('one\ntwo');
+
+    expect(state.bodies()).toEqual(['Alphaone', 'two']);
+  });
+
+  it('joins the text after the cursor onto the last pasted line', async () => {
+    const user = userEvent.setup();
+    const state = renderEditor(items('AlphaOmega', 'B'));
+
+    await user.click(box('assumption 1'));
+    box('assumption 1').setSelectionRange(5, 5);
+    await user.paste('one\nmiddle\ntwo');
+
+    expect(state.bodies()).toEqual(['Alphaone', 'middle', 'twoOmega', 'B']);
+  });
+
+  it('replaces the selected text with the pasted lines', async () => {
+    const user = userEvent.setup();
+    const state = renderEditor(items('Keep DROP tail'));
+
+    await user.click(box('assumption 1'));
+    box('assumption 1').setSelectionRange(5, 9);
+    await user.paste('one\ntwo');
+
+    expect(state.bodies()).toEqual(['Keep one', 'two tail']);
+  });
+
+  it('keeps the text typed in the empty row ahead of the pasted lines', async () => {
+    const user = userEvent.setup();
+    const state = renderEditor(items('A'));
+
+    await user.type(box('Add an assumption'), 'Typed ');
+    await user.paste('one\ntwo');
+
+    expect(state.bodies()).toEqual(['A', 'Typed one', 'two']);
+    expect(box('Add an assumption')).toHaveValue('');
+  });
+
+  it('caps a joined line at 500 characters', async () => {
+    const user = userEvent.setup();
+    const state = renderEditor(items('x'.repeat(499)));
+
+    await user.click(box('assumption 1'));
+    await user.paste('one\ntwo');
+
+    expect(state.bodies()[0]).toHaveLength(500);
+    expect(state.bodies()[1]).toBe('two');
   });
 
   it('appends the lines pasted into the empty row, and clears it', async () => {
@@ -606,7 +661,7 @@ describe('ClauseListEditor — a full list', () => {
     expect(state.bodies()).toHaveLength(20);
   });
 
-  it('pasting into a full list adds nothing and says so', async () => {
+  it('pasting into a full list adds no item and says how many lines fit', async () => {
     const user = userEvent.setup();
     const state = renderEditor(full());
 
@@ -614,7 +669,7 @@ describe('ClauseListEditor — a full list', () => {
     await user.paste('Extra 1\nExtra 2');
 
     expect(state.bodies()).toHaveLength(20);
-    expect(mockToast).toHaveBeenCalledWith('Added 0 of 2. A list holds up to 20.');
+    expect(mockToast).toHaveBeenCalledWith('Added 1 of 2. A list holds up to 20.');
   });
 
   it('opens the empty row again once an item is removed', async () => {

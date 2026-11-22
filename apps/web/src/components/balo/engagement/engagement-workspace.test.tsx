@@ -259,7 +259,7 @@ function mappedView(
       isClientOwner: lens === 'client',
       isDeliveringExpert: lens === 'expert',
     },
-    NOW
+    { now: NOW }
   );
 }
 

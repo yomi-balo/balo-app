@@ -397,7 +397,7 @@ export function ClauseListEditor({
   const handleItemBlur = useCallback(
     (key: string): void => {
       const item = itemsRef.current.find((candidate) => candidate.key === key);
-      if (item !== undefined && item.body.trim().length === 0) {
+      if (item?.body.trim().length === 0) {
         removeItem(key, { refocus: false, undo: false });
       }
     },
@@ -447,22 +447,43 @@ export function ClauseListEditor({
     [copy.one, kind, onChange]
   );
 
-  /** Pasting two or more lines adds one item per line; a single line pastes as ordinary text. */
+  /**
+   * Pasting two or more lines splices them in at the selection: the first line joins the text
+   * before it, the last joins the text after it, and the lines between become their own items.
+   * A single line pastes as ordinary text.
+   */
   const pasteLines = useCallback(
     (key: string | null, event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
       const lines = splitPastedClauses(event.clipboardData.getData('text'));
       if (lines.length < 2) return;
       event.preventDefault();
+      const { value, selectionStart, selectionEnd } = event.currentTarget;
+      const before = value.slice(0, selectionStart);
+      const after = value.slice(selectionEnd);
       const current = itemsRef.current;
+      const rowIndex = key === null ? -1 : current.findIndex((item) => item.key === key);
+      if (key !== null && rowIndex < 0) return;
+      // The row being pasted into already holds a slot; the empty row does not.
       const room = Math.max(0, PROPOSAL_CLAUSE_MAX_ITEMS - current.length);
-      const added = lines.slice(0, room).map((body) => ({
-        key: nextDraftKey(),
-        body: body.slice(0, PROPOSAL_CLAUSE_MAX_CHARS),
-      }));
-      const at = key === null ? current.length - 1 : current.findIndex((item) => item.key === key);
-      if (key !== null && at < 0) return;
-      onChange([...current.slice(0, at + 1), ...added, ...current.slice(at + 1)]);
-      if (key === null) setGhost('');
+      const keep = Math.min(lines.length, key === null ? room : room + 1);
+      const kept = lines.slice(0, keep);
+      const [first, ...rest] = kept.map((line, index) =>
+        normalizeClauseBody(
+          `${index === 0 ? before : ''}${line}${index === kept.length - 1 ? after : ''}`
+        ).slice(0, PROPOSAL_CLAUSE_MAX_CHARS)
+      );
+      if (first === undefined) return;
+      const fresh = (body: string): ProposalClauseDraft => ({ key: nextDraftKey(), body });
+      if (key === null) {
+        onChange([...current, fresh(first), ...rest.map(fresh)]);
+        setGhost('');
+      } else {
+        onChange(
+          current.flatMap((item, index) =>
+            index === rowIndex ? [{ ...item, body: first }, ...rest.map(fresh)] : [item]
+          )
+        );
+      }
       if (proposalId !== null) {
         track(PROJECT_EVENTS.PROPOSAL_CLAUSES_PASTED, {
           proposal_id: proposalId,
@@ -470,10 +491,8 @@ export function ClauseListEditor({
           line_count: lines.length,
         });
       }
-      if (lines.length > room) {
-        toast(
-          `Added ${added.length} of ${lines.length}. A list holds up to ${PROPOSAL_CLAUSE_MAX_ITEMS}.`
-        );
+      if (lines.length > keep) {
+        toast(`Added ${keep} of ${lines.length}. A list holds up to ${PROPOSAL_CLAUSE_MAX_ITEMS}.`);
       }
     },
     [kind, onChange, proposalId]

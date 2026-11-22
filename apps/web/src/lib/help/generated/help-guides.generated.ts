@@ -2114,7 +2114,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
     "category": {
       "client": "cases-projects"
     },
-    "order": 6,
+    "order": 3,
     "updated": "2026-11-23",
     "related": [
       "approving-a-change-to-your-project"
@@ -2157,7 +2157,7 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
         "blocks": [
           {
             "kind": "html",
-            "html": "<p>When you choose to accept, the dialog shows <strong>What you're agreeing to</strong>: Balo's Project T&amp;Cs with\nthe rule for your pricing method, and the expert's additional terms, when there are any. If there\nare more than three, choose <strong>Show all</strong> to read the rest. A line also tells you how many\nassumptions and exclusions are part of the proposal.</p>\n<p>You then tick the box to confirm you agree. Accepting commits your company to those terms. After\nyou accept, if your project has any agreed lists, they stay on the project page under <strong>Agreed\nin the proposal</strong>.</p>",
+            "html": "<p>When you choose to accept, the dialog shows <strong>What you're agreeing to</strong>: Balo's Project T&amp;Cs with\nthe rule for your pricing method, and the expert's additional terms, when there are any. If there\nare more than three, choose <strong>Show all</strong> to read the rest. A line also tells you how many\nassumptions and exclusions are part of the proposal.</p>\n<p>You then tick the box to confirm you agree. Accepting commits your company to those terms. If\nyour project has any agreed lists, they appear on the project page under <strong>Agreed in the\nproposal</strong> once the project kicks off.</p>",
             "id": "s3-b0"
           }
         ],

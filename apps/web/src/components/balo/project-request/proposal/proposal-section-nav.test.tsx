@@ -123,7 +123,7 @@ describe('ProposalSectionNav — scroll-spy IntersectionObserver', () => {
 
   it('marks the topmost intersecting section active from the scroll-spy callback', () => {
     mountWithAnchors();
-    expect(observed.length).toBe(REVIEW_SECTIONS.length);
+    expect(observed).toHaveLength(REVIEW_SECTIONS.length);
     expect(ioCb).toBeDefined();
 
     // Milestones intersects at top:10 (above), Payment terms below at top:200 and

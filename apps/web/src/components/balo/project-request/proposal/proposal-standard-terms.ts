@@ -10,8 +10,10 @@ export const STANDARD_TERMS = [
 
 /** Balo's rule for how a cost increase is handled, by pricing method (ADR-1057). */
 export function pricingMethodRule(method: 'fixed' | 'tm', companyName: string): string {
-  const kind = method === 'fixed' ? 'fixed-price' : 'time and materials';
-  return `This is a ${kind} project. Any increase in cost is only charged if ${companyName} approves it.`;
+  if (method === 'fixed') {
+    return `This is a fixed-price project. Any increase in cost is only charged if ${companyName} approves it.`;
+  }
+  return `This is a time and materials project. ${companyName} is billed for the hours logged each billing period. If a milestone goes over its estimate, ${companyName} is told, and raising an estimate needs ${companyName}'s approval.`;
 }
 
 /** Introduces the expert's additional terms: they sit on top of the Balo Project T&Cs. */

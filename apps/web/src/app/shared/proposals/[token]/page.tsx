@@ -133,16 +133,14 @@ export default async function SharedProposalPage({
     proposalsRepository.findExpertOrgName(proposal.id),
   ]);
 
-  const doc = hydrateReviewDoc(
-    proposal,
+  const doc = hydrateReviewDoc(proposal, relationship, {
+    audience: 'client',
     milestones,
     installments,
     documents,
     clauses,
-    relationship,
-    'client',
-    request.company?.name ?? 'the client'
-  );
+    clientCompanyName: request.company?.name ?? 'the client',
+  });
   const clientCompany = request.company?.name ?? 'their team';
   const sharerName = sharer === undefined ? 'a colleague' : shareDisplayName(sharer);
 

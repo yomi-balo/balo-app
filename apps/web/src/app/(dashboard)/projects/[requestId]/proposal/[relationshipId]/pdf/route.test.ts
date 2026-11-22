@@ -212,19 +212,30 @@ describe('GET proposal PDF — audience invariant (money-safety)', () => {
   it('serializes with the CLIENT audience for the client lens', async () => {
     const res = await callGet();
     expect(res.status).toBe(200);
-    const call = mockHydrateReviewDoc.mock.calls[0];
-    expect(call?.[6]).toBe('client');
+    expect(mockHydrateReviewDoc).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ audience: 'client' })
+    );
   });
 
   it('serializes with the CLIENT audience even for the ADMIN lens (never admin)', async () => {
     mockResolveRequestLens.mockReturnValue({ lens: 'admin' });
     const res = await callGet();
     expect(res.status).toBe(200);
-    const call = mockHydrateReviewDoc.mock.calls[0];
-    expect(call?.[6]).toBe('client');
-    //Assert the forbidden audiences were never passed.
-    expect(call?.[6]).not.toBe('admin');
-    expect(call?.[5]).not.toBe('expert');
+    expect(mockHydrateReviewDoc).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ audience: 'client' })
+    );
+    // The forbidden audiences were never passed.
+    for (const forbidden of ['admin', 'expert']) {
+      expect(mockHydrateReviewDoc).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ audience: forbidden })
+      );
+    }
   });
 });
 

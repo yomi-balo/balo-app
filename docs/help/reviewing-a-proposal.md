@@ -4,7 +4,7 @@ summary: 'Read each part of a proposal, ask for changes and know what accepting 
 audience: [client]
 category:
   client: cases-projects
-order: 6
+order: 3
 published: true
 updated: 2026-11-23
 related: [approving-a-change-to-your-project]
@@ -45,9 +45,9 @@ the rule for your pricing method, and the expert's additional terms, when there 
 are more than three, choose **Show all** to read the rest. A line also tells you how many
 assumptions and exclusions are part of the proposal.
 
-You then tick the box to confirm you agree. Accepting commits your company to those terms. After
-you accept, if your project has any agreed lists, they stay on the project page under **Agreed
-in the proposal**.
+You then tick the box to confirm you agree. Accepting commits your company to those terms. If
+your project has any agreed lists, they appear on the project page under **Agreed in the
+proposal** once the project kicks off.
 
 ## Opening attachments
 

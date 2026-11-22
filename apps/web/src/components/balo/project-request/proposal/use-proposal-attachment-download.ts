@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { getProposalDocumentDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download';
 import type { ProposalReviewAttachment } from './proposal-review-types';
@@ -47,14 +48,18 @@ export function useProposalAttachmentDownload({
           // `window.open` after the await runs outside the click's user gesture, which iOS
           // Safari blocks as a popup.
           globalThis.location.assign(result.url);
-        } catch {
-          // The action call itself rejected (offline, deploy skew) — it never got to answer.
-          toast.error('Could not open this document. Please try again.');
         } finally {
           setDownloadingId(null);
         }
       };
-      run();
+      // A rejection here means the action call itself failed (offline, deploy skew) — it never got
+      // to answer.
+      run().catch((error: unknown) => {
+        Sentry.captureException(error, {
+          tags: { feature: 'project_proposal', step: 'attachment_download' },
+        });
+        toast.error('Could not open this document. Please try again.');
+      });
     },
     [requestId, relationshipId, proposalId]
   );

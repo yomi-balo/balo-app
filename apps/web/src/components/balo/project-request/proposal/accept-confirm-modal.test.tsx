@@ -141,7 +141,7 @@ describe('AcceptConfirmModal', () => {
       renderModal(tmDoc());
       expect(
         screen.getByText(
-          'This is a time and materials project. Any increase in cost is only charged if Northwind approves it.'
+          "This is a time and materials project. Northwind is billed for the hours logged each billing period. If a milestone goes over its estimate, Northwind is told, and raising an estimate needs Northwind's approval."
         )
       ).toBeInTheDocument();
     });

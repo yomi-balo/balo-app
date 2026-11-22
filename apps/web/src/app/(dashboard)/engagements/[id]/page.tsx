@@ -296,16 +296,14 @@ export default async function EngagementWorkspacePage({
     ...loadTimeReads(engagement, billingPeriod),
   ]);
   const { from, action } = await searchParams;
-  const mappedView = mapEngagementToWorkspaceView(
-    engagement,
-    ctx,
+  const mappedView = mapEngagementToWorkspaceView(engagement, ctx, {
     now,
-    changeOrderRows,
+    changeOrders: changeOrderRows,
     contentEdits,
-    latestTimeLoggedAt(timeEntries),
-    await expertProfileHrefRead,
-    agreedTerms
-  );
+    lastTimeLoggedAt: latestTimeLoggedAt(timeEntries),
+    expertProfileHref: await expertProfileHrefRead,
+    agreedTerms,
+  });
   const view = {
     ...mappedView,
     header: {

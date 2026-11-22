@@ -45,8 +45,11 @@ describe('generateClientProposalPdf', () => {
 
   it('always hydrates with the CLIENT audience', async () => {
     await generateClientProposalPdf(TARGET);
-    const audience = mockHydrate.mock.calls[0]?.[6];
-    expect(audience).toBe('client');
+    expect(mockHydrate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ audience: 'client' })
+    );
     expect(mockRender).toHaveBeenCalledTimes(1);
   });
 });

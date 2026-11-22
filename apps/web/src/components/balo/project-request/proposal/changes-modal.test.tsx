@@ -9,6 +9,11 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 
+const mockCaptureException = vi.fn();
+vi.mock('@sentry/nextjs', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
 const requestProposalChangesAction =
   vi.fn<(input: unknown) => Promise<RequestProposalChangesResult>>();
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-changes', () => ({
@@ -230,7 +235,8 @@ describe('ChangesModal', () => {
 
   it('toasts a generic error and stays open when the action throws (catch path)', async () => {
     const user = userEvent.setup();
-    requestProposalChangesAction.mockRejectedValue(new Error('boom'));
+    const failure = new Error('boom');
+    requestProposalChangesAction.mockRejectedValue(failure);
     const { onOpenChange } = renderModal();
 
     await user.type(screen.getByLabelText('Your note'), 'Adjust scope');
@@ -240,6 +246,10 @@ describe('ChangesModal', () => {
       expect(mockToast.error).toHaveBeenCalledWith(
         'Could not send your change request. Please try again.'
       )
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      failure,
+      expect.objectContaining({ tags: expect.objectContaining({ step: 'request_changes' }) })
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });

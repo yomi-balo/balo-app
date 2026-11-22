@@ -7,6 +7,10 @@ import { useProposalAttachmentDownload } from './use-proposal-attachment-downloa
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
+const mockCaptureException = vi.fn();
+vi.mock('@sentry/nextjs', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-proposal-document-download', () => ({
   getProposalDocumentDownloadAction: vi.fn(),
 }));
@@ -83,13 +87,18 @@ describe('useProposalAttachmentDownload', () => {
   });
 
   it('toasts a generic error when the action call itself rejects', async () => {
-    mockAction.mockRejectedValue(new Error('offline'));
+    const failure = new Error('offline');
+    mockAction.mockRejectedValue(failure);
     const { result } = renderHook(() => useProposalAttachmentDownload(IDS));
 
     act(() => result.current.download(ATTACHMENT));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Could not open this document. Please try again.')
+    );
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      failure,
+      expect.objectContaining({ tags: expect.objectContaining({ step: 'attachment_download' }) })
     );
     expect(assign).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.downloadingId).toBeNull());

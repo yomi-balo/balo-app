@@ -147,7 +147,7 @@ describe('AgreedTermsCard', () => {
 
     expect(
       screen.getByText(
-        'This is a time and materials project. Any increase in cost is only charged if Northwind Industrial approves it.'
+        "This is a time and materials project. Northwind Industrial is billed for the hours logged each billing period. If a milestone goes over its estimate, Northwind Industrial is told, and raising an estimate needs Northwind Industrial's approval."
       )
     ).toBeInTheDocument();
   });

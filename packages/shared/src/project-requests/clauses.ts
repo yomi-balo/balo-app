@@ -56,12 +56,16 @@ export function splitPastedClauses(text: string): string[] {
  * A rate or price typed into a list item. The client would see it without Balo's margin, so the
  * editor warns. Inputs are capped at {@link PROPOSAL_CLAUSE_MAX_CHARS} characters.
  */
-const AMOUNT_RE =
-  /[$€£]\s?\d|\b\d[\d,.]*\s?(?:aud|usd|nzd|eur|gbp|dollars?)\b|\/\s?h(?:ou)?r\b|\bper (?:hour|day)\b/i;
+const AMOUNT_PATTERNS: readonly RegExp[] = [
+  /[$€£]\s?\d/,
+  /\b\d[\d,.]*\s?(?:aud|usd|nzd|eur|gbp|dollars?)\b/i,
+  /\/\s?h(?:ou)?r\b/i,
+  /\bper (?:hour|day)\b/i,
+];
 
 /** Whether an item reads like it names a price or a rate. */
 export function clauseMentionsAmount(body: string): boolean {
-  return AMOUNT_RE.test(body);
+  return AMOUNT_PATTERNS.some((pattern) => pattern.test(body));
 }
 
 /** Split a proposal's clause rows into the three display lists, keeping the input order. */

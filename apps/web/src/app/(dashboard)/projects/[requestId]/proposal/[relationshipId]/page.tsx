@@ -223,17 +223,15 @@ async function loadReviewDoc(
     proposalClausesRepository.listByProposal(proposal.id),
     publicUsernameRead,
   ]);
-  return hydrateReviewDoc(
-    proposal,
+  return hydrateReviewDoc(proposal, relationship, {
+    audience,
     milestones,
     installments,
     documents,
     clauses,
-    relationship,
-    audience,
     clientCompanyName,
-    publicUsername
-  );
+    publicUsername,
+  });
 }
 
 /**

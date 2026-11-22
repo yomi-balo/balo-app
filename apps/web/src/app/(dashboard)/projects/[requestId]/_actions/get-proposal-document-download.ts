@@ -110,7 +110,7 @@ export async function getProposalDocumentDownloadAction(
     }
 
     const proposal = await proposalsRepository.findById(proposalId);
-    if (proposal === undefined || proposal.relationshipId !== relationshipId) {
+    if (proposal?.relationshipId !== relationshipId) {
       return { success: false, error: NOT_FOUND };
     }
     if (scope.side !== 'expert' && !PARTY_READABLE_STATUSES.has(proposal.status)) {
