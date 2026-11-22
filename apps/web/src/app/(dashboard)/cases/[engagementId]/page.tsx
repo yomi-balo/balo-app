@@ -132,7 +132,9 @@ export default async function CasePage({
     view.lens === 'client' && view.header.isOpen && view.party.availableForWork
       ? await productsTaxonomyRead
       : EMPTY_TAXONOMY;
-  const callNow = callNowRead === null ? null : await loadCaseCallNow({ view, read: callNowRead });
+  // NOT AWAITED: the surface renders at once and the Call now entry fills in when the read lands,
+  // so a slow api read delays the entry, never the page. `loadCaseCallNow` never rejects.
+  const callNowView = callNowRead === null ? null : loadCaseCallNow({ view, read: callNowRead });
 
   return (
     <>
@@ -143,7 +145,7 @@ export default async function CasePage({
         view={view}
         viewerEmailDomain={viewerEmailDomain}
         productsTaxonomy={productsTaxonomy}
-        callNow={callNow}
+        callNowView={callNowView}
       />
     </>
   );

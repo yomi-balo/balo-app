@@ -80,18 +80,65 @@ describe('authorizeCallNow (AC11)', () => {
     expect(mockRoleHasCapability).toHaveBeenCalledWith('member', CAPABILITIES.PARTICIPATE);
   });
 
-  it('a user with a company role never reaches the expert arm, even when refused PARTICIPATE', async () => {
+  it('a user with a company role is judged on the client arm only, even when refused PARTICIPATE and a host', async () => {
     mockGetMemberRole.mockResolvedValue('member');
     mockRoleHasCapability.mockReturnValue(false);
     mockHasEngagementCapability.mockResolvedValue(true);
 
+    // The host read runs alongside the membership read; its answer is never used for a member.
     await expect(
       authorizeCallNow({ engagementId: ENGAGEMENT_ID, userId: USER_ID })
     ).resolves.toEqual({
       ok: false,
       code: 'case_not_found',
     });
-    expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+  });
+
+  it('answers a client caller without waiting on the expert-side reads', async () => {
+    mockGetMemberRole.mockResolvedValue('member');
+    mockRoleHasCapability.mockReturnValue(true);
+    mockHasEngagementCapability.mockReturnValue(new Promise(() => undefined));
+
+    await expect(
+      authorizeCallNow({ engagementId: ENGAGEMENT_ID, userId: USER_ID })
+    ).resolves.toMatchObject({ ok: true, side: 'client' });
+  });
+
+  it('a failed expert-side read never fails a client caller', async () => {
+    mockGetMemberRole.mockResolvedValue('member');
+    mockRoleHasCapability.mockReturnValue(true);
+    mockHasEngagementCapability.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      authorizeCallNow({ engagementId: ENGAGEMENT_ID, userId: USER_ID })
+    ).resolves.toMatchObject({ ok: true, side: 'client' });
+  });
+
+  it('a failed expert-side read fails an expert caller', async () => {
+    mockHasEngagementCapability.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      authorizeCallNow({ engagementId: ENGAGEMENT_ID, userId: USER_ID })
+    ).rejects.toThrow('db down');
+  });
+
+  it('reads the role, the host capability and the delivering expert together, not in series', async () => {
+    let releaseRole: (role: undefined) => void = () => undefined;
+    mockGetMemberRole.mockReturnValue(
+      new Promise<undefined>((resolve) => {
+        releaseRole = resolve;
+      })
+    );
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    const result = authorizeCallNow({ engagementId: ENGAGEMENT_ID, userId: USER_ID });
+    await vi.waitFor(() => {
+      expect(mockHasEngagementCapability).toHaveBeenCalledTimes(1);
+      expect(mockFindExpertUserId).toHaveBeenCalledTimes(1);
+    });
+    releaseRole(undefined);
+
+    await expect(result).resolves.toMatchObject({ ok: true, side: 'expert' });
   });
 
   it('expert arm: no company role and HOST_MEETINGS on this case is the expert side', async () => {

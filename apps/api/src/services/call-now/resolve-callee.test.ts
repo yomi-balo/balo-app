@@ -134,6 +134,21 @@ describe('resolveCallee', () => {
       });
     });
 
+    it('reads the booker’s zone alongside their role, not after it', async () => {
+      let releaseRole: (role: string) => void = () => undefined;
+      mockGetMemberRole.mockReturnValue(
+        new Promise<string>((resolve) => {
+          releaseRole = resolve;
+        })
+      );
+
+      const result = resolveCallee(input('expert', EXPERT_USER));
+      await vi.waitFor(() => expect(mockFindTimezone).toHaveBeenCalledTimes(1));
+      releaseRole('owner');
+
+      await expect(result).resolves.toMatchObject({ ok: true, userId: BOOKER });
+    });
+
     it('is `self` when the expert caller is the booker', async () => {
       mockFindLatest.mockResolvedValue({ actorUserId: EXPERT_USER });
 

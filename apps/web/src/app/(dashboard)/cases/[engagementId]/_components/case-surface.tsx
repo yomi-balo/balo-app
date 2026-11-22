@@ -37,6 +37,7 @@ import { canBookInPage } from '@/lib/call-now/book-in-page';
 import { useCallNowSurface } from '@/lib/call-now/use-call-now-surface';
 import { CallNowDialog } from './call-now-dialog';
 import { trackCallNowClicked } from './call-now-entry';
+import { useCallNowView } from './use-call-now-view';
 
 /**
  * BAL-421 — the DESKTOP case surface.
@@ -130,7 +131,7 @@ export function CaseSurface({
   view,
   viewerEmailDomain = null,
   productsTaxonomy,
-  callNow = null,
+  callNowView = null,
 }: Readonly<{
   view: CaseSurfaceView;
   viewerEmailDomain?: string | null;
@@ -138,11 +139,14 @@ export function CaseSurface({
   productsTaxonomy?: ProductTaxonomy;
   /**
    * BAL-651 — the Call now read for this viewer, a sibling of `view` so `CaseSurfaceView` stays
-   * desktop-neutral. `null` when the entry must not render (including an impersonated session).
+   * desktop-neutral. Streamed: the page renders without waiting for it, and the entry appears
+   * when it lands. `null` when there is no read at all (an impersonated session); it resolves to
+   * `null` when the entry must not render.
    */
-  callNow?: CaseCallNowView | null;
+  callNowView?: Promise<CaseCallNowView | null> | null;
 }>): React.JSX.Element {
   const router = useRouter();
+  const { settled: callNowSettled, callNow } = useCallNowView(callNowView);
   const [pending, startTransition] = useTransition();
 
   // Retained after close so the exiting dialog keeps its subject through the close animation;
@@ -188,10 +192,11 @@ export function CaseSurface({
   }, []);
   const callNowSurface = useCallNowSurface();
   // The missed-call toast's "Call back" lands here with `?call=1`: open the confirm once, then drop
-  // the param. Keyed on the param itself so a Call back from this very case fires again.
+  // the param. Keyed on the param itself so a Call back from this very case fires again. Waits for
+  // the streamed Call now read, so the param is not dropped before there is a confirm to open.
   const callParam = useSearchParams().get('call');
   useEffect(() => {
-    if (callParam !== '1') return;
+    if (callParam !== '1' || !callNowSettled) return;
     const { search, pathname } = globalThis.location;
     const params = new URLSearchParams(search);
     params.delete('call');
@@ -210,7 +215,7 @@ export function CaseSurface({
         entry: 'missed_call_back',
       })
     );
-  }, [callParam, callNow, view.lens, callNowSurface, handleOpenCallNow]);
+  }, [callParam, callNowSettled, callNow, view.lens, callNowSurface, handleOpenCallNow]);
   const handleCallNowBookTime = useCallback(() => requestFollowUp('call_now'), [requestFollowUp]);
 
   // The call room's "Book a time" and the ended card land here with `?book=1`: read it once,

@@ -46,7 +46,7 @@ import {
   type CallSide,
 } from '@balo/shared/meetings';
 import { offlineCalleePresence, type CalleePresence } from './callee-presence.js';
-import { resolveCallee } from './resolve-callee.js';
+import { resolveCallee, type ResolveCalleeResult } from './resolve-callee.js';
 
 const log = createLogger('call-now-gates');
 
@@ -130,25 +130,54 @@ function hasBookingStarting(
   });
 }
 
+type ExpertResolverSettings = Awaited<ReturnType<typeof expertsRepository.findResolverSettings>>;
+
+/**
+ * Who this caller would ring, or `null` when nobody may be rung: a viewer who may not ring, or a
+ * case whose expert has no settings row.
+ *
+ * ⚠ AN EXPERT CALLER'S CALLEE IS READ ALONGSIDE THE EXPERT'S SETTINGS, NOT AFTER THEM. The booker
+ * comes from the case alone, and reading it in series put its reads after every other gate read —
+ * enough, from a distant database, to push the expert's view past the page's wait.
+ */
+async function readCallee(
+  input: LoadCallNowGatesInput,
+  expertSettingsRead: Promise<ExpertResolverSettings>
+): Promise<ResolveCalleeResult | null> {
+  if (!input.mayRing) {
+    return null;
+  }
+  const base = { caseRow: input.caseRow, callerUserId: input.userId };
+  if (input.side === 'client') {
+    const expertSettings = await expertSettingsRead;
+    return expertSettings === null
+      ? null
+      : resolveCallee({ ...base, side: 'client', expertSettings });
+  }
+  const [expertSettings, booker] = await Promise.all([
+    expertSettingsRead,
+    resolveCallee({ ...base, side: 'expert' }),
+  ]);
+  return expertSettings === null ? null : booker;
+}
+
 export async function loadCallNowGates(input: LoadCallNowGatesInput): Promise<CallNowGates> {
   const { caseRow, side, userId, now } = input;
   const presence = input.presence ?? offlineCalleePresence;
 
-  const [expertSettings, ringingRing, otherLiveSession, caseMeetings, callerZone] =
+  const expertSettingsRead = expertsRepository.findResolverSettings(caseRow.expertProfileId);
+  const [expertSettings, ringingRing, otherLiveSession, caseMeetings, callerZone, calleeResult] =
     await Promise.all([
-      expertsRepository.findResolverSettings(caseRow.expertProfileId),
+      expertSettingsRead,
       meetingRingsRepository.findRingingForEngagement(caseRow.id),
       companyHasOtherLiveSession(caseRow),
       meetingContextsRepository.listMeetingsForContext('case', caseRow.id),
       loadCallerZoneForInPlace(input),
+      readCallee(input, expertSettingsRead),
     ]);
   const inPlaceCandidate =
     callerZone === null ? null : selectInPlaceCandidate(caseMeetings, now, callerZone);
 
-  const calleeResult =
-    expertSettings === null || !input.mayRing
-      ? null
-      : await resolveCallee({ caseRow, side, callerUserId: userId, expertSettings });
   const callee = calleeResult?.ok === true ? calleeResult : null;
 
   const [calleeInLiveMeeting, calleeOnline, calleeRecentlyDeclinedCaller] =

@@ -79,7 +79,7 @@ describe('readCallNowView', () => {
     try {
       mockGetView.mockReturnValue(new Promise(() => undefined));
       const pending = readCallNowView(ENGAGEMENT_ID);
-      await vi.advanceTimersByTimeAsync(2499);
+      await vi.advanceTimersByTimeAsync(5999);
       let settled = false;
       pending.then(() => {
         settled = true;
@@ -90,7 +90,7 @@ describe('readCallNowView', () => {
       await expect(pending).resolves.toBeNull();
       expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
         'Call now view timed out — entry hidden',
-        expect.objectContaining({ engagementId: ENGAGEMENT_ID, timeoutMs: 2500 })
+        expect.objectContaining({ engagementId: ENGAGEMENT_ID, timeoutMs: 6000 })
       );
     } finally {
       vi.useRealTimers();

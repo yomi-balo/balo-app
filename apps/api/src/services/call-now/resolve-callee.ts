@@ -30,13 +30,23 @@ export type ResolveCalleeResult =
   | { ok: true; userId: string; timeZone: string }
   | { ok: false; reason: CalleeUnresolvedReason };
 
-export interface ResolveCalleeInput {
+interface ResolveCalleeBase {
   caseRow: CaseEngagementRow;
-  side: CallSide;
   callerUserId: string;
-  /** The delivering expert's settings, from `expertsRepository.findResolverSettings`. */
-  expertSettings: { userId: string; timezone: string };
 }
+
+/**
+ * A client caller rings the delivering expert, named by the expert's settings. An expert caller
+ * rings the booker, who is read from the case alone — so the gates can resolve the booker
+ * alongside the expert's settings instead of after them.
+ */
+export type ResolveCalleeInput =
+  | (ResolveCalleeBase & {
+      side: Extract<CallSide, 'client'>;
+      /** The delivering expert's settings, from `expertsRepository.findResolverSettings`. */
+      expertSettings: { userId: string; timezone: string };
+    })
+  | (ResolveCalleeBase & { side: Extract<CallSide, 'expert'> });
 
 function unresolved(
   input: ResolveCalleeInput,
@@ -60,16 +70,16 @@ async function resolveBooker(input: ResolveCalleeInput): Promise<ResolveCalleeRe
     return unresolved(input, 'no_actor');
   }
 
-  const role = await partyMembershipsRepository.getMemberRole(
-    'company',
-    input.caseRow.companyId,
-    bookerUserId
-  );
+  // The zone is read alongside the role rather than after it: a departed booker wastes one read,
+  // and every other caller saves a round trip.
+  const [role, context] = await Promise.all([
+    partyMembershipsRepository.getMemberRole('company', input.caseRow.companyId, bookerUserId),
+    usersRepository.findTimezoneContext(bookerUserId, undefined),
+  ]);
   if (role === undefined || !roleHasCapability(role, CAPABILITIES.PARTICIPATE)) {
     return unresolved(input, 'departed');
   }
 
-  const context = await usersRepository.findTimezoneContext(bookerUserId, undefined);
   return { ok: true, userId: bookerUserId, timeZone: context?.savedTimezone ?? 'UTC' };
 }
 
