@@ -108,6 +108,21 @@ describe('proposalReviewSequence', () => {
     expect(await proposalReviewSequence.resolveRecipients(entity)).toEqual([]);
   });
 
+  it('matches a stored payload only when its projectRequestId is the entity', () => {
+    expect(
+      proposalReviewSequence.payloadMatchesEntity({ projectRequestId: 'req-1' }, 'req-1')
+    ).toBe(true);
+    expect(
+      proposalReviewSequence.payloadMatchesEntity({ projectRequestId: 'req-2' }, 'req-1')
+    ).toBe(false);
+    expect(proposalReviewSequence.payloadMatchesEntity({}, 'req-1')).toBe(false);
+  });
+
+  it('reports on email only and has no extra publish tracking', () => {
+    expect(proposalReviewSequence.channels).toEqual(['email']);
+    expect(proposalReviewSequence.trackPublished).toBeUndefined();
+  });
+
   it('builds a payload with no price, budget or email address', () => {
     const [entity] = proposalReviewEntities([candidate()]);
     if (entity === undefined) throw new Error('expected an entity');

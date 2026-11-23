@@ -1779,6 +1779,37 @@ describe('projectEngagementsRepository.requestChanges — rounds and milestone t
     }
   });
 
+  it('reverts every tagged completed milestone in id order and skips a tagged one that is not completed', async () => {
+    const { engagementId, userId, milestoneIds } = await seedPendingWithCompletedMilestones([
+      'Discovery',
+      'Build',
+    ]);
+    const [discovery, build] = takeIds(milestoneIds, 2);
+    const { milestone: open } = await engagementMilestoneFactory({
+      engagementId,
+      values: { title: 'Launch', sortOrder: 2, status: 'in_progress' },
+    });
+
+    const advanced = await projectEngagementsRepository.requestChanges({
+      engagementId,
+      userId,
+      note: 'Rework discovery and the build.',
+      milestoneIds: [open.id, build, discovery],
+    });
+
+    const expectedOrder = [discovery, build].sort((a, b) => (a < b ? -1 : 1));
+    expect(advanced.changeRequest.revertedMilestoneIds).toEqual(expectedOrder);
+    for (const id of [discovery, build]) {
+      expect((await milestoneById(id)).status).toBe('in_progress');
+      expect(await revertAuditsFor(id)).toHaveLength(1);
+    }
+    expect((await milestoneById(open.id)).status).toBe('in_progress');
+    expect(await revertAuditsFor(open.id)).toHaveLength(0);
+    expect(await taggedIdsFor(advanced.changeRequest.id)).toEqual(
+      [open.id, build, discovery].sort((a, b) => a.localeCompare(b))
+    );
+  });
+
   it('a tagged milestone that is not completed is tagged but not reverted (only completed rows reopen)', async () => {
     // Not reachable through the lifecycle (`requestCompletion` requires every live
     // milestone completed) — seeded directly to pin that only `completed` rows revert.

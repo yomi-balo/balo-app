@@ -19,15 +19,33 @@ vi.mock('@balo/db', () => ({
 vi.mock('@balo/shared/logging', () => ({ createLogger: () => mockLogger }));
 vi.mock('../scheduling/scheduled-key-decided.js', () => ({ isScheduledKeyDecided: mockDecided }));
 vi.mock('./registry.js', async () => {
+  // The identity check is each sequence's own rule, so the mocks delegate it to the real ones.
+  const { proposalReviewSequence } =
+    await vi.importActual<typeof import('./proposal-review.js')>('./proposal-review.js');
+  const { deliveryReviewSequence } =
+    await vi.importActual<typeof import('./delivery-review.js')>('./delivery-review.js');
   const sequence = {
     id: 'proposal_review',
     event: 'project.proposal_review_reminder',
     exemptFromDailyLimit: false,
     evaluate: mockEvaluate,
     resolveRecipients: mockResolve,
+    payloadMatchesEntity: proposalReviewSequence.payloadMatchesEntity,
+  };
+  const deliverySequence = {
+    id: 'delivery_review',
+    event: 'engagement.review_reminder',
+    exemptFromDailyLimit: true,
+    evaluate: mockEvaluate,
+    resolveRecipients: mockResolve,
+    payloadMatchesEntity: deliveryReviewSequence.payloadMatchesEntity,
+  };
+  const byId: Record<string, unknown> = {
+    proposal_review: sequence,
+    delivery_review: deliverySequence,
   };
   return {
-    findReminderSequence: (id: unknown) => (id === 'proposal_review' ? sequence : undefined),
+    findReminderSequence: (id: unknown) => (typeof id === 'string' ? byId[id] : undefined),
     limitedSequencePrefixes: () => ['seq:proposal_review:'],
     __sequence: sequence,
   };
@@ -144,6 +162,83 @@ describe('reminderSequenceRecheck', () => {
       'row-1'
     );
     expect(mockEvaluate).not.toHaveBeenCalled();
+  });
+
+  it('skips as malformed_payload, never evaluating, when the sequence rejects the entity', async () => {
+    const stored = row();
+    const mismatched = { ...stored, payload: { ...stored.payload, projectRequestId: USER } };
+    expect(await reminderSequenceRecheck(mismatched)).toEqual({
+      publish: false,
+      reason: 'malformed_payload',
+    });
+    expect(mockEvaluate).not.toHaveBeenCalled();
+  });
+
+  describe('delivery_review row', () => {
+    const ENG = '33333333-3333-4333-8333-333333333333';
+
+    function deliveryRow(payload: Record<string, unknown> = {}): ScheduledNotification {
+      return row({
+        dedupeKey: `seq:delivery_review:${ENG}:pre_auto_accept:${USER}:2026-11-02T00:00:00.000Z`,
+        event: 'engagement.review_reminder',
+        payload: {
+          correlationId: 'c-2',
+          sequenceId: 'delivery_review',
+          step: 'pre_auto_accept',
+          entityId: ENG,
+          anchorIso: ANCHOR.toISOString(),
+          recipientUserId: USER,
+          recipientId: USER,
+          engagementId: ENG,
+          daysLeft: 2,
+          ...payload,
+        },
+      });
+    }
+
+    it('publishes with the live fields merged, with no projectRequestId and no daily-limit read', async () => {
+      mockEvaluate.mockResolvedValue({
+        ...entity,
+        entityId: ENG,
+        fresh: { daysLeft: 1, autoDate: '10 Jul' },
+      });
+      const stored = deliveryRow();
+      expect(await reminderSequenceRecheck(stored)).toEqual({
+        publish: true,
+        payload: { ...stored.payload, daysLeft: 1, autoDate: '10 Jul' },
+      });
+      expect(mockCount).not.toHaveBeenCalled();
+    });
+
+    it('skips as malformed_payload when the recipient is not the one the rule emails', async () => {
+      expect(await reminderSequenceRecheck(deliveryRow({ recipientId: ENG }))).toEqual({
+        publish: false,
+        reason: 'malformed_payload',
+      });
+      expect(mockEvaluate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['recipientUserId', { recipientUserId: ENG }],
+      ['recipientId', { recipientId: ENG }],
+      ['engagementId', { engagementId: REQ }],
+    ])(
+      'skips as malformed_payload when fresh overwrites %s, publishing nothing',
+      async (_field, clash) => {
+        mockEvaluate.mockResolvedValue({ ...entity, entityId: ENG, fresh: clash });
+        expect(await reminderSequenceRecheck(deliveryRow())).toEqual({
+          publish: false,
+          reason: 'malformed_payload',
+        });
+      }
+    );
+
+    it('skips as malformed_payload when the engagement id is not the entity id', async () => {
+      expect(await reminderSequenceRecheck(deliveryRow({ engagementId: REQ }))).toEqual({
+        publish: false,
+        reason: 'malformed_payload',
+      });
+    });
   });
 
   it('can re-arm only after anchor_moved', () => {

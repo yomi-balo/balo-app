@@ -4,6 +4,8 @@ import { REMINDER_SEQUENCE_IDS } from '@balo/shared/notifications';
 
 vi.mock('@balo/db', () => ({}));
 
+import { notificationRules } from '../engine/rules.js';
+
 import {
   REMINDER_SEQUENCES,
   allReminderSequences,
@@ -25,8 +27,26 @@ describe('REMINDER_SEQUENCES', () => {
     expect(limitedSequencePrefixes()).toEqual(['seq:proposal_review:']);
   });
 
+  it('names every channel its event rule delivers on, in-app written with an underscore', () => {
+    for (const sequence of allReminderSequences()) {
+      const ruleChannels = new Set(
+        (notificationRules[sequence.event] ?? []).map((rule) => rule.channel.replace('-', '_'))
+      );
+      expect(new Set(sequence.channels)).toEqual(ruleChannels);
+    }
+  });
+
+  it('registers delivery_review as a client reminder for engagement.review_reminder', () => {
+    const sequence = REMINDER_SEQUENCES.delivery_review;
+    expect(sequence.event).toBe('engagement.review_reminder');
+    expect(sequence.channels).toEqual(['email', 'in_app']);
+    expect(sequence.audience).toBe('client');
+    expect(sequence.exemptFromDailyLimit).toBe(true);
+  });
+
   it('finds a known id and not an unknown one', () => {
     expect(findReminderSequence('proposal_review')).toBe(REMINDER_SEQUENCES.proposal_review);
+    expect(findReminderSequence('delivery_review')).toBe(REMINDER_SEQUENCES.delivery_review);
     expect(findReminderSequence('nope')).toBeUndefined();
     expect(findReminderSequence(undefined)).toBeUndefined();
   });

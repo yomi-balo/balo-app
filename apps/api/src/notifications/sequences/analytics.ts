@@ -39,11 +39,13 @@ export function reportReminderOutcome(row: ScheduledNotification, outcome: Remin
   if (sequence === undefined) {
     return;
   }
+  const [primaryChannel] = sequence.channels;
   trackServer(REMINDER_SERVER_EVENTS.SENT, {
     sequence: sequenceId,
     step,
-    channel: sequence.channel,
+    channel: primaryChannel,
     audience: sequence.audience,
     distinct_id: distinctId,
   });
+  sequence.trackPublished?.(row.payload);
 }
