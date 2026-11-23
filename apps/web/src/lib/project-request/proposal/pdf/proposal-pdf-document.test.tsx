@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { Text, View } from '@react-pdf/renderer';
 import type {
   Proposal,
   ProposalMilestone,
@@ -586,5 +587,61 @@ describe('ProposalPdfDocument — conditional branches', () => {
     // Neither figure given → the same em dash the TIMELINE cell uses for "not specified".
     const neither = clientDoc({ pricingMethod: 'tm', depositCents: null, rateCents: null });
     expect(renderTree(neither)).toContain('Payment—');
+  });
+});
+
+type PdfStyle = Record<string, unknown>;
+
+function flattenStyle(style: unknown): PdfStyle {
+  if (Array.isArray(style)) return Object.assign({}, ...style.map(flattenStyle)) as PdfStyle;
+  return typeof style === 'object' && style !== null ? (style as PdfStyle) : {};
+}
+
+/** Every Text styled `flex: 1`, with the flexDirection of the View that lays it out. */
+function flexTexts(
+  node: React.ReactNode,
+  direction: unknown = 'column'
+): { text: string; direction: unknown }[] {
+  if (Array.isArray(node))
+    return node.flatMap((child: React.ReactNode) => flexTexts(child, direction));
+  if (typeof node !== 'object' || node === null || !('type' in node) || !('props' in node))
+    return [];
+  const el = node as { type: unknown; props: { children?: React.ReactNode; style?: unknown } };
+  if (typeof el.type === 'function') {
+    const renderComponent = el.type as (props: unknown) => React.ReactNode;
+    return flexTexts(renderComponent(el.props), direction);
+  }
+  const style = flattenStyle(el.props.style);
+  if (el.type === Text) {
+    return style.flex === 1 ? [{ text: collectText(el.props.children), direction }] : [];
+  }
+  const childDirection = el.type === View ? (style.flexDirection ?? 'column') : direction;
+  return flexTexts(el.props.children, childDirection);
+}
+
+describe('ProposalPdfDocument — layout', () => {
+  it('stretches text with flex 1 only inside a row, where it cannot collapse to no height', () => {
+    const doc = clientDoc(
+      {},
+      {
+        clauses: [
+          makeClause('assumption', 'Sandbox access by kickoff', 0),
+          makeClause('exclusion', 'Data migration is out of scope.', 0),
+          makeClause('additional_term', 'One revision round per milestone', 0),
+        ],
+      }
+    );
+    const texts = flexTexts(
+      ProposalPdfDocument({
+        doc,
+        title: 'CRM Cleanup',
+        clientCompanyName: 'Northwind Industrial',
+        preparedByOrgName: 'CloudPeak',
+        generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
+      })
+    );
+    expect(texts.map((t) => t.text)).toContain('One revision round per milestone');
+    expect(texts.filter((t) => t.direction !== 'row')).toEqual([]);
   });
 });

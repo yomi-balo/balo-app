@@ -31,8 +31,7 @@ export function renderProjectTermsMarkdown(): string {
     PROJECT_TERMS_LAST_UPDATED_LINE,
   ];
   PROJECT_TERMS.forEach((section, sectionPosition) => {
-    blocks.push(`## ${sectionPosition + 1}. ${section.title}`);
-    blocks.push(...(section.intro ?? []));
+    blocks.push(`## ${sectionPosition + 1}. ${section.title}`, ...(section.intro ?? []));
     section.clauses.forEach((clause, position) => {
       blocks.push(clauseLines(clause, [sectionPosition + 1, position + 1]).join('\n'));
     });
