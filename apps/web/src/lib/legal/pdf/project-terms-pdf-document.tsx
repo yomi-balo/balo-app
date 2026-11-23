@@ -23,6 +23,10 @@ ensurePdfFontsRegistered();
 
 const CLAUSE_INDEX = buildClauseIndex(PROJECT_TERMS);
 
+// react-pdf multiplies a numeric lineHeight by the element's own fontSize (default 18pt), and nested
+// bold Text inherits the raw number, so the leading is a unit string: 1.5 × the body size, in points.
+const BODY_LEADING = `${PDF_TYPE.body * 1.5}pt`;
+
 const styles = StyleSheet.create({
   page: {
     fontFamily: PDF_FONT_FAMILY,
@@ -35,10 +39,10 @@ const styles = StyleSheet.create({
   title: { fontSize: PDF_TYPE.title, fontWeight: 600, marginBottom: 6 },
   dateLine: { color: PDF_COLORS.muted, marginBottom: 18 },
   sectionHeading: { fontSize: PDF_TYPE.h2, fontWeight: 600, marginTop: 14, marginBottom: 6 },
-  paragraph: { marginBottom: 6, lineHeight: 1.5 },
+  paragraph: { marginBottom: 6, lineHeight: BODY_LEADING },
   clause: { flexDirection: 'row', marginBottom: 4 },
-  label: { fontWeight: 500, lineHeight: 1.5 },
-  body: { flex: 1, lineHeight: 1.5 },
+  label: { fontWeight: 500, lineHeight: BODY_LEADING },
+  body: { flex: 1, lineHeight: BODY_LEADING },
   bold: { fontWeight: 700 },
   footer: {
     position: 'absolute',
@@ -82,7 +86,8 @@ function Clause({
   const label = clauseLabel(path);
   return (
     <View>
-      <View style={styles.clause}>
+      {/* A clause's own text is at most about ten lines, so it moves whole rather than leave its label behind. */}
+      <View style={styles.clause} wrap={false}>
         <Text style={[styles.label, { width: labelWidth(path.length) }]}>{label}</Text>
         <Text style={styles.body}>
           <Emphasised text={node.text} />

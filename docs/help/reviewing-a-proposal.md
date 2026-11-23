@@ -24,7 +24,9 @@ attachments.
 - **Payment terms** — the price and when each payment falls due. On a time and materials
   project it shows the hourly rate and how often you're invoiced.
 - **Terms** — Balo's Project T&Cs, which are the same for every project on Balo, then the expert's
-  additional terms as a numbered list, when they've added any.
+  additional terms as a numbered list, when they've added any. Choose **Read the Project T&Cs** to
+  open the full agreement in a new tab. Once you've accepted, the link shows the date of the
+  agreement you accepted and opens it as a PDF.
 - **Attachments** — reference documents the expert included.
 
 ![The Assumptions and exclusions section of a proposal, with numbered Assumptions and Not included lists, highlighted.](01)

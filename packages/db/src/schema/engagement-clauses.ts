@@ -24,7 +24,7 @@ import { timestamps, softDelete } from './helpers';
  * FK TARGET IS THE SUPERTYPE (`engagements.id`) with CASCADE, as for milestones.
  *
  * `created_by_user_id` is the approving admin. It is NULLABLE because the rows backfilled by
- * migration 0128 for engagements kicked off before this table existed have no actor; NULL
+ * migrations 0128 and 0129 for engagements kicked off before this table existed have no actor; NULL
  * there means "copied by the migration", never a fabricated author. RESTRICT preserves
  * attribution.
  *

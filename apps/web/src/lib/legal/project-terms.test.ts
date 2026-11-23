@@ -4,7 +4,13 @@ import {
   PROJECT_TERMS_LAST_UPDATED_LINE,
   PROJECT_TERMS_VERSION,
 } from './project-terms';
-import { buildClauseIndex, clauseLabel, splitEmphasis, type TermsNode } from './terms';
+import {
+  buildClauseIndex,
+  clauseLabel,
+  formatTermsDate,
+  splitEmphasis,
+  type TermsNode,
+} from './terms';
 
 function walk(
   nodes: readonly TermsNode[],
@@ -65,7 +71,8 @@ describe('project terms', () => {
 
   it('has an ISO version named by the Last Updated line', () => {
     expect(PROJECT_TERMS_VERSION).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(PROJECT_TERMS_LAST_UPDATED_LINE).toContain('23rd July 2025');
+    const named = PROJECT_TERMS_LAST_UPDATED_LINE.replace(/(\d{1,2})(?:st|nd|rd|th)/, '$1');
+    expect(named).toContain(formatTermsDate(PROJECT_TERMS_VERSION));
   });
 
   it('opens section 1 with 9 intro paragraphs', () => {

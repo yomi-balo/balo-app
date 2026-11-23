@@ -1,5 +1,5 @@
 {
-  "id": "c01f1529-bb11-4e9d-a957-3cc0c918ea1f",
+  "id": "b76ec202-4b5e-4644-9557-f5e1e0d964f9",
   "prevId": "3aeff966-0084-41c2-8aa9-2aa9cbb0a0b1",
   "version": "7",
   "dialect": "postgresql",
@@ -7748,12 +7748,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "exclusions": {
-          "name": "exclusions",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "timeframe_weeks": {
           "name": "timeframe_weeks",
           "type": "integer",
@@ -7815,12 +7809,6 @@
         "accepted_by_user_id": {
           "name": "accepted_by_user_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "accepted_terms_version": {
-          "name": "accepted_terms_version",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

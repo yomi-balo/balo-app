@@ -31,7 +31,6 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     version: 1,
     isCurrent: true,
     overview: '<p>Rebuild lead routing with proper assignment rules.</p>',
-    exclusions: null,
     timeframeWeeks: 8,
     priceCents: 100_000,
     currency: 'aud',
@@ -250,6 +249,13 @@ describe('ProposalPdfDocument — render smoke', () => {
     });
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    // Each weight carries its own PostScript name; a shared one makes the renderer reuse one face.
+    const fonts = new Set(
+      [...buffer.toString('latin1').matchAll(/\/BaseFont \/[A-Z]{6}\+(Geist-\w+)/g)].map(
+        (m) => m[1]
+      )
+    );
+    expect(fonts.size).toBeGreaterThan(1);
   });
 
   it('renders a T&M proposal with clauses and null timeframe without throwing', async () => {
