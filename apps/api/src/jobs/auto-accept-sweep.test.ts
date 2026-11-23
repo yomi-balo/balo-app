@@ -68,7 +68,6 @@ import { runDeliveryReviewSweep, DELIVERY_REVIEW_SWEEP_CRON } from './auto-accep
 // relocated fails here instead of silently feeding the sweep a shape production no
 // longer produces. `status` is the 4-value `ProjectDeliveryStatus`.
 const REQUESTED_07_03 = new Date('2026-07-03T00:00:00Z');
-const REQUESTED_07_06 = new Date('2026-07-06T00:00:00Z');
 
 function engRow(over: Partial<ProjectEngagementRow> = {}): Partial<ProjectEngagementRow> {
   return {
@@ -323,32 +322,18 @@ describe('runDeliveryReviewSweep — BAL-390 fused rating ask (auto-accept pass 
   });
 });
 
-describe('runDeliveryReviewSweep — the T-2 reminder is no longer sent here', () => {
-  it('never publishes engagement.review_reminder or tracks it, even for a pending row at day 5.5', async () => {
-    const midWindow = engRow({ id: 'eng-2', completionRequestedAt: REQUESTED_07_06 });
-    // Only the auto-accept query exists now; it returns nothing for a row inside the window.
+describe('runDeliveryReviewSweep — auto-accept only', () => {
+  it('queries only requests past the 7-day cutoff, so a day-5.5 request is never loaded or reminded', async () => {
+    const now = new Date('2026-07-11T12:00:00Z');
     mockListPending.mockResolvedValue([]);
-    mockFindWithMilestones.mockResolvedValue(hydrated({ id: midWindow.id }));
-    mockFindOwner.mockResolvedValue({ id: 'owner-2' });
 
-    const result = await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
+    const result = await runDeliveryReviewSweep(now);
 
     expect(result).toEqual({ accepted: 0 });
     expect(mockListPending).toHaveBeenCalledTimes(1);
-    expect(mockPublish).not.toHaveBeenCalledWith('engagement.review_reminder', expect.anything());
-    expect(mockTrackServer).not.toHaveBeenCalledWith(
-      'engagement_review_reminder_sent',
-      expect.anything()
-    );
-  });
-
-  it('does not mint a review token for a row it leaves pending', async () => {
-    mockListPending.mockResolvedValue([]);
-
-    await runDeliveryReviewSweep(new Date('2026-07-11T12:00:00Z'));
-
-    expect(mockFindLiveReview).not.toHaveBeenCalled();
-    expect(mockCreateReviewToken).not.toHaveBeenCalled();
+    expect(mockListPending).toHaveBeenCalledWith(new Date('2026-07-04T12:00:00Z'));
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
   });
 });
 
