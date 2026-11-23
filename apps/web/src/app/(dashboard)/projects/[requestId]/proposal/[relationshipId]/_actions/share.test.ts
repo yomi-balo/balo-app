@@ -35,8 +35,10 @@ vi.mock('@/lib/project-request/resolve-request-lens', () => ({
 }));
 
 const mockEnsurePdf = vi.fn();
+const mockFreezePdf = vi.fn();
 vi.mock('@/lib/project-request/proposal/pdf/ensure-client-pdf', () => ({
   ensureClientProposalPdf: (...a: unknown[]) => mockEnsurePdf(...a),
+  freezeAcceptedProposalPdf: (...a: unknown[]) => mockFreezePdf(...a),
   proposalPdfFileName: () => 'Balo-Proposal-x-v3.pdf',
 }));
 
@@ -87,6 +89,10 @@ describe('shareProposalWithColleague', () => {
     primeAuthorizedClient();
     mockFindProposal.mockResolvedValue({ id: PROPOSAL_ID, status: 'submitted', version: 3 });
     mockEnsurePdf.mockResolvedValue(undefined);
+    mockFreezePdf.mockResolvedValue({
+      key: `proposals/${PROPOSAL_ID}/accepted.pdf`,
+      bytes: new Uint8Array([1]),
+    });
     mockCreateLink.mockResolvedValue({ link: LINK, revokedPriorId: null });
     mockPublish.mockResolvedValue(undefined);
   });
@@ -206,6 +212,50 @@ describe('shareProposalWithColleague', () => {
       error: 'send_failed',
     });
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  describe('accepted proposal (BAL-668)', () => {
+    const ACCEPTED = { id: PROPOSAL_ID, status: 'accepted', version: 3 };
+
+    it('freezes the PDF and attaches the accepted key, never regenerating the versioned copy', async () => {
+      mockFindProposal.mockResolvedValue(ACCEPTED);
+
+      expect(await shareProposalWithColleague(baseInput)).toEqual({ ok: true });
+
+      expect(mockFreezePdf).toHaveBeenCalledWith({
+        request: REQUEST,
+        relationship: { id: REL_ID },
+        proposal: ACCEPTED,
+      });
+      expect(mockEnsurePdf).not.toHaveBeenCalled();
+      const payload = (mockPublish.mock.calls[0] as [string, Record<string, unknown>])[1];
+      expect(payload.attachments).toEqual([
+        {
+          source: 'r2',
+          key: `proposals/${PROPOSAL_ID}/accepted.pdf`,
+          filename: 'Balo-Proposal-x-v3.pdf',
+        },
+      ]);
+    });
+
+    it('returns send_failed and publishes nothing when the freeze rejects', async () => {
+      mockFindProposal.mockResolvedValue(ACCEPTED);
+      mockFreezePdf.mockRejectedValue(new Error('R2 down'));
+
+      expect(await shareProposalWithColleague(baseInput)).toEqual({
+        ok: false,
+        error: 'send_failed',
+      });
+      expect(mockCreateLink).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+    });
+
+    it('leaves a submitted proposal on the versioned path', async () => {
+      await shareProposalWithColleague(baseInput);
+
+      expect(mockEnsurePdf).toHaveBeenCalledTimes(1);
+      expect(mockFreezePdf).not.toHaveBeenCalled();
+    });
   });
 });
 

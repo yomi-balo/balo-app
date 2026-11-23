@@ -652,11 +652,14 @@ export interface ProjectServerEventMap {
   // lens (client|admin); the serializer that builds the PDF always runs with the
   // `client` audience, so no fee/margin/expert-quote figure is ever in the document.
   // `version` is the proposal version stamped on the PDF; `distinct_id` is the
-  // downloader's user id.
+  // downloader's user id. BAL-668: `accepted_copy` true means the frozen accepted
+  // copy was served (the proposal was `accepted`), false means the versioned
+  // read-through cache path.
   [PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_PDF_DOWNLOADED]: {
     proposal_id: string;
     version: number;
     audience: 'client' | 'admin';
+    accepted_copy: boolean;
     distinct_id: string;
   };
   // BAL-386: a client member minted a share link for an external colleague. Emitted

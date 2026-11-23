@@ -19,7 +19,12 @@ import { resolveConversationAccess } from '@/lib/project-request/resolve-convers
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { runAfterResponse } from '@/lib/after-response';
 import { PROJECT_TERMS_VERSION } from '@/lib/legal/project-terms';
+import {
+  freezeAcceptedProposalPdf,
+  type ClientPdfTarget,
+} from '@/lib/project-request/proposal/pdf/ensure-client-pdf';
 import { lockContentionFailure } from './deadlock';
 
 const inputSchema = z.object({
@@ -122,6 +127,31 @@ async function confirmClientBillingGateBestEffort(requestId: string): Promise<vo
   } catch (error) {
     log.warn('Client billing gate auto-confirm failed after accept commit', {
       requestId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
+}
+
+/**
+ * BAL-668 — freeze the accepted proposal's client PDF so the copy the client agreed
+ * to is the copy they download and share from now on.
+ *
+ * Best-effort and NEVER throws: the accept is ALREADY COMMITTED, so a render or R2
+ * failure must not turn into a "could not accept" for the client. WARN, not ERROR:
+ * recoverable, because the copy is frozen lazily on the first download or share.
+ */
+async function freezeAcceptedPdfBestEffort(
+  target: ClientPdfTarget,
+  requestId: string
+): Promise<void> {
+  try {
+    await freezeAcceptedProposalPdf(target);
+  } catch (error) {
+    log.warn('Accepted proposal PDF freeze after accept failed', {
+      requestId,
+      relationshipId: target.proposal.relationshipId,
+      proposalId: target.proposal.id,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
@@ -285,6 +315,16 @@ export async function runAcceptProposal(
     }).catch(() => {
       // publishNotificationEvent logs internally.
     });
+
+    // BAL-668 — freeze the PDF the client just accepted. Deferred past the response
+    // (never awaited, no added latency). The PDF never renders `doc.status`, so the
+    // pre-commit row held here renders identically to the accepted one.
+    runAfterResponse('accepted proposal PDF freeze', () =>
+      freezeAcceptedPdfBestEffort(
+        { request: access.request, relationship: access.relationship, proposal },
+        requestId
+      )
+    );
 
     // BAL-343 — confirm the `client_billing` gate now the request is `accepted`.
     // AWAITED: the very next render reads this row. Self-swallowing: it must never
