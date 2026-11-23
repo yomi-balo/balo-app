@@ -7,6 +7,7 @@ vi.mock('@balo/db', () => ({}));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrack,
   REMINDER_SERVER_EVENTS: { SENT: 'reminder_sent', SKIPPED: 'reminder_skipped' },
+  ENGAGEMENT_SERVER_EVENTS: { REVIEW_REMINDER_SENT: 'engagement_review_reminder_sent' },
 }));
 
 import { reportReminderOutcome, REMINDER_SYSTEM_DISTINCT_ID } from './analytics.js';
@@ -67,6 +68,48 @@ describe('reportReminderOutcome', () => {
       channel: 'email',
       audience: 'expert',
       distinct_id: 'user-2',
+    });
+  });
+
+  describe('delivery_review', () => {
+    const ENG_ID = 'eng-1';
+    const DELIVERY = {
+      sequenceId: 'delivery_review',
+      step: 'pre_auto_accept',
+      recipientUserId: 'owner-1',
+      engagementId: ENG_ID,
+    };
+
+    it('emits reminder_sent for the first channel, then the legacy engagement event', () => {
+      reportReminderOutcome(row(DELIVERY), { kind: 'published' });
+      expect(mockTrack).toHaveBeenCalledTimes(2);
+      expect(mockTrack).toHaveBeenNthCalledWith(1, 'reminder_sent', {
+        sequence: 'delivery_review',
+        step: 'pre_auto_accept',
+        channel: 'email',
+        audience: 'client',
+        distinct_id: 'owner-1',
+      });
+      expect(mockTrack).toHaveBeenNthCalledWith(2, 'engagement_review_reminder_sent', {
+        engagement_id: ENG_ID,
+        distinct_id: 'owner-1',
+      });
+    });
+
+    it('emits only reminder_skipped for a skipped row', () => {
+      reportReminderOutcome(row(DELIVERY), { kind: 'skipped', reason: 'no_longer_waiting' });
+      expect(mockTrack).toHaveBeenCalledTimes(1);
+      expect(mockTrack).toHaveBeenCalledWith('reminder_skipped', {
+        sequence: 'delivery_review',
+        step: 'pre_auto_accept',
+        reason: 'no_longer_waiting',
+        distinct_id: 'owner-1',
+      });
+    });
+
+    it('skips the legacy event when the payload names no engagement', () => {
+      reportReminderOutcome(row({ ...DELIVERY, engagementId: undefined }), { kind: 'published' });
+      expect(mockTrack).toHaveBeenCalledTimes(1);
     });
   });
 

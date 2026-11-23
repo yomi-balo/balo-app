@@ -12,6 +12,7 @@ import {
   sum,
   type SQL,
 } from 'drizzle-orm';
+import { mapWithConcurrency } from '@balo/shared/async';
 import { applyBaloFee } from '@balo/shared/pricing';
 import { upfrontDueCents } from '@balo/shared/project-requests';
 import { db } from '../client';
@@ -200,17 +201,11 @@ export interface ChangeRequestRoundResult {
 }
 
 /**
- * D7 auto-accept window: a `pending_acceptance` project auto-accepts this many
- * days after the completion request. Consumed only in D7 (the sweep computes
- * `cutoff = now - AUTO_ACCEPT_DAYS` and passes it to `listPendingAutoAccept`) —
- * the repo stays policy-free. Plain typed const, mirroring `QUIET_THRESHOLD_DAYS`.
- *
- * FOOTGUN (memory `reference_balo_db_client_bundle_footgun`): do NOT value-import
- * this into a web *client* component — `@balo/db`'s barrel re-exports `postgres` and
- * breaks `next build`. If a later slice needs to DISPLAY the window client-side, lift
- * it to a pure `@balo/shared` subpath there.
+ * The D7 auto-accept window now lives in `@balo/shared/engagements`; re-exported here so the
+ * existing `@balo/db` importers keep working. Do NOT value-import it from `@balo/db` into a web
+ * *client* component (the barrel re-exports `postgres`); import it from the shared subpath.
  */
-export const AUTO_ACCEPT_DAYS = 7;
+export { AUTO_ACCEPT_DAYS } from '@balo/shared/engagements';
 
 /**
  * The FLAT project-engagement row (BAL-417). The supertype's universal columns with
@@ -1932,16 +1927,20 @@ export const projectEngagementsRepository = {
         },
       });
 
-      const revertedMilestoneIds: string[] = [];
-      for (const milestone of tagged) {
-        if (milestone.status !== 'completed') continue;
-        await revertMilestoneTx(tx, {
-          milestone,
-          userId: input.userId,
-          extraMetadata: { change_request_id: round.id },
-        });
-        revertedMilestoneIds.push(milestone.id);
-      }
+      // One revert at a time: the transaction has a single connection, and `tagged` order is
+      // the revert order.
+      const revertedMilestoneIds = await mapWithConcurrency(
+        tagged.filter((milestone) => milestone.status === 'completed'),
+        1,
+        async (milestone) => {
+          await revertMilestoneTx(tx, {
+            milestone,
+            userId: input.userId,
+            extraMetadata: { change_request_id: round.id },
+          });
+          return milestone.id;
+        }
+      );
 
       // Display order. `tagged` arrives id-ordered and the sort is stable, so ties on
       // `sort_order` keep the id order — the same tie-break as every milestone list.

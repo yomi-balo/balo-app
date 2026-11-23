@@ -18,6 +18,7 @@
  * while every local gate stays green. Opposite rule to `apps/api`.
  */
 import type { DebtCoveringCreditReason, MeetingSettlementShape } from '../credit';
+import type { ReminderStepFields } from './reminder-sequences';
 /**
  * BAL-540 (fix round) — the two request-lifecycle unions are IMPORTED, never re-spelled inline,
  * for the same reason the settlement shapes above are. `../project-requests` is this package's
@@ -531,18 +532,16 @@ export interface EngagementAutoAcceptedPayload {
 
 // BAL-338 (D7) T-2 review reminder: a `pending_acceptance` engagement nears its
 // auto-accept date and the client hasn't decided — one friendly nudge. SERVER-ONLY
-// (published from the API reminder sweep). Targets the CLIENT company owner
-// (recipient:'client' via `recipientId`; email = VARIANT 2 `ReviewReminderEmail`
-// verbatim + in-app). `correlationId =
-// `${engagementId}:review_reminder:${completionRequestedAtMs}`` — the ticket's stated
-// idempotency key (engagement id + request timestamp): the daily sweep matching the same
-// engagement on both T-2 and T-1 mints the SAME key → one nudge; a genuine re-request
-// (fresh `completionRequestedAt`) re-reminds. `recipientId` absent → no-op
-// (retainer/no-owner). Copy uses BAL-329 conventions. Dates pre-formatted UTC.
-export interface EngagementReviewReminderPayload {
-  correlationId: string; // `${engagementId}:review_reminder:${completionRequestedAtMs}`
+// (published by the reminder-sequence dispatch tick: the `delivery_review` sequence, BAL-665 /
+// ADR-1060). Targets the CLIENT company owner (recipient:'client' via `recipientId`; email =
+// VARIANT 2 `ReviewReminderEmail` verbatim + in-app). `correlationId` is a fresh uuid per
+// promise; the sequence's registry key (engagement id + step + owner + request timestamp)
+// is what dedupes, so a genuine re-request (fresh `completionRequestedAt`) re-reminds. The
+// recheck refreshes the dates, `daysLeft` and display fields at fire time. Copy uses BAL-329
+// conventions. Dates pre-formatted UTC.
+export interface EngagementReviewReminderPayload extends ReminderStepFields {
   engagementId: string; // CTA / actionUrl → /engagements/{id}
-  recipientId?: string; // client company owner user id → recipient:'client'; absent → no-op
+  recipientId: string; // client company owner user id → recipient:'client' (= recipientUserId)
   clientCompanyName: string; // {clientCompany} — prospective party (email body)
   expertPartyLabel: string; // {expertParty} — prospective party (email body)
   projectTitle: string; // {title} — subject + summary + in-app body

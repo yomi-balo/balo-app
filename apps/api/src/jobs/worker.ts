@@ -93,7 +93,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   startAvailabilityCacheWorker();
   startStalenessCheckWorker();
   await registerStalenessCheckCron();
-  // BAL-338 (D7): auto-accept + T-2 review reminder sweep.
+  // BAL-338 (D7): the hourly auto-accept sweep. The T-2 review reminder is the
+  // `delivery_review` reminder sequence, armed by the reminder-sequence sweep.
   startDeliveryReviewSweepWorker();
   await registerDeliveryReviewSweepCron();
   // BAL-374: onboarding-completion reminder sweep (+24h / +72h / +7d).

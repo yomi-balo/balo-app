@@ -4,7 +4,6 @@ import {
   type InvitationReminderCandidateRow,
 } from '@balo/db';
 import { expertInvitationMove } from '@balo/shared/project-requests';
-import type { EventPayloadMap } from '../events.js';
 import type { ReminderSequence, SequenceEntity } from './types.js';
 
 /**
@@ -72,8 +71,7 @@ function freshString(entity: SequenceEntity, field: string): string {
 export const invitationSequence: ReminderSequence<'project.invitation_reminder'> = {
   id: 'invitation',
   event: 'project.invitation_reminder',
-  entityIdField: 'relationshipId',
-  channel: 'email',
+  channels: ['email'],
   audience: 'expert',
   cadence: 'hourly',
   exemptFromDailyLimit: false,
@@ -97,12 +95,11 @@ export const invitationSequence: ReminderSequence<'project.invitation_reminder'>
     return Promise.resolve(entity.candidateUserIds);
   },
 
-  buildPayload(
-    entity,
-    stepKey,
-    recipientUserId,
-    correlationId
-  ): EventPayloadMap['project.invitation_reminder'] {
+  payloadMatchesEntity(payload, entityId) {
+    return payload.relationshipId === entityId;
+  },
+
+  buildPayload(entity, stepKey, recipientUserId, correlationId) {
     return {
       correlationId,
       sequenceId: 'invitation',

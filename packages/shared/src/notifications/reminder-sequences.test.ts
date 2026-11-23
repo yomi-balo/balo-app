@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { AUTO_ACCEPT_DAYS } from '../engagements/delivery-review';
 import {
   MAX_REMINDER_STEPS,
+  REMINDER_ARMABLE_AFTER_DUE_MS,
   REMINDER_DEFAULT_ZONE,
   REMINDER_SEQUENCE_IDS,
+  REMINDER_SEQUENCE_SHARED_RULES,
   REMINDER_SEQUENCE_STEPS,
   reminderLocalDayStart,
   reminderRecipientZone,
@@ -39,6 +42,24 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
       { key: 'day_5', offsetMinutes: 7200, timing: 'weekday_morning' },
       { key: 'day_9', offsetMinutes: 12960, timing: 'weekday_morning' },
     ]);
+  });
+
+  it('delivery_review is one exact step, 5 days after the completion request', () => {
+    expect(REMINDER_SEQUENCE_STEPS.delivery_review).toEqual([
+      { key: 'pre_auto_accept', offsetMinutes: 7200, timing: 'exact' },
+    ]);
+  });
+
+  it('delivery_review step cannot fire after auto-accept unless dispatch lags', () => {
+    const [step] = REMINDER_SEQUENCE_STEPS.delivery_review;
+    const autoAcceptMs = AUTO_ACCEPT_DAYS * 86_400_000;
+    expect((step?.offsetMinutes ?? 0) * 60_000 + REMINDER_ARMABLE_AFTER_DUE_MS).toBeLessThan(
+      autoAcceptMs
+    );
+  });
+
+  it('delivery_review shares no predicate rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual([]);
   });
 });
 
@@ -162,27 +183,20 @@ describe('reminderSequenceKey', () => {
 
   it('prefix is seq:{id}:', () => {
     expect(reminderSequenceKeyPrefix('proposal_review')).toBe('seq:proposal_review:');
+    expect(reminderSequenceKeyPrefix('delivery_review')).toBe('seq:delivery_review:');
   });
 });
 
 describe('reminderLocalDayStart', () => {
   const melbourne = 'Australia/Melbourne';
 
-  it('Tuesday 09:00:00.050 Melbourne gives Tuesday 00:00 Melbourne', () => {
-    // Tue 2026-11-24 09:00:00.050 AEDT (UTC+11) = Mon 22:00:00.050Z; midnight = Mon 13:00Z
-    const out = reminderLocalDayStart(new Date('2026-11-23T22:00:00.050Z'), melbourne);
-    expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
-  });
-
-  it('23:59 local still gives that day midnight', () => {
-    // Tue 2026-11-24 23:59 AEDT = 12:59Z
-    const out = reminderLocalDayStart(new Date('2026-11-24T12:59:00Z'), melbourne);
-    expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
-  });
-
-  it('a UTC instant already tomorrow locally gives the local day midnight', () => {
-    // Mon 2026-11-23 20:00Z is Tue 07:00 Melbourne
-    const out = reminderLocalDayStart(new Date('2026-11-23T20:00:00Z'), melbourne);
+  // Each instant falls on Tue 2026-11-24 Melbourne (AEDT, UTC+11), whose midnight is Mon 13:00Z.
+  it.each([
+    ['09:00:00.050 local (Mon 22:00:00.050Z)', '2026-11-23T22:00:00.050Z'],
+    ['23:59 local, the last minute of the day (12:59Z)', '2026-11-24T12:59:00Z'],
+    ['07:00 local, while UTC is still Monday (Mon 20:00Z)', '2026-11-23T20:00:00Z'],
+  ])('Tuesday %s gives Tuesday 00:00 Melbourne', (_label, instant) => {
+    const out = reminderLocalDayStart(new Date(instant), melbourne);
     expect(out.toISOString()).toBe('2026-11-23T13:00:00.000Z');
   });
 

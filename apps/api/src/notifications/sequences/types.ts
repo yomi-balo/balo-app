@@ -16,8 +16,18 @@ export interface SequenceEntity {
 /** How often a sequence's sweep runs. The lead a sweep arms ahead by equals its cadence. */
 export type ReminderCadence = 'hourly';
 
-/** The events a reminder sequence publishes. */
-export type ReminderEvent = 'project.proposal_review_reminder' | 'project.invitation_reminder';
+/** The event each sequence publishes. A new sequence adds one line here and one registry entry. */
+export interface ReminderSequenceEvents {
+  proposal_review: 'project.proposal_review_reminder';
+  delivery_review: 'engagement.review_reminder';
+  invitation: 'project.invitation_reminder';
+}
+
+/** Every event a reminder sequence can publish. */
+export type ReminderEvent = ReminderSequenceEvents[ReminderSequenceId];
+
+/** The delivery channels a reminder promise covers. */
+export type ReminderChannel = 'email' | 'in_app';
 
 /**
  * A reminder sequence. The steps are never stored here: they are always read from
@@ -27,9 +37,8 @@ export type ReminderEvent = 'project.proposal_review_reminder' | 'project.invita
 export interface ReminderSequence<E extends ReminderEvent = ReminderEvent> {
   readonly id: ReminderSequenceId;
   readonly event: E;
-  /** The payload field that must equal the entity id; the recheck refuses a row where it does not. */
-  readonly entityIdField: keyof EventPayloadMap[E] & string;
-  readonly channel: 'email';
+  /** Every channel the event's rule delivers on; the first is the one `reminder_sent` reports. */
+  readonly channels: readonly [ReminderChannel, ...ReminderChannel[]];
   readonly audience: 'client' | 'expert';
   readonly cadence: ReminderCadence;
   readonly exemptFromDailyLimit: boolean;
@@ -45,7 +54,11 @@ export interface ReminderSequence<E extends ReminderEvent = ReminderEvent> {
     recipientUserId: string,
     correlationId: string
   ): EventPayloadMap[E];
+  /**
+   * True when a stored payload names `entityId` the way this sequence's own payload does. The
+   * recheck's common guard cannot know the event's entity field, so each sequence checks it.
+   */
+  payloadMatchesEntity(payload: Readonly<Record<string, unknown>>, entityId: string): boolean;
+  /** Extra post-publish tracking for a sequence with its own legacy event. Runs once per publish. */
+  trackPublished?(payload: Readonly<Record<string, unknown>>): void;
 }
-
-/** Any one registered sequence, each paired with its own event and payload. */
-export type AnyReminderSequence = { [K in ReminderEvent]: ReminderSequence<K> }[ReminderEvent];

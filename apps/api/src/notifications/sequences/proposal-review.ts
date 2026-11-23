@@ -4,7 +4,6 @@ import {
   type ProposalReviewCandidateRow,
 } from '@balo/db';
 import { proposalAwaitsClientReview } from '@balo/shared/project-requests';
-import type { EventPayloadMap } from '../events.js';
 import type { ReminderSequence, SequenceEntity } from './types.js';
 
 function earliestSubmittedAt(rows: readonly ProposalReviewCandidateRow[]): Date | null {
@@ -73,8 +72,7 @@ function freshAwaitingCount(entity: SequenceEntity): number {
 export const proposalReviewSequence: ReminderSequence<'project.proposal_review_reminder'> = {
   id: 'proposal_review',
   event: 'project.proposal_review_reminder',
-  entityIdField: 'projectRequestId',
-  channel: 'email',
+  channels: ['email'],
   audience: 'client',
   cadence: 'hourly',
   exemptFromDailyLimit: false,
@@ -98,12 +96,11 @@ export const proposalReviewSequence: ReminderSequence<'project.proposal_review_r
     return entity.candidateUserIds.filter((_, index) => participates[index] === true);
   },
 
-  buildPayload(
-    entity,
-    stepKey,
-    recipientUserId,
-    correlationId
-  ): EventPayloadMap['project.proposal_review_reminder'] {
+  payloadMatchesEntity(payload, entityId) {
+    return payload.projectRequestId === entityId;
+  },
+
+  buildPayload(entity, stepKey, recipientUserId, correlationId) {
     return {
       correlationId,
       sequenceId: 'proposal_review',

@@ -1080,7 +1080,8 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   ],
   // BAL-338 (D7): T-2 review reminder (server-published). Targets the CLIENT company
   // owner only (recipient:'client' via payload.recipientId; email = VARIANT 2
-  // ReviewReminderEmail verbatim + in-app). Skips gracefully when recipientId is absent.
+  // ReviewReminderEmail verbatim + in-app). Published by the `delivery_review` reminder
+  // sequence, which arms a step only for a live owner, so the payload always carries recipientId.
   'engagement.review_reminder': emailAndInApp('client', 'engagement-review-reminder-client'),
   // BAL-390 (D4): a CASE was closed — ONE fused email: close confirmation → case
   // summary → the star-rating ask. Targets the client-side reviewer (recipient:'client'

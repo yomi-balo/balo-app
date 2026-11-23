@@ -30,7 +30,6 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     version: 1,
     isCurrent: true,
     overview: '<p>Rebuild lead routing with proper assignment rules.</p>',
-    exclusions: null,
     timeframeWeeks: 8,
     priceCents: 100_000,
     currency: 'aud',

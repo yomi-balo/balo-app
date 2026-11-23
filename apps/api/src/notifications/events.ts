@@ -79,7 +79,7 @@ import type {
   ExpertApplicationDeclinedPayload,
   ExpertApplicationEditedPayload,
   ExpertApplicationSubmittedPayload,
-  ReminderSequenceId,
+  ReminderStepFields,
 } from '@balo/shared/notifications';
 // BAL-475 — the calendar-invite engine contract lives in this app (not `@balo/shared`), since
 // it is server-only vocabulary (no publish-route Zod arm ever reads it).
@@ -214,23 +214,16 @@ export interface ProjectProposalSubmittedPayload {
   title: string; // request title — email/in-app body
 }
 
-/** The fields every reminder-sequence payload carries, whatever the sequence. */
-export interface ReminderPayloadBase {
-  correlationId: string; // fresh uuid per promise
-  sequenceId: ReminderSequenceId;
-  step: string; // the step key, e.g. 'day_2'
-  entityId: string; // the entity the sequence is keyed to
-  anchorIso: string; // the instant the sequence's step offsets count from
-  recipientUserId: string; // → resolves recipient:'self'
-}
-
 /**
  * BAL-663 — the proposal-review follow-up. Armed by the reminder-sequence sweep; the
  * `reminder_sequence` recheck refreshes `awaitingCount` and `title` at fire time. Names no
  * price, budget or email address.
  */
-export interface ProposalReviewReminderPayload extends ReminderPayloadBase {
-  projectRequestId: string; // → the email CTA; equals `entityId`
+export interface ProposalReviewReminderPayload extends ReminderStepFields {
+  // `correlationId` is a fresh uuid per promise; `step` is the step key, e.g. 'day_2'; `entityId`
+  // is the project request id; `anchorIso` is the oldest awaiting proposal's submit time the
+  // sequence is keyed to; `recipientUserId` → resolves recipient:'self'.
+  projectRequestId: string; // → the email CTA
   title: string; // request title — email body
   awaitingCount: number; // proposals awaiting the client's review
 }
@@ -240,7 +233,8 @@ export interface ProposalReviewReminderPayload extends ReminderPayloadBase {
  * `reminder_sequence` recheck refreshes `title`, `projectRequestId` and `companyName` at fire
  * time. Names no price, budget, fee or email address.
  */
-export interface InvitationReminderPayload extends ReminderPayloadBase {
+export interface InvitationReminderPayload extends ReminderStepFields {
+  // `entityId` is the relationship id; `anchorIso` is the relationship's `invited_at`.
   relationshipId: string; // the invited expert's relationship; equals `entityId`
   projectRequestId: string; // → the email CTA
   title: string; // request title — email body
@@ -796,10 +790,11 @@ export type NotificationEvent =
   | WaitingSmsEvent;
 
 /**
- * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept +
- * review-reminder sweeps, the BAL-374 onboarding-reminder sweep, and the BAL-380
- * dormancy/expiry sweep) — never through the internal `/notifications/publish` route, so they
- * have no arm in `publishBodySchema` by design. Keep this list tight: everything NOT listed here
+ * Events published only from WITHIN the API (the calendar health probe, the D7 auto-accept
+ * sweep, the BAL-374 onboarding-reminder sweep, the BAL-380 dormancy/expiry sweep, and the
+ * reminder-sequence dispatch tick, which publishes `engagement.review_reminder`) — never through
+ * the internal `/notifications/publish` route, so they have no arm in `publishBodySchema` by
+ * design. Keep this list tight: everything NOT listed here
  * is treated as publishable from apps/web and MUST have a schema arm — enforced at compile time
  * in apps/api/src/routes/notifications/schema.ts.
  */

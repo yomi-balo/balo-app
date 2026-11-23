@@ -1525,7 +1525,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
 
   // BAL-338 (D7) T-2 review reminder — CLIENT email (VARIANT 2 ReviewReminderEmail,
   // verbatim). One friendly nudge; the amber window block keeps the auto-accept date
-  // unmissable. `daysLeft` is computed at send time by the reminder sweep.
+  // unmissable. `daysLeft` is recomputed at fire time by the `delivery_review` sequence.
   'engagement-review-reminder-client': (data) => {
     const projectTitle = (data.projectTitle as string) ?? 'your project';
     return {

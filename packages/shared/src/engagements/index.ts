@@ -20,9 +20,8 @@
  *          case's action items done or reopened it.
  *
  * PURE and dependency-free (no @balo/db, no I/O) so it is bundle-safe and
- * exhaustively unit-testable — deliberately NOT placed next to `AUTO_ACCEPT_DAYS`
- * in `@balo/db`, which carries the documented client-bundle footgun
- * (repositories/project-engagements.ts).
+ * exhaustively unit-testable. `AUTO_ACCEPT_DAYS` lives beside it in this package
+ * (`./delivery-review`), not in `@balo/db`, which carries the documented client-bundle footgun.
  *
  * ⚠ THE ACTIVITY INPUTS ARE PARAMETERS, NOT QUERIES — this module stays PURE. Three
  * batched `@balo/db` reads supply every anchor except creation:
@@ -113,6 +112,12 @@ export * from './change-orders';
  * re-exported so `@balo/shared/engagements` stays ONE subpath.
  */
 export * from './time-entries';
+
+/**
+ * Delivery-review window (`AUTO_ACCEPT_DAYS`, `REVIEW_REMINDER_LEAD_DAYS`, `autoAcceptAt`),
+ * re-exported so `@balo/shared/engagements` stays ONE subpath.
+ */
+export * from './delivery-review';
 
 /** The default inactivity window, in days. */
 export const CASE_INACTIVITY_DAYS = 30;

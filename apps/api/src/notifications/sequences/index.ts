@@ -6,9 +6,4 @@ export {
 } from './recheck.js';
 export { reportReminderOutcome } from './analytics.js';
 export { planDueSteps } from './plan.js';
-export type {
-  AnyReminderSequence,
-  ReminderEvent,
-  ReminderSequence,
-  SequenceEntity,
-} from './types.js';
+export type { ReminderSequence, SequenceEntity } from './types.js';

@@ -12,6 +12,7 @@ import { getQueue } from '../lib/queue.js';
 import { mapWithConcurrency } from '../lib/map-with-concurrency.js';
 import { scheduleNotification } from '../notifications/scheduling/schedule.js';
 import { isScheduledKeyDecided } from '../notifications/scheduling/scheduled-key-decided.js';
+import { REMINDER_SEQUENCE_SWEEP_LEAD_MS } from '../notifications/sequences/cadence.js';
 import { planDueSteps } from '../notifications/sequences/plan.js';
 import {
   REARMABLE_REMINDER_SKIP_REASONS,
@@ -19,8 +20,8 @@ import {
 } from '../notifications/sequences/recheck.js';
 import { allReminderSequences } from '../notifications/sequences/registry.js';
 import type {
-  AnyReminderSequence,
   ReminderCadence,
+  ReminderSequence,
   SequenceEntity,
 } from '../notifications/sequences/types.js';
 
@@ -44,10 +45,7 @@ export const REMINDER_SEQUENCE_SWEEP_JOB_NAMES: Readonly<Record<ReminderCadence,
   hourly: 'sweep-hourly',
 };
 
-/** How far ahead of its send time a step is armed: one cadence period. */
-export const REMINDER_SEQUENCE_SWEEP_LEAD_MS: Readonly<Record<ReminderCadence, number>> = {
-  hourly: 60 * 60 * 1000,
-};
+export { REMINDER_SEQUENCE_SWEEP_LEAD_MS };
 
 /** Entities armed at once per sequence; bounds DB load when a backlog arrives. */
 export const REMINDER_SEQUENCE_ENTITY_CONCURRENCY = 4;
@@ -70,7 +68,7 @@ export interface ReminderSequenceSweepResult {
 }
 
 async function armRecipient(
-  sequence: AnyReminderSequence,
+  sequence: ReminderSequence,
   entity: SequenceEntity,
   userId: string,
   now: Date,
@@ -120,7 +118,7 @@ type FindResult =
 
 /** One sequence's waiting entities. A failing `find` is logged and ends only that sequence. */
 async function findEntities(
-  sequence: AnyReminderSequence,
+  sequence: ReminderSequence,
   now: Date,
   jobLog: (message: string) => void
 ): Promise<FindResult> {
@@ -143,7 +141,7 @@ async function findEntities(
 
 /** Arms one entity for every recipient. A failure is logged and never aborts the batch. */
 async function armEntity(
-  sequence: AnyReminderSequence,
+  sequence: ReminderSequence,
   entity: SequenceEntity,
   now: Date,
   leadMs: number,

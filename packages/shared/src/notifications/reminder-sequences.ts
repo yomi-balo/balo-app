@@ -1,6 +1,7 @@
 import { canonicalTimezone, zonedWallClockToUtc } from '../timezone';
+import { AUTO_ACCEPT_DAYS, REVIEW_REMINDER_LEAD_DAYS } from '../engagements/delivery-review';
 
-export const REMINDER_SEQUENCE_IDS = ['proposal_review', 'invitation'] as const;
+export const REMINDER_SEQUENCE_IDS = ['proposal_review', 'delivery_review', 'invitation'] as const;
 export type ReminderSequenceId = (typeof REMINDER_SEQUENCE_IDS)[number];
 
 export type ReminderStepTiming = 'exact' | 'weekday_morning';
@@ -21,6 +22,13 @@ export const REMINDER_SEQUENCE_STEPS: Readonly<
     { key: 'day_5', offsetMinutes: reminderDays(5), timing: 'weekday_morning' },
     { key: 'day_9', offsetMinutes: reminderDays(9), timing: 'weekday_morning' },
   ],
+  delivery_review: [
+    {
+      key: 'pre_auto_accept',
+      offsetMinutes: reminderDays(AUTO_ACCEPT_DAYS - REVIEW_REMINDER_LEAD_DAYS),
+      timing: 'exact',
+    },
+  ],
   invitation: [
     { key: 'day_1', offsetMinutes: reminderDays(1), timing: 'weekday_morning' },
     { key: 'day_3', offsetMinutes: reminderDays(3), timing: 'weekday_morning' },
@@ -32,8 +40,23 @@ export const REMINDER_SEQUENCE_SHARED_RULES: Readonly<
   Record<ReminderSequenceId, readonly string[]>
 > = {
   proposal_review: ['proposalAwaitsClientReview'],
+  delivery_review: [],
   invitation: ['expertInvitationMove'],
 };
+
+/**
+ * The fields every reminder payload carries, whatever the sequence's event: the sequence/step
+ * identity the recheck guard reads back (`sequenceId`, `step`, `entityId`, `anchorIso`,
+ * `recipientUserId`) plus the per-promise `correlationId`.
+ */
+export interface ReminderStepFields {
+  correlationId: string;
+  sequenceId: ReminderSequenceId;
+  step: string;
+  entityId: string;
+  anchorIso: string;
+  recipientUserId: string;
+}
 
 export const MAX_REMINDER_STEPS = 3;
 export const REMINDER_DAILY_LIMIT = 2;

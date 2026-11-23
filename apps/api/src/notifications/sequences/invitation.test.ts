@@ -92,8 +92,7 @@ describe('invitationSequence', () => {
     expect(invitationSequence).toMatchObject({
       id: 'invitation',
       event: 'project.invitation_reminder',
-      entityIdField: 'relationshipId',
-      channel: 'email',
+      channels: ['email'],
       audience: 'expert',
       cadence: 'hourly',
       exemptFromDailyLimit: false,

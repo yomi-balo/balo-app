@@ -33,9 +33,9 @@ import { stripComments } from '@balo/shared/testing';
  * Each rule has a fixture-backed positive control below.
  *
  * ⚠ COVERAGE BOUNDARY, NAMED. A write through a table passed in as a parameter is invisible to
- * this scan. The migration 0128 backfill writes the table too, for engagements kicked off before
- * it existed; it sits in `drizzle/`, outside `repositories/`, by construction, and runs once
- * with no actor.
+ * this scan. The migration 0128 backfill, re-run verbatim by 0129, writes the table too, for
+ * engagements kicked off before it existed; both sit in `drizzle/`, outside `repositories/`, by
+ * construction, and run once with no actor.
  */
 
 const REPO_DIR = fileURLToPath(new URL('../repositories/', import.meta.url));
