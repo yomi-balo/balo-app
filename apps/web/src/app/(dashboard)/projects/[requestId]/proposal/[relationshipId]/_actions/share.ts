@@ -14,7 +14,9 @@ import { log } from '@/lib/logging';
 import { resolveRequestLens } from '@/lib/project-request/resolve-request-lens';
 import {
   ensureClientProposalPdf,
+  freezeAcceptedProposalPdf,
   proposalPdfFileName,
+  type ClientPdfTarget,
 } from '@/lib/project-request/proposal/pdf/ensure-client-pdf';
 import { proposalPdfKey } from '@/lib/storage/proposal-pdf';
 import { formatUtcLongDate } from '@/lib/format/local-date';
@@ -126,9 +128,9 @@ export async function shareProposalWithColleague(input: {
   }
 
   try {
-    // Force-generate the client PDF so the R2 object is present BEFORE the delivery
-    // worker reads it by key (robust across BullMQ retries).
-    await ensureClientProposalPdf({ request, relationship, proposal });
+    // Make sure the R2 object is present BEFORE the delivery worker reads it by key
+    // (robust across BullMQ retries). An accepted proposal attaches its frozen copy.
+    const attachmentKey = await prepareShareAttachmentKey({ request, relationship, proposal });
 
     const rawToken = randomBytes(32).toString('base64url');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
@@ -153,7 +155,7 @@ export async function shareProposalWithColleague(input: {
       attachments: [
         {
           source: 'r2',
-          key: proposalPdfKey(proposal.id),
+          key: attachmentKey,
           filename: proposalPdfFileName(request.title, proposal.version),
         },
       ],
@@ -182,6 +184,20 @@ export async function shareProposalWithColleague(input: {
     });
     return { ok: false, error: 'send_failed' };
   }
+}
+
+/**
+ * Guarantee the R2 object the share attachment points at, and return its key. An
+ * `accepted` proposal attaches its frozen copy (BAL-668); every other status
+ * force-regenerates the versioned client PDF (BAL-386).
+ */
+async function prepareShareAttachmentKey(target: ClientPdfTarget): Promise<string> {
+  if (target.proposal.status === 'accepted') {
+    const { key } = await freezeAcceptedProposalPdf(target);
+    return key;
+  }
+  await ensureClientProposalPdf(target);
+  return proposalPdfKey(target.proposal.id);
 }
 
 /**

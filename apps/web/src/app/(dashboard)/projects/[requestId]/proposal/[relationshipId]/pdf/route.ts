@@ -15,6 +15,7 @@ import {
   proposalPdfKey,
 } from '@/lib/storage/proposal-pdf';
 import {
+  freezeAcceptedProposalPdf,
   generateClientProposalPdf,
   proposalPdfFileName,
 } from '@/lib/project-request/proposal/pdf/ensure-client-pdf';
@@ -148,7 +149,9 @@ function pdfResponse(body: Uint8Array, title: string, version: number): Response
 
 /**
  * GET the Balo-branded, client-facing proposal PDF. Auth → shared rate limit →
- * lens/status gate → read-through R2 cache → stream. Emits
+ * lens/status gate → R2 → stream. An `accepted` proposal serves its frozen copy
+ * (BAL-668, written once and never re-rendered); every other status uses the
+ * versioned read-through cache. Emits
  * `project_proposal_pdf_downloaded` on a successful response (hit or miss). The
  * `audience` property records WHO downloaded (client|admin); the serializer that
  * builds the PDF always uses the `client` audience.
@@ -205,16 +208,18 @@ export async function GET(
   }
 
   const { proposal, request, lens } = target;
-  const key = proposalPdfKey(proposal.id);
-
+  const acceptedCopy = proposal.status === 'accepted';
   let body: Uint8Array;
   try {
-    body = await resolveBytes(target, key, user.id);
+    body = acceptedCopy
+      ? (await freezeAcceptedProposalPdf(target)).bytes
+      : await resolveBytes(target, proposalPdfKey(proposal.id), user.id);
   } catch (error) {
     log.error('Proposal client PDF generation failed', {
       proposalId: proposal.id,
       relationshipId,
       userId: user.id,
+      acceptedCopy,
       ...errorFields(error),
     });
     return new Response('Failed to generate proposal PDF', { status: 500 });
@@ -224,6 +229,7 @@ export async function GET(
     proposal_id: proposal.id,
     version: proposal.version,
     audience: lens === 'admin' ? 'admin' : 'client',
+    accepted_copy: acceptedCopy,
     distinct_id: user.id,
   });
 

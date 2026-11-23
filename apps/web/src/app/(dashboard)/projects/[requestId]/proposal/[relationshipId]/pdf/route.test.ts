@@ -56,10 +56,18 @@ vi.mock('@/lib/project-request/proposal-audience-view', () => ({
   hydrateReviewDoc: (...args: unknown[]) => mockHydrateReviewDoc(...args),
 }));
 
+const { mockProposalPdfKey } = vi.hoisted(() => ({
+  mockProposalPdfKey: vi.fn((id: string) => `proposals/${id}/client-v2.pdf`),
+}));
+
 vi.mock('@/lib/storage/proposal-pdf', () => ({
-  proposalPdfKey: (id: string) => `proposals/${id}/client-v2.pdf`,
+  proposalPdfKey: (id: string) => mockProposalPdfKey(id),
+  acceptedProposalPdfKey: (id: string) => `proposals/${id}/accepted.pdf`,
   getProposalPdfFromR2: (...args: unknown[]) => mockGetPdfFromR2(...args),
   putProposalPdfToR2: (...args: unknown[]) => mockPutPdfToR2(...args),
+  isPreconditionFailedError: (error: unknown) =>
+    (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode ===
+    412,
 }));
 
 vi.mock('@/lib/project-request/proposal/pdf/proposal-pdf-document', () => ({
@@ -247,8 +255,18 @@ describe('GET proposal PDF — analytics', () => {
       proposal_id: 'proposal-1',
       version: 2,
       audience: 'client',
+      accepted_copy: false,
       distinct_id: 'user-1',
     });
+  });
+
+  it('records accepted_copy=true when the frozen accepted copy is served', async () => {
+    mockFindCurrentByRelationship.mockResolvedValue({ ...PROPOSAL, status: 'accepted' });
+    await callGet();
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'project_proposal_pdf_downloaded',
+      expect.objectContaining({ accepted_copy: true, audience: 'client' })
+    );
   });
 
   it('records audience=admin for the admin lens (downloader identity)', async () => {
@@ -311,6 +329,104 @@ describe('GET proposal PDF — read-through cache', () => {
       'Proposal client PDF cache read failed; regenerating',
       expect.any(Object)
     );
+  });
+});
+
+describe('GET proposal PDF — accepted proposal serves its frozen copy (BAL-668)', () => {
+  const ACCEPTED_KEY = 'proposals/proposal-1/accepted.pdf';
+
+  beforeEach(() => {
+    mockFindCurrentByRelationship.mockResolvedValue({ ...PROPOSAL, status: 'accepted' });
+  });
+
+  it('streams the stored accepted object with no render, no write, and never the versioned key', async () => {
+    mockGetPdfFromR2.mockResolvedValue(new Uint8Array(Buffer.from('%PDF-frozen')));
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockGetPdfFromR2).toHaveBeenCalledTimes(1);
+    expect(mockGetPdfFromR2).toHaveBeenCalledWith(ACCEPTED_KEY);
+    expect(mockProposalPdfKey).not.toHaveBeenCalled();
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+    expect(mockPutPdfToR2).not.toHaveBeenCalled();
+    expect(Buffer.from(await res.arrayBuffer()).toString('latin1')).toBe('%PDF-frozen');
+  });
+
+  it('renders once and writes the accepted key on a miss', async () => {
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockRenderPdf).toHaveBeenCalledTimes(1);
+    expect(mockPutPdfToR2).toHaveBeenCalledTimes(1);
+    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything(), {
+      ifAbsent: true,
+    });
+    expect(mockProposalPdfKey).not.toHaveBeenCalled();
+    expect(Buffer.from(await res.arrayBuffer()).toString('latin1')).toBe('%PDF-generated');
+  });
+
+  it('returns 500 with no render and no write when the read throws', async () => {
+    mockGetPdfFromR2.mockRejectedValue(new Error('transient blip'));
+    const res = await callGet();
+
+    expect(res.status).toBe(500);
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+    expect(mockPutPdfToR2).not.toHaveBeenCalled();
+    expect(mockLog.error).toHaveBeenCalledWith(
+      'Proposal client PDF generation failed',
+      expect.objectContaining({ acceptedCopy: true })
+    );
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when the write fails, never serving bytes it did not persist', async () => {
+    mockPutPdfToR2.mockRejectedValue(new Error('R2 down'));
+    const res = await callGet();
+
+    expect(res.status).toBe(500);
+    expect(mockLog.error).toHaveBeenCalledWith(
+      'Proposal client PDF generation failed',
+      expect.objectContaining({ acceptedCopy: true })
+    );
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('still refuses the expert lens with 403 and never reads or writes the frozen copy', async () => {
+    mockResolveRequestLens.mockReturnValue({ lens: 'expert' });
+    const res = await callGet();
+
+    expect(res.status).toBe(403);
+    expect(mockGetPdfFromR2).not.toHaveBeenCalled();
+    expect(mockPutPdfToR2).not.toHaveBeenCalled();
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+  });
+
+  it('an admin-lens first download freezes the CLIENT-audience render, never the admin one', async () => {
+    mockResolveRequestLens.mockReturnValue({ lens: 'admin' });
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything(), {
+      ifAbsent: true,
+    });
+    expect(mockHydrateReviewDoc).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ audience: 'client' })
+    );
+    expect(mockHydrateReviewDoc).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ audience: 'admin' })
+    );
+  });
+
+  it('serves a submitted proposal from the versioned key, not the accepted one', async () => {
+    mockFindCurrentByRelationship.mockResolvedValue(PROPOSAL);
+    await callGet();
+
+    expect(mockGetPdfFromR2).toHaveBeenCalledWith('proposals/proposal-1/client-v2.pdf');
+    expect(mockGetPdfFromR2).not.toHaveBeenCalledWith(ACCEPTED_KEY);
   });
 });
 

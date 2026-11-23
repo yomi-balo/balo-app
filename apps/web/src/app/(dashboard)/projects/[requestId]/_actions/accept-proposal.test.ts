@@ -33,6 +33,28 @@ vi.mock('@/lib/analytics/server', () => ({
   },
 }));
 
+const { runAfterResponseMock, getScheduled, resetScheduled } = vi.hoisted(() => {
+  let scheduled: (() => Promise<void>) | null = null;
+  return {
+    runAfterResponseMock: vi.fn((_label: string, work: () => Promise<void>) => {
+      scheduled = work;
+    }),
+    getScheduled: (): (() => Promise<void>) | null => scheduled,
+    resetScheduled: (): void => {
+      scheduled = null;
+    },
+  };
+});
+
+vi.mock('@/lib/after-response', () => ({
+  runAfterResponse: runAfterResponseMock,
+}));
+
+const mockFreezePdf = vi.fn();
+vi.mock('@/lib/project-request/proposal/pdf/ensure-client-pdf', () => ({
+  freezeAcceptedProposalPdf: (...a: unknown[]) => mockFreezePdf(...a),
+}));
+
 const {
   mockFindById,
   mockAccept,
@@ -143,6 +165,11 @@ describe('acceptProposalAction', () => {
     // `clearAllMocks` clears calls but KEEPS implementations — re-set the default
     // resolution every test, same as mockAccept / mockFindById above.
     mockEnsureBillingGate.mockResolvedValue(undefined);
+    resetScheduled();
+    mockFreezePdf.mockResolvedValue({
+      key: 'proposals/p/accepted.pdf',
+      bytes: new Uint8Array([1]),
+    });
   });
 
   it('rejects when not signed in', async () => {
@@ -564,5 +591,70 @@ describe('acceptProposalAction', () => {
     release?.();
     const result = await pending;
     expect(result.success).toBe(true);
+  });
+
+  describe('freezes the accepted PDF after the response (BAL-668)', () => {
+    const FREEZE_WARN_MESSAGE = 'Accepted proposal PDF freeze after accept failed';
+
+    it('schedules the freeze once without running it inline', async () => {
+      const result = await acceptProposalAction(VALID_INPUT);
+
+      expect(result.success).toBe(true);
+      expect(runAfterResponseMock).toHaveBeenCalledTimes(1);
+      expect(runAfterResponseMock).toHaveBeenCalledWith(
+        'accepted proposal PDF freeze',
+        expect.any(Function)
+      );
+      expect(mockFreezePdf).not.toHaveBeenCalled();
+    });
+
+    it('freezes with the request, relationship and accepted proposal it already holds', async () => {
+      const access = accessOk();
+      mockResolveAccess.mockResolvedValue(access);
+      await acceptProposalAction(VALID_INPUT);
+
+      await getScheduled()?.();
+
+      expect(mockFreezePdf).toHaveBeenCalledTimes(1);
+      expect(mockFreezePdf).toHaveBeenCalledWith({
+        request: access.request,
+        relationship: access.relationship,
+        proposal: expect.objectContaining({ id: PROPOSAL_ID }),
+      });
+      expect(log.warn).not.toHaveBeenCalledWith(FREEZE_WARN_MESSAGE, expect.anything());
+    });
+
+    it('a rejected freeze never fails the accept — success on the action, one WARN from the deferred work', async () => {
+      const freezeError = new Error('r2 down');
+      mockFreezePdf.mockRejectedValue(freezeError);
+
+      const result = await acceptProposalAction(VALID_INPUT);
+      expect(result.success).toBe(true);
+
+      await expect(getScheduled()?.()).resolves.toBeUndefined();
+      expect(log.warn).toHaveBeenCalledWith(FREEZE_WARN_MESSAGE, {
+        requestId: REQUEST_ID,
+        relationshipId: REL_ID,
+        proposalId: PROPOSAL_ID,
+        error: 'r2 down',
+        stack: freezeError.stack,
+      });
+      expect(log.error).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a stale accept', () => mockAccept.mockRejectedValue(new InvalidProposalTransitionError())],
+      [
+        'a coherence rejection',
+        () => mockAccept.mockRejectedValue(new ProposalCoherenceError('fixed_price_missing')),
+      ],
+      ['access denied', () => mockResolveAccess.mockResolvedValue({ ok: false, error: 'no' })],
+    ])('schedules nothing on %s', async (_label, arrange) => {
+      arrange();
+      const result = await acceptProposalAction(VALID_INPUT);
+
+      expect(result.success).toBe(false);
+      expect(runAfterResponseMock).not.toHaveBeenCalled();
+    });
   });
 });
