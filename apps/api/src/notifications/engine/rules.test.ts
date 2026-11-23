@@ -2270,3 +2270,26 @@ describe('project.proposal_review_reminder rules (BAL-663)', () => {
     expect(built.subject).toContain('2 proposals are ready');
   });
 });
+
+describe('project.invitation_reminder rules (BAL-664)', () => {
+  it('has exactly one rule: an immediate email to the recipient named in the payload', () => {
+    expect(notificationRules['project.invitation_reminder']).toEqual([
+      {
+        channel: 'email',
+        recipient: 'self',
+        template: 'project-invitation-reminder',
+        timing: 'immediate',
+        priority: 'normal',
+      },
+    ]);
+  });
+
+  it('names a template the email registry renders', () => {
+    const built = getEmailTemplate('project-invitation-reminder', {
+      title: 'CRM rollout',
+      projectRequestId: 'req-1',
+      companyName: 'Northwind',
+    });
+    expect(built.subject).toBe('A project is waiting on your answer: CRM rollout');
+  });
+});

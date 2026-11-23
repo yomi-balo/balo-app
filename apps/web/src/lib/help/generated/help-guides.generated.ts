@@ -1632,14 +1632,14 @@ export const HELP_GUIDES: readonly HelpGuide[] = [
       "expert": "projects"
     },
     "order": 1,
-    "updated": "2026-10-31",
+    "updated": "2026-11-23",
     "related": [
       "pausing-new-work"
     ],
     "intro": [
       {
         "kind": "html",
-        "html": "<p>When a request started life as a case, the new-request notification names the case it came\nfrom, so you know there's message history and consultation records behind it before you reply.</p>",
+        "html": "<p>When a request started life as a case, the new-request notification names the case it came\nfrom, so you know there's message history and consultation records behind it before you reply.</p>\n<p>If you haven't answered an invitation or a direct request yet, we'll send you up to two short\nreminder emails: the first a day or two after it arrived and the second a day or more after\nthat, each on a weekday morning your time. They stop once you've expressed interest or passed (on a\ndirect request, once you've replied or shared your availability), or the request closes.</p>",
         "id": "intro-b0"
       }
     ],

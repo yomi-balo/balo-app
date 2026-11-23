@@ -20,6 +20,7 @@ export type ReminderCadence = 'hourly';
 export interface ReminderSequenceEvents {
   proposal_review: 'project.proposal_review_reminder';
   delivery_review: 'engagement.review_reminder';
+  invitation: 'project.invitation_reminder';
 }
 
 /** Every event a reminder sequence can publish. */

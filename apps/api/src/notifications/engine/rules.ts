@@ -439,6 +439,17 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+  // BAL-664: the follow-up while an invited expert has not yet answered — email only, to the
+  // expert's own user (resolved at schedule time into `payload.recipientUserId`).
+  'project.invitation_reminder': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'project-invitation-reminder',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   // BAL-289: the client accepted an expert's proposal — a decision that fans out
   // to THREE audiences in one event. The WINNING expert (recipient:'expert',
   // resolved from the hydrated data.expert) gets a congratulatory in-app + email;

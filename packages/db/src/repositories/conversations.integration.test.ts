@@ -8,6 +8,7 @@ import {
   conversationFiles,
   conversationReadStates,
   conversations,
+  expertProfiles,
   meetingContexts,
   meetings,
   requestSharedFiles,
@@ -2361,5 +2362,91 @@ describe('request-share card messages (BAL-617)', () => {
       body: '',
       requestSharedFileId: fileId,
     });
+  });
+});
+
+describe('conversationsRepository.relationshipsWithExpertMessage', () => {
+  const at = new Date('2026-11-10T00:00:00.000Z');
+
+  async function expertUserOf(expertProfileId: string): Promise<string> {
+    const [expert] = await db
+      .select({ userId: expertProfiles.userId })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, expertProfileId));
+    if (expert === undefined) throw new Error('expert not found');
+    return expert.userId;
+  }
+
+  it('returns an empty Set for empty input', async () => {
+    expect(await conversationsRepository.relationshipsWithExpertMessage([])).toEqual(new Set());
+  });
+
+  it('includes a relationship whose expert user wrote a live message', async () => {
+    const { relationship, conversationId, expertProfileId } =
+      await requestExpertRelationshipFactory();
+    await conversationMessageFactory({
+      conversationId,
+      senderUserId: await expertUserOf(expertProfileId),
+      createdAt: at,
+    });
+
+    const got = await conversationsRepository.relationshipsWithExpertMessage([relationship.id]);
+
+    expect(got).toEqual(new Set([relationship.id]));
+  });
+
+  it('excludes client-only, soft-deleted-message and soft-deleted-conversation threads', async () => {
+    const clientOnly = await requestExpertRelationshipFactory();
+    const client = await userFactory();
+    await conversationMessageFactory({
+      conversationId: clientOnly.conversationId,
+      senderUserId: client.id,
+      createdAt: at,
+    });
+
+    const deletedMessage = await requestExpertRelationshipFactory();
+    await conversationMessageFactory({
+      conversationId: deletedMessage.conversationId,
+      senderUserId: await expertUserOf(deletedMessage.expertProfileId),
+      createdAt: at,
+      deletedAt: at,
+    });
+
+    const deletedThread = await requestExpertRelationshipFactory();
+    await conversationMessageFactory({
+      conversationId: deletedThread.conversationId,
+      senderUserId: await expertUserOf(deletedThread.expertProfileId),
+      createdAt: at,
+    });
+    await db
+      .update(conversations)
+      .set({ deletedAt: at })
+      .where(eq(conversations.id, deletedThread.conversationId));
+
+    const got = await conversationsRepository.relationshipsWithExpertMessage([
+      clientOnly.relationship.id,
+      deletedMessage.relationship.id,
+      deletedThread.relationship.id,
+    ]);
+
+    expect(got).toEqual(new Set());
+  });
+
+  it('only reports the relationships asked about', async () => {
+    const asked = await requestExpertRelationshipFactory();
+    const notAsked = await requestExpertRelationshipFactory();
+    for (const r of [asked, notAsked]) {
+      await conversationMessageFactory({
+        conversationId: r.conversationId,
+        senderUserId: await expertUserOf(r.expertProfileId),
+        createdAt: at,
+      });
+    }
+
+    const got = await conversationsRepository.relationshipsWithExpertMessage([
+      asked.relationship.id,
+    ]);
+
+    expect(got).toEqual(new Set([asked.relationship.id]));
   });
 });

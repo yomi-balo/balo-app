@@ -11,6 +11,7 @@ import {
   reminderRecipientZone,
   reminderSendAt,
   reminderSequenceKey,
+  reminderStepSendTimes,
   reminderSequenceKeyPrefix,
 } from './reminder-sequences';
 
@@ -27,6 +28,13 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
       expect(offsets).toEqual([...offsets].sort((a, b) => a - b));
     }
   );
+
+  it('invitation is day 1 / 3, weekday mornings', () => {
+    expect(REMINDER_SEQUENCE_STEPS.invitation).toEqual([
+      { key: 'day_1', offsetMinutes: 1440, timing: 'weekday_morning' },
+      { key: 'day_3', offsetMinutes: 4320, timing: 'weekday_morning' },
+    ]);
+  });
 
   it('proposal_review is day 2 / 5 / 9, weekday mornings', () => {
     expect(REMINDER_SEQUENCE_STEPS.proposal_review).toEqual([
@@ -104,6 +112,59 @@ describe('reminderSendAt', () => {
     // Sat 2026-10-03 12:00 AEST (UTC+10) = 02:00Z; Monday 5 Oct 09:00 AEDT = Sun 22:00Z
     const out = reminderSendAt(new Date('2026-10-03T02:00:00Z'), 'weekday_morning', sydney);
     expect(out.toISOString()).toBe('2026-10-04T22:00:00.000Z');
+  });
+});
+
+describe('reminderStepSendTimes', () => {
+  const melbourne = 'Australia/Melbourne';
+  const times = (sequence: 'invitation' | 'proposal_review', anchor: string) =>
+    reminderStepSendTimes({
+      steps: REMINDER_SEQUENCE_STEPS[sequence],
+      anchor: new Date(anchor),
+      zone: melbourne,
+    }).map(({ stepKey, fireAt }) => [stepKey, fireAt.toISOString()]);
+
+  it('applies each step timing when no two steps share a morning', () => {
+    // Monday 2026-11-02 10:00 AEDT.
+    expect(times('proposal_review', '2026-11-01T23:00:00.000Z')).toEqual([
+      ['day_2', '2026-11-04T22:00:00.000Z'],
+      ['day_5', '2026-11-08T22:00:00.000Z'],
+      ['day_9', '2026-11-11T22:00:00.000Z'],
+    ]);
+  });
+
+  it('moves a Thursday-afternoon invitation day_3 off day_1 Monday to Tuesday', () => {
+    // Thursday 2026-11-05 14:00 AEDT: both steps would otherwise send Monday 09:00.
+    expect(times('invitation', '2026-11-05T03:00:00.000Z')).toEqual([
+      ['day_1', '2026-11-08T22:00:00.000Z'],
+      ['day_3', '2026-11-09T22:00:00.000Z'],
+    ]);
+  });
+
+  it('moves a proposal_review day_5 off day_2 Monday in the week clocks go back', () => {
+    // Wednesday 2027-03-31 09:30 AEDT; clocks go back on Sunday 2027-04-04, so day_5 falls due
+    // at Monday 08:30 AEST, the same morning day_2 slipped to.
+    expect(times('proposal_review', '2027-03-30T22:30:00.000Z')).toEqual([
+      ['day_2', '2027-04-04T23:00:00.000Z'],
+      ['day_5', '2027-04-05T23:00:00.000Z'],
+      ['day_9', '2027-04-08T23:00:00.000Z'],
+    ]);
+  });
+
+  it('leaves exact steps where they fall', () => {
+    const steps = [
+      { key: 'a', offsetMinutes: 60, timing: 'exact' as const },
+      { key: 'b', offsetMinutes: 60, timing: 'exact' as const },
+    ];
+    const out = reminderStepSendTimes({
+      steps,
+      anchor: new Date('2026-11-02T00:00:00.000Z'),
+      zone: melbourne,
+    });
+    expect(out.map(({ fireAt }) => fireAt.toISOString())).toEqual([
+      '2026-11-02T01:00:00.000Z',
+      '2026-11-02T01:00:00.000Z',
+    ]);
   });
 });
 

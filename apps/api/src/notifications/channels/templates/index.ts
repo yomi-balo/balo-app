@@ -25,6 +25,7 @@ import {
   ProjectProposalReviewReminderEmail,
   proposalsReadyPhrase,
 } from './project-proposal-review-reminder.js';
+import { ProjectInvitationReminderEmail } from './project-invitation-reminder.js';
 import { ProjectProposalAcceptedEmail } from './project-proposal-accepted.js';
 import {
   ProjectKickoffApprovedExpertEmail,
@@ -759,6 +760,21 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${proposalsReadyPhrase(awaitingCount)} for review: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  'project-invitation-reminder': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    return {
+      component: React.createElement(ProjectInvitationReminderEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        companyName: typeof data.companyName === 'string' ? data.companyName : '',
+        baseUrl: BASE_URL,
+      }),
+      // pending-MJ
+      subject: `A project is waiting on your answer: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

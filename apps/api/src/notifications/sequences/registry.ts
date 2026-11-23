@@ -4,6 +4,7 @@ import {
   type ReminderSequenceId,
 } from '@balo/shared/notifications';
 import { deliveryReviewSequence } from './delivery-review.js';
+import { invitationSequence } from './invitation.js';
 import { proposalReviewSequence } from './proposal-review.js';
 import type { ReminderSequence, ReminderSequenceEvents } from './types.js';
 
@@ -12,6 +13,7 @@ export const REMINDER_SEQUENCES: {
 } = {
   proposal_review: proposalReviewSequence,
   delivery_review: deliveryReviewSequence,
+  invitation: invitationSequence,
 };
 
 /** The sequences, in the order `REMINDER_SEQUENCE_IDS` lists them. */

@@ -57,6 +57,20 @@ describe('reportReminderOutcome', () => {
     });
   });
 
+  it('reports an invitation step as an email to the expert', () => {
+    reportReminderOutcome(
+      row({ sequenceId: 'invitation', step: 'day_1', recipientUserId: 'user-2' }),
+      { kind: 'published' }
+    );
+    expect(mockTrack).toHaveBeenCalledWith('reminder_sent', {
+      sequence: 'invitation',
+      step: 'day_1',
+      channel: 'email',
+      audience: 'expert',
+      distinct_id: 'user-2',
+    });
+  });
+
   describe('delivery_review', () => {
     const ENG_ID = 'eng-1';
     const DELIVERY = {

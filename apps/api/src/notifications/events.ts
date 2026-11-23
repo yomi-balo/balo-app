@@ -228,6 +228,19 @@ export interface ProposalReviewReminderPayload extends ReminderStepFields {
   awaitingCount: number; // proposals awaiting the client's review
 }
 
+/**
+ * BAL-664 — the invitation follow-up. Armed by the reminder-sequence sweep; the
+ * `reminder_sequence` recheck refreshes `title`, `projectRequestId` and `companyName` at fire
+ * time. Names no price, budget, fee or email address.
+ */
+export interface InvitationReminderPayload extends ReminderStepFields {
+  // `entityId` is the relationship id; `anchorIso` is the relationship's `invited_at`.
+  relationshipId: string; // the invited expert's relationship; equals `entityId`
+  projectRequestId: string; // → the email CTA
+  title: string; // request title — email body
+  companyName: string; // the client party the email names
+}
+
 export interface ProjectProposalAcceptedPayload {
   correlationId: string; // proposalId — dedup per accepted proposal
   projectRequestId: string;
@@ -576,6 +589,9 @@ export type NotificationEvent =
   // BAL-663: the 2 / 5 / 9 day follow-up while proposals still await the client. SERVER-ONLY
   // (see `ServerOnlyNotificationEvent` below).
   | 'project.proposal_review_reminder'
+  // BAL-664: the day 1 / day 3 follow-up while the expert still owes an answer. SERVER-ONLY
+  // (see `ServerOnlyNotificationEvent` below).
+  | 'project.invitation_reminder'
   | 'project.proposal_accepted'
   | 'project.kickoff_approved'
   | 'project.changes_requested'
@@ -880,6 +896,9 @@ export type ServerOnlyNotificationEvent =
   // BAL-663: scheduled by the reminder-sequence sweep and published by the dispatch tick only —
   // no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
   | 'project.proposal_review_reminder'
+  // BAL-664: scheduled by the reminder-sequence sweep and published by the dispatch tick only —
+  // no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+  | 'project.invitation_reminder'
   // BAL-521 §3: published from BOTH doors in apps/api — the Stripe webhook applier
   // (`services/stripe/dispatch.ts`) and `detachSavedCard` (`services/stripe/mandate.ts`) —
   // never from apps/web, so it has NO `publishBodySchema` arm; adding one would be a
@@ -990,6 +1009,7 @@ export interface EventPayloadMap {
   'project.proposal_requested': ProjectProposalRequestedPayload;
   'project.proposal_submitted': ProjectProposalSubmittedPayload;
   'project.proposal_review_reminder': ProposalReviewReminderPayload;
+  'project.invitation_reminder': InvitationReminderPayload;
   'project.proposal_accepted': ProjectProposalAcceptedPayload;
   'project.kickoff_approved': ProjectKickoffApprovedPayload;
   'project.changes_requested': ProjectChangesRequestedPayload;

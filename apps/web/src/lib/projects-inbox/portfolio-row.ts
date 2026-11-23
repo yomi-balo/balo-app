@@ -3,11 +3,12 @@ import type {
   PortfolioInvitationRow,
   PortfolioProjectEngagementView,
 } from '@balo/db';
-import { proposalAwaitsClientReview, relationshipIsOpened } from '@balo/shared/project-requests';
 import {
-  DIRECT_CHOICE_LABEL,
-  directExpertOwesChoice,
-} from '@/lib/project-request/direct-request-choice';
+  expertInvitationMove,
+  proposalAwaitsClientReview,
+  relationshipIsOpened,
+} from '@balo/shared/project-requests';
+import { DIRECT_CHOICE_LABEL } from '@/lib/project-request/direct-request-choice';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { QUIET_THRESHOLD_DAYS } from '@/lib/project-request/request-detail-view';
@@ -498,20 +499,11 @@ function decidedRequestResult(invitation: PortfolioInvitationRow): ExpertNeedsYo
     : { needsYou: false, nudgeLabel: 'Awaiting kickoff', moveKind: null };
 }
 
-/** After the expert's EOI: a direct request's choice, a reply owed, or times to propose. */
+/** After the expert's EOI: a reply owed, or times to propose. */
 function eoiSubmittedResult(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal
 ): ExpertNeedsYouResult {
-  const owesChoice = directExpertOwesChoice({
-    onDirectLeg: invitation.onDirectLeg,
-    relationshipStatus: invitation.relationshipStatus,
-    availabilityShared: invitation.availabilitySharedAt !== null,
-    sentMessage: signal.viewerHasSentMessage,
-  });
-  if (owesChoice) {
-    return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
-  }
   const needsReply = signal.anyUnread || signal.awaitingViewerReply;
   return {
     needsYou: true,
@@ -524,6 +516,20 @@ function expertNeedsYou(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal
 ): ExpertNeedsYouResult {
+  const move = expertInvitationMove({
+    requestStatus: invitation.requestStatus,
+    relationshipStatus: invitation.relationshipStatus,
+    onDirectLeg: invitation.onDirectLeg,
+    availabilityShared: invitation.availabilitySharedAt !== null,
+    sentMessage: signal.viewerHasSentMessage,
+  });
+  if (move === 'invitation') {
+    return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
+  }
+  if (move === 'direct_request') {
+    return { needsYou: true, nudgeLabel: DIRECT_CHOICE_LABEL, moveKind: 'direct_request' };
+  }
+
   // BAL-540 — a closed request needs nothing from anybody, on ANY relationship status,
   // BEFORE the accepted/kickoff_approved branch below (which would otherwise read a closed
   // request's accepted relationship as still owing the kickoff gate).
@@ -536,8 +542,6 @@ function expertNeedsYou(
   }
 
   switch (invitation.relationshipStatus) {
-    case 'invited':
-      return { needsYou: true, nudgeLabel: 'Submit your EOI', moveKind: 'invitation' };
     case 'eoi_submitted':
       return eoiSubmittedResult(invitation, signal);
     case 'proposal_requested':

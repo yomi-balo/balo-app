@@ -1,15 +1,22 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const { mockSchedule, mockDecided, mockFind, mockResolve, mockTimezone, mockLogger } = vi.hoisted(
-  () => ({
-    mockSchedule: vi.fn(),
-    mockDecided: vi.fn(),
-    mockFind: vi.fn(),
-    mockResolve: vi.fn(),
-    mockTimezone: vi.fn(),
-    mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  })
-);
+const {
+  mockSchedule,
+  mockDecided,
+  mockFind,
+  mockResolve,
+  mockTimezone,
+  mockLogger,
+  sequenceIdentity,
+} = vi.hoisted(() => ({
+  sequenceIdentity: { id: 'proposal_review', event: 'project.proposal_review_reminder' },
+  mockSchedule: vi.fn(),
+  mockDecided: vi.fn(),
+  mockFind: vi.fn(),
+  mockResolve: vi.fn(),
+  mockTimezone: vi.fn(),
+  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock('@balo/db', () => ({
   usersRepository: { findTimezoneContext: mockTimezone },
@@ -22,8 +29,8 @@ vi.mock('../notifications/scheduling/scheduled-key-decided.js', () => ({
 vi.mock('../notifications/sequences/registry.js', () => ({
   allReminderSequences: () => [
     {
-      id: 'proposal_review',
-      event: 'project.proposal_review_reminder',
+      id: sequenceIdentity.id,
+      event: sequenceIdentity.event,
       cadence: 'hourly',
       find: (...args: unknown[]) => mockFind(...args),
       resolveRecipients: (...args: unknown[]) => mockResolve(...args),
@@ -64,6 +71,8 @@ const entity = { entityId: 'req-1', anchor: ANCHOR, companyId: 'co-1' };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sequenceIdentity.id = 'proposal_review';
+  sequenceIdentity.event = 'project.proposal_review_reminder';
   mockFind.mockResolvedValue([entity]);
   mockResolve.mockResolvedValue(['user-1']);
   mockTimezone.mockResolvedValue({ savedTimezone: null, expert: null });
@@ -87,6 +96,23 @@ describe('runReminderSequenceSweep', () => {
       mode: 'first_wins',
       recheck: 'reminder_sequence',
     });
+  });
+
+  it('arms an invitation entity under the invitation key prefix and event', async () => {
+    sequenceIdentity.id = 'invitation';
+    sequenceIdentity.event = 'project.invitation_reminder';
+    const result = await runReminderSequenceSweep(NOW, 'hourly');
+
+    expect(result.entities).toBe(1);
+    const keys = mockSchedule.mock.calls.map(([, , options]) => options.key as string);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.length).toBe(result.armed);
+    for (const key of keys) {
+      expect(key).toMatch(/^seq:invitation:req-1:day_(1|3):user-1:/);
+    }
+    for (const [event] of mockSchedule.mock.calls) {
+      expect(event).toBe('project.invitation_reminder');
+    }
   });
 
   it('gives each armed promise its own correlation id', async () => {
