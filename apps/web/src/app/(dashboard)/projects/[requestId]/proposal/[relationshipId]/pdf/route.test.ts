@@ -65,6 +65,9 @@ vi.mock('@/lib/storage/proposal-pdf', () => ({
   acceptedProposalPdfKey: (id: string) => `proposals/${id}/accepted.pdf`,
   getProposalPdfFromR2: (...args: unknown[]) => mockGetPdfFromR2(...args),
   putProposalPdfToR2: (...args: unknown[]) => mockPutPdfToR2(...args),
+  isPreconditionFailedError: (error: unknown) =>
+    (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode ===
+    412,
 }));
 
 vi.mock('@/lib/project-request/proposal/pdf/proposal-pdf-document', () => ({
@@ -355,7 +358,9 @@ describe('GET proposal PDF — accepted proposal serves its frozen copy (BAL-668
     expect(res.status).toBe(200);
     expect(mockRenderPdf).toHaveBeenCalledTimes(1);
     expect(mockPutPdfToR2).toHaveBeenCalledTimes(1);
-    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything());
+    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything(), {
+      ifAbsent: true,
+    });
     expect(mockProposalPdfKey).not.toHaveBeenCalled();
     expect(Buffer.from(await res.arrayBuffer()).toString('latin1')).toBe('%PDF-generated');
   });
@@ -401,7 +406,9 @@ describe('GET proposal PDF — accepted proposal serves its frozen copy (BAL-668
     const res = await callGet();
 
     expect(res.status).toBe(200);
-    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything());
+    expect(mockPutPdfToR2).toHaveBeenCalledWith(ACCEPTED_KEY, expect.anything(), {
+      ifAbsent: true,
+    });
     expect(mockHydrateReviewDoc).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),

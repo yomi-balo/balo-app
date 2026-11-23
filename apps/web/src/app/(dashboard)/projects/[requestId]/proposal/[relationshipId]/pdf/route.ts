@@ -212,7 +212,7 @@ export async function GET(
   let body: Uint8Array;
   try {
     body = acceptedCopy
-      ? await freezeAcceptedProposalPdf(target)
+      ? (await freezeAcceptedProposalPdf(target)).bytes
       : await resolveBytes(target, proposalPdfKey(proposal.id), user.id);
   } catch (error) {
     log.error('Proposal client PDF generation failed', {

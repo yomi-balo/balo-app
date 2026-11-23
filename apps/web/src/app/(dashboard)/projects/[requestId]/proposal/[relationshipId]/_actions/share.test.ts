@@ -44,7 +44,6 @@ vi.mock('@/lib/project-request/proposal/pdf/ensure-client-pdf', () => ({
 
 vi.mock('@/lib/storage/proposal-pdf', () => ({
   proposalPdfKey: (id: string) => `proposals/${id}/client-v2.pdf`,
-  acceptedProposalPdfKey: (id: string) => `proposals/${id}/accepted.pdf`,
 }));
 
 const mockPublish = vi.fn();
@@ -90,7 +89,10 @@ describe('shareProposalWithColleague', () => {
     primeAuthorizedClient();
     mockFindProposal.mockResolvedValue({ id: PROPOSAL_ID, status: 'submitted', version: 3 });
     mockEnsurePdf.mockResolvedValue(undefined);
-    mockFreezePdf.mockResolvedValue(new Uint8Array([1]));
+    mockFreezePdf.mockResolvedValue({
+      key: `proposals/${PROPOSAL_ID}/accepted.pdf`,
+      bytes: new Uint8Array([1]),
+    });
     mockCreateLink.mockResolvedValue({ link: LINK, revokedPriorId: null });
     mockPublish.mockResolvedValue(undefined);
   });

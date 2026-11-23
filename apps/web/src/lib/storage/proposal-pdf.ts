@@ -21,6 +21,9 @@ import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
  * re-rendered.
  */
 
+/** File name of an accepted proposal's frozen copy; see {@link acceptedProposalPdfKey}. */
+const ACCEPTED_PDF_FILENAME = 'accepted.pdf';
+
 /** Key prefix every cached proposal PDF lives under. */
 export const PROPOSAL_PDF_PREFIX = 'proposals/';
 
@@ -45,11 +48,12 @@ export function proposalPdfKey(proposalId: string): string {
 /**
  * Layout-independent key for an accepted proposal's frozen client PDF:
  * `proposals/{id}/accepted.pdf`. The object is written once, at acceptance or on
- * first access afterwards, and holds the client-audience render. It carries no
- * layout version, so a {@link PROPOSAL_PDF_LAYOUT_VERSION} bump never touches it.
+ * first access afterwards (a conditional put, so storage itself refuses a second
+ * write), and holds the client-audience render. It carries no layout version, so a
+ * {@link PROPOSAL_PDF_LAYOUT_VERSION} bump never touches it.
  */
 export function acceptedProposalPdfKey(proposalId: string): string {
-  return `${PROPOSAL_PDF_PREFIX}${proposalId}/accepted.pdf`;
+  return `${PROPOSAL_PDF_PREFIX}${proposalId}/${ACCEPTED_PDF_FILENAME}`;
 }
 
 /** True when an AWS/R2 error signals the object is simply absent (cache miss). */
@@ -62,6 +66,23 @@ function isNotFoundError(error: unknown): boolean {
     return true;
   }
   return candidate.$metadata?.httpStatusCode === 404;
+}
+
+/**
+ * True when an R2 conditional write was refused: `412 PreconditionFailed` (the
+ * object already exists) or `409 ConditionalRequestConflict` (a concurrent
+ * conditional write to the same key is in flight).
+ */
+export function isPreconditionFailedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const candidate = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  if (candidate.name === 'PreconditionFailed' || candidate.name === 'ConditionalRequestConflict') {
+    return true;
+  }
+  const status = candidate.$metadata?.httpStatusCode;
+  return status === 412 || status === 409;
 }
 
 /**
@@ -94,10 +115,26 @@ export async function getProposalPdfFromR2(key: string): Promise<Uint8Array | nu
  * outside the proposal space. The caller treats failure as non-fatal (logs +
  * still streams the in-memory buffer), so this surfaces errors by throwing and
  * lets the Route Handler own the catch.
+ *
+ * With `ifAbsent`, the write is conditional (`If-None-Match: *`): R2 refuses it when
+ * the key already exists, and the refusal surfaces as an error that
+ * {@link isPreconditionFailedError} recognises.
+ *
+ * An accepted proposal's frozen copy may only ever be written conditionally: a write
+ * to an `accepted.pdf` key without `ifAbsent` is refused here, before R2 is called.
+ * Together with `If-None-Match: *`, that makes "never overwritten" a property of the
+ * one write path, whichever caller holds the key.
  */
-export async function putProposalPdfToR2(key: string, body: Uint8Array): Promise<void> {
+export async function putProposalPdfToR2(
+  key: string,
+  body: Uint8Array,
+  options?: { ifAbsent?: boolean }
+): Promise<void> {
   if (!key.startsWith(PROPOSAL_PDF_PREFIX)) {
     throw new Error(`Refusing to write key outside proposal PDF space: ${key}`);
+  }
+  if (key.endsWith(`/${ACCEPTED_PDF_FILENAME}`) && options?.ifAbsent !== true) {
+    throw new Error(`Refusing an unconditional write to a frozen accepted proposal PDF: ${key}`);
   }
   await r2Client.send(
     new PutObjectCommand({
@@ -105,6 +142,7 @@ export async function putProposalPdfToR2(key: string, body: Uint8Array): Promise
       Key: key,
       Body: body,
       ContentType: 'application/pdf',
+      ...(options?.ifAbsent === true ? { IfNoneMatch: '*' } : {}),
     })
   );
 }

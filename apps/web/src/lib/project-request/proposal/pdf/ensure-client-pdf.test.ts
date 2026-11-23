@@ -29,6 +29,8 @@ vi.mock('@/lib/storage/proposal-pdf', () => ({
   acceptedProposalPdfKey: (id: string) => `proposals/${id}/accepted.pdf`,
   getProposalPdfFromR2: (...a: unknown[]) => mockGet(...a),
   putProposalPdfToR2: (...a: unknown[]) => mockPut(...a),
+  isPreconditionFailedError: (e: unknown) =>
+    (e as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode === 412,
 }));
 
 const { mockLogInfo } = vi.hoisted(() => ({ mockLogInfo: vi.fn() }));
@@ -46,7 +48,7 @@ import {
 const TARGET = {
   request: { title: 'CPQ', company: { name: 'Acme' } },
   relationship: { id: 'rel-1' },
-  proposal: { id: PROPOSAL_ID, version: 3 },
+  proposal: { id: PROPOSAL_ID, version: 3, acceptedAt: null },
 } as never;
 
 describe('generateClientProposalPdf', () => {
@@ -91,13 +93,66 @@ describe('freezeAcceptedProposalPdf', () => {
     expect(mockGet).toHaveBeenCalledWith(ACCEPTED_KEY);
     expect(mockRender).toHaveBeenCalledTimes(1);
     expect(mockPut).toHaveBeenCalledTimes(1);
-    expect(mockPut).toHaveBeenCalledWith(ACCEPTED_KEY, new Uint8Array([1, 2, 3]));
-    expect(result).toEqual(new Uint8Array([1, 2, 3]));
+    expect(mockPut).toHaveBeenCalledWith(ACCEPTED_KEY, new Uint8Array([1, 2, 3]), {
+      ifAbsent: true,
+    });
+    expect(result).toEqual({ key: ACCEPTED_KEY, bytes: new Uint8Array([1, 2, 3]) });
     expect(mockLogInfo).toHaveBeenCalledWith('Accepted proposal PDF frozen', {
       proposalId: PROPOSAL_ID,
       relationshipId: 'rel-1',
       version: 3,
+      secondsSinceAccepted: null,
     });
+  });
+
+  it('logs the seconds since acceptance when the row carries acceptedAt (a late freeze)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
+      await freezeAcceptedProposalPdf({
+        request: { title: 'CPQ', company: { name: 'Acme' } },
+        relationship: { id: 'rel-1' },
+        proposal: { id: PROPOSAL_ID, version: 3, acceptedAt: new Date('2026-01-01T00:00:00.000Z') },
+      } as never);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Accepted proposal PDF frozen',
+      expect.objectContaining({ secondsSinceAccepted: 120 })
+    );
+  });
+
+  it('returns the stored copy when a concurrent writer wins the conditional put', async () => {
+    const winner = new Uint8Array([7, 7, 7]);
+    mockGet.mockResolvedValueOnce(null).mockResolvedValueOnce(winner);
+    mockPut.mockRejectedValue({ $metadata: { httpStatusCode: 412 } });
+
+    const result = await freezeAcceptedProposalPdf(TARGET);
+
+    expect(result).toEqual({ key: ACCEPTED_KEY, bytes: winner });
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Accepted proposal PDF already frozen by a concurrent writer',
+      { proposalId: PROPOSAL_ID, relationshipId: 'rel-1' }
+    );
+    expect(mockLogInfo).not.toHaveBeenCalledWith('Accepted proposal PDF frozen', expect.anything());
+  });
+
+  it('rejects when the put was refused but the stored copy cannot be re-read', async () => {
+    const refused = { $metadata: { httpStatusCode: 412 } };
+    mockGet.mockResolvedValue(null);
+    mockPut.mockRejectedValue(refused);
+
+    await expect(freezeAcceptedProposalPdf(TARGET)).rejects.toBe(refused);
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a non-precondition put error without re-reading', async () => {
+    mockPut.mockRejectedValue(new Error('r2 500'));
+
+    await expect(freezeAcceptedProposalPdf(TARGET)).rejects.toThrow('r2 500');
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
   it('returns the stored bytes on a hit with no render and no write', async () => {
@@ -106,7 +161,7 @@ describe('freezeAcceptedProposalPdf', () => {
 
     const result = await freezeAcceptedProposalPdf(TARGET);
 
-    expect(result).toBe(stored);
+    expect(result).toEqual({ key: ACCEPTED_KEY, bytes: stored });
     expect(mockRender).not.toHaveBeenCalled();
     expect(mockPut).not.toHaveBeenCalled();
     expect(mockLogInfo).not.toHaveBeenCalled();

@@ -18,7 +18,7 @@ import {
   proposalPdfFileName,
   type ClientPdfTarget,
 } from '@/lib/project-request/proposal/pdf/ensure-client-pdf';
-import { acceptedProposalPdfKey, proposalPdfKey } from '@/lib/storage/proposal-pdf';
+import { proposalPdfKey } from '@/lib/storage/proposal-pdf';
 import { formatUtcLongDate } from '@/lib/format/local-date';
 import { shareDisplayName } from '@/lib/project-request/proposal/share-view-types';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -193,8 +193,8 @@ export async function shareProposalWithColleague(input: {
  */
 async function prepareShareAttachmentKey(target: ClientPdfTarget): Promise<string> {
   if (target.proposal.status === 'accepted') {
-    await freezeAcceptedProposalPdf(target);
-    return acceptedProposalPdfKey(target.proposal.id);
+    const { key } = await freezeAcceptedProposalPdf(target);
+    return key;
   }
   await ensureClientProposalPdf(target);
   return proposalPdfKey(target.proposal.id);

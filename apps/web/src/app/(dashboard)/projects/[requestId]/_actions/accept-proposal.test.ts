@@ -166,7 +166,10 @@ describe('acceptProposalAction', () => {
     // resolution every test, same as mockAccept / mockFindById above.
     mockEnsureBillingGate.mockResolvedValue(undefined);
     resetScheduled();
-    mockFreezePdf.mockResolvedValue(new Uint8Array([1]));
+    mockFreezePdf.mockResolvedValue({
+      key: 'proposals/p/accepted.pdf',
+      bytes: new Uint8Array([1]),
+    });
   });
 
   it('rejects when not signed in', async () => {

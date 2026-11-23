@@ -32,6 +32,7 @@ import {
   proposalPdfKey,
   getProposalPdfFromR2,
   putProposalPdfToR2,
+  isPreconditionFailedError,
 } from './proposal-pdf';
 
 const PROPOSAL_ID = '11111111-1111-4111-8111-111111111111';
@@ -122,10 +123,68 @@ describe('putProposalPdfToR2', () => {
     });
   });
 
+  it('sends no conditional header by default', async () => {
+    mockSend.mockResolvedValue({});
+    await putProposalPdfToR2(proposalPdfKey(PROPOSAL_ID), new Uint8Array([1]));
+    const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
+    expect(command.input).not.toHaveProperty('IfNoneMatch');
+  });
+
+  it('sends IfNoneMatch "*" when ifAbsent is set', async () => {
+    mockSend.mockResolvedValue({});
+    await putProposalPdfToR2(acceptedProposalPdfKey(PROPOSAL_ID), new Uint8Array([1]), {
+      ifAbsent: true,
+    });
+    const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
+    expect(command.input).toMatchObject({ IfNoneMatch: '*', ContentType: 'application/pdf' });
+  });
+
+  it('sends no conditional header when ifAbsent is false', async () => {
+    mockSend.mockResolvedValue({});
+    await putProposalPdfToR2(proposalPdfKey(PROPOSAL_ID), new Uint8Array([1]), {
+      ifAbsent: false,
+    });
+    const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
+    expect(command.input).not.toHaveProperty('IfNoneMatch');
+  });
+
+  it('refuses an unconditional write to an accepted key, before R2 is called', async () => {
+    for (const options of [undefined, {}, { ifAbsent: false }]) {
+      await expect(
+        putProposalPdfToR2(acceptedProposalPdfKey(PROPOSAL_ID), new Uint8Array([1]), options)
+      ).rejects.toThrow(/unconditional write to a frozen accepted proposal PDF/);
+    }
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
   it('refuses to write a key outside the proposal prefix', async () => {
     await expect(putProposalPdfToR2('other-space/x.pdf', new Uint8Array())).rejects.toThrow(
       /outside proposal PDF space/
     );
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('isPreconditionFailedError', () => {
+  it.each([412, 409])('is true for HTTP status %i', (httpStatusCode) => {
+    expect(isPreconditionFailedError({ $metadata: { httpStatusCode } })).toBe(true);
+  });
+
+  it.each(['PreconditionFailed', 'ConditionalRequestConflict'])('is true for name %s', (name) => {
+    expect(isPreconditionFailedError(Object.assign(new Error('x'), { name }))).toBe(true);
+  });
+
+  it.each([404, 500, 503])('is false for HTTP status %i', (httpStatusCode) => {
+    expect(isPreconditionFailedError({ $metadata: { httpStatusCode } })).toBe(false);
+  });
+
+  it('is false for other names, bare errors and non-objects', () => {
+    expect(isPreconditionFailedError(Object.assign(new Error('x'), { name: 'NoSuchKey' }))).toBe(
+      false
+    );
+    expect(isPreconditionFailedError(new Error('plain'))).toBe(false);
+    expect(isPreconditionFailedError(null)).toBe(false);
+    expect(isPreconditionFailedError('412')).toBe(false);
+    expect(isPreconditionFailedError(undefined)).toBe(false);
   });
 });
