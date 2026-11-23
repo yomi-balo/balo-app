@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
-import { LookupDrillInTabs } from './lookup-drill-in-tabs';
+import { LookupDrillInTabs, type LookupDrillInTab } from './lookup-drill-in-tabs';
 
 const TABS = [
   { key: 'timeline' as const, label: 'Timeline' },
@@ -103,7 +103,7 @@ describe('LookupDrillInTabs', () => {
       // A real handler, mirroring how `lookup-drill-in.tsx` re-renders `active` from state —
       // otherwise `active` never changes and this test could pass with focus stuck in place.
       function Harness(): React.JSX.Element {
-        const [active, setActive] = useState<'timeline' | 'money'>('timeline');
+        const [active, setActive] = useState<LookupDrillInTab>('timeline');
         return <LookupDrillInTabs tabs={TABS} active={active} onSelect={setActive} />;
       }
       render(<Harness />);

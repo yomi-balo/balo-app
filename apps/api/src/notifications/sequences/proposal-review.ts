@@ -3,33 +3,21 @@ import {
   proposalsRepository,
   type ProposalReviewCandidateRow,
 } from '@balo/db';
-import { proposalAwaitsClientReview } from '@balo/shared/project-requests';
+import { REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT } from '@balo/shared/notifications';
+import { proposalReviewWait } from '@balo/shared/project-requests';
 import type { ReminderSequence, SequenceEntity } from './types.js';
 
-function earliestSubmittedAt(rows: readonly ProposalReviewCandidateRow[]): Date | null {
-  let earliest: Date | null = null;
-  for (const row of rows) {
-    if (row.submittedAt !== null && (earliest === null || row.submittedAt < earliest)) {
-      earliest = row.submittedAt;
-    }
-  }
-  return earliest;
-}
-
 /**
- * Pure. Groups candidate rows by request and keeps the requests that still have a proposal
- * awaiting the client's review, by the shared rule. `awaitingCount` is the number of awaiting
- * relationships, the same count the "Review N proposals" card shows. The anchor is the oldest
- * awaiting proposal's submit time; a request whose awaiting rows have none has no entity.
+ * Pure. Groups candidate rows by request and keeps the requests that still await the client's
+ * review, by the shared `proposalReviewWait` rule: `awaitingCount` is the number of awaiting
+ * relationships, the same count the "Review N proposals" card shows, and the anchor is the oldest
+ * awaiting proposal's submit time. A request with no such wait has no entity.
  */
 export function proposalReviewEntities(
   rows: readonly ProposalReviewCandidateRow[]
 ): SequenceEntity[] {
   const byRequest = new Map<string, ProposalReviewCandidateRow[]>();
   for (const row of rows) {
-    if (!proposalAwaitsClientReview(row.relationshipStatus, row.proposalStatus)) {
-      continue;
-    }
     const group = byRequest.get(row.projectRequestId);
     if (group === undefined) {
       byRequest.set(row.projectRequestId, [row]);
@@ -39,18 +27,18 @@ export function proposalReviewEntities(
   }
 
   const entities: SequenceEntity[] = [];
-  for (const [projectRequestId, awaiting] of byRequest) {
-    const [first] = awaiting;
-    const anchor = earliestSubmittedAt(awaiting);
-    if (first === undefined || anchor === null) {
+  for (const [projectRequestId, candidates] of byRequest) {
+    const [first] = candidates;
+    const wait = proposalReviewWait(candidates);
+    if (first === undefined || wait === null) {
       continue;
     }
     entities.push({
       entityId: projectRequestId,
-      anchor,
+      anchor: wait.anchor,
       companyId: first.companyId,
       candidateUserIds: [first.createdByUserId],
-      fresh: { awaitingCount: awaiting.length, title: first.title },
+      fresh: { awaitingCount: wait.awaitingCount, title: first.title },
     });
   }
   return entities;
@@ -75,7 +63,7 @@ export const proposalReviewSequence: ReminderSequence<'project.proposal_review_r
   channels: ['email'],
   audience: 'client',
   cadence: 'hourly',
-  exemptFromDailyLimit: false,
+  exemptFromDailyLimit: REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT.proposal_review,
 
   async find() {
     return proposalReviewEntities(await proposalsRepository.listReviewCandidates());

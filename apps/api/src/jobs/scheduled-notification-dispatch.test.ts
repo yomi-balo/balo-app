@@ -7,7 +7,7 @@ const {
   mockClaim,
   mockMarkPublished,
   mockMarkSkipped,
-  mockMarkFailed,
+  mockFailScheduledNotification,
   mockPublish,
   mockRunRecheck,
   mockTrackServer,
@@ -21,7 +21,7 @@ const {
   mockClaim: vi.fn(),
   mockMarkPublished: vi.fn(),
   mockMarkSkipped: vi.fn(),
-  mockMarkFailed: vi.fn(),
+  mockFailScheduledNotification: vi.fn(),
   mockPublish: vi.fn(),
   mockRunRecheck: vi.fn(),
   mockTrackServer: vi.fn(),
@@ -36,8 +36,11 @@ vi.mock('@balo/db', () => ({
     claim: mockClaim,
     markPublished: mockMarkPublished,
     markSkipped: mockMarkSkipped,
-    markFailed: mockMarkFailed,
   },
+}));
+
+vi.mock('../notifications/scheduling/fail-scheduled-notification.js', () => ({
+  failScheduledNotification: mockFailScheduledNotification,
 }));
 
 vi.mock('@balo/analytics/server', () => ({
@@ -112,7 +115,7 @@ beforeEach(() => {
   mockClaim.mockImplementation(async ({ id }: { id: string }) => row({ id, status: 'claimed' }));
   mockMarkPublished.mockResolvedValue(undefined);
   mockMarkSkipped.mockResolvedValue(undefined);
-  mockMarkFailed.mockResolvedValue(undefined);
+  mockFailScheduledNotification.mockResolvedValue('failed');
   mockPublish.mockResolvedValue(undefined);
   mockRunRecheck.mockImplementation(async (r: ScheduledNotification) => ({
     publish: true,
@@ -245,7 +248,7 @@ describe('runScheduledNotificationDispatch — the fire-time recheck', () => {
 
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockMarkSkipped).toHaveBeenCalledWith('row-3', 'all_read');
-    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockFailScheduledNotification).not.toHaveBeenCalled();
     expect(counts).toEqual({ published: 0, skipped: 1, failed: 0 });
   });
 
@@ -256,7 +259,13 @@ describe('runScheduledNotificationDispatch — the fire-time recheck', () => {
     const counts = await runScheduledNotificationDispatch(NOW);
 
     expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockMarkFailed).toHaveBeenCalledWith('row-4', expect.stringContaining('gone'));
+    expect(mockFailScheduledNotification).toHaveBeenCalledTimes(1);
+    expect(mockFailScheduledNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'row-4' }),
+      'unknown_recheck',
+      expect.stringContaining('gone'),
+      { recheck: 'gone' }
+    );
     expect(counts).toEqual({ published: 0, skipped: 0, failed: 1 });
   });
 
@@ -273,7 +282,13 @@ describe('runScheduledNotificationDispatch — the fire-time recheck', () => {
     // alert silently never sent, AND the row marked `published`. Terminal `failed` instead.
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockMarkPublished).not.toHaveBeenCalled();
-    expect(mockMarkFailed).toHaveBeenCalledWith('row-8', expect.stringContaining('correlationId'));
+    expect(mockFailScheduledNotification).toHaveBeenCalledTimes(1);
+    expect(mockFailScheduledNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'row-8' }),
+      'missing_correlation_id',
+      expect.stringContaining('correlationId'),
+      { recheck: null }
+    );
     expect(counts).toEqual({ published: 0, skipped: 0, failed: 1 });
   });
 
@@ -316,7 +331,7 @@ describe('runScheduledNotificationDispatch — the fire-time recheck', () => {
     const counts = await runScheduledNotificationDispatch(NOW);
 
     // Retried after the claim TTL; a transient blip must not consume the notification.
-    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockFailScheduledNotification).not.toHaveBeenCalled();
     expect(mockMarkSkipped).not.toHaveBeenCalled();
     expect(mockMarkPublished).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
@@ -419,7 +434,13 @@ describe('runScheduledNotificationDispatch — attempts ceiling', () => {
     // Without this the row would be unclaimable (claim requires attempts < max) and would
     // sit `claimed` forever, re-selected by every tick and never resolved.
     expect(mockClaim).not.toHaveBeenCalled();
-    expect(mockMarkFailed).toHaveBeenCalledWith('row-6', expect.stringContaining('3 attempts'));
+    expect(mockFailScheduledNotification).toHaveBeenCalledTimes(1);
+    expect(mockFailScheduledNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'row-6' }),
+      'attempts_exhausted',
+      expect.stringContaining('3 attempts'),
+      { lastError: expect.stringContaining('3 attempts') }
+    );
     expect(mockPublish).not.toHaveBeenCalled();
     expect(counts).toEqual({ published: 0, skipped: 0, failed: 1 });
   });
@@ -432,7 +453,7 @@ describe('runScheduledNotificationDispatch — attempts ceiling', () => {
     await runScheduledNotificationDispatch(NOW);
 
     expect(mockClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'row-6' }));
-    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockFailScheduledNotification).not.toHaveBeenCalled();
   });
 });
 

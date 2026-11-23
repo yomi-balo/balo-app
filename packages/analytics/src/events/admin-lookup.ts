@@ -19,11 +19,11 @@ export const ADMIN_LOOKUP_EVENTS = {
 export type AdminLookupMatchedBy = 'name' | 'email' | 'id';
 
 /**
- * The drill-in's two tab keys. Mirrors `apps/web`'s `LookupDrillInTab`
+ * The drill-in's tab keys. Mirrors `apps/web`'s `LookupDrillInTab`
  * (`admin/lookup/_components/lookup-drill-in-tabs.tsx`) without importing it — `@balo/analytics`
  * is a lower-level package apps/web depends ON, never the reverse.
  */
-export type AdminLookupDrillInTab = 'timeline' | 'money';
+export type AdminLookupDrillInTab = 'timeline' | 'money' | 'follow_ups';
 
 export interface AdminLookupEventMap {
   [ADMIN_LOOKUP_EVENTS.SEARCHED]: {

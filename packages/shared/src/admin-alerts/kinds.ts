@@ -2,12 +2,14 @@ import type { AdminAlertDetail } from './detail';
 import type { AdminAlertGroup, AdminAlertCadence } from './groups';
 
 /**
- * BAL-548 / ADR-1055 — the kind registry: THE twenty-one-row table (twenty-one registered kinds,
- * one of which — `sweep.failed` — has no finder) that a `packages/db` invariant
+ * BAL-548 / ADR-1055 — the kind registry: THE twenty-three-row table (twenty-three registered kinds,
+ * ten of which — the eight event-driven kinds plus the `sweep.failed` and
+ * `scheduled_notification.failed` sentinels — have no finder) that a `packages/db` invariant
  * (`admin-alert-kinds-have-exactly-one-writer.test.ts`) value-imports to prove every kind has
  * EXACTLY one writer: a finder XOR a `raise()` call site.
  *
- * ⚠ TWELVE FINDER KINDS, EIGHT EVENT-DRIVEN, PLUS `sweep.failed` (no finder).
+ * ⚠ THIRTEEN FINDER KINDS, EIGHT EVENT-DRIVEN, PLUS TWO NO-FINDER SENTINELS (`sweep.failed`,
+ * `scheduled_notification.failed`).
  * `calendar.subscription_lapse` is ONE kind consuming THREE finder reads;
  * `session.presence_stuck` is ONE kind consuming TWO (overrunning and unsettled).
  */
@@ -33,6 +35,8 @@ export const ADMIN_ALERT_KIND_KEYS = [
   'meeting.stranded',
   'session.presence_stuck',
   'sweep.failed',
+  'project.proposal_review_stalled',
+  'scheduled_notification.failed',
 ] as const;
 
 export type AdminAlertKind = (typeof ADMIN_ALERT_KIND_KEYS)[number];
@@ -148,6 +152,11 @@ function targetCalendarSettings(): AdminAlertTarget {
  */
 function targetWalletCatalogue(): AdminAlertTarget {
   return { label: 'the company', href: '/admin/catalogue' };
+}
+
+/** `project.proposal_review_stalled` — keyed on `project_requests.id`, the request's own page. */
+function targetProjectRequest(input: AdminAlertTargetInput): AdminAlertTarget {
+  return { label: 'the request', href: `/projects/${input.entityId}` };
 }
 
 function targetQueue(): AdminAlertTarget {
@@ -312,6 +321,20 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     finder: null,
     cadence: null,
     closes: 'No row to re-check — closes with a note once the sweep is healthy again',
+    target: targetQueue,
+  },
+  'project.proposal_review_stalled': {
+    group: 'marketplace',
+    finder: 'projectProposalReviewStalled',
+    cadence: '15m',
+    closes: 'Closes itself once the proposals are reviewed or the request moves on',
+    target: targetProjectRequest,
+  },
+  'scheduled_notification.failed': {
+    group: 'platform',
+    finder: null,
+    cadence: null,
+    closes: 'No row to re-check — closes with a note once the failed send is understood',
     target: targetQueue,
   },
 };

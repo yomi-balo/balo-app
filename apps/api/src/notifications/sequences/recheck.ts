@@ -8,6 +8,7 @@ import {
   reminderLocalDayStart,
   reminderRecipientZone,
   REMINDER_SEQUENCE_STEPS,
+  type ReminderSkipReason,
 } from '@balo/shared/notifications';
 import { createLogger } from '@balo/shared/logging';
 import type { ScheduledRecheck } from '../scheduling/rechecks.js';
@@ -19,17 +20,6 @@ const log = createLogger('reminder-sequence-recheck');
 
 /** The registry key for the reminder-sequence guard. ⚠ Must match `SCHEDULED_RECHECKS`. */
 export const REMINDER_SEQUENCE_RECHECK = 'reminder_sequence';
-
-/** Every skip the guard records. */
-export const REMINDER_SKIP_REASONS = [
-  'malformed_payload',
-  'already_decided',
-  'no_longer_waiting',
-  'anchor_moved',
-  'recipient_gone',
-  'over_daily_limit',
-] as const;
-export type ReminderSkipReason = (typeof REMINDER_SKIP_REASONS)[number];
 
 /**
  * The only skip after which a step may be armed again: the sequence's anchor moved, and a later

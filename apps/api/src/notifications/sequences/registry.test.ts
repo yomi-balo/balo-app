@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { REMINDER_SEQUENCE_IDS } from '@balo/shared/notifications';
+import {
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
+  REMINDER_SEQUENCE_IDS,
+  REMINDER_SEQUENCE_SHARED_RULES,
+} from '@balo/shared/notifications';
 
 vi.mock('@balo/db', () => ({}));
 
@@ -51,12 +55,31 @@ describe('REMINDER_SEQUENCES', () => {
     expect(findReminderSequence(undefined)).toBeUndefined();
   });
 
-  it('takes the awaiting-review rule from the shared package', () => {
+  it('takes the wait rule from the shared package', () => {
     const source = readFileSync(new URL('./proposal-review.ts', import.meta.url), 'utf8');
     expect(source).toMatch(
-      /import \{[^}]*proposalAwaitsClientReview[^}]*\} from '@balo\/shared\/project-requests'/
+      /import \{[^}]*proposalReviewWait[^}]*\} from '@balo\/shared\/project-requests'/
     );
     expect(source).not.toMatch(/function proposalAwaitsClientReview/);
+    expect(source).not.toMatch(/function earliestSubmittedAt/);
+  });
+
+  it('names the shared wait rule in the sequence rule record', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.proposal_review).toContain('proposalReviewWait');
+  });
+
+  it('takes every sequence daily-limit flag from the shared record', () => {
+    for (const sequence of allReminderSequences()) {
+      expect(sequence.exemptFromDailyLimit).toBe(
+        REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT[sequence.id]
+      );
+    }
+  });
+
+  it('keeps one definition of the skip reasons, in the shared package', () => {
+    const source = readFileSync(new URL('./recheck.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/export const REMINDER_SKIP_REASONS/);
+    expect(source).toMatch(/type ReminderSkipReason[^}]*\} from '@balo\/shared\/notifications'/);
   });
 
   it('takes the invitation rule from the shared package and declares no copy', () => {

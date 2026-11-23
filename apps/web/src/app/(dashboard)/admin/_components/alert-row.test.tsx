@@ -48,6 +48,29 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('AlertRow kind icons', () => {
+  // Other kinds fall back to the shared default on purpose; these two were added with BAL-666.
+  it.each(['scheduled_notification.failed', 'project.proposal_review_stalled'])(
+    '%s has its own icon, not the fallback',
+    (kind) => {
+      const { container } = render(
+        <AlertRow
+          row={row({ kind })}
+          index={0}
+          last
+          expanded={false}
+          onToggle={noop}
+          canResolve
+          onClosed={noop}
+        />
+      );
+
+      expect(container.querySelector('svg')).not.toBeNull();
+      expect(container.querySelector('svg.lucide-layers')).toBeNull();
+    }
+  );
+});
+
 describe('AlertRow', () => {
   it('renders the sentence, entity, evidence, and "first seen" meta', () => {
     render(

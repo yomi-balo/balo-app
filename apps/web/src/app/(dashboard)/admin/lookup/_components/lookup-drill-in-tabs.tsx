@@ -20,7 +20,7 @@ import { useRef } from 'react';
  * manual-activation mode.
  */
 
-export type LookupDrillInTab = 'timeline' | 'money';
+export type LookupDrillInTab = 'timeline' | 'money' | 'follow_ups';
 
 interface LookupDrillInTabsProps {
   readonly tabs: readonly { readonly key: LookupDrillInTab; readonly label: string }[];

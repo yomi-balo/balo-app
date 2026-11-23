@@ -3,6 +3,10 @@ import { AUTO_ACCEPT_DAYS } from '../engagements/delivery-review';
 import {
   MAX_REMINDER_STEPS,
   REMINDER_ARMABLE_AFTER_DUE_MS,
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
+  REMINDER_SEQUENCE_SHARED_RULES,
+  REMINDER_SKIP_REASONS,
+  reminderSequenceSpanMs,
   REMINDER_DEFAULT_ZONE,
   REMINDER_SEQUENCE_IDS,
   REMINDER_SEQUENCE_SHARED_RULES,
@@ -216,5 +220,43 @@ describe('reminderLocalDayStart', () => {
     // Tue 2026-11-24 09:00 EST (UTC-5) = 14:00Z; midnight = 05:00Z
     const out = reminderLocalDayStart(new Date('2026-11-24T14:00:00Z'), 'America/New_York');
     expect(out.toISOString()).toBe('2026-11-24T05:00:00.000Z');
+  });
+});
+
+describe('reminderSequenceSpanMs', () => {
+  it('is the largest step offset plus four days', () => {
+    expect(reminderSequenceSpanMs()).toBe((9 + 4) * 86_400_000);
+  });
+});
+
+describe('REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s has an explicit flag', (id) => {
+    expect(typeof REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT[id]).toBe('boolean');
+  });
+
+  it('proposal_review counts toward the daily limit', () => {
+    expect(REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT.proposal_review).toBe(false);
+  });
+});
+
+describe('REMINDER_SKIP_REASONS', () => {
+  it('lists every skip the recheck guard records', () => {
+    expect([...REMINDER_SKIP_REASONS]).toEqual([
+      'malformed_payload',
+      'already_decided',
+      'no_longer_waiting',
+      'anchor_moved',
+      'recipient_gone',
+      'over_daily_limit',
+    ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_SHARED_RULES', () => {
+  it('names the proposal-review wait rule beside the awaiting rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.proposal_review).toEqual([
+      'proposalAwaitsClientReview',
+      'proposalReviewWait',
+    ]);
   });
 });

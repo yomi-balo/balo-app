@@ -9,14 +9,26 @@ import {
   calendarSubscriptionsRepository,
   engagementChangeOrdersRepository,
   engagementTimeEntriesRepository,
+  proposalsRepository,
+  reminderWaitsRepository,
   type OpenReceivableAlertRow,
   type AdminAlertFinding,
+  type ReminderWaitRow,
 } from '@balo/db';
 import {
   TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS,
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
 import { LIFECYCLE_LOOKBACK_MS } from '@balo/shared/meetings';
+import {
+  groupReminderWaits,
+  PROPOSAL_REVIEW_STALLED_AFTER_MS,
+  reminderRecipientZone,
+  reminderSequenceKeyPrefix,
+  reminderWaitsLastWent,
+  reminderWaitsStalled,
+  type ReminderWait,
+} from '@balo/shared/notifications';
 import { changeOrderStaleCutoff, hoursLabel } from '@balo/shared/engagements';
 import { businessDaysBetween } from '@balo/shared/timezone';
 import { PRESENCE_UNSETTLED_ALERT_MS } from './presence-settlement-timing.js';
@@ -28,9 +40,10 @@ import {
 import { resolveMeetingTimers } from '../config/meeting-timers.js';
 import { formatAudMinor } from '../notifications/channels/templates/credit-format.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
+import { proposalReviewEntities } from '../notifications/sequences/proposal-review.js';
 
 /**
- * BAL-548 / ADR-1055 — the eleven `admin_alerts` FINDER implementations, keyed by the NAME the
+ * BAL-548 / ADR-1055 — the `admin_alerts` FINDER implementations, keyed by the NAME the
  * registry (`@balo/shared/admin-alerts`) holds on each finder-kind's `finder` field.
  * `packages/shared` cannot hold these functions (it imports no db, by rule), so the registry
  * holds a NAME and this module holds the implementation.
@@ -86,9 +99,13 @@ function formatDateTimeShortUtc(date: Date): string {
   );
 }
 
-function personName(firstName: string | null, lastName: string | null): string {
+function personName(
+  firstName: string | null,
+  lastName: string | null,
+  fallback = 'An expert'
+): string {
   const name = [firstName, lastName].filter((part): part is string => part !== null).join(' ');
-  return name.length > 0 ? name : 'An expert';
+  return name.length > 0 ? name : fallback;
 }
 
 /** `'Recording failed'` / `'Recording failed at ingest'` — one title-builder for both the
@@ -795,6 +812,100 @@ async function sessionPresenceStuck(
   return { findings, batchFilled };
 }
 
+// ── project.proposal_review_stalled ──────────────────────────────────────
+
+/** Bounds the reminder rows one tick reads; a full read warns through `batchFilled`. */
+export const PROPOSAL_REVIEW_STALLED_ROW_LIMIT = 2000;
+
+/** The zone a wait's steps are placed in: its recipient's saved zone, else the platform default. */
+function waitRecipientZone(wait: ReminderWait<ReminderWaitRow>): string {
+  const [first] = wait.steps.values();
+  return reminderRecipientZone(first?.recipient?.timezone);
+}
+
+/**
+ * Requests still waiting on the client's review whose follow-ups have all gone and whose last one
+ * went more than two days ago. The candidate requests come from the sequence's own
+ * `proposalReviewEntities`, so a request whose only proposals await changes is never a candidate,
+ * and the stalled rule is the shared `reminderWaitsStalled`. Only waits at the request's current
+ * anchor count: an older anchor's follow-ups say nothing about this wait. A request that is never
+ * sent anything is left to `scheduled_notification.failed`.
+ */
+async function projectProposalReviewStalled(
+  ctx: AdminAlertFinderContext
+): Promise<AdminAlertFinderOutcome> {
+  const entities = proposalReviewEntities(await proposalsRepository.listReviewCandidates());
+  if (entities.length === 0) {
+    return { findings: [], batchFilled: false };
+  }
+
+  const keyPrefix = reminderSequenceKeyPrefix('proposal_review');
+  const earliestAnchor = Math.min(...entities.map((entity) => entity.anchor.getTime()));
+  const rows = await reminderWaitsRepository.listRows({
+    keyPrefixes: entities.map((entity) => `${keyPrefix}${entity.entityId}:`),
+    createdSince: new Date(earliestAnchor),
+    limit: PROPOSAL_REVIEW_STALLED_ROW_LIMIT,
+  });
+
+  const waitsByRequest = new Map<string, ReminderWait<ReminderWaitRow>[]>();
+  for (const wait of groupReminderWaits(rows)) {
+    const group = waitsByRequest.get(wait.entityId);
+    if (group === undefined) {
+      waitsByRequest.set(wait.entityId, [wait]);
+    } else {
+      group.push(wait);
+    }
+  }
+
+  const findings: AdminAlertFinding[] = [];
+  for (const entity of entities) {
+    const anchorIso = entity.anchor.toISOString();
+    const current = (waitsByRequest.get(entity.entityId) ?? []).filter(
+      (wait) => wait.anchorIso === anchorIso
+    );
+    const last = reminderWaitsLastWent(current);
+    if (
+      last === null ||
+      !reminderWaitsStalled(current, ctx.now, PROPOSAL_REVIEW_STALLED_AFTER_MS, waitRecipientZone)
+    ) {
+      continue;
+    }
+    const requestTitle =
+      typeof entity.fresh.title === 'string' ? entity.fresh.title : 'Project request';
+    const awaiting =
+      typeof entity.fresh.awaitingCount === 'number' ? entity.fresh.awaitingCount : 0;
+    const companyName = last.row.entity?.companyName ?? null;
+    const company = companyName ?? 'the client';
+    const person = personName(
+      last.row.recipient?.firstName ?? null,
+      last.row.recipient?.lastName ?? null,
+      'The client'
+    );
+    const waitingOn = companyName === null ? person : `${person} @ ${companyName}`;
+    findings.push({
+      entityType: 'project_request',
+      entityId: entity.entityId,
+      detail: {
+        title: `Proposals are still waiting on ${company}`,
+        entityLabel: `${requestTitle} · ${company}`,
+        evidence: `Every follow-up has gone to ${waitingOn}; the last went on ${formatDateShort(last.at)}.`,
+        facts: [
+          ['Client', company],
+          ['Waiting on', waitingOn],
+          ['Proposals awaiting', String(awaiting)],
+          ['Waiting since', formatDateShort(entity.anchor)],
+          ['Last follow-up', formatDateShort(last.at)],
+        ],
+      },
+    });
+  }
+
+  return {
+    findings: findings.slice(0, ctx.limit),
+    batchFilled: findings.length > ctx.limit || rows.length >= PROPOSAL_REVIEW_STALLED_ROW_LIMIT,
+  };
+}
+
 // ── The registry ─────────────────────────────────────────────────────────
 
 /**
@@ -816,4 +927,5 @@ export const ADMIN_ALERT_FINDERS: Readonly<Record<string, AdminAlertFinder>> = {
   meetingUnprovisioned,
   meetingStranded,
   sessionPresenceStuck,
+  projectProposalReviewStalled,
 };
