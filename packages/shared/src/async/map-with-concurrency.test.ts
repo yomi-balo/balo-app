@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapWithConcurrency } from './map-with-concurrency.js';
+import { mapWithConcurrency } from './map-with-concurrency';
 
 interface Deferred {
   readonly promise: Promise<void>;

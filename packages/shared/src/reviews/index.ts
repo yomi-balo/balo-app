@@ -12,7 +12,7 @@
  * returns zero hits repo-wide (verified, not assumed). The design spec's line
  * "`LOW_THRESHOLD` is config … follow the BAL-398 platform-config precedent" is WRONG
  * and is deliberately not followed. House precedents for the typed-const treatment:
- * `AUTO_ACCEPT_DAYS` (repositories/project-engagements.ts), `CASE_INACTIVITY_DAYS`
+ * `AUTO_ACCEPT_DAYS` (`@balo/shared/engagements`), `CASE_INACTIVITY_DAYS`
  * (`@balo/shared/engagements`), `DORMANCY_REMINDER_WINDOWS_DAYS` (`@balo/shared/pricing`).
  */
 
@@ -263,7 +263,7 @@ export const REVIEW_NUDGE_WINDOW_MS = 60 * 60 * 1000;
  * every sweep here writes a composite string, so the insert is rejected `22P02` and
  * swallowed by the log channel's own try/catch).
  *
- * ⚠ NAME COLLISION AVOIDED: `apps/api/src/jobs/auto-accept-sweep.ts` already exports
+ * ⚠ NAME COLLISION AVOIDED: `@balo/shared/engagements` already exports
  * `REVIEW_REMINDER_LEAD_DAYS = 2`, meaning the T-2 AUTO-ACCEPT lead — a completely
  * different thing. Do NOT reuse that name here.
  */

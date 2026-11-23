@@ -34,6 +34,7 @@
     "./admin-alerts": "./src/admin-alerts/index.ts",
     "./capture-health": "./src/capture-health/index.ts",
     "./rate-limit": "./src/rate-limit/index.ts",
+    "./async": "./src/async/index.ts",
     "./realtime": "./src/realtime/index.ts"
   },
   "dependencies": {

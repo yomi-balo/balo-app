@@ -13,6 +13,7 @@ import { createLogger } from '@balo/shared/logging';
 import type { ScheduledRecheck } from '../scheduling/rechecks.js';
 import { isScheduledKeyDecided } from '../scheduling/scheduled-key-decided.js';
 import { findReminderSequence, limitedSequencePrefixes } from './registry.js';
+import type { ReminderSequence } from './types.js';
 
 const log = createLogger('reminder-sequence-recheck');
 
@@ -62,23 +63,13 @@ function nonBlank(value: unknown): value is string {
 
 /** The stored payload's identifying fields, or null when any is missing or unusable. */
 function parsePayload(row: ScheduledNotification): ParsedPayload | null {
-  const {
-    correlationId,
-    sequenceId,
-    step,
-    entityId,
-    anchorIso,
-    recipientUserId,
-    projectRequestId,
-  } = row.payload;
+  const { correlationId, sequenceId, step, entityId, anchorIso, recipientUserId } = row.payload;
   if (
     !nonBlank(correlationId) ||
     !nonBlank(sequenceId) ||
     !nonBlank(step) ||
     !isUuid(entityId) ||
     !isUuid(recipientUserId) ||
-    !isUuid(projectRequestId) ||
-    projectRequestId !== entityId ||
     !nonBlank(anchorIso) ||
     !isRoundTrippedIso(anchorIso)
   ) {
@@ -87,11 +78,39 @@ function parsePayload(row: ScheduledNotification): ParsedPayload | null {
   const sequence = findReminderSequence(sequenceId);
   if (
     sequence?.event !== row.event ||
-    !REMINDER_SEQUENCE_STEPS[sequence.id].some((known) => known.key === step)
+    !REMINDER_SEQUENCE_STEPS[sequence.id].some((known) => known.key === step) ||
+    !sequence.payloadMatchesEntity(row.payload, entityId)
   ) {
     return null;
   }
   return { sequenceId, entityId, anchorIso, recipientUserId };
+}
+
+/** The stored fields that say who a step is for and which entity it is about. */
+const IDENTITY_FIELDS = [
+  'correlationId',
+  'sequenceId',
+  'step',
+  'entityId',
+  'anchorIso',
+  'recipientUserId',
+] as const;
+
+/**
+ * True when merging the live `fresh` fields left the stored identity intact: the common step
+ * fields are unchanged and the sequence's own entity and recipient fields still agree with them.
+ * `fresh` may refresh display fields only, never redirect a step to another recipient or entity.
+ */
+function identityPreserved(
+  stored: Readonly<Record<string, unknown>>,
+  merged: Readonly<Record<string, unknown>>,
+  sequence: ReminderSequence,
+  entityId: string
+): boolean {
+  return (
+    IDENTITY_FIELDS.every((field) => merged[field] === stored[field]) &&
+    sequence.payloadMatchesEntity(merged, entityId)
+  );
 }
 
 function skip(reason: ReminderSkipReason): { publish: false; reason: string } {
@@ -152,5 +171,9 @@ async function decide(row: ScheduledNotification): ReturnType<ScheduledRecheck> 
       return skip('over_daily_limit');
     }
   }
-  return { publish: true, payload: { ...row.payload, ...entity.fresh } };
+  const merged = { ...row.payload, ...entity.fresh };
+  if (!identityPreserved(row.payload, merged, sequence, parsed.entityId)) {
+    return skip('malformed_payload');
+  }
+  return { publish: true, payload: merged };
 }
