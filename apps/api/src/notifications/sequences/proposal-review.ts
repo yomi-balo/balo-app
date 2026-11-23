@@ -3,7 +3,11 @@ import {
   proposalsRepository,
   type ProposalReviewCandidateRow,
 } from '@balo/db';
-import { REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT } from '@balo/shared/notifications';
+import {
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_CHANNELS,
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
+} from '@balo/shared/notifications';
 import { proposalReviewWait } from '@balo/shared/project-requests';
 import type { ReminderSequence, SequenceEntity } from './types.js';
 
@@ -60,8 +64,8 @@ function freshAwaitingCount(entity: SequenceEntity): number {
 export const proposalReviewSequence: ReminderSequence<'project.proposal_review_reminder'> = {
   id: 'proposal_review',
   event: 'project.proposal_review_reminder',
-  channels: ['email'],
-  audience: 'client',
+  channels: REMINDER_SEQUENCE_CHANNELS.proposal_review,
+  audience: REMINDER_SEQUENCE_AUDIENCE.proposal_review,
   cadence: 'hourly',
   exemptFromDailyLimit: REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT.proposal_review,
 

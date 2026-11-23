@@ -1066,7 +1066,7 @@ describe('projectProposalReviewStalled', () => {
       updatedAt: ANCHOR,
       payload: {},
       recipient: { firstName: 'Dana', lastName: 'Lee', timezone: null },
-      entity: { title: 'CRM rollout', companyName: 'Northwind' },
+      entity: { title: 'CRM rollout', companyName: 'Northwind', agencyName: null },
       ...overrides,
     };
   }

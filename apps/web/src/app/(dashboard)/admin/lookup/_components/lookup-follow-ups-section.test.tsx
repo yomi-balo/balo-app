@@ -37,6 +37,7 @@ function wait(id: string, over: Partial<FollowUpWaitView> = {}): FollowUpWaitVie
     context: ['Project request', '2 proposals', 'waiting since Mon 16 Nov'],
     state: 'waiting',
     summary: '1 of 3 sent · next Wed 25 Nov, 9:00 am',
+    note: null,
     hasFailed: false,
     steps: [
       step(),
@@ -68,7 +69,6 @@ function view(over: Partial<LookupFollowUpsView> = {}): LookupFollowUpsView {
     lens: 'person',
     subjectFirstName: 'Dana',
     origin: null,
-    engagementWithoutRequest: false,
     limit: null,
     now: [wait('a'), wait('b')],
     earlier: [],
@@ -417,6 +417,36 @@ describe('LookupFollowUpsSection — blocks (AC6)', () => {
   });
 });
 
+describe('LookupFollowUpsSection — exempt sequences', () => {
+  it('shows a wait’s note first in its open panel, and nothing when it has none', async () => {
+    const user = userEvent.setup();
+    mockAction.mockResolvedValue({
+      ok: true,
+      view: view({
+        now: [
+          wait('a', {
+            title: 'Work to review',
+            note: 'A deadline warning. Sent at its exact time.',
+          }),
+          wait('b'),
+        ],
+      }),
+    });
+    renderSection();
+    const [first, second] = await screen.findAllByRole('button', { expanded: false });
+    expect(screen.queryByText(/A deadline warning/)).not.toBeInTheDocument();
+    if (first === undefined || second === undefined) throw new Error('expected two wait blocks');
+
+    await user.click(second);
+    expect(screen.queryByText(/A deadline warning/)).not.toBeInTheDocument();
+
+    await user.click(first);
+    const note = screen.getByText('A deadline warning. Sent at its exact time.');
+    const panel = note.closest('div');
+    expect(panel?.firstElementChild).toBe(note);
+  });
+});
+
 describe('LookupFollowUpsSection — origin note and daily limit', () => {
   it('shows the engagement origin note', async () => {
     mockAction.mockResolvedValue({
@@ -425,11 +455,13 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     });
     renderSection({ entityType: 'engagement' });
     expect(
-      await screen.findByText('From Salesforce CPQ rollout, the request this engagement came from.')
+      await screen.findByText(
+        'Proposal follow-ups here are from Salesforce CPQ rollout, the request this engagement came from.'
+      )
     ).toBeInTheDocument();
   });
 
-  it('keeps the origin note on the empty state of an engagement', async () => {
+  it('leaves the origin note off the empty state of an engagement', async () => {
     mockAction.mockResolvedValue({
       ok: true,
       view: view({
@@ -441,20 +473,37 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     });
     renderSection({ entityType: 'engagement' });
     expect(await screen.findByText('Nothing here is waiting on anyone')).toBeInTheDocument();
-    expect(
-      screen.getByText('From Salesforce CPQ rollout, the request this engagement came from.')
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/the request this engagement came from/)).not.toBeInTheDocument();
   });
 
-  it('says so when an engagement did not come from a project request', async () => {
+  it('leaves the origin note off when an engagement only has its own delivery waits', async () => {
     mockAction.mockResolvedValue({
       ok: true,
-      view: view({ lens: 'entity', now: [], earlier: [], engagementWithoutRequest: true }),
+      view: view({
+        lens: 'entity',
+        now: [wait('delivery', { title: 'Work to review' })],
+        origin: { requestTitle: 'Salesforce CPQ rollout' },
+      }),
+    });
+    renderSection({ entityType: 'engagement' });
+    expect(await screen.findByText('Request delivery')).toBeInTheDocument();
+    expect(screen.queryByText(/the request this engagement came from/)).not.toBeInTheDocument();
+  });
+
+  it('shows the origin note when only an earlier wait is a proposal wait', async () => {
+    mockAction.mockResolvedValue({
+      ok: true,
+      view: view({
+        lens: 'entity',
+        now: [wait('delivery', { title: 'Work to review' })],
+        earlier: [wait('proposal', { state: 'stopped' })],
+        origin: { requestTitle: 'Salesforce CPQ rollout' },
+      }),
     });
     renderSection({ entityType: 'engagement' });
     expect(
       await screen.findByText(
-        "This engagement didn't come from a project request, so no follow-ups apply."
+        'Proposal follow-ups here are from Salesforce CPQ rollout, the request this engagement came from.'
       )
     ).toBeInTheDocument();
   });
@@ -464,7 +513,6 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     renderSection();
     await screen.findByText(/Nothing is waiting on Dana/);
     expect(screen.queryByText(/the request this engagement came from/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/didn't come from a project request/)).not.toBeInTheDocument();
   });
 
   it('shows the limit strip with the used count, and no skip sentence below the limit', async () => {
@@ -475,7 +523,7 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     renderSection();
     expect(await screen.findByText('1 of 2 follow-up emails today')).toBeInTheDocument();
     expect(screen.queryByText(/is skipped/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/deadline warnings/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Deadline warnings do not count.')).toBeInTheDocument();
   });
 
   it('a full limit says the next one due for the person is skipped', async () => {
@@ -485,7 +533,11 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     });
     renderSection();
     expect(await screen.findByText('2 of 2 follow-up emails today')).toBeInTheDocument();
-    expect(screen.getByText('The next one due for Dana today is skipped.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The next one due for Dana today is skipped. Deadline warnings do not count.'
+      )
+    ).toBeInTheDocument();
   });
 
   it('a full limit for an unnamed person says "this person"', async () => {
@@ -495,7 +547,9 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     });
     renderSection();
     expect(
-      await screen.findByText('The next one due for this person today is skipped.')
+      await screen.findByText(
+        'The next one due for this person today is skipped. Deadline warnings do not count.'
+      )
     ).toBeInTheDocument();
   });
 

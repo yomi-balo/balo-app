@@ -1,4 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, isNull, ne, notInArray } from 'drizzle-orm';
+import { mapWithConcurrency } from '@balo/shared/async';
+import { isLookupUuid } from '@balo/shared/lookup';
 import { db } from '../client';
 import {
   companies,
@@ -487,11 +489,11 @@ async function endTrackTx(
 
   // 3. End each open proposal. Already locked in step 1/2b, so `advanceProposalStatus`'s own
   //    `FOR UPDATE` re-take is free and its transition guard still runs.
-  const endedProposalIds: string[] = [];
-  for (const proposal of openProposals) {
+  //    Concurrency 1: order is load-bearing (one transaction connection, row locks taken in order).
+  const endedProposalIds = await mapWithConcurrency(openProposals, 1, async (proposal) => {
     await advanceProposalStatus(tx, { id: proposal.id, to: input.proposalOutcome });
-    endedProposalIds.push(proposal.id);
-  }
+    return proposal.id;
+  });
 
   return { advanced, endedProposalIds };
 }
@@ -545,12 +547,21 @@ export const requestExpertRelationshipsRepository = {
    * whose expert profile resolves to a live, active user (the company is joined on id only: companies has no soft delete). `onDirectLeg` is
    * true when the request was sent directly to this very expert. The SQL only narrows the
    * rows; whether the expert still owes an answer is decided by the shared rule, not here.
-   * Ordered by `invited_at`, then id. `relationshipId` narrows to one row; `invitedSince`
-   * drops rows invited before it.
+   * Ordered by `invited_at`, then id. `relationshipId` narrows to one row; `relationshipIds`
+   * narrows to those rows (empty, or no uuid-shaped id, makes no query); `invitedSince` drops
+   * rows invited before it.
    */
   async listInvitationReminderCandidates(
-    input: { relationshipId?: string; invitedSince?: Date } = {}
+    input: {
+      relationshipId?: string;
+      relationshipIds?: readonly string[];
+      invitedSince?: Date;
+    } = {}
   ): Promise<InvitationReminderCandidateRow[]> {
+    const relationshipIds = input.relationshipIds?.filter(isLookupUuid);
+    if (relationshipIds?.length === 0) {
+      return [];
+    }
     const rows = await db
       .select({
         relationshipId: requestExpertRelationships.id,
@@ -593,6 +604,9 @@ export const requestExpertRelationshipsRepository = {
           input.relationshipId === undefined
             ? undefined
             : eq(requestExpertRelationships.id, input.relationshipId),
+          relationshipIds === undefined
+            ? undefined
+            : inArray(requestExpertRelationships.id, relationshipIds),
           input.invitedSince === undefined
             ? undefined
             : gte(requestExpertRelationships.invitedAt, input.invitedSince)

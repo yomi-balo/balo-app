@@ -4,9 +4,14 @@ import {
   type ProjectEngagementWithMilestones,
 } from '@balo/db';
 import { trackServer, ENGAGEMENT_SERVER_EVENTS } from '@balo/analytics/server';
-import { autoAcceptAt } from '@balo/shared/engagements';
+import { deliveryReviewWait } from '@balo/shared/engagements';
 import { createLogger } from '@balo/shared/logging';
-import { REMINDER_ARMABLE_AFTER_DUE_MS, REMINDER_SEQUENCE_STEPS } from '@balo/shared/notifications';
+import {
+  REMINDER_ARMABLE_AFTER_DUE_MS,
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_CHANNELS,
+  REMINDER_SEQUENCE_STEPS,
+} from '@balo/shared/notifications';
 import { formatShortUtc } from '@balo/shared/timezone';
 import { deliveryEmailFields } from '../../lib/delivery-email-fields.js';
 import { mapWithConcurrency } from '../../lib/map-with-concurrency.js';
@@ -37,10 +42,6 @@ export function deliveryReviewDaysLeft(autoAt: Date, now: Date): number {
   return Math.max(1, Math.ceil((autoAt.getTime() - now.getTime()) / DAY_MS));
 }
 
-function awaitsClientReview(engagement: ProjectEngagementWithMilestones): boolean {
-  return engagement.status === 'pending_acceptance' && engagement.completionRequestedAt !== null;
-}
-
 /**
  * Pure. The waiting entity for a hydrated project, or null unless it is `pending_acceptance`
  * with a completion request. `status` is the folded delivery status. The anchor is the request
@@ -51,11 +52,11 @@ export function deliveryReviewEntity(
   ownerUserId: string | undefined,
   now: Date
 ): SequenceEntity | null {
-  const anchor = engagement.completionRequestedAt;
-  if (engagement.status !== 'pending_acceptance' || anchor === null) {
+  const wait = deliveryReviewWait(engagement);
+  if (wait === null) {
     return null;
   }
-  const autoAt = autoAcceptAt(anchor);
+  const { anchor, autoAcceptAt: autoAt } = wait;
   return {
     entityId: engagement.id,
     anchor,
@@ -73,7 +74,7 @@ export function deliveryReviewEntity(
 /** One engagement's live entity, or null when it is gone or no longer awaits the client. */
 async function loadEntity(engagementId: string, now: Date): Promise<SequenceEntity | null> {
   const engagement = await projectEngagementsRepository.findWithMilestones(engagementId);
-  if (engagement === undefined || !awaitsClientReview(engagement)) {
+  if (engagement === undefined || deliveryReviewWait(engagement) === null) {
     return null;
   }
   const owner = await companiesRepository.findOwnerUserIdByCompanyId(engagement.company.id);
@@ -103,8 +104,8 @@ function nonBlankText(value: unknown): value is string {
 export const deliveryReviewSequence: ReminderSequence<'engagement.review_reminder'> = {
   id: 'delivery_review',
   event: 'engagement.review_reminder',
-  channels: ['email', 'in_app'],
-  audience: 'client',
+  channels: REMINDER_SEQUENCE_CHANNELS.delivery_review,
+  audience: REMINDER_SEQUENCE_AUDIENCE.delivery_review,
   cadence: CADENCE,
   exemptFromDailyLimit: true,
 

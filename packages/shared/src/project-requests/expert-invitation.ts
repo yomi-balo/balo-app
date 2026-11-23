@@ -58,3 +58,33 @@ export function expertInvitationMove(
   if (directExpertOwesChoice(facts)) return 'direct_request';
   return null;
 }
+
+/** The facts that decide whether an invited expert's reminder sequence is still waiting. */
+export interface InvitationReminderFacts {
+  requestStatus: string;
+  relationshipStatus: string;
+  /** The request was sent directly to this very expert. */
+  onDirectLeg: boolean;
+  availabilitySharedAt: Date | null;
+  invitedAt: Date;
+}
+
+/**
+ * The wait the invitation reminder sequence runs on, or null once the Your move card would no
+ * longer show. The anchor is the invite instant. `sentMessage` is whether the expert has written
+ * in the request thread. Both the sweep and the Lookup Follow-ups tab read this, so a reminder
+ * stops exactly when the card does.
+ */
+export function invitationReminderWait(
+  facts: Readonly<InvitationReminderFacts>,
+  sentMessage: boolean
+): { anchor: Date } | null {
+  const move = expertInvitationMove({
+    requestStatus: facts.requestStatus,
+    relationshipStatus: facts.relationshipStatus,
+    onDirectLeg: facts.onDirectLeg,
+    availabilityShared: facts.availabilitySharedAt !== null,
+    sentMessage,
+  });
+  return move === null ? null : { anchor: facts.invitedAt };
+}

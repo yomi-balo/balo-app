@@ -1,11 +1,18 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { REMINDER_SEQUENCE_IDS } from '@balo/shared/notifications';
 import {
+  ANY_SEQUENCE_EXEMPT,
+  EXEMPT_NOTE,
   FOOTNOTE,
+  LIMIT_EXEMPT_TAIL,
+  SEQUENCE_META,
   LOOKUP_FOLLOW_UP_TYPES,
   REASON_CODE,
   REASON_SENTENCE,
   hasFollowUpsTab,
+  channelLabel,
   isFollowUpReasonKey,
+  sequenceChannelLabel,
   type FollowUpReasonKey,
 } from './follow-ups-view';
 
@@ -75,5 +82,55 @@ describe('follow-ups wording', () => {
     expect(hasFollowUpsTab('user')).toBe(true);
     expect(hasFollowUpsTab('company')).toBe(false);
     expect(hasFollowUpsTab('credit_session')).toBe(false);
+  });
+});
+
+describe('per-sequence wording', () => {
+  it('has complete wording for every registered sequence', () => {
+    for (const id of REMINDER_SEQUENCE_IDS) {
+      const meta = SEQUENCE_META[id];
+      expect(meta.title).not.toBe('');
+      expect(meta.aboutType).not.toBe('');
+      expect(meta.untitled).not.toBe('');
+      expect(meta.sinceLive).not.toBe('');
+      expect(meta.sinceStopped).not.toBe('');
+    }
+  });
+
+  it('takes the reference wording', () => {
+    expect(SEQUENCE_META.delivery_review).toMatchObject({
+      title: 'Work to review',
+      aboutType: 'Engagement',
+      untitled: 'A project',
+      sinceLive: 'marked complete',
+      endsAutomatically: true,
+    });
+    expect(SEQUENCE_META.invitation).toMatchObject({
+      title: 'Invitation to answer',
+      aboutType: 'Project request',
+      sinceLive: 'invited',
+      endsAutomatically: false,
+    });
+    expect(SEQUENCE_META.proposal_review).toMatchObject({
+      sinceLive: 'waiting since',
+      sinceStopped: 'began waiting',
+      endsAutomatically: false,
+    });
+  });
+
+  it('labels channels from the shared record, capitalised and joined', () => {
+    expect(channelLabel(['email', 'in_app'])).toBe('Email and in-app');
+    expect(sequenceChannelLabel('proposal_review')).toBe('Email');
+    expect(sequenceChannelLabel('delivery_review')).toBe('Email and in-app');
+    expect(sequenceChannelLabel('invitation')).toBe('Email');
+  });
+
+  it('words the exempt note and limit tail, without "24 hours"', () => {
+    expect(EXEMPT_NOTE).toBe(
+      'A deadline warning. Sent at its exact time and not counted in the daily limit.'
+    );
+    expect(LIMIT_EXEMPT_TAIL).toBe('Deadline warnings do not count.');
+    expect(`${EXEMPT_NOTE}${LIMIT_EXEMPT_TAIL}`).not.toMatch(/24 hours/i);
+    expect(ANY_SEQUENCE_EXEMPT).toBe(true);
   });
 });

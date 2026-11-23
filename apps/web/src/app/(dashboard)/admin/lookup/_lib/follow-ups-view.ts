@@ -1,5 +1,8 @@
 import {
   REMINDER_DAILY_LIMIT,
+  REMINDER_SEQUENCE_CHANNELS,
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
+  type ReminderChannel,
   type ReminderSequenceId,
   type ReminderSkipReason,
 } from '@balo/shared/notifications';
@@ -50,6 +53,8 @@ export interface FollowUpWaitView {
   readonly context: readonly string[];
   readonly state: FollowUpWaitState;
   readonly summary: string;
+  /** A line about the sequence itself, shown first in the open panel; `null` for most. */
+  readonly note: string | null;
   readonly hasFailed: boolean;
   readonly steps: readonly FollowUpStepView[];
 }
@@ -66,8 +71,6 @@ export interface LookupFollowUpsView {
   readonly subjectFirstName: string | null;
   /** Set only for an engagement: the request whose waits are shown. */
   readonly origin: { readonly requestTitle: string } | null;
-  /** True for an engagement that did not come from a project request. */
-  readonly engagementWithoutRequest: boolean;
   readonly limit: FollowUpLimitView | null;
   readonly now: readonly FollowUpWaitView[];
   readonly earlier: readonly FollowUpWaitView[];
@@ -90,18 +93,72 @@ export const WAIT_LABEL: Readonly<Record<FollowUpWaitState, string>> = {
   stopped: 'No longer waiting',
 };
 
-export const SEQUENCE_META: Readonly<
-  Record<
-    ReminderSequenceId,
-    { readonly title: string; readonly aboutType: string; readonly channel: string }
-  >
-> = {
+export interface SequenceMeta {
+  readonly title: string;
+  readonly aboutType: string;
+  /** The headline of a wait whose subject has no title. */
+  readonly untitled: string;
+  /** The "since" phrase, for a wait that is still live and for one that has stopped. */
+  readonly sinceLive: string;
+  readonly sinceStopped: string;
+  /** True when the wait closes by itself, so a finished wait has nothing to hand off. */
+  readonly endsAutomatically: boolean;
+}
+
+export const SEQUENCE_META: Readonly<Record<ReminderSequenceId, SequenceMeta>> = {
   proposal_review: {
     title: 'Proposals to review',
     aboutType: 'Project request',
-    channel: 'Email',
+    untitled: 'A request',
+    sinceLive: 'waiting since',
+    sinceStopped: 'began waiting',
+    endsAutomatically: false,
+  },
+  delivery_review: {
+    title: 'Work to review',
+    aboutType: 'Engagement',
+    untitled: 'A project',
+    sinceLive: 'marked complete',
+    sinceStopped: 'marked complete',
+    endsAutomatically: true,
+  },
+  invitation: {
+    title: 'Invitation to answer',
+    aboutType: 'Project request',
+    untitled: 'A request',
+    sinceLive: 'invited',
+    sinceStopped: 'invited',
+    endsAutomatically: false,
   },
 };
+
+const CHANNEL_WORDS: Readonly<Record<ReminderChannel, string>> = {
+  email: 'email',
+  in_app: 'in-app',
+};
+
+/** The channels a sequence sends on, as a label: `Email`, `Email and in-app`. */
+export function channelLabel(channels: readonly ReminderChannel[]): string {
+  const joined = channels.map((channel) => CHANNEL_WORDS[channel]).join(' and ');
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}`;
+}
+
+/** What a step of each sequence was sent on. */
+export function sequenceChannelLabel(sequenceId: ReminderSequenceId): string {
+  return channelLabel(REMINDER_SEQUENCE_CHANNELS[sequenceId]);
+}
+
+/** The line under a sequence that is not counted in the daily limit. */
+export const EXEMPT_NOTE =
+  'A deadline warning. Sent at its exact time and not counted in the daily limit.';
+
+/** Appended to the daily-limit strip when any sequence is exempt from the limit. */
+export const LIMIT_EXEMPT_TAIL = 'Deadline warnings do not count.';
+
+/** True when at least one sequence is not counted in the daily limit, so the strip says so. */
+export const ANY_SEQUENCE_EXEMPT: boolean = Object.values(
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT
+).some(Boolean);
 
 const LIMIT_WORDS: readonly string[] = ['no', 'one', 'two', 'three', 'four', 'five'];
 

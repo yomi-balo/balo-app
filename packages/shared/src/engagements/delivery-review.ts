@@ -30,3 +30,19 @@ export const REVIEW_REMINDER_LEAD_DAYS = 2;
 export function autoAcceptAt(requestedAt: Date): Date {
   return new Date(requestedAt.getTime() + AUTO_ACCEPT_DAYS * MS_PER_DAY);
 }
+
+/**
+ * The wait the `delivery_review` reminder sequence runs on, or null unless the project is
+ * `pending_acceptance` with a completion request. `status` is the folded delivery status. The
+ * anchor is the request instant, so a withdrawn-then-re-requested delivery is a new anchor. Both
+ * the sweep and the Lookup Follow-ups tab read this rule.
+ */
+export function deliveryReviewWait(e: {
+  status: string;
+  completionRequestedAt: Date | null;
+}): { anchor: Date; autoAcceptAt: Date } | null {
+  if (e.status !== 'pending_acceptance' || e.completionRequestedAt === null) {
+    return null;
+  }
+  return { anchor: e.completionRequestedAt, autoAcceptAt: autoAcceptAt(e.completionRequestedAt) };
+}

@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Inbox } from 'lucide-react';
 import {
+  ANY_SEQUENCE_EXEMPT,
   FOOTNOTE,
+  LIMIT_EXEMPT_TAIL,
+  SEQUENCE_META,
   type FollowUpLimitView,
   type FollowUpWaitView,
   type LookupFollowUpType,
@@ -71,10 +74,14 @@ function OriginNote({
   view,
   className,
 }: Readonly<{ view: LookupFollowUpsView; className: string }>): React.JSX.Element | null {
-  if (view.origin === null) return null;
+  const showsProposalWait = [...view.now, ...view.earlier].some(
+    (wait) => wait.title === SEQUENCE_META.proposal_review.title
+  );
+  if (view.origin === null || !showsProposalWait) return null;
   return (
     <p className={className}>
-      From {view.origin.requestTitle}, the request this engagement came from.
+      Proposal follow-ups here are from {view.origin.requestTitle}, the request this engagement came
+      from.
     </p>
   );
 }
@@ -93,11 +100,6 @@ function EmptyState({ view }: Readonly<{ view: LookupFollowUpsView }>): React.JS
         each follow-up shows here with what happened to it.
       </p>
       <OriginNote view={view} className="text-muted-foreground mt-2 text-xs leading-relaxed" />
-      {view.engagementWithoutRequest && (
-        <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
-          This engagement didn&apos;t come from a project request, so no follow-ups apply.
-        </p>
-      )}
     </div>
   );
 }
@@ -132,9 +134,10 @@ function LimitStrip({
       <span className="text-foreground text-[12.5px] font-semibold">
         {used} of {of} follow-up emails today
       </span>
-      {full && (
+      {(full || ANY_SEQUENCE_EXEMPT) && (
         <span className="text-muted-foreground text-xs">
-          The next one due for {firstName ?? 'this person'} today is skipped.
+          {full && `The next one due for ${firstName ?? 'this person'} today is skipped. `}
+          {ANY_SEQUENCE_EXEMPT && LIMIT_EXEMPT_TAIL}
         </span>
       )}
     </div>

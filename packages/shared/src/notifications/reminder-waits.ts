@@ -5,7 +5,7 @@ import {
   REMINDER_SEQUENCE_KEY_PREFIX,
   REMINDER_SEQUENCE_STEPS,
   reminderLocalDayStart,
-  reminderSendAt,
+  reminderStepSendTimes,
   type ReminderSequenceId,
   type ReminderStep,
 } from './reminder-sequences';
@@ -154,23 +154,45 @@ export function groupReminderWaits<R extends ReminderWaitRowFacts>(
   }));
 }
 
-const MS_PER_MINUTE = 60_000;
+/** The facts a wait's send times and missed steps are read from. */
+export interface ReminderWaitTiming {
+  readonly sequenceId: ReminderSequenceId;
+  readonly anchorIso: string;
+  readonly steps: ReadonlyMap<string, unknown>;
+}
 
 /**
- * True when `step` has no row and its send time (the anchor plus the step's offset, placed by the
- * step's timing in `zone`) is already more than `REMINDER_ARMABLE_AFTER_DUE_MS` behind `now`:
- * the planner will never arm it, so the follow-up is gone. A step that has a row is never missed.
- * The one definition of "missed", read by the stalled finder and the Follow-ups tab alike.
+ * When each step of the wait's sequence is sent, keyed by step key. The same call the planner
+ * makes (`reminderStepSendTimes` over `REMINDER_SEQUENCE_STEPS`), so a schedule shown to a person
+ * and the step the sweep arms agree on the morning, including the same-morning bump.
+ */
+export function reminderWaitSendTimes(
+  wait: Pick<ReminderWaitTiming, 'sequenceId' | 'anchorIso'>,
+  zone: string
+): ReadonlyMap<string, Date> {
+  const times = reminderStepSendTimes({
+    steps: REMINDER_SEQUENCE_STEPS[wait.sequenceId],
+    anchor: new Date(wait.anchorIso),
+    zone,
+  });
+  return new Map(times.map(({ stepKey, fireAt }) => [stepKey, fireAt]));
+}
+
+/**
+ * True when `step` has no row and its send time (see `reminderWaitSendTimes`) is already more
+ * than `REMINDER_ARMABLE_AFTER_DUE_MS` behind `now`: the planner will never arm it, so the
+ * follow-up is gone. A step that has a row is never missed. The one definition of "missed", read
+ * by the stalled finder and the Follow-ups tab alike.
  */
 export function reminderStepMissed(
-  wait: { readonly anchorIso: string; readonly steps: ReadonlyMap<string, unknown> },
+  wait: ReminderWaitTiming,
   step: ReminderStep,
   now: Date,
   zone: string
 ): boolean {
   if (wait.steps.has(step.key)) return false;
-  const dueAt = new Date(new Date(wait.anchorIso).getTime() + step.offsetMinutes * MS_PER_MINUTE);
-  const sendAt = reminderSendAt(dueAt, step.timing, zone);
+  const sendAt = reminderWaitSendTimes(wait, zone).get(step.key);
+  if (sendAt === undefined) return false;
   return now.getTime() > sendAt.getTime() + REMINDER_ARMABLE_AFTER_DUE_MS;
 }
 

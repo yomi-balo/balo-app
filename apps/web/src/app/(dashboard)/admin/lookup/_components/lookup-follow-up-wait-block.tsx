@@ -225,6 +225,9 @@ export function WaitBlock({
       </button>
       {open && (
         <div id={panelId} className="border-border/60 border-t">
+          {wait.note !== null && (
+            <p className="text-muted-foreground px-3.5 pt-2 text-xs leading-snug">{wait.note}</p>
+          )}
           <ul className="px-3.5 pt-0.5 pb-1">
             {wait.steps.map((step, index) => (
               <StepRow key={step.key} step={step} last={index === wait.steps.length - 1} />

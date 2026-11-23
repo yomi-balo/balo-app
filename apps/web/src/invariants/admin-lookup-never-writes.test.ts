@@ -94,6 +94,10 @@ const ALLOWED_REPOSITORY_CALLS: readonly { readonly object: string; readonly mem
   // other repository here is reached for one lookup by id or one live "is it still waiting" read.
   { object: 'reminderWaitsRepository', member: 'listRows' },
   { object: 'reminderWaitsRepository', member: 'findEngagementRequestId' },
+  { object: 'reminderWaitsRepository', member: 'listRequestRelationshipIds' },
+  { object: 'reminderWaitsRepository', member: 'listDeliveryReviewStates' },
+  { object: 'requestExpertRelationshipsRepository', member: 'listInvitationReminderCandidates' },
+  { object: 'conversationsRepository', member: 'relationshipsWithExpertMessage' },
   { object: 'expertsRepository', member: 'findUserIdByProfileId' },
   { object: 'usersRepository', member: 'findById' },
   { object: 'proposalsRepository', member: 'listReviewCandidates' },
@@ -115,9 +119,11 @@ const ALLOWED_DB_IMPORTS: Readonly<Record<string, readonly string[]>> = {
   '_lib/load-lookup.ts': ['platformLookupRepository'],
   '_lib/load-lookup-timeline.ts': ['auditEventsRepository'],
   '_lib/load-lookup-follow-ups.ts': [
+    'conversationsRepository',
     'expertsRepository',
     'proposalsRepository',
     'reminderWaitsRepository',
+    'requestExpertRelationshipsRepository',
     'usersRepository',
   ],
 };
@@ -155,9 +161,20 @@ describe('invariant: the Lookup page and its drill-in perform no writes (BAL-551
     expect(loader).toBeDefined();
     const calls = repositoryMemberCallsOf(loader?.code ?? '');
     expect(calls).toContainEqual({ object: 'reminderWaitsRepository', member: 'listRows' });
+    for (const member of [
+      'findEngagementRequestId',
+      'listRequestRelationshipIds',
+      'listDeliveryReviewStates',
+    ]) {
+      expect(calls).toContainEqual({ object: 'reminderWaitsRepository', member });
+    }
     expect(calls).toContainEqual({
-      object: 'reminderWaitsRepository',
-      member: 'findEngagementRequestId',
+      object: 'requestExpertRelationshipsRepository',
+      member: 'listInvitationReminderCandidates',
+    });
+    expect(calls).toContainEqual({
+      object: 'conversationsRepository',
+      member: 'relationshipsWithExpertMessage',
     });
   });
 

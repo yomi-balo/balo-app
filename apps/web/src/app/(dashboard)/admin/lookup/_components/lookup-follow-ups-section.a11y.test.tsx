@@ -23,6 +23,7 @@ function wait(id: string, state: FollowUpWaitView['state']): FollowUpWaitView {
     context: ['Project request', '2 proposals', 'waiting since Mon 16 Nov'],
     state,
     summary: '1 of 3 sent · 1 failed',
+    note: null,
     hasFailed: true,
     steps: [
       {
@@ -70,7 +71,6 @@ function view(over: Partial<LookupFollowUpsView> = {}): LookupFollowUpsView {
     lens: 'person',
     subjectFirstName: 'Dana',
     origin: null,
-    engagementWithoutRequest: false,
     limit: { used: 2, of: 2, full: true },
     now: [wait('a', 'waiting'), wait('b', 'finished')],
     earlier: [wait('c', 'stopped')],

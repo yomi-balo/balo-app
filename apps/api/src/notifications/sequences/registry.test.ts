@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_CHANNELS,
   REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
   REMINDER_SEQUENCE_IDS,
   REMINDER_SEQUENCE_SHARED_RULES,
@@ -82,10 +84,30 @@ describe('REMINDER_SEQUENCES', () => {
     expect(source).toMatch(/type ReminderSkipReason[^}]*\} from '@balo\/shared\/notifications'/);
   });
 
+  it('takes every sequence channel list and audience from the shared records', () => {
+    for (const sequence of allReminderSequences()) {
+      expect(sequence.channels).toEqual(REMINDER_SEQUENCE_CHANNELS[sequence.id]);
+      expect(sequence.audience).toBe(REMINDER_SEQUENCE_AUDIENCE[sequence.id]);
+    }
+  });
+
+  it('takes the delivery-review rule from the shared package', () => {
+    const source = readFileSync(new URL('./delivery-review.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(
+      /import \{[^}]*deliveryReviewWait[^}]*\} from '@balo\/shared\/engagements'/
+    );
+    expect(source).not.toMatch(/function awaitsClientReview/);
+  });
+
+  it('names the shared wait rules in the delivery-review and invitation records', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toContain('deliveryReviewWait');
+    expect(REMINDER_SEQUENCE_SHARED_RULES.invitation).toContain('invitationReminderWait');
+  });
+
   it('takes the invitation rule from the shared package and declares no copy', () => {
     const source = readFileSync(new URL('./invitation.ts', import.meta.url), 'utf8');
     expect(source).toMatch(
-      /import \{[^}]*expertInvitationMove[^}]*\} from '@balo\/shared\/project-requests'/
+      /import \{[^}]*invitationReminderWait[^}]*\} from '@balo\/shared\/project-requests'/
     );
     expect(source).not.toMatch(/function expertInvitationMove/);
     expect(source).not.toMatch(/budget|price|fee/i);

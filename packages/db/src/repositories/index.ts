@@ -148,6 +148,7 @@ export {
 } from './scheduled-notifications';
 export {
   reminderWaitsRepository,
+  REQUEST_RELATIONSHIP_IDS_LIMIT,
   type ReminderWaitRow,
   type ListReminderWaitRowsInput,
 } from './reminder-waits';

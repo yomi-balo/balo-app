@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { reminderSequenceKey, REMINDER_SEQUENCE_STEPS } from './reminder-sequences';
+import {
+  REMINDER_ARMABLE_AFTER_DUE_MS,
+  reminderSequenceKey,
+  REMINDER_SEQUENCE_STEPS,
+} from './reminder-sequences';
 import {
   groupReminderWaits,
   parseReminderSequenceKey,
@@ -7,6 +11,7 @@ import {
   reminderSentToday,
   reminderStepMissed,
   reminderWaitFollowUpsFinished,
+  reminderWaitSendTimes,
   reminderWaitsLastWent,
   reminderWaitsStalled,
   type ReminderWaitRowFacts,
@@ -236,6 +241,54 @@ describe('reminderStepMissed', () => {
     const wait = waitOf([published('day_2', '2026-11-04T22:00:00Z')]);
     expect(reminderStepMissed(wait, day9, new Date('2026-11-09T00:00:00.000Z'), ZONE)).toBe(false);
     expect(reminderStepMissed(wait, day9, NOW, ZONE)).toBe(true);
+  });
+});
+
+describe('reminderWaitSendTimes', () => {
+  // Thursday 2026-11-05 15:00 AEDT.
+  const THU_ANCHOR = '2026-11-05T04:00:00.000Z';
+  const invitationWait = { sequenceId: 'invitation' as const, anchorIso: THU_ANCHOR };
+
+  it('reads the planner send times, with day_3 bumped to Tuesday', () => {
+    const times = reminderWaitSendTimes(invitationWait, ZONE);
+    expect(times.get('day_1')?.toISOString()).toBe('2026-11-08T22:00:00.000Z');
+    expect(times.get('day_3')?.toISOString()).toBe('2026-11-09T22:00:00.000Z');
+  });
+
+  it('has one entry per step of the sequence', () => {
+    const times = reminderWaitSendTimes({ sequenceId: 'delivery_review', anchorIso: ANCHOR }, ZONE);
+    expect([...times.keys()]).toEqual(['pre_auto_accept']);
+    expect(times.get('pre_auto_accept')?.toISOString()).toBe('2026-11-07T01:00:00.000Z');
+  });
+});
+
+describe('reminderStepMissed with the same-morning bump', () => {
+  const day3 = REMINDER_SEQUENCE_STEPS.invitation.find((step) => step.key === 'day_3');
+  const wait = {
+    sequenceId: 'invitation' as const,
+    anchorIso: '2026-11-05T04:00:00.000Z',
+    steps: new Map<string, unknown>(),
+  };
+  // day_3 sends Tue 10 Nov 09:00 AEDT (Mon 22:00Z), not Mon 9 Nov.
+  const tuesdaySend = new Date('2026-11-09T22:00:00.000Z');
+
+  it('is missed only once past the Tuesday send plus the armable window', () => {
+    if (day3 === undefined) throw new Error('expected day_3');
+    const edge = new Date(tuesdaySend.getTime() + REMINDER_ARMABLE_AFTER_DUE_MS);
+    expect(reminderStepMissed(wait, day3, edge, ZONE)).toBe(false);
+    expect(reminderStepMissed(wait, day3, new Date(edge.getTime() + 1), ZONE)).toBe(true);
+  });
+
+  it('is not missed once past the window of the unbumped Monday send', () => {
+    if (day3 === undefined) throw new Error('expected day_3');
+    const afterMondayWindow = new Date('2026-11-10T00:00:00.000Z');
+    expect(reminderStepMissed(wait, day3, afterMondayWindow, ZONE)).toBe(false);
+  });
+
+  it('is false for a step key the sequence does not have', () => {
+    expect(
+      reminderStepMissed(wait, { key: 'nope', offsetMinutes: 1, timing: 'exact' }, NOW, ZONE)
+    ).toBe(false);
   });
 });
 

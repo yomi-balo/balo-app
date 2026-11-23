@@ -2,28 +2,43 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { engagements, projectEngagements, users } from '../schema';
 import {
+  engagements,
+  expertProfiles,
+  projectEngagements,
+  projectRequests,
+  requestExpertRelationships,
+  users,
+  verticals,
+} from '../schema';
+import {
+  agencyFactory,
   caseEngagementFactory,
+  companyFactory,
   engagementFactory,
+  expertDraftFactory,
   projectRequestFactory,
+  requestExpertRelationshipFactory,
   scheduledNotificationFactory,
   userFactory,
 } from '../test/factories';
-import { reminderWaitsRepository } from './reminder-waits';
+import { REQUEST_RELATIONSHIP_IDS_LIMIT, reminderWaitsRepository } from './reminder-waits';
 
 const DAY_MS = 86_400_000;
 const LONG_AGO = new Date('2020-01-01T00:00:00.000Z');
 const ANCHOR = '2026-11-02T01:00:00.000Z';
 
-function seqKey(entityId: string, step: string, userId: string): string {
-  return `seq:proposal_review:${entityId}:${step}:${userId}:${ANCHOR}`;
+type SequenceId = 'proposal_review' | 'delivery_review' | 'invitation';
+
+function seqKey(entityId: string, step: string, userId: string, sequence: SequenceId): string {
+  return `seq:${sequence}:${entityId}:${step}:${userId}:${ANCHOR}`;
 }
 
 interface SeedInput {
   entityId: string;
   userId: string;
   step?: string;
+  sequence?: SequenceId;
   values?: Parameters<typeof scheduledNotificationFactory>[0] extends infer O
     ? O extends { values?: infer V }
       ? V
@@ -31,9 +46,15 @@ interface SeedInput {
     : never;
 }
 
-function seed({ entityId, userId, step = 'day_2', values }: SeedInput) {
+function seed({
+  entityId,
+  userId,
+  step = 'day_2',
+  sequence = 'proposal_review',
+  values,
+}: SeedInput) {
   return scheduledNotificationFactory({
-    dedupeKey: seqKey(entityId, step, userId),
+    dedupeKey: seqKey(entityId, step, userId, sequence),
     values: {
       event: 'project.proposal_review_reminder',
       payload: { entityId, recipientUserId: userId, title: 'payload title' },
@@ -175,7 +196,11 @@ describe('reminderWaitsRepository.listRows', () => {
       lastName: 'Cole',
       timezone: 'Pacific/Auckland',
     });
-    expect(found?.entity).toEqual({ title: 'Lead routing rebuild', companyName: 'Acme Co' });
+    expect(found?.entity).toEqual({
+      title: 'Lead routing rebuild',
+      companyName: 'Acme Co',
+      agencyName: null,
+    });
     expect(found?.payload).toMatchObject({ entityId: request.id, recipientUserId: user.id });
     expect(found?.status).toBe('pending');
     expect(found?.attempts).toBe(0);
@@ -202,7 +227,7 @@ describe('reminderWaitsRepository.listRows', () => {
     const unknownEntity = randomUUID();
     await seed({ entityId: unknownEntity, userId: user.id, step: 'day_2' });
     await scheduledNotificationFactory({
-      dedupeKey: seqKey('not-a-uuid', 'day_5', user.id),
+      dedupeKey: seqKey('not-a-uuid', 'day_5', user.id, 'proposal_review'),
       values: { payload: { entityId: 'not-a-uuid', recipientUserId: 'also-not-a-uuid' } },
     });
 
@@ -218,7 +243,7 @@ describe('reminderWaitsRepository.listRows', () => {
   it('gives a null recipient and entity for a malformed stored recipientUserId and entityId, without throwing', async () => {
     const user = await userFactory();
     await scheduledNotificationFactory({
-      dedupeKey: seqKey('bad-ids', 'day_2', user.id),
+      dedupeKey: seqKey('bad-ids', 'day_2', user.id, 'proposal_review'),
       values: { payload: { entityId: 'not-a-uuid', recipientUserId: 'also-not-a-uuid' } },
     });
 
@@ -237,7 +262,7 @@ describe('reminderWaitsRepository.listRows', () => {
     const request = await projectRequestFactory({ title: 'Upper-case id' });
     const user = await userFactory({ firstName: 'Una' });
     await scheduledNotificationFactory({
-      dedupeKey: seqKey(request.id, 'day_2', user.id),
+      dedupeKey: seqKey(request.id, 'day_2', user.id, 'proposal_review'),
       values: {
         payload: {
           entityId: request.id.toUpperCase(),
@@ -273,8 +298,26 @@ describe('reminderWaitsRepository.findEngagementRequestId', () => {
   it("returns the originating request's id for a project engagement", async () => {
     const { engagement } = await engagementFactory({ withSourceProposal: true });
     expect(engagement.projectRequestId).not.toBeNull();
+    const [request] = await db
+      .select({ title: projectRequests.title })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, engagement.projectRequestId ?? randomUUID()));
     expect(await reminderWaitsRepository.findEngagementRequestId(engagement.id)).toEqual({
       projectRequestId: engagement.projectRequestId,
+      requestTitle: request?.title,
+    });
+  });
+
+  it('returns a null title when the originating request is soft-deleted', async () => {
+    const { engagement } = await engagementFactory({ withSourceProposal: true });
+    await db
+      .update(projectRequests)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectRequests.id, engagement.projectRequestId ?? randomUUID()));
+
+    expect(await reminderWaitsRepository.findEngagementRequestId(engagement.id)).toEqual({
+      projectRequestId: engagement.projectRequestId,
+      requestTitle: null,
     });
   });
 
@@ -282,6 +325,7 @@ describe('reminderWaitsRepository.findEngagementRequestId', () => {
     const { engagement } = await engagementFactory();
     expect(await reminderWaitsRepository.findEngagementRequestId(engagement.id)).toEqual({
       projectRequestId: null,
+      requestTitle: null,
     });
   });
 
@@ -289,6 +333,7 @@ describe('reminderWaitsRepository.findEngagementRequestId', () => {
     const { engagement } = await caseEngagementFactory();
     expect(await reminderWaitsRepository.findEngagementRequestId(engagement.id)).toEqual({
       projectRequestId: null,
+      requestTitle: null,
     });
   });
 
@@ -302,6 +347,7 @@ describe('reminderWaitsRepository.findEngagementRequestId', () => {
 
     expect(await reminderWaitsRepository.findEngagementRequestId(engagement.id)).toEqual({
       projectRequestId: null,
+      requestTitle: null,
     });
   });
 
@@ -317,10 +363,286 @@ describe('reminderWaitsRepository.findEngagementRequestId', () => {
   });
 });
 
+async function rowFor(sequence: SequenceId, entityId: string, step: string) {
+  const user = await userFactory();
+  await seed({ entityId, userId: user.id, step, sequence });
+  const [row] = await reminderWaitsRepository.listRows({
+    keyPrefixes: [`seq:${sequence}:${entityId}:`],
+    createdSince: LONG_AGO,
+    limit: 10,
+  });
+  return row;
+}
+
+async function softDeleteRequest(requestId: string): Promise<void> {
+  await db
+    .update(projectRequests)
+    .set({ deletedAt: new Date() })
+    .where(eq(projectRequests.id, requestId));
+}
+
+describe('reminderWaitsRepository.listRows entity per sequence', () => {
+  it('resolves a delivery_review row to its engagement, originating request and company', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const { engagement } = await engagementFactory({
+      companyId: company.id,
+      withSourceProposal: true,
+    });
+    const [request] = await db
+      .select({ title: projectRequests.title })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, engagement.projectRequestId ?? randomUUID()));
+
+    const row = await rowFor('delivery_review', engagement.id, 'pre_auto_accept');
+
+    expect(row?.entity).toEqual({
+      title: request?.title,
+      companyName: 'Northwind Industrial',
+      agencyName: null,
+    });
+  });
+
+  it('keeps the company and gives a null title when the engagement has no live request', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const { engagement } = await engagementFactory({ companyId: company.id });
+    const withoutRequest = await rowFor('delivery_review', engagement.id, 'pre_auto_accept');
+    expect(withoutRequest?.entity).toEqual({
+      title: null,
+      companyName: 'Northwind Industrial',
+      agencyName: null,
+    });
+
+    const sourced = await engagementFactory({ companyId: company.id, withSourceProposal: true });
+    await softDeleteRequest(sourced.engagement.projectRequestId ?? randomUUID());
+    const deletedRequest = await rowFor(
+      'delivery_review',
+      sourced.engagement.id,
+      'pre_auto_accept'
+    );
+    expect(deletedRequest?.entity).toEqual({
+      title: null,
+      companyName: 'Northwind Industrial',
+      agencyName: null,
+    });
+  });
+
+  it('resolves an invitation row to its relationship, request, company and expert agency', async () => {
+    const agency = await agencyFactory({ name: 'CloudPeak' });
+    const request = await projectRequestFactory({ title: 'Quote-to-cash rollout' });
+    const { relationship, expertProfileId } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+    });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, expertProfileId));
+
+    const row = await rowFor('invitation', relationship.id, 'day_1');
+
+    expect(row?.entity).toEqual({
+      title: 'Quote-to-cash rollout',
+      companyName: 'Acme Co',
+      agencyName: 'CloudPeak',
+    });
+  });
+
+  it('gives a null agency for an independent expert', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const row = await rowFor('invitation', relationship.id, 'day_1');
+    expect(row?.entity?.agencyName).toBeNull();
+    expect(row?.entity?.companyName).toBe('Acme Co');
+  });
+
+  it('takes the agency from the invited profile when the user has another profile', async () => {
+    const invitedAgency = await agencyFactory({ name: 'Invited Agency' });
+    const otherAgency = await agencyFactory({ name: 'Other Agency' });
+    const user = await userFactory();
+    const invitedProfile = await expertDraftFactory({ userId: user.id });
+    const [vertical] = await db
+      .insert(verticals)
+      .values({ name: 'Second vertical', slug: `second-${randomUUID()}` })
+      .returning();
+    const otherProfile = await expertDraftFactory({ userId: user.id, verticalId: vertical?.id });
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: invitedAgency.id })
+      .where(eq(expertProfiles.id, invitedProfile.id));
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: otherAgency.id })
+      .where(eq(expertProfiles.id, otherProfile.id));
+    const { relationship } = await requestExpertRelationshipFactory({
+      expertProfileId: invitedProfile.id,
+    });
+    const reader = await userFactory();
+    await seed({
+      entityId: relationship.id,
+      userId: reader.id,
+      step: 'day_1',
+      sequence: 'invitation',
+    });
+
+    const rows = await reminderWaitsRepository.listRows({
+      keyPrefixes: [`seq:invitation:${relationship.id}:`],
+      createdSince: LONG_AGO,
+      limit: 10,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entity?.agencyName).toBe('Invited Agency');
+  });
+
+  it('never borrows another sequence’s join for a key', async () => {
+    const request = await projectRequestFactory({ title: 'A request' });
+    const { engagement } = await engagementFactory();
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    expect((await rowFor('proposal_review', engagement.id, 'day_2'))?.entity).toBeNull();
+    expect((await rowFor('proposal_review', relationship.id, 'day_2'))?.entity).toBeNull();
+    expect((await rowFor('delivery_review', request.id, 'pre_auto_accept'))?.entity).toBeNull();
+    expect(
+      (await rowFor('delivery_review', relationship.id, 'pre_auto_accept'))?.entity
+    ).toBeNull();
+    expect((await rowFor('invitation', request.id, 'day_1'))?.entity).toBeNull();
+    expect((await rowFor('invitation', engagement.id, 'day_1'))?.entity).toBeNull();
+  });
+
+  it('gives a null entity once its subject is soft-deleted', async () => {
+    const request = await projectRequestFactory();
+    await softDeleteRequest(request.id);
+    expect((await rowFor('proposal_review', request.id, 'day_2'))?.entity).toBeNull();
+
+    const { engagement } = await engagementFactory();
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+    expect((await rowFor('delivery_review', engagement.id, 'pre_auto_accept'))?.entity).toBeNull();
+
+    const { relationship } = await requestExpertRelationshipFactory();
+    await db
+      .update(requestExpertRelationships)
+      .set({ deletedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect((await rowFor('invitation', relationship.id, 'day_1'))?.entity).toBeNull();
+  });
+});
+
+describe('reminderWaitsRepository.listRequestRelationshipIds', () => {
+  it('lists live relationships in any status, oldest invite first, then by id', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const declined = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: (await expertDraftFactory()).id,
+      values: { status: 'declined', invitedAt: new Date('2026-11-02T00:00:00Z') },
+    });
+    const first = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: (await expertDraftFactory()).id,
+      values: { invitedAt: new Date('2026-11-01T00:00:00Z') },
+    });
+    const last = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: (await expertDraftFactory()).id,
+      values: { status: 'proposal_requested', invitedAt: new Date('2026-11-03T00:00:00Z') },
+    });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: (await expertDraftFactory()).id,
+      values: { deletedAt: new Date() },
+    });
+
+    expect(await reminderWaitsRepository.listRequestRelationshipIds(request.id)).toEqual([
+      first.relationship.id,
+      declined.relationship.id,
+      last.relationship.id,
+    ]);
+  });
+
+  it('is empty for an unknown request', async () => {
+    expect(await reminderWaitsRepository.listRequestRelationshipIds(randomUUID())).toEqual([]);
+  });
+
+  it('returns at most REQUEST_RELATIONSHIP_IDS_LIMIT ids, the oldest invites first', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    const base = new Date('2026-11-01T00:00:00Z').getTime();
+    const created: string[] = [];
+    for (let index = 0; index <= REQUEST_RELATIONSHIP_IDS_LIMIT; index++) {
+      const { relationship } = await requestExpertRelationshipFactory({
+        projectRequestId: request.id,
+        expertProfileId: (await expertDraftFactory()).id,
+        values: { invitedAt: new Date(base + index * 1000) },
+      });
+      created.push(relationship.id);
+    }
+
+    const ids = await reminderWaitsRepository.listRequestRelationshipIds(request.id);
+
+    expect(created).toHaveLength(REQUEST_RELATIONSHIP_IDS_LIMIT + 1);
+    expect(ids).toEqual(created.slice(0, REQUEST_RELATIONSHIP_IDS_LIMIT));
+  });
+});
+
+describe('reminderWaitsRepository.listDeliveryReviewStates', () => {
+  it('returns the folded delivery status and completion request of live projects', async () => {
+    const requestedAt = new Date('2026-11-18T01:00:00.000Z');
+    const pending = await engagementFactory({
+      projectValues: { deliveryStatus: 'pending_acceptance', completionRequestedAt: requestedAt },
+    });
+    const active = await engagementFactory();
+
+    const states = await reminderWaitsRepository.listDeliveryReviewStates([
+      pending.engagement.id,
+      active.engagement.id,
+    ]);
+
+    expect([...states].sort((a, b) => a.engagementId.localeCompare(b.engagementId))).toEqual(
+      [
+        {
+          engagementId: pending.engagement.id,
+          status: 'pending_acceptance',
+          completionRequestedAt: requestedAt,
+        },
+        { engagementId: active.engagement.id, status: 'active', completionRequestedAt: null },
+      ].sort((a, b) => a.engagementId.localeCompare(b.engagementId))
+    );
+  });
+
+  it('has no row for a case, an unknown id or a soft-deleted engagement or project', async () => {
+    const { engagement: caseEngagement } = await caseEngagementFactory();
+    const deletedParent = await engagementFactory();
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, deletedParent.engagement.id));
+    const deletedChild = await engagementFactory();
+    await db
+      .update(projectEngagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(projectEngagements.engagementId, deletedChild.engagement.id));
+
+    expect(
+      await reminderWaitsRepository.listDeliveryReviewStates([
+        caseEngagement.id,
+        randomUUID(),
+        deletedParent.engagement.id,
+        deletedChild.engagement.id,
+      ])
+    ).toEqual([]);
+  });
+
+  it('makes no query for empty or non-uuid ids', async () => {
+    expect(await reminderWaitsRepository.listDeliveryReviewStates([])).toEqual([]);
+    expect(await reminderWaitsRepository.listDeliveryReviewStates(['not-a-uuid'])).toEqual([]);
+  });
+});
+
 describe('reminderWaitsRepository surface', () => {
-  it('is read-only: its keys are exactly the two reads', () => {
+  it('is read-only: its keys are exactly the four reads', () => {
     expect(Object.keys(reminderWaitsRepository).sort()).toEqual([
       'findEngagementRequestId',
+      'listDeliveryReviewStates',
+      'listRequestRelationshipIds',
       'listRows',
     ]);
   });

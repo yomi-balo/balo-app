@@ -1,20 +1,29 @@
-import { and, desc, eq, gte, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { isLookupUuid } from '@balo/shared/lookup';
+import { reminderSequenceKeyPrefix } from '@balo/shared/notifications';
 import { db } from '../client';
 import {
+  agencies,
   companies,
   engagements,
+  expertProfiles,
   projectEngagements,
   projectRequests,
+  requestExpertRelationships,
   scheduledNotifications,
   users,
   type ScheduledNotificationPayload,
   type ScheduledNotificationStatus,
 } from '../schema';
 
+/** The most relationship ids {@link reminderWaitsRepository.listRequestRelationshipIds} returns. */
+export const REQUEST_RELATIONSHIP_IDS_LIMIT = 200;
+
 /**
  * One reminder row with the display facts its readers need, joined in so a reader makes one
- * query: the recipient's name and zone, and — when the row is about a project request — the
- * request's title and its company's name.
+ * query: the recipient's name and zone, and the facts of the entity the row's sequence is
+ * about (a request, an engagement or an expert relationship).
  */
 export interface ReminderWaitRow {
   id: string;
@@ -35,8 +44,23 @@ export interface ReminderWaitRow {
     lastName: string | null;
     timezone: string | null;
   } | null;
-  /** `null` when the row's entity is not a live project request. */
-  entity: { title: string; companyName: string | null } | null;
+  /**
+   * `null` when the row's subject is gone: the entity its key names is missing or soft-deleted.
+   * The fields are individually `null` when that fact does not exist, such as the title of an
+   * engagement whose originating request was deleted, or the agency of an independent expert.
+   */
+  entity: {
+    title: string | null;
+    companyName: string | null;
+    agencyName: string | null;
+  } | null;
+}
+
+/** One live engagement's delivery-review facts, with the project's folded delivery status. */
+export interface DeliveryReviewState {
+  engagementId: string;
+  status: string;
+  completionRequestedAt: Date | null;
 }
 
 export interface ListReminderWaitRowsInput {
@@ -51,6 +75,20 @@ export interface ListReminderWaitRowsInput {
 /** The `payload.recipientUserId` / `payload.entityId` text a row's joins and filters read. */
 const PAYLOAD_RECIPIENT = sql`${scheduledNotifications.payload}->>'recipientUserId'`;
 const PAYLOAD_ENTITY = sql`${scheduledNotifications.payload}->>'entityId'`;
+
+/** The tables a row's entity is read from, one set per sequence, each joined by its own prefix. */
+const proposalRequest = alias(projectRequests, 'proposal_request');
+const reviewEngagement = alias(engagements, 'review_engagement');
+const reviewProject = alias(projectEngagements, 'review_project');
+const reviewRequest = alias(projectRequests, 'review_request');
+const invitedRelationship = alias(requestExpertRelationships, 'invited_relationship');
+const invitationRequest = alias(projectRequests, 'invitation_request');
+const invitedExpert = alias(expertProfiles, 'invited_expert');
+
+/** True when the row's dedupe key belongs to `sequenceId`, so a join never reads another's rows. */
+function keyIsSequence(sequenceId: 'proposal_review' | 'delivery_review' | 'invitation'): SQL {
+  return sql`starts_with(${scheduledNotifications.dedupeKey}, ${reminderSequenceKeyPrefix(sequenceId)})`;
+}
 
 const UUID_SHAPE = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
 
@@ -108,9 +146,14 @@ export const reminderWaitsRepository = {
         recipientFirstName: users.firstName,
         recipientLastName: users.lastName,
         recipientTimezone: users.timezone,
-        entityId: projectRequests.id,
-        entityTitle: projectRequests.title,
+        subjectId: sql<
+          string | null
+        >`COALESCE(${proposalRequest.id}, ${reviewEngagement.id}, ${invitedRelationship.id})`,
+        entityTitle: sql<
+          string | null
+        >`COALESCE(${proposalRequest.title}, ${reviewRequest.title}, ${invitationRequest.title})`,
         entityCompanyName: companies.name,
+        entityAgencyName: agencies.name,
       })
       .from(scheduledNotifications)
       .leftJoin(
@@ -118,13 +161,53 @@ export const reminderWaitsRepository = {
         and(sql`${users.id} = ${payloadUuid(PAYLOAD_RECIPIENT)}`, isNull(users.deletedAt))
       )
       .leftJoin(
-        projectRequests,
+        proposalRequest,
         and(
-          sql`${projectRequests.id} = ${payloadUuid(PAYLOAD_ENTITY)}`,
-          isNull(projectRequests.deletedAt)
+          keyIsSequence('proposal_review'),
+          sql`${proposalRequest.id} = ${payloadUuid(PAYLOAD_ENTITY)}`,
+          isNull(proposalRequest.deletedAt)
         )
       )
-      .leftJoin(companies, eq(companies.id, projectRequests.companyId))
+      .leftJoin(
+        reviewEngagement,
+        and(
+          keyIsSequence('delivery_review'),
+          sql`${reviewEngagement.id} = ${payloadUuid(PAYLOAD_ENTITY)}`,
+          isNull(reviewEngagement.deletedAt)
+        )
+      )
+      .leftJoin(
+        reviewProject,
+        and(eq(reviewProject.engagementId, reviewEngagement.id), isNull(reviewProject.deletedAt))
+      )
+      .leftJoin(
+        reviewRequest,
+        and(eq(reviewRequest.id, reviewProject.projectRequestId), isNull(reviewRequest.deletedAt))
+      )
+      .leftJoin(
+        invitedRelationship,
+        and(
+          keyIsSequence('invitation'),
+          sql`${invitedRelationship.id} = ${payloadUuid(PAYLOAD_ENTITY)}`,
+          isNull(invitedRelationship.deletedAt)
+        )
+      )
+      .leftJoin(
+        invitationRequest,
+        and(
+          eq(invitationRequest.id, invitedRelationship.projectRequestId),
+          isNull(invitationRequest.deletedAt)
+        )
+      )
+      .leftJoin(invitedExpert, eq(invitedExpert.id, invitedRelationship.expertProfileId))
+      .leftJoin(agencies, eq(agencies.id, invitedExpert.agencyId))
+      .leftJoin(
+        companies,
+        eq(
+          companies.id,
+          sql`COALESCE(${proposalRequest.companyId}, ${reviewEngagement.companyId}, ${invitationRequest.companyId})`
+        )
+      )
       .where(
         and(
           isNull(scheduledNotifications.deletedAt),
@@ -158,22 +241,30 @@ export const reminderWaitsRepository = {
               timezone: row.recipientTimezone,
             },
       entity:
-        row.entityId === null || row.entityTitle === null
+        row.subjectId === null
           ? null
-          : { title: row.entityTitle, companyName: row.entityCompanyName },
+          : {
+              title: row.entityTitle,
+              companyName: row.entityCompanyName,
+              agencyName: row.entityAgencyName,
+            },
     }));
   },
 
   /**
-   * The project request an engagement came from. `undefined` when the engagement does not exist
-   * or is soft-deleted; `{ projectRequestId: null }` for a case, a project with no
-   * originating request, or a project engagement that is soft-deleted.
+   * The project request an engagement came from, with its title when that request is live.
+   * `undefined` when the engagement does not exist or is soft-deleted; `{ projectRequestId: null }`
+   * for a case, a project with no originating request, or a project engagement that is
+   * soft-deleted. `requestTitle` is `null` when the request is soft-deleted or absent.
    */
   async findEngagementRequestId(
     engagementId: string
-  ): Promise<{ projectRequestId: string | null } | undefined> {
+  ): Promise<{ projectRequestId: string | null; requestTitle: string | null } | undefined> {
     const [row] = await db
-      .select({ projectRequestId: projectEngagements.projectRequestId })
+      .select({
+        projectRequestId: projectEngagements.projectRequestId,
+        requestTitle: projectRequests.title,
+      })
       .from(engagements)
       .leftJoin(
         projectEngagements,
@@ -182,8 +273,65 @@ export const reminderWaitsRepository = {
           isNull(projectEngagements.deletedAt)
         )
       )
+      .leftJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, projectEngagements.projectRequestId),
+          isNull(projectRequests.deletedAt)
+        )
+      )
       .where(and(eq(engagements.id, engagementId), isNull(engagements.deletedAt)))
       .limit(1);
-    return row === undefined ? undefined : { projectRequestId: row.projectRequestId };
+    return row === undefined
+      ? undefined
+      : { projectRequestId: row.projectRequestId, requestTitle: row.requestTitle };
+  },
+
+  /**
+   * Every live relationship on a request, in any status, oldest invite first then by id. These
+   * are the entities the request's `invitation` waits are keyed on. Capped at
+   * {@link REQUEST_RELATIONSHIP_IDS_LIMIT}; a caller seeing that many ids may have a truncated set.
+   */
+  async listRequestRelationshipIds(projectRequestId: string): Promise<string[]> {
+    const rows = await db
+      .select({ id: requestExpertRelationships.id })
+      .from(requestExpertRelationships)
+      .where(
+        and(
+          eq(requestExpertRelationships.projectRequestId, projectRequestId),
+          isNull(requestExpertRelationships.deletedAt)
+        )
+      )
+      .orderBy(asc(requestExpertRelationships.invitedAt), asc(requestExpertRelationships.id))
+      .limit(REQUEST_RELATIONSHIP_IDS_LIMIT);
+    return rows.map((row) => row.id);
+  },
+
+  /**
+   * The delivery-review facts of each live project engagement among `engagementIds`: its folded
+   * delivery status and completion request. A case, an unknown id or a soft-deleted engagement or
+   * project has no row. Empty (or no uuid-shaped) ids make no query.
+   */
+  async listDeliveryReviewStates(engagementIds: readonly string[]): Promise<DeliveryReviewState[]> {
+    const ids = engagementIds.filter(isLookupUuid);
+    if (ids.length === 0) {
+      return [];
+    }
+    const rows = await db
+      .select({
+        engagementId: engagements.id,
+        status: projectEngagements.deliveryStatus,
+        completionRequestedAt: projectEngagements.completionRequestedAt,
+      })
+      .from(engagements)
+      .innerJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .where(and(inArray(engagements.id, ids), isNull(engagements.deletedAt)));
+    return rows;
   },
 };

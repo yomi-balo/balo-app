@@ -1,21 +1,26 @@
 import {
   REMINDER_DAILY_LIMIT,
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
   REMINDER_SEQUENCE_STEPS,
   groupReminderWaits,
   reminderRecipientZone,
-  reminderSendAt,
   reminderSentToday,
   reminderStepMissed,
   reminderWaitFollowUpsFinished,
+  reminderWaitSendTimes,
   type ReminderSequenceId,
   type ReminderStep,
   type ReminderWait,
 } from '@balo/shared/notifications';
+import { autoAcceptAt } from '@balo/shared/engagements';
 import {
+  EXEMPT_NOTE,
   REASON_CODE,
   REASON_SENTENCE,
   SEQUENCE_META,
   isFollowUpReasonKey,
+  sequenceChannelLabel,
   type FollowUpLens,
   type FollowUpReasonKey,
   type FollowUpStepState,
@@ -52,14 +57,21 @@ export interface FollowUpSourceRow {
     readonly lastName: string | null;
     readonly timezone: string | null;
   } | null;
-  readonly entity: { readonly title: string; readonly companyName: string | null } | null;
+  /** `null` when the row's subject is gone; each field is `null` when that fact does not exist. */
+  readonly entity: {
+    readonly title: string | null;
+    readonly companyName: string | null;
+    readonly agencyName: string | null;
+  } | null;
 }
 
 /** What the live source says about one entity's wait right now. */
 export interface LiveWait {
   readonly anchorIso: string;
-  readonly awaitingCount: number;
-  readonly title: string;
+  /** How many proposals await review; `null` for a sequence that has no such count. */
+  readonly awaitingCount: number | null;
+  /** The subject's live title; `null` when the sequence's source does not carry one. */
+  readonly title: string | null;
 }
 
 /** The map key for a live wait. */
@@ -74,8 +86,6 @@ export interface BuildFollowUpsInput {
   /** The person's first name and saved zone on a person lens. */
   readonly subject: { readonly firstName: string | null; readonly timezone: string | null } | null;
   readonly origin: { readonly requestTitle: string } | null;
-  /** True for an engagement that did not come from a project request. */
-  readonly engagementWithoutRequest?: boolean;
   readonly now: Date;
 }
 
@@ -211,7 +221,8 @@ function waitState(
   const newestSkipReason = newest?.status === 'skipped' ? newest.skipReason : null;
   const newestEnded = newestSkipReason !== null && WAIT_ENDED_SKIPS.has(newestSkipReason);
   if (live?.anchorIso !== wait.anchorIso || newestEnded) return 'stopped';
-  return reminderWaitFollowUpsFinished(wait, now, zone) ? 'finished' : 'waiting';
+  if (!reminderWaitFollowUpsFinished(wait, now, zone)) return 'waiting';
+  return SEQUENCE_META[wait.sequenceId].endsAutomatically ? 'waiting' : 'finished';
 }
 
 const WEEKEND_WEEKDAYS: ReadonlySet<string> = new Set(['Saturday', 'Sunday']);
@@ -327,6 +338,8 @@ interface StepContext {
   readonly first: string;
   readonly now: Date;
   readonly includeMissing: boolean;
+  /** When each step of this wait is sent, as the planner places it. */
+  readonly sendTimes: ReadonlyMap<string, Date>;
 }
 
 function buildStep(step: ReminderStep, index: number, ctx: StepContext): FollowUpStepView | null {
@@ -334,8 +347,8 @@ function buildStep(step: ReminderStep, index: number, ctx: StepContext): FollowU
   const row = wait.steps.get(step.key);
   if (row === undefined && !ctx.includeMissing) return null;
   const dueAt = new Date(anchor.getTime() + step.offsetMinutes * MS_PER_MINUTE);
-  const sendAt = reminderSendAt(dueAt, step.timing, zone);
-  const channel = SEQUENCE_META[wait.sequenceId].channel;
+  const sendAt = ctx.sendTimes.get(step.key) ?? dueAt;
+  const channel = sequenceChannelLabel(wait.sequenceId);
   const facts =
     row === undefined
       ? factsForMissingStep(sendAt, reminderStepMissed(wait, step, now, zone), zone)
@@ -373,6 +386,46 @@ function personName(row: FollowUpSourceRow | undefined): string {
   return name === '' ? FORMER_USER : name;
 }
 
+interface FactContext {
+  readonly lens: FollowUpLens;
+  readonly state: FollowUpWaitState;
+  readonly anchor: Date;
+  readonly zone: string;
+  readonly now: Date;
+  readonly awaitingCount: number | null;
+  readonly entity: FollowUpSourceRow['entity'];
+}
+
+/** The one-line fact each sequence shows beside its title, or `null` when there is nothing to say. */
+const SEQUENCE_FACT: Readonly<Record<ReminderSequenceId, (ctx: FactContext) => string | null>> = {
+  proposal_review: (ctx) =>
+    ctx.awaitingCount === null ? null : pluralProposals(ctx.awaitingCount),
+  delivery_review: (ctx) => {
+    if (ctx.state === 'stopped') return null;
+    const acceptAt = autoAcceptAt(ctx.anchor);
+    // The sweep may not have closed a due wait yet, so a past date is never reported as accepted.
+    const verb = acceptAt.getTime() <= ctx.now.getTime() ? 'Auto-accept was due' : 'Auto-accepts';
+    return `${verb} ${formatDay(acceptAt, ctx.zone)}`;
+  },
+  invitation: (ctx) => {
+    if (ctx.lens === 'person') {
+      return ctx.entity?.companyName == null ? null : `From ${ctx.entity.companyName}`;
+    }
+    return ctx.entity !== null && ctx.entity.agencyName === null ? 'Independent expert' : null;
+  },
+};
+
+/** The party a wait is waiting on, beside the person's name: the company or the expert's agency. */
+function partyOf(
+  sequenceId: ReminderSequenceId,
+  entity: FollowUpSourceRow['entity']
+): string | null {
+  if (entity === null) return null;
+  return REMINDER_SEQUENCE_AUDIENCE[sequenceId] === 'client'
+    ? entity.companyName
+    : entity.agencyName;
+}
+
 function buildWait(
   wait: ReminderWait<FollowUpSourceRow>,
   lens: FollowUpLens,
@@ -385,26 +438,40 @@ function buildWait(
   const state = waitState(wait, live, newest, now, zone);
   const anchor = new Date(wait.anchorIso);
   const first = newest.recipient?.firstName ?? 'The recipient';
-  const ctx: StepContext = { wait, anchor, zone, first, now, includeMissing: state !== 'stopped' };
+  const sendTimes = reminderWaitSendTimes(wait, zone);
+  const ctx: StepContext = {
+    wait,
+    anchor,
+    zone,
+    first,
+    now,
+    includeMissing: state !== 'stopped',
+    sendTimes,
+  };
   const sequenceSteps = REMINDER_SEQUENCE_STEPS[wait.sequenceId];
   const steps = sequenceSteps
     .map((step, index) => buildStep(step, index, ctx))
     .filter((s): s is FollowUpStepView => s !== null);
 
-  const count = live?.awaitingCount ?? readCount(newest.payload);
-  const fact = count === null ? null : pluralProposals(count);
-  const since =
-    state === 'stopped'
-      ? `began waiting ${formatDay(anchor, zone)}`
-      : `waiting since ${formatDay(anchor, zone)}`;
   const meta = SEQUENCE_META[wait.sequenceId];
+  const fact = SEQUENCE_FACT[wait.sequenceId]({
+    lens,
+    state,
+    anchor,
+    zone,
+    now,
+    awaitingCount: live?.awaitingCount ?? readCount(newest.payload),
+    entity: newest.entity,
+  });
+  const sincePhrase = state === 'stopped' ? meta.sinceStopped : meta.sinceLive;
+  const since = `${sincePhrase} ${formatDay(anchor, zone)}`;
   const entityTitle =
-    live?.title ?? newest.entity?.title ?? readTitle(newest.payload) ?? 'A request';
-  const company = newest.entity?.companyName ?? null;
+    live?.title ?? newest.entity?.title ?? readTitle(newest.payload) ?? meta.untitled;
+  const party = partyOf(wait.sequenceId, newest.entity);
   const person = personName(newest);
 
-  const personAtCompany = company === null ? person : `${person} @ ${company}`;
-  const headline = lens === 'person' ? entityTitle : personAtCompany;
+  const personAtParty = party === null ? person : `${person} @ ${party}`;
+  const headline = lens === 'person' ? entityTitle : personAtParty;
   const context = lens === 'person' ? [meta.aboutType, fact, since] : [fact, since];
 
   return {
@@ -415,6 +482,7 @@ function buildWait(
       context: context.filter((part): part is string => part !== null),
       state,
       summary: summarise(steps, sequenceSteps.length),
+      note: REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT[wait.sequenceId] ? EXEMPT_NOTE : null,
       hasFailed: steps.some((s) => s.state === 'failed'),
       steps,
     },
@@ -426,7 +494,7 @@ function buildWait(
 
 /** Everything the Follow-ups tab shows, from the rows already read. */
 export function buildLookupFollowUps(input: BuildFollowUpsInput): LookupFollowUpsView {
-  const { lens, rows, live, subject, origin, engagementWithoutRequest = false, now } = input;
+  const { lens, rows, live, subject, origin, now } = input;
   const waits = groupReminderWaits(rows);
   const built = waits
     .map((wait) =>
@@ -447,7 +515,6 @@ export function buildLookupFollowUps(input: BuildFollowUpsInput): LookupFollowUp
     lens,
     subjectFirstName: firstName,
     origin,
-    engagementWithoutRequest,
     limit: lens === 'person' ? limitFor(rows, subject?.timezone ?? null, now) : null,
     now: current.map((b) => b.view),
     earlier: earlier.map((b) => b.view),

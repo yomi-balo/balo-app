@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reminderSequenceKey } from '@balo/shared/notifications';
+import { reminderSequenceKey, type ReminderSequenceId } from '@balo/shared/notifications';
 import {
   buildLookupFollowUps,
   liveWaitKey,
@@ -7,7 +7,13 @@ import {
   type FollowUpSourceRow,
   type LiveWait,
 } from './build-lookup-follow-ups';
-import { REASON_SENTENCE, type FollowUpReasonKey } from './follow-ups-view';
+import {
+  EXEMPT_NOTE,
+  REASON_SENTENCE,
+  SEQUENCE_META,
+  channelLabel,
+  type FollowUpReasonKey,
+} from './follow-ups-view';
 
 const REQUEST_ID = 'req-1';
 const USER_ID = 'user-1';
@@ -48,7 +54,11 @@ function row(
     updatedAt: new Date('2026-11-22T00:00:00.000Z'),
     payload: { entityId: REQUEST_ID, awaitingCount: 2, title: 'Stored title' },
     recipient: MELBOURNE,
-    entity: { title: 'Salesforce CPQ rollout', companyName: 'Northwind Industrial' },
+    entity: {
+      title: 'Salesforce CPQ rollout',
+      companyName: 'Northwind Industrial',
+      agencyName: null,
+    },
     ...over,
   };
 }
@@ -442,7 +452,7 @@ describe('buildLookupFollowUps — summary, headline and context', () => {
     const noCompany = build({
       lens: 'entity',
       subject: null,
-      rows: [row('day_2', { entity: { title: 'T', companyName: null } })],
+      rows: [row('day_2', { entity: { title: 'T', companyName: null, agencyName: null } })],
     });
     expect(noCompany.now[0]?.headline).toBe('Dana Whitfield');
   });
@@ -475,12 +485,6 @@ describe('buildLookupFollowUps — summary, headline and context', () => {
   it('carries the engagement origin through', () => {
     const view = build({ lens: 'entity', subject: null, origin: { requestTitle: 'CPQ' } });
     expect(view.origin).toEqual({ requestTitle: 'CPQ' });
-    expect(view.engagementWithoutRequest).toBe(false);
-  });
-
-  it('carries an engagement with no originating request through', () => {
-    const view = build({ lens: 'entity', subject: null, engagementWithoutRequest: true });
-    expect(view.engagementWithoutRequest).toBe(true);
   });
 
   it('identifies a wait by its newest row, never by anything holding the user id', () => {
@@ -560,5 +564,274 @@ describe('buildLookupFollowUps — what the view carries', () => {
     for (const key of Object.keys(REASON_SENTENCE) as FollowUpReasonKey[]) {
       expect(REASON_SENTENCE[key]('Dana', 3)).not.toMatch(/24 hours/i);
     }
+  });
+});
+
+const DELIVERY_ANCHOR_ISO = '2026-11-18T01:00:00.000Z';
+const ENGAGEMENT_ID = 'eng-1';
+const RELATIONSHIP_ID = 'rel-1';
+const TOM = { firstName: 'Tom', lastName: 'Okafor', timezone: 'Australia/Melbourne' };
+
+function seqRow(
+  sequenceId: ReminderSequenceId,
+  entityId: string,
+  stepKey: string,
+  anchorIso: string,
+  over: Partial<FollowUpSourceRow> = {}
+): FollowUpSourceRow {
+  return {
+    ...row(stepKey, {}, anchorIso, entityId),
+    id: `${sequenceId}-${stepKey}-${entityId}`,
+    dedupeKey: reminderSequenceKey({ sequenceId, entityId, stepKey, userId: USER_ID, anchorIso }),
+    createdAt: new Date(anchorIso),
+    ...over,
+  };
+}
+
+function liveFor(
+  sequenceId: ReminderSequenceId,
+  entityId: string,
+  anchorIso: string,
+  over: Partial<LiveWait> = {}
+): ReadonlyMap<string, LiveWait> {
+  return new Map([
+    [liveWaitKey(sequenceId, entityId), { anchorIso, awaitingCount: null, title: null, ...over }],
+  ]);
+}
+
+describe('buildLookupFollowUps — delivery review (decision 16)', () => {
+  const sent = seqRow('delivery_review', ENGAGEMENT_ID, 'pre_auto_accept', DELIVERY_ANCHOR_ISO, {
+    status: 'published',
+    publishedAt: new Date('2026-11-23T01:05:00.000Z'),
+    scheduledFor: new Date('2026-11-23T01:00:00.000Z'),
+    entity: {
+      title: 'Data migration, phase 1',
+      companyName: 'Northwind Industrial',
+      agencyName: null,
+    },
+  });
+  const delivery = (over: Partial<BuildFollowUpsInput> = {}): ReturnType<typeof build> =>
+    build({
+      rows: [sent],
+      live: liveFor('delivery_review', ENGAGEMENT_ID, DELIVERY_ANCHOR_ISO),
+      ...over,
+    });
+
+  it('words the wait from the reference, with the auto-accept day and the exempt note', () => {
+    const [wait] = delivery().now;
+    expect(wait?.title).toBe('Work to review');
+    expect(wait?.headline).toBe('Data migration, phase 1');
+    expect(wait?.context).toEqual([
+      'Engagement',
+      'Auto-accepts Wed 25 Nov',
+      'marked complete Wed 18 Nov',
+    ]);
+    expect(wait?.note).toBe(EXEMPT_NOTE);
+    expect(wait?.steps[0]).toMatchObject({
+      offsetLabel: '5 days after, exact time',
+      state: 'sent',
+      channel: 'Email and in-app',
+    });
+  });
+
+  it('says the auto-accept was due, never accepted, once its date has passed on a live wait', () => {
+    const due = delivery({ now: new Date('2026-11-25T01:00:00.000Z') }).now[0];
+    expect(due?.state).toBe('waiting');
+    expect(due?.context).toEqual([
+      'Engagement',
+      'Auto-accept was due Wed 25 Nov',
+      'marked complete Wed 18 Nov',
+    ]);
+    const later = delivery({ now: new Date('2026-11-27T05:00:00.000Z') }).now[0];
+    expect(later?.context[1]).toBe('Auto-accept was due Wed 25 Nov');
+  });
+
+  it('still says Auto-accepts a moment before the auto-accept date', () => {
+    const before = delivery({ now: new Date('2026-11-25T00:59:59.000Z') }).now[0];
+    expect(before?.context[1]).toBe('Auto-accepts Wed 25 Nov');
+  });
+
+  it('reads waiting, not finished, once its one step has sent: auto-accept closes it', () => {
+    expect(delivery().now[0]?.state).toBe('waiting');
+    expect(delivery().earlier).toEqual([]);
+  });
+
+  it('a proposal wait that has run out of follow-ups still reads finished', () => {
+    const view = build({
+      rows: [
+        published('day_2', '2026-11-18T22:00:00.000Z'),
+        published('day_5', '2026-11-19T22:00:00.000Z'),
+        published('day_9', '2026-11-20T22:00:00.000Z'),
+      ],
+    });
+    expect(view.now[0]?.state).toBe('finished');
+    expect(view.now[0]?.note).toBeNull();
+  });
+
+  it('drops the auto-accept fact and says "marked complete" on a stopped wait', () => {
+    const [wait] = delivery({ live: new Map() }).earlier;
+    expect(wait?.state).toBe('stopped');
+    expect(wait?.context).toEqual(['Engagement', 'marked complete Wed 18 Nov']);
+  });
+
+  it('falls back to "A project" when nothing names the engagement', () => {
+    const untitled = seqRow(
+      'delivery_review',
+      ENGAGEMENT_ID,
+      'pre_auto_accept',
+      DELIVERY_ANCHOR_ISO,
+      {
+        payload: {},
+        entity: { title: null, companyName: 'Northwind Industrial', agencyName: null },
+      }
+    );
+    const [wait] = delivery({ rows: [untitled] }).now;
+    expect(wait?.headline).toBe('A project');
+  });
+
+  it('names the person at the company on an entity lens', () => {
+    const [wait] = delivery({ lens: 'entity', subject: null }).now;
+    expect(wait?.headline).toBe('Dana Whitfield @ Northwind Industrial');
+    expect(wait?.context).toEqual(['Auto-accepts Wed 25 Nov', 'marked complete Wed 18 Nov']);
+  });
+
+  it('does not count a delivery warning against the daily limit', () => {
+    const view = delivery({
+      rows: [sent, published('day_2', '2026-11-22T22:00:00.000Z')],
+    });
+    expect(view.limit).toEqual({ used: 1, of: 2, full: false });
+  });
+});
+
+describe('buildLookupFollowUps — invitation (decision 16)', () => {
+  const INVITED_ISO = '2026-11-17T03:00:00.000Z';
+  const invited = (over: Partial<FollowUpSourceRow['entity'] & object> = {}): FollowUpSourceRow =>
+    seqRow('invitation', RELATIONSHIP_ID, 'day_1', INVITED_ISO, {
+      status: 'published',
+      publishedAt: new Date('2026-11-17T22:00:00.000Z'),
+      recipient: TOM,
+      entity: {
+        title: 'Field Service rollout',
+        companyName: 'Bright Foods',
+        agencyName: 'CloudPeak',
+        ...over,
+      },
+    });
+  const liveInvitation = liveFor('invitation', RELATIONSHIP_ID, INVITED_ISO, {
+    title: 'Field Service rollout',
+  });
+
+  it('shows who invited the expert on a person lens', () => {
+    const [wait] = build({ rows: [invited()], live: liveInvitation }).now;
+    expect(wait?.title).toBe('Invitation to answer');
+    expect(wait?.headline).toBe('Field Service rollout');
+    expect(wait?.context).toEqual(['Project request', 'From Bright Foods', 'invited Tue 17 Nov']);
+    expect(wait?.note).toBeNull();
+    expect(wait?.steps[0]?.channel).toBe('Email');
+  });
+
+  it('names the expert at their agency on an entity lens, with no fact', () => {
+    const [wait] = build({
+      lens: 'entity',
+      subject: null,
+      rows: [invited()],
+      live: liveInvitation,
+    }).now;
+    expect(wait?.headline).toBe('Tom Okafor @ CloudPeak');
+    expect(wait?.context).toEqual(['invited Tue 17 Nov']);
+  });
+
+  it('says "Independent expert" with a bare name when there is no agency', () => {
+    const [wait] = build({
+      lens: 'entity',
+      subject: null,
+      rows: [invited({ agencyName: null })],
+      live: liveInvitation,
+    }).now;
+    expect(wait?.headline).toBe('Tom Okafor');
+    expect(wait?.context).toEqual(['Independent expert', 'invited Tue 17 Nov']);
+  });
+
+  it('says nothing about the agency when the relationship is gone', () => {
+    const [wait] = build({
+      lens: 'entity',
+      subject: null,
+      rows: [{ ...invited(), entity: null }],
+      live: liveInvitation,
+    }).now;
+    expect(wait?.context).toEqual(['invited Tue 17 Nov']);
+  });
+
+  it('still reads finished once both follow-ups have gone: nothing closes it by itself', () => {
+    const rows = [
+      invited(),
+      seqRow('invitation', RELATIONSHIP_ID, 'day_3', INVITED_ISO, {
+        status: 'published',
+        publishedAt: new Date('2026-11-20T22:00:00.000Z'),
+        recipient: TOM,
+      }),
+    ];
+    expect(build({ rows, live: liveInvitation }).now[0]?.state).toBe('finished');
+  });
+});
+
+describe('buildLookupFollowUps — send times agree with the planner', () => {
+  /** Thu 19 Nov 2026, 3:00 pm in Melbourne. */
+  const THURSDAY_ISO = '2026-11-19T04:00:00.000Z';
+  const rows = [
+    seqRow('invitation', RELATIONSHIP_ID, 'day_1', THURSDAY_ISO, {
+      status: 'published',
+      publishedAt: new Date('2026-11-22T22:00:00.000Z'),
+      recipient: TOM,
+    }),
+  ];
+  const liveInvitation = liveFor('invitation', RELATIONSHIP_ID, THURSDAY_ISO);
+
+  it('puts day 3 on Tuesday morning, not the Monday its due day would suggest', () => {
+    const view = build({
+      rows,
+      live: liveInvitation,
+      now: new Date('2026-11-23T01:00:00.000Z'),
+    });
+    const day3 = view.now[0]?.steps.find((step) => step.key === 'day_3');
+    expect(day3).toMatchObject({ state: 'due', whenLabel: 'Tue 24 Nov, 9:00 am' });
+  });
+
+  it('does not call day 3 missed while its Tuesday send is still armable', () => {
+    // Tue 24 Nov, 4:00 pm Melbourne: past Monday 9 am + 24 h, inside Tuesday 9 am + 24 h.
+    const view = build({
+      rows,
+      live: liveInvitation,
+      now: new Date('2026-11-24T05:00:00.000Z'),
+    });
+    const day3 = view.now[0]?.steps.find((step) => step.key === 'day_3');
+    expect(day3?.state).toBe('due');
+    expect(day3?.code).toBeNull();
+  });
+
+  it('calls day 3 missed once Tuesday’s window has passed', () => {
+    const view = build({
+      rows,
+      live: liveInvitation,
+      now: new Date('2026-11-25T23:00:00.000Z'),
+    });
+    const day3 = view.now[0]?.steps.find((step) => step.key === 'day_3');
+    expect(day3?.state).toBe('not_sent');
+    expect(day3?.sentence).toBe(REASON_SENTENCE.missed('Dana', 0));
+  });
+});
+
+describe('follow-up wording tables', () => {
+  it('has a title, aboutType and untitled fallback for every sequence', () => {
+    expect(Object.keys(SEQUENCE_META).sort()).toEqual([
+      'delivery_review',
+      'invitation',
+      'proposal_review',
+    ]);
+  });
+
+  it('joins channels into a label', () => {
+    expect(channelLabel(['email'])).toBe('Email');
+    expect(channelLabel(['email', 'in_app'])).toBe('Email and in-app');
   });
 });

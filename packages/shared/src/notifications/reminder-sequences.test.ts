@@ -8,8 +8,9 @@ import {
   REMINDER_SKIP_REASONS,
   reminderSequenceSpanMs,
   REMINDER_DEFAULT_ZONE,
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_CHANNELS,
   REMINDER_SEQUENCE_IDS,
-  REMINDER_SEQUENCE_SHARED_RULES,
   REMINDER_SEQUENCE_STEPS,
   reminderLocalDayStart,
   reminderRecipientZone,
@@ -62,8 +63,8 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
     );
   });
 
-  it('delivery_review shares no predicate rule', () => {
-    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual([]);
+  it('delivery_review names its wait rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual(['deliveryReviewWait']);
   });
 });
 
@@ -258,5 +259,42 @@ describe('REMINDER_SEQUENCE_SHARED_RULES', () => {
       'proposalAwaitsClientReview',
       'proposalReviewWait',
     ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_SHARED_RULES for invitation', () => {
+  it('names the move rule beside the wait rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.invitation).toEqual([
+      'expertInvitationMove',
+      'invitationReminderWait',
+    ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_CHANNELS', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s lists at least one channel', (id) => {
+    expect(REMINDER_SEQUENCE_CHANNELS[id].length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('matches each sequence event rule', () => {
+    expect(REMINDER_SEQUENCE_CHANNELS).toEqual({
+      proposal_review: ['email'],
+      delivery_review: ['email', 'in_app'],
+      invitation: ['email'],
+    });
+  });
+});
+
+describe('REMINDER_SEQUENCE_AUDIENCE', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s has an audience', (id) => {
+    expect(['client', 'expert']).toContain(REMINDER_SEQUENCE_AUDIENCE[id]);
+  });
+
+  it('reminds the expert only on invitation', () => {
+    expect(REMINDER_SEQUENCE_AUDIENCE).toEqual({
+      proposal_review: 'client',
+      delivery_review: 'client',
+      invitation: 'expert',
+    });
   });
 });

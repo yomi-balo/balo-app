@@ -1,5 +1,7 @@
-import type { ReminderSequenceId } from '@balo/shared/notifications';
+import type { ReminderChannel, ReminderSequenceId } from '@balo/shared/notifications';
 import type { EventPayloadMap } from '../events.js';
+
+export type { ReminderChannel };
 
 /** One waiting entity a sequence reminds about, as of one read of live state. */
 export interface SequenceEntity {
@@ -25,9 +27,6 @@ export interface ReminderSequenceEvents {
 
 /** Every event a reminder sequence can publish. */
 export type ReminderEvent = ReminderSequenceEvents[ReminderSequenceId];
-
-/** The delivery channels a reminder promise covers. */
-export type ReminderChannel = 'email' | 'in_app';
 
 /**
  * A reminder sequence. The steps are never stored here: they are always read from
