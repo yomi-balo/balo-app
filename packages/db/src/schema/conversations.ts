@@ -84,11 +84,18 @@ export const conversations = pgTable('conversations', {
  * discharged for the `engagement` arm; the `relationship` arm keeps its shipped gate
  * (`apps/web/src/lib/project-request/resolve-conversation-access.ts`).
  *
- * ONE SYSTEM-SCOPED READER IS EXEMPT, BY DESIGN: `conversationsRepository
- * .latestChatActivityAtForEngagements` (BAL-572, the case-inactivity sweep's chat read). It
- * resolves `engagement` contexts with no party check because its one caller passes ids from
- * `caseEngagementsRepository.listOpenCreatedBefore`, and it returns a timestamp per id, never
- * content. ⚠ AND THE INVERSE NOW BINDS THE WRITERS: a live message or file in a case thread
+ * TWO SYSTEM-SCOPED READERS ARE EXEMPT, BY DESIGN. Neither returns content, and each takes
+ * its ids only from a system query, never from a request:
+ *   · `conversationsRepository.latestChatActivityAtForEngagements` (BAL-572, the
+ *     case-inactivity sweep's chat read) resolves `engagement` contexts with no party check;
+ *     its one caller passes ids from `caseEngagementsRepository.listOpenCreatedBefore`, and it
+ *     returns a timestamp per id.
+ *   · `conversationsRepository.relationshipsWithExpertMessage` (BAL-664, the invitation
+ *     reminder's stop check) resolves `relationship` contexts with no party check; its one
+ *     caller passes ids from `requestExpertRelationshipsRepository
+ *     .listInvitationReminderCandidates`, and it returns the subset of ids whose expert has
+ *     written. It counts only messages from that relationship's own expert user, so a client
+ *     message never stops the reminders. ⚠ AND THE INVERSE NOW BINDS THE WRITERS: a live message or file in a case thread
  * holds that case open for 30 days, from either party, with no sender filter on the read. So
  * every insert path into `conversation_messages` / `conversation_files` on a case thread MUST
  * keep its party check — an unchecked writer could hold another tenant's case open at will.

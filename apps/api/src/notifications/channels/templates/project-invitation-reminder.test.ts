@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@react-email/render';
 import {
   ProjectInvitationReminderEmail,
-  invitationClientName,
+  invitationRequestFrom,
 } from './project-invitation-reminder.js';
 import { getEmailTemplate } from './index.js';
 
@@ -47,31 +47,42 @@ function renderEmail(companyName: string): Promise<string> {
   );
 }
 
-describe('invitationClientName', () => {
+describe('invitationRequestFrom', () => {
   it.each([
-    ['Northwind', 'Northwind'],
-    ['  Northwind  ', 'Northwind'],
-    ['', 'The client'],
-    ['   ', 'The client'],
-    [undefined, 'The client'],
+    ['Northwind', 'A request from Northwind'],
+    ['  Northwind  ', 'A request from Northwind'],
+    ['', 'A request'],
+    ['   ', 'A request'],
+    [undefined, 'A request'],
   ])('%j reads %j', (input, expected) => {
-    expect(invitationClientName(input)).toBe(expected);
+    expect(invitationRequestFrom(input)).toBe(expected);
   });
 });
 
 describe('ProjectInvitationReminderEmail', () => {
   it('names the client, shows the title and links the request', async () => {
     const html = clean(await renderEmail('Northwind'));
-    expect(html).toContain('Northwind is waiting on your answer.');
+    expect(html).toContain('A request from Northwind is waiting on your answer.');
     expect(html).toContain('Waiting on your answer');
     expect(html).toContain('Open the request →');
     expect(html).toContain(`${BASE}/projects/req-1`);
     expect(html).toContain('CRM rollout');
   });
 
-  it('falls back to "The client" for a blank company name', async () => {
+  it('falls back to "A request" for a blank company name, in the heading and the preview', async () => {
     const html = clean(await renderEmail(''));
-    expect(html).toContain('The client is waiting on your answer.');
+    expect(html).toContain('A request is waiting on your answer.');
+    expect(html).toContain('A request is waiting on your answer: CRM rollout');
+    expect(html).not.toContain('The client');
+  });
+
+  it('never says the client is waiting, and gives a reason to answer either way', async () => {
+    const html = clean(await renderEmail('Northwind'));
+    expect(html.replaceAll('A request from Northwind is waiting', '')).not.toContain(
+      'Northwind is waiting'
+    );
+    expect(html).not.toContain('No rush');
+    expect(html).toContain('An answer either way keeps it moving.');
   });
 
   it('mentions no price, budget, fee or money', async () => {

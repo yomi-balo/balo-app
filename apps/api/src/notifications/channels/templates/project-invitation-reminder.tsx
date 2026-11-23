@@ -5,16 +5,18 @@ export interface ProjectInvitationReminderEmailProps extends ProjectEmailRecipie
   readonly companyName: string;
 }
 
-/** The client party named in the copy; a blank name falls back to "The client". */
-export function invitationClientName(companyName: string | undefined): string {
+/** "A request from {company}", or "A request" when the company name is blank. */
+export function invitationRequestFrom(companyName: string | undefined): string {
   const trimmed = companyName?.trim() ?? '';
-  return trimmed === '' ? 'The client' : trimmed;
+  return trimmed === '' ? 'A request' : `A request from ${trimmed}`;
 }
 
 /**
- * Expert email: a gentle follow-up while a project request still waits on the expert's answer.
- * One copy serves both invited and direct requests. Names the client party, carries no money and
- * no countdown. CTA links to the request page. Layout lives in the shared `ProjectStatusEmail`.
+ * Expert email: a follow-up while a project request still waits on the expert's answer. One copy
+ * serves both invited and direct requests, so it says the REQUEST is waiting, never that the
+ * client is: on an invitation the client can't see the expert until they express interest. It
+ * gives a reason to answer either way, carries no money and no countdown, and links to the
+ * request page. Layout lives in the shared `ProjectStatusEmail`.
  */
 export function ProjectInvitationReminderEmail({
   firstName = 'there',
@@ -23,23 +25,23 @@ export function ProjectInvitationReminderEmail({
   companyName,
   baseUrl,
 }: Readonly<ProjectInvitationReminderEmailProps>) {
-  const client = invitationClientName(companyName);
+  const request = invitationRequestFrom(companyName);
   return (
     <ProjectStatusEmail
       // pending-MJ
-      previewText={`${firstName}, ${client} is waiting on your answer about ${projectTitle}`}
+      previewText={`${request} is waiting on your answer: ${projectTitle}`}
       baseUrl={baseUrl}
       projectRequestId={projectRequestId}
       firstName={firstName}
       pillLabel="📬 Waiting on your answer" // pending-MJ
-      heroHeading={`${client} is waiting on your answer.`} // pending-MJ
-      heroSubtext="Take a look whenever suits you." // pending-MJ
+      heroHeading={`${request} is waiting on your answer.`} // pending-MJ
+      heroSubtext="An answer either way keeps it moving." // pending-MJ
       // pending-MJ
-      bodyText="Open the request to read the brief and let the client know whether you'd like to take it on."
+      bodyText="If you'd like to take it on, saying so now gets the conversation started while the brief is fresh. If it isn't the right fit, passing lets Balo find other experts sooner."
       summaryLabel="Project request" // pending-MJ
       projectTitle={projectTitle}
       // pending-MJ
-      calloutText="If it isn't the right fit, you can pass from the same page. No rush."
+      calloutText="You can answer or pass from the request page."
       ctaLabel="Open the request →" // pending-MJ
       supportPrefix="Questions about this request?" // pending-MJ
     />

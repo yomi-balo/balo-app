@@ -83,7 +83,7 @@ describe('planDueSteps', () => {
       ).not.toContain('day_3');
     });
 
-    it('leaves proposal_review send times as they were', () => {
+    it('leaves a proposal_review step alone when no other step shares its morning', () => {
       const planned = plan(new Date('2026-11-05T08:30:00.000Z'));
       expect(planned[0]?.fireAt.toISOString()).toBe('2026-11-05T09:00:00.000Z');
     });

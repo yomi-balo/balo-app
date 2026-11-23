@@ -44,6 +44,7 @@ export const REMINDER_SEQUENCE_KEY_PREFIX = 'seq:';
 
 const SATURDAY = 6;
 const SUNDAY = 0;
+const MINUTE_MS = 60_000;
 
 /**
  * The zone a reminder's send window is read in. A saved zone is used as its canonical name;
@@ -92,6 +93,43 @@ export function reminderSendAt(dueAt: Date, timing: ReminderStepTiming, zone: st
     dayOffset += 1;
   }
   return dueAt;
+}
+
+export interface ReminderStepSendTime {
+  readonly stepKey: string;
+  readonly fireAt: Date;
+}
+
+/**
+ * When every step of a sequence is sent, in step order. Each step is its offset from the anchor
+ * with `reminderSendAt` applied. A `weekday_morning` step whose send time would not be strictly
+ * after the previous step's moves to the next weekday morning, so two steps never land on the
+ * same morning: a Thursday-afternoon `invitation` sends day_1 on Monday and day_3 on Tuesday,
+ * and a `proposal_review` anchored on the Wednesday morning before clocks go back sends day_2 on
+ * Monday and day_5 on Tuesday. The sweep and anything that shows a schedule both read this, so
+ * they agree on the morning.
+ */
+export function reminderStepSendTimes(input: {
+  steps: readonly ReminderStep[];
+  anchor: Date;
+  zone: string;
+}): ReminderStepSendTime[] {
+  const out: ReminderStepSendTime[] = [];
+  let previous: Date | null = null;
+  for (const step of input.steps) {
+    const dueAt = new Date(input.anchor.getTime() + step.offsetMinutes * MINUTE_MS);
+    let fireAt = reminderSendAt(dueAt, step.timing, input.zone);
+    if (
+      step.timing === 'weekday_morning' &&
+      previous !== null &&
+      fireAt.getTime() <= previous.getTime()
+    ) {
+      fireAt = reminderSendAt(new Date(previous.getTime() + 1), 'weekday_morning', input.zone);
+    }
+    previous = fireAt;
+    out.push({ stepKey: step.key, fireAt });
+  }
+  return out;
 }
 
 /**

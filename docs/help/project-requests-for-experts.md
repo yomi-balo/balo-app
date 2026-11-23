@@ -14,8 +14,8 @@ When a request started life as a case, the new-request notification names the ca
 from, so you know there's message history and consultation records behind it before you reply.
 
 If you haven't answered an invitation or a direct request yet, we'll send you up to two short
-reminder emails: the first about a day after it arrived and the second a couple of days later,
-each on a weekday morning your time. They stop once you've expressed interest or passed (on a
+reminder emails: the first a day or two after it arrived and the second a day or more after
+that, each on a weekday morning your time. They stop once you've expressed interest or passed (on a
 direct request, once you've replied or shared your availability), or the request closes.
 
 ## When a client asks for you directly
