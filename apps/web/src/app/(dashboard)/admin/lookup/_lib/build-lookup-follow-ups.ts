@@ -322,7 +322,7 @@ function factsForPublished(
     state: undelivered ? 'failed' : 'sent',
     label: undelivered ? NOT_DELIVERED_LABEL : undefined,
     channel: undelivered ? null : channel,
-    delivery: outcomes.map(deliveryLine),
+    delivery: outcomes.map((outcome, index) => deliveryLine(outcome, index)),
     reasonKey: null,
     unknownSkipCode: null,
     detail: null,
