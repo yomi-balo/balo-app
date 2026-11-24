@@ -39,9 +39,9 @@ export const REMINDER_SEQUENCE_STEPS: Readonly<
 export const REMINDER_SEQUENCE_SHARED_RULES: Readonly<
   Record<ReminderSequenceId, readonly string[]>
 > = {
-  proposal_review: ['proposalAwaitsClientReview'],
-  delivery_review: [],
-  invitation: ['expertInvitationMove'],
+  proposal_review: ['proposalAwaitsClientReview', 'proposalReviewWait'],
+  delivery_review: ['deliveryReviewWait'],
+  invitation: ['expertInvitationMove', 'invitationReminderWait'],
 };
 
 /**
@@ -58,12 +58,64 @@ export interface ReminderStepFields {
   recipientUserId: string;
 }
 
+/**
+ * Whether a sequence's steps skip the per-recipient daily limit. A sequence that is not exempt
+ * counts toward `REMINDER_DAILY_LIMIT` and is held back once a recipient has had that many
+ * published sends since local midnight.
+ */
+export const REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT: Readonly<
+  Record<ReminderSequenceId, boolean>
+> = {
+  proposal_review: false,
+  delivery_review: true,
+  invitation: false,
+};
+
+/** The delivery channels a reminder promise covers. */
+export type ReminderChannel = 'email' | 'in_app';
+
+/**
+ * Every channel each sequence's event rule delivers on; the first is the one `reminder_sent`
+ * reports. The sweep registry and the Lookup Follow-ups tab both read this record.
+ */
+export const REMINDER_SEQUENCE_CHANNELS: Readonly<
+  Record<ReminderSequenceId, readonly [ReminderChannel, ...ReminderChannel[]]>
+> = {
+  proposal_review: ['email'],
+  delivery_review: ['email', 'in_app'],
+  invitation: ['email'],
+};
+
+/** Who each sequence reminds: the client side or the expert side of the engagement. */
+export const REMINDER_SEQUENCE_AUDIENCE: Readonly<Record<ReminderSequenceId, 'client' | 'expert'>> =
+  {
+    proposal_review: 'client',
+    delivery_review: 'client',
+    invitation: 'expert',
+  };
+
+/** Every skip the recheck guard records on a scheduled reminder row. */
+export const REMINDER_SKIP_REASONS = [
+  'malformed_payload',
+  'already_decided',
+  'no_longer_waiting',
+  'anchor_moved',
+  'recipient_gone',
+  'over_daily_limit',
+] as const;
+export type ReminderSkipReason = (typeof REMINDER_SKIP_REASONS)[number];
+
 export const MAX_REMINDER_STEPS = 3;
 export const REMINDER_DAILY_LIMIT = 2;
 export const REMINDER_ARMABLE_AFTER_DUE_MS = 86_400_000;
 export const REMINDER_DEFAULT_ZONE = 'Australia/Melbourne';
 export const REMINDER_MORNING_HOUR = 9;
 export const REMINDER_SEQUENCE_KEY_PREFIX = 'seq:';
+
+const MS_PER_MINUTE = 60_000;
+const MS_PER_DAY = 86_400_000;
+/** The weekend hold plus the window in which a missed step may still be armed. */
+const SEQUENCE_SPAN_PADDING_DAYS = 4;
 
 const SATURDAY = 6;
 const SUNDAY = 0;
@@ -177,4 +229,19 @@ export function reminderSequenceKey(p: {
 
 export function reminderSequenceKeyPrefix(id: ReminderSequenceId): string {
   return `${REMINDER_SEQUENCE_KEY_PREFIX}${id}:`;
+}
+
+/**
+ * An upper bound on how long after its anchor any step of any sequence can still be on a row:
+ * the largest step offset plus {@link SEQUENCE_SPAN_PADDING_DAYS} days (the weekend hold plus the
+ * armable window). It bounds how far back a row read must reach.
+ */
+export function reminderSequenceSpanMs(): number {
+  let largestOffsetMinutes = 0;
+  for (const id of REMINDER_SEQUENCE_IDS) {
+    for (const step of REMINDER_SEQUENCE_STEPS[id]) {
+      largestOffsetMinutes = Math.max(largestOffsetMinutes, step.offsetMinutes);
+    }
+  }
+  return largestOffsetMinutes * MS_PER_MINUTE + SEQUENCE_SPAN_PADDING_DAYS * MS_PER_DAY;
 }

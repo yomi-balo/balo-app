@@ -97,7 +97,7 @@ const isLiveGateViolator = (f: ScannedFile): boolean =>
   inScope(f) && occurrences(f.code, SESSION_GATE) > occurrences(f.code, LIVE_GATE);
 
 /**
- * The seven measured exceptions, each with its reason and a `proof` substring the reason
+ * The eight measured exceptions, each with its reason and a `proof` substring the reason
  * genuinely rests on (verified against the file's own code before pinning).
  */
 const ALLOWLIST: readonly { rel: string; reason: string; proof: string }[] = [
@@ -117,6 +117,12 @@ const ALLOWLIST: readonly { rel: string; reason: string; proof: string }[] = [
     rel: 'app/(dashboard)/admin/lookup/_actions/fetch-lookup-timeline.ts',
     reason: 'Read-only loader, same reasoning: a stale read shows data the caller already saw.',
     proof: 'loadLookupTimeline(',
+  },
+  {
+    rel: 'app/(dashboard)/admin/lookup/_actions/fetch-lookup-follow-ups.ts',
+    reason:
+      'Read-only loader, same reasoning as the timeline loader: a stale read shows follow-up history and grants nothing.',
+    proof: 'loadLookupFollowUps(',
   },
   {
     rel: 'app/(dashboard)/admin/lookup/_actions/fetch-lookup-money-block.ts',
@@ -213,11 +219,11 @@ describe('invariant: every session-gated platform capability check is ALSO live-
 
   it('A6: exact size — the violator set IS the allowlist, both directions', () => {
     expect([...violators].sort(REL_COMPARATOR)).toEqual([...ALLOWLIST_RELS].sort(REL_COMPARATOR));
-    expect(violators).toHaveLength(7);
+    expect(violators).toHaveLength(8);
   });
 
   it('A7: each allowlist reason is backed by source', () => {
-    expect(ALLOWLIST).toHaveLength(7);
+    expect(ALLOWLIST).toHaveLength(8);
     for (const entry of ALLOWLIST) {
       const file = scanned.find((candidate) => candidate.rel === entry.rel);
       expect(file, `${entry.rel} must be in the scan set`).toBeDefined();

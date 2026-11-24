@@ -3,7 +3,8 @@ import {
   requestExpertRelationshipsRepository,
   type InvitationReminderCandidateRow,
 } from '@balo/db';
-import { expertInvitationMove } from '@balo/shared/project-requests';
+import { REMINDER_SEQUENCE_AUDIENCE, REMINDER_SEQUENCE_CHANNELS } from '@balo/shared/notifications';
+import { invitationReminderWait } from '@balo/shared/project-requests';
 import type { ReminderSequence, SequenceEntity } from './types.js';
 
 /**
@@ -24,19 +25,13 @@ export function invitationEntities(
 ): SequenceEntity[] {
   const entities: SequenceEntity[] = [];
   for (const row of rows) {
-    const move = expertInvitationMove({
-      requestStatus: row.requestStatus,
-      relationshipStatus: row.relationshipStatus,
-      onDirectLeg: row.onDirectLeg,
-      availabilityShared: row.availabilitySharedAt !== null,
-      sentMessage: expertWrote.has(row.relationshipId),
-    });
-    if (move === null) {
+    const wait = invitationReminderWait(row, expertWrote.has(row.relationshipId));
+    if (wait === null) {
       continue;
     }
     entities.push({
       entityId: row.relationshipId,
-      anchor: row.invitedAt,
+      anchor: wait.anchor,
       companyId: row.companyId,
       candidateUserIds: [row.expertUserId],
       fresh: {
@@ -71,8 +66,8 @@ function freshString(entity: SequenceEntity, field: string): string {
 export const invitationSequence: ReminderSequence<'project.invitation_reminder'> = {
   id: 'invitation',
   event: 'project.invitation_reminder',
-  channels: ['email'],
-  audience: 'expert',
+  channels: REMINDER_SEQUENCE_CHANNELS.invitation,
+  audience: REMINDER_SEQUENCE_AUDIENCE.invitation,
   cadence: 'hourly',
   exemptFromDailyLimit: false,
 

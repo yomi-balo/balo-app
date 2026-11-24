@@ -13,6 +13,8 @@
  */
 export type { AdminAlertDetail, AdminAlertMoney } from './detail';
 
+export { formatDateTimeShortUtc } from './format';
+
 export {
   ADMIN_ALERT_GROUPS,
   ADMIN_ALERT_GROUP_ORDER,

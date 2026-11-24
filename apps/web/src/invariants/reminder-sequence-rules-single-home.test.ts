@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as engagements from '@balo/shared/engagements';
 import * as projectRequests from '@balo/shared/project-requests';
 import { REMINDER_SEQUENCE_SHARED_RULES } from '@balo/shared/notifications';
 import { codeLinesOf, namedImportsFrom, scanWorkspaceSources } from './_source-scan';
@@ -10,7 +11,21 @@ import { codeLinesOf, namedImportsFrom, scanWorkspaceSources } from './_source-s
  * own copy, and that every web file mentioning the name imports it from the shared home.
  */
 
-const SHARED_HOME = '@balo/shared/project-requests';
+/** Each shared subpath that homes a rule, with its module namespace. */
+const SHARED_HOMES: readonly {
+  readonly path: string;
+  readonly exports: Record<string, unknown>;
+}[] = [
+  { path: '@balo/shared/project-requests', exports: projectRequests },
+  { path: '@balo/shared/engagements', exports: engagements },
+];
+
+function homesOf(name: string): readonly string[] {
+  return SHARED_HOMES.filter((home) => typeof home.exports[name] === 'function').map(
+    (home) => home.path
+  );
+}
+
 const WEB_PREFIX = 'apps/web/src/';
 
 const RULE_NAMES: readonly string[] = [
@@ -45,8 +60,8 @@ describe('reminder-sequence shared rules have one home', () => {
   });
 
   describe.each(RULE_NAMES)('%s', (name) => {
-    it('is exported by the shared package as a function', () => {
-      expect(typeof (projectRequests as Record<string, unknown>)[name]).toBe('function');
+    it('is exported as a function by exactly one shared home', () => {
+      expect(homesOf(name)).toHaveLength(1);
     });
 
     it('is declared by no apps/web file', () => {
@@ -57,8 +72,9 @@ describe('reminder-sequence shared rules have one home', () => {
     it('is imported from the shared home by every apps/web file that names it', () => {
       const users = webFiles.filter((f) => f.code.includes(name));
       expect(users.length).toBeGreaterThan(0);
+      const [home] = homesOf(name);
       const missing = users
-        .filter((f) => !namedImportsFrom(f.code, SHARED_HOME).includes(name))
+        .filter((f) => home === undefined || !namedImportsFrom(f.code, home).includes(name))
         .map((f) => f.rel);
       expect(missing).toEqual([]);
     });

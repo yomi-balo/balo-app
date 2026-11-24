@@ -26,14 +26,39 @@ const ALL_GROUPS: readonly AdminAlertGroup[] = [...ADMIN_ALERT_GROUP_ORDER, 'pla
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 describe('ADMIN_ALERT_KINDS — the registry', () => {
-  it('has exactly the twenty-one kinds (twelve finder + eight event-driven + sweep.failed)', () => {
-    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(21);
-    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(21);
+  it('has exactly the twenty-three kinds (thirteen finder + eight event-driven + two sentinels)', () => {
+    expect(ADMIN_ALERT_KIND_KEYS).toHaveLength(23);
+    expect(new Set(ADMIN_ALERT_KIND_KEYS).size).toBe(23);
   });
 
-  it('has exactly twelve finder kinds', () => {
+  it('has exactly thirteen finder kinds', () => {
     const finderKinds = ADMIN_ALERT_KIND_KEYS.filter((k) => ADMIN_ALERT_KINDS[k].finder !== null);
-    expect(finderKinds).toHaveLength(12);
+    expect(finderKinds).toHaveLength(13);
+  });
+
+  it('project.proposal_review_stalled is a 15m marketplace finder kind targeting the request', () => {
+    const meta = ADMIN_ALERT_KINDS['project.proposal_review_stalled'];
+    expect(meta.group).toBe('marketplace');
+    expect(meta.finder).toBe('projectProposalReviewStalled');
+    expect(meta.cadence).toBe('15m');
+    const target = meta.target({
+      entityId: 'request-1',
+      detail: { title: 't', entityLabel: 'e', evidence: 'ev', facts: [] },
+    });
+    expect(target).toEqual({ label: 'the request', href: '/projects/request-1' });
+  });
+
+  it('scheduled_notification.failed is a platform sentinel, note-closeable, targeting the queue', () => {
+    const meta = ADMIN_ALERT_KINDS['scheduled_notification.failed'];
+    expect(meta.group).toBe('platform');
+    expect(meta.finder).toBeNull();
+    expect(meta.cadence).toBeNull();
+    expect(isNoteCloseableKind('scheduled_notification.failed')).toBe(true);
+    const target = meta.target({
+      entityId: 'row-1',
+      detail: { title: 't', entityLabel: 'e', evidence: 'ev', facts: [] },
+    });
+    expect(target).toEqual({ label: 'the queue', href: '/admin' });
   });
 
   it('finder === null iff cadence === null, for every kind', () => {

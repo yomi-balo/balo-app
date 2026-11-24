@@ -54,4 +54,6 @@ export type AdminAlertEntityType =
   | 'transcript' // transcripts.id
   | 'calendar' // calendar_connections.id
   | 'engagement' // engagements.id
+  | 'scheduled_notification' // scheduled_notifications.id
+  | 'project_request' // project_requests.id
   | 'sweep'; // the sentinel — no table

@@ -70,6 +70,13 @@ const PINNED_FILES: readonly string[] = [
   '_actions/fetch-lookup-timeline.ts',
   '_components/lookup-drill-in-tabs.tsx',
   '_components/lookup-timeline-section.tsx',
+  // BAL-666
+  '_lib/load-lookup-follow-ups.ts',
+  '_lib/build-lookup-follow-ups.ts',
+  '_lib/follow-ups-view.ts',
+  '_actions/fetch-lookup-follow-ups.ts',
+  '_components/lookup-follow-ups-section.tsx',
+  '_components/lookup-follow-up-wait-block.tsx',
 ];
 
 /**
@@ -83,6 +90,18 @@ const ALLOWED_REPOSITORY_CALLS: readonly { readonly object: string; readonly mem
   // BAL-555 — the Timeline reader. ⚠ `record` is NOT added: the route must never reach the
   // audit WRITER (PR #273 D3).
   { object: 'auditEventsRepository', member: 'listTrailForEntity' },
+  // BAL-666 — the Follow-ups tab's reads. `reminderWaitsRepository` has no write member; every
+  // other repository here is reached for one lookup by id or one live "is it still waiting" read.
+  { object: 'reminderWaitsRepository', member: 'listRows' },
+  { object: 'reminderWaitsRepository', member: 'findEngagementRequestId' },
+  { object: 'reminderWaitsRepository', member: 'listRequestRelationshipIds' },
+  { object: 'reminderWaitsRepository', member: 'listDeliveryReviewStates' },
+  { object: 'reminderWaitsRepository', member: 'listDeliveryOutcomes' },
+  { object: 'requestExpertRelationshipsRepository', member: 'listInvitationReminderCandidates' },
+  { object: 'conversationsRepository', member: 'relationshipsWithExpertMessage' },
+  { object: 'expertsRepository', member: 'findUserIdByProfileId' },
+  { object: 'usersRepository', member: 'findById' },
+  { object: 'proposalsRepository', member: 'listReviewCandidates' },
 ];
 
 function isAllowedCall(call: { readonly object: string; readonly member: string }): boolean {
@@ -100,6 +119,15 @@ function isAllowedCall(call: { readonly object: string; readonly member: string 
 const ALLOWED_DB_IMPORTS: Readonly<Record<string, readonly string[]>> = {
   '_lib/load-lookup.ts': ['platformLookupRepository'],
   '_lib/load-lookup-timeline.ts': ['auditEventsRepository'],
+  '_lib/load-lookup-follow-ups.ts': [
+    'conversationsRepository',
+    'expertsRepository',
+    'proposalsRepository',
+    'reminderWaitsRepository',
+    'REQUEST_RELATIONSHIP_IDS_LIMIT',
+    'requestExpertRelationshipsRepository',
+    'usersRepository',
+  ],
 };
 
 const scanned = scanRouteSources(LOOKUP_DIR, '', EXCLUDED_DIRS);
@@ -128,6 +156,29 @@ describe('invariant: the Lookup page and its drill-in perform no writes (BAL-551
     expect(loader).toBeDefined();
     const calls = repositoryMemberCallsOf(loader?.code ?? '');
     expect(calls).toContainEqual({ object: 'auditEventsRepository', member: 'listTrailForEntity' });
+  });
+
+  it('guards the guard: the Follow-ups loader genuinely calls listRows (BAL-666 dead-matcher guard)', () => {
+    const loader = scanned.find((file) => file.rel === '_lib/load-lookup-follow-ups.ts');
+    expect(loader).toBeDefined();
+    const calls = repositoryMemberCallsOf(loader?.code ?? '');
+    expect(calls).toContainEqual({ object: 'reminderWaitsRepository', member: 'listRows' });
+    for (const member of [
+      'findEngagementRequestId',
+      'listRequestRelationshipIds',
+      'listDeliveryReviewStates',
+      'listDeliveryOutcomes',
+    ]) {
+      expect(calls).toContainEqual({ object: 'reminderWaitsRepository', member });
+    }
+    expect(calls).toContainEqual({
+      object: 'requestExpertRelationshipsRepository',
+      member: 'listInvitationReminderCandidates',
+    });
+    expect(calls).toContainEqual({
+      object: 'conversationsRepository',
+      member: 'relationshipsWithExpertMessage',
+    });
   });
 
   it.each(scannedPaths)(
@@ -181,16 +232,17 @@ describe('invariant: the Lookup page and its drill-in perform no writes (BAL-551
     ).toEqual([]);
   });
 
-  it('_actions/ is NOT excluded, and it holds exactly two read-only Server Actions', () => {
+  it('_actions/ is NOT excluded, and it holds exactly three read-only Server Actions', () => {
     const actionFiles = scanned.filter((file) => file.rel.startsWith('_actions/'));
     expect(actionFiles.length).toBeGreaterThan(0); // proves the directory was actually scanned
     const serverActions = actionFiles.filter((file) => hasUseServerDirective(file.raw));
     expect(serverActions.map((file) => file.rel).sort()).toEqual([
+      '_actions/fetch-lookup-follow-ups.ts',
       '_actions/fetch-lookup-money-block.ts',
       '_actions/fetch-lookup-timeline.ts',
     ]);
-    // The money block travels over HTTP (callSessionApi); the timeline action delegates to
-    // the loader — NEITHER hops a repository member directly.
+    // The money block travels over HTTP (callSessionApi); the timeline and follow-ups actions
+    // delegate to their loaders — NONE hops a repository member directly.
     for (const action of serverActions) {
       expect(repositoryMemberCallsOf(action.code)).toEqual([]);
     }

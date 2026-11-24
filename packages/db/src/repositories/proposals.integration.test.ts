@@ -2936,4 +2936,51 @@ describe('proposalsRepository.listReviewCandidates', () => {
       expect.arrayContaining([a.relationshipId, b.relationshipId])
     );
   });
+
+  it('filters by projectRequestIds to exactly the named requests', async () => {
+    const a = await proposalFactory();
+    const b = await proposalFactory();
+    const c = await proposalFactory();
+    await setRequestStatus(a.projectRequestId, 'proposal_submitted');
+    await setRequestStatus(b.projectRequestId, 'proposal_submitted');
+    await setRequestStatus(c.projectRequestId, 'proposal_submitted');
+
+    const rows = await proposalsRepository.listReviewCandidates({
+      projectRequestIds: [a.projectRequestId, c.projectRequestId],
+    });
+
+    expect(rows.map((r) => r.relationshipId).sort()).toEqual(
+      [a.relationshipId, c.relationshipId].sort()
+    );
+  });
+
+  it('returns nothing for an empty projectRequestIds without widening to every request', async () => {
+    const a = await proposalFactory();
+    await setRequestStatus(a.projectRequestId, 'proposal_submitted');
+
+    expect(await proposalsRepository.listReviewCandidates({ projectRequestIds: [] })).toEqual([]);
+  });
+
+  it('still applies the review gate to a named request', async () => {
+    const a = await proposalFactory();
+    await setRequestStatus(a.projectRequestId, 'accepted');
+
+    expect(
+      await proposalsRepository.listReviewCandidates({ projectRequestIds: [a.projectRequestId] })
+    ).toEqual([]);
+  });
+
+  it('requires both filters to match when projectRequestId and projectRequestIds are given', async () => {
+    const a = await proposalFactory();
+    const b = await proposalFactory();
+    await setRequestStatus(a.projectRequestId, 'proposal_submitted');
+    await setRequestStatus(b.projectRequestId, 'proposal_submitted');
+
+    const rows = await proposalsRepository.listReviewCandidates({
+      projectRequestId: a.projectRequestId,
+      projectRequestIds: [b.projectRequestId],
+    });
+
+    expect(rows).toEqual([]);
+  });
 });

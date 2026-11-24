@@ -2029,3 +2029,4 @@ export type PartyDomainAddedPayload = PartyDomainChangedPayload; // correlationI
 export type PartyDomainRemovedPayload = PartyDomainChangedPayload; // correlationId = the removed row id
 
 export * from './reminder-sequences';
+export * from './reminder-waits';

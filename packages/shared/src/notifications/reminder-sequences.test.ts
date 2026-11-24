@@ -3,9 +3,14 @@ import { AUTO_ACCEPT_DAYS } from '../engagements/delivery-review';
 import {
   MAX_REMINDER_STEPS,
   REMINDER_ARMABLE_AFTER_DUE_MS,
-  REMINDER_DEFAULT_ZONE,
-  REMINDER_SEQUENCE_IDS,
+  REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT,
   REMINDER_SEQUENCE_SHARED_RULES,
+  REMINDER_SKIP_REASONS,
+  reminderSequenceSpanMs,
+  REMINDER_DEFAULT_ZONE,
+  REMINDER_SEQUENCE_AUDIENCE,
+  REMINDER_SEQUENCE_CHANNELS,
+  REMINDER_SEQUENCE_IDS,
   REMINDER_SEQUENCE_STEPS,
   reminderLocalDayStart,
   reminderRecipientZone,
@@ -58,8 +63,8 @@ describe('REMINDER_SEQUENCE_STEPS', () => {
     );
   });
 
-  it('delivery_review shares no predicate rule', () => {
-    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual([]);
+  it('delivery_review names its wait rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.delivery_review).toEqual(['deliveryReviewWait']);
   });
 });
 
@@ -216,5 +221,80 @@ describe('reminderLocalDayStart', () => {
     // Tue 2026-11-24 09:00 EST (UTC-5) = 14:00Z; midnight = 05:00Z
     const out = reminderLocalDayStart(new Date('2026-11-24T14:00:00Z'), 'America/New_York');
     expect(out.toISOString()).toBe('2026-11-24T05:00:00.000Z');
+  });
+});
+
+describe('reminderSequenceSpanMs', () => {
+  it('is the largest step offset plus four days', () => {
+    expect(reminderSequenceSpanMs()).toBe((9 + 4) * 86_400_000);
+  });
+});
+
+describe('REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s has an explicit flag', (id) => {
+    expect(typeof REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT[id]).toBe('boolean');
+  });
+
+  it('proposal_review counts toward the daily limit', () => {
+    expect(REMINDER_SEQUENCE_EXEMPT_FROM_DAILY_LIMIT.proposal_review).toBe(false);
+  });
+});
+
+describe('REMINDER_SKIP_REASONS', () => {
+  it('lists every skip the recheck guard records', () => {
+    expect([...REMINDER_SKIP_REASONS]).toEqual([
+      'malformed_payload',
+      'already_decided',
+      'no_longer_waiting',
+      'anchor_moved',
+      'recipient_gone',
+      'over_daily_limit',
+    ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_SHARED_RULES', () => {
+  it('names the proposal-review wait rule beside the awaiting rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.proposal_review).toEqual([
+      'proposalAwaitsClientReview',
+      'proposalReviewWait',
+    ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_SHARED_RULES for invitation', () => {
+  it('names the move rule beside the wait rule', () => {
+    expect(REMINDER_SEQUENCE_SHARED_RULES.invitation).toEqual([
+      'expertInvitationMove',
+      'invitationReminderWait',
+    ]);
+  });
+});
+
+describe('REMINDER_SEQUENCE_CHANNELS', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s lists at least one channel', (id) => {
+    expect(REMINDER_SEQUENCE_CHANNELS[id].length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('matches each sequence event rule', () => {
+    expect(REMINDER_SEQUENCE_CHANNELS).toEqual({
+      proposal_review: ['email'],
+      delivery_review: ['email', 'in_app'],
+      invitation: ['email'],
+    });
+  });
+});
+
+describe('REMINDER_SEQUENCE_AUDIENCE', () => {
+  it.each(REMINDER_SEQUENCE_IDS)('%s has an audience', (id) => {
+    expect(['client', 'expert']).toContain(REMINDER_SEQUENCE_AUDIENCE[id]);
+  });
+
+  it('reminds the expert only on invitation', () => {
+    expect(REMINDER_SEQUENCE_AUDIENCE).toEqual({
+      proposal_review: 'client',
+      delivery_review: 'client',
+      invitation: 'expert',
+    });
   });
 });

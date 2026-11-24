@@ -146,6 +146,14 @@ export {
   type ListDueInput,
   type ClaimInput,
 } from './scheduled-notifications';
+export {
+  reminderWaitsRepository,
+  REQUEST_RELATIONSHIP_IDS_LIMIT,
+  DELIVERY_OUTCOMES_LIMIT,
+  type DeliveryOutcome,
+  type ReminderWaitRow,
+  type ListReminderWaitRowsInput,
+} from './reminder-waits';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
 export type {

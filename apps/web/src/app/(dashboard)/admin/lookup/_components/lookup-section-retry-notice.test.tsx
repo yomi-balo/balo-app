@@ -36,4 +36,30 @@ describe('LookupSectionRetryNotice', () => {
     await user.click(button);
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it('BAL-666 — renders a title above the message when given one, and none otherwise', () => {
+    const { rerender } = render(
+      <LookupSectionRetryNotice
+        containerClassName=""
+        title="Follow-ups could not be loaded"
+        message="Something went wrong."
+        showRetry={false}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Follow-ups could not be loaded')).toBeInTheDocument();
+    expect(screen.getByText('Follow-ups could not be loaded').parentElement).toHaveClass(
+      'justify-center'
+    );
+
+    rerender(
+      <LookupSectionRetryNotice
+        containerClassName=""
+        message="Something went wrong."
+        showRetry={false}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.queryByText('Follow-ups could not be loaded')).not.toBeInTheDocument();
+  });
 });

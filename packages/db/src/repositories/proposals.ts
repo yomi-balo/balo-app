@@ -781,11 +781,14 @@ export const proposalsRepository = {
    * status and `submitted_at` (null when it has none). Ordered by request, then
    * `submitted_at`. Uncapped on purpose — a cap could split one request's rows across
    * batches. The SQL only narrows the rows; whether a row still awaits review is decided by
-   * the shared rule, not here. `projectRequestId` narrows to one request.
+   * the shared rule, not here. `projectRequestId` narrows to one request and
+   * `projectRequestIds` to a set (an empty set matches nothing and runs no query); both given,
+   * a row must satisfy both.
    */
   async listReviewCandidates(
-    input: { projectRequestId?: string } = {}
+    input: { projectRequestId?: string; projectRequestIds?: readonly string[] } = {}
   ): Promise<ProposalReviewCandidateRow[]> {
+    if (input.projectRequestIds?.length === 0) return [];
     return db
       .select({
         projectRequestId: projectRequests.id,
@@ -820,7 +823,10 @@ export const proposalsRepository = {
           isNull(requestExpertRelationships.deletedAt),
           input.projectRequestId === undefined
             ? undefined
-            : eq(projectRequests.id, input.projectRequestId)
+            : eq(projectRequests.id, input.projectRequestId),
+          input.projectRequestIds === undefined
+            ? undefined
+            : inArray(projectRequests.id, [...input.projectRequestIds])
         )
       )
       .orderBy(asc(projectRequests.id), asc(proposals.submittedAt));

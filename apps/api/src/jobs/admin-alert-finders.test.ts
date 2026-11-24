@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { businessDaysBetween } from '@balo/shared/timezone';
+import { reminderSequenceKey } from '@balo/shared/notifications';
 
 /**
  * BAL-548 / ADR-1055 — unit coverage per finder: the cutoff arithmetic, `batchFilled` when the
@@ -25,6 +26,8 @@ const {
   mockListPresenceAlertLabels,
   mockListStaleSentForAlerts,
   mockListOverEstimateForAlerts,
+  mockListReviewCandidates,
+  mockListReminderWaitRows,
 } = vi.hoisted(() => ({
   mockListPendingApplicationsForAlerts: vi.fn(),
   mockListOpen: vi.fn(),
@@ -43,9 +46,14 @@ const {
   mockListPresenceAlertLabels: vi.fn(),
   mockListStaleSentForAlerts: vi.fn(),
   mockListOverEstimateForAlerts: vi.fn(),
+  mockListReviewCandidates: vi.fn(),
+  mockListReminderWaitRows: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
+  proposalsRepository: { listReviewCandidates: mockListReviewCandidates },
+  reminderWaitsRepository: { listRows: mockListReminderWaitRows },
+  clientPartyRecipientsRepository: { bookerStillParticipatesInCompany: vi.fn() },
   engagementChangeOrdersRepository: { listStaleSentForAlerts: mockListStaleSentForAlerts },
   engagementTimeEntriesRepository: { listOverEstimateForAlerts: mockListOverEstimateForAlerts },
   expertsRepository: { listPendingApplicationsForAlerts: mockListPendingApplicationsForAlerts },
@@ -1010,5 +1018,338 @@ describe('projectOverEstimate', () => {
 
     expect(outcome.findings[0]?.detail.entityLabel).toBe('Project · Northwind');
     expect(outcome.findings[0]?.detail.facts).toContainEqual(['Expert', 'Priya Nair']);
+  });
+});
+
+describe('projectProposalReviewStalled', () => {
+  const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
+  const USER_ID = '22222222-2222-4222-8222-222222222222';
+  const ANCHOR = new Date('2026-08-24T00:00:00.000Z');
+  const STEPS = ['day_2', 'day_5', 'day_9'] as const;
+  const DAY_MS = 86_400_000;
+
+  function candidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      projectRequestId: REQUEST_ID,
+      companyId: 'co-1',
+      createdByUserId: USER_ID,
+      title: 'CRM rollout',
+      relationshipId: 'rel-1',
+      relationshipStatus: 'proposal_submitted',
+      proposalStatus: 'submitted',
+      submittedAt: ANCHOR,
+      ...overrides,
+    };
+  }
+
+  function reminderRow(
+    step: string,
+    overrides: Record<string, unknown> = {}
+  ): Record<string, unknown> {
+    return {
+      id: `row-${step}`,
+      dedupeKey: reminderSequenceKey({
+        sequenceId: 'proposal_review',
+        entityId: REQUEST_ID,
+        stepKey: step,
+        userId: USER_ID,
+        anchorIso: ANCHOR.toISOString(),
+      }),
+      event: 'project.proposal_review_reminder',
+      status: 'published',
+      scheduledFor: ANCHOR,
+      publishedAt: new Date(NOW.getTime() - 3 * DAY_MS),
+      skipReason: null,
+      lastError: null,
+      attempts: 1,
+      createdAt: ANCHOR,
+      updatedAt: ANCHOR,
+      payload: {},
+      recipient: { firstName: 'Dana', lastName: 'Lee', timezone: null },
+      entity: { title: 'CRM rollout', companyName: 'Northwind', agencyName: null },
+      ...overrides,
+    };
+  }
+
+  const allPublished = (): Record<string, unknown>[] => STEPS.map((step) => reminderRow(step));
+
+  beforeEach(() => {
+    mockListReviewCandidates.mockResolvedValue([candidate()]);
+    mockListReminderWaitRows.mockResolvedValue(allPublished());
+  });
+
+  it('raises one finding on the request when every follow-up went out more than two days ago', async () => {
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.batchFilled).toBe(false);
+    expect(outcome.findings).toEqual([
+      {
+        entityType: 'project_request',
+        entityId: REQUEST_ID,
+        detail: {
+          title: 'Proposals are still waiting on Northwind',
+          entityLabel: 'CRM rollout · Northwind',
+          evidence:
+            'No more follow-ups will go to Dana Lee @ Northwind. 3 of 3 were sent; the last was due 5 Sept 2026.',
+          facts: [
+            ['Client', 'Northwind'],
+            ['Waiting on', 'Dana Lee @ Northwind'],
+            ['Proposals awaiting', '1'],
+            ['Waiting since', '24 Aug 2026'],
+            ['Last follow-up due', '5 Sept 2026'],
+          ],
+        },
+      },
+    ]);
+    expect(outcome.findings[0]?.detail).not.toHaveProperty('money');
+  });
+
+  it('raises the finding when every follow-up was skipped and none was sent', async () => {
+    const dueAt = new Date(NOW.getTime() - 3 * DAY_MS);
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) =>
+        reminderRow(step, {
+          status: 'skipped',
+          skipReason: 'over_daily_limit',
+          publishedAt: null,
+          scheduledFor: dueAt,
+        })
+      )
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings[0]?.detail.evidence).toBe(
+      'No more follow-ups will go to Dana Lee @ Northwind. 0 of 3 were sent; the last was due 5 Sept 2026.'
+    );
+    expect(outcome.findings[0]?.detail.facts).toContainEqual([
+      'Waiting on',
+      'Dana Lee @ Northwind',
+    ]);
+    expect(outcome.findings[0]?.detail.facts).toContainEqual(['Last follow-up due', '5 Sept 2026']);
+  });
+
+  it('counts a mix of sent and skipped steps against every step', async () => {
+    const dueAt = new Date(NOW.getTime() - 3 * DAY_MS);
+    mockListReminderWaitRows.mockResolvedValue([
+      reminderRow('day_2', { publishedAt: new Date(NOW.getTime() - 9 * DAY_MS) }),
+      reminderRow('day_5', {
+        status: 'skipped',
+        skipReason: 'anchor_moved',
+        publishedAt: null,
+        scheduledFor: dueAt,
+      }),
+      reminderRow('day_9', {
+        status: 'skipped',
+        skipReason: 'over_daily_limit',
+        publishedAt: null,
+        scheduledFor: dueAt,
+      }),
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings[0]?.detail.evidence).toBe(
+      'No more follow-ups will go to Dana Lee @ Northwind. 1 of 3 were sent; the last was due 5 Sept 2026.'
+    );
+  });
+
+  it('reads one key prefix per request, back to the earliest anchor', async () => {
+    await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({ now: NOW, limit: LIMIT });
+
+    expect(mockListReminderWaitRows).toHaveBeenCalledWith({
+      keyPrefixes: [`seq:proposal_review:${REQUEST_ID}:`],
+      createdSince: ANCHOR,
+      limit: 2000,
+    });
+  });
+
+  it('reads nothing when no request awaits review', async () => {
+    mockListReviewCandidates.mockResolvedValue([]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome).toEqual({ findings: [], batchFilled: false });
+    expect(mockListReminderWaitRows).not.toHaveBeenCalled();
+  });
+
+  it('raises nothing for a request whose only proposal has had changes requested', async () => {
+    mockListReviewCandidates.mockResolvedValue([
+      candidate({ proposalStatus: 'changes_requested' }),
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+    expect(mockListReminderWaitRows).not.toHaveBeenCalled();
+  });
+
+  it('is not stalled at exactly two days', async () => {
+    const at = new Date(NOW.getTime() - 2 * DAY_MS);
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) => reminderRow(step, { publishedAt: at }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('raises the finding when the last step was never armed and its window has passed', async () => {
+    mockListReminderWaitRows.mockResolvedValue([reminderRow('day_2'), reminderRow('day_5')]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toHaveLength(1);
+    expect(outcome.findings[0]?.entityId).toBe(REQUEST_ID);
+  });
+
+  it('is not stalled while a rowless step is still inside its armable window', async () => {
+    const wentAt = new Date('2026-08-30T00:00:00.000Z');
+    mockListReminderWaitRows.mockResolvedValue([
+      reminderRow('day_2', { publishedAt: wentAt }),
+      reminderRow('day_5', { publishedAt: wentAt }),
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: new Date('2026-09-03T12:00:00.000Z'),
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('is not stalled while a step is still pending', async () => {
+    mockListReminderWaitRows.mockResolvedValue([
+      reminderRow('day_2'),
+      reminderRow('day_5'),
+      reminderRow('day_9', { status: 'pending', publishedAt: null }),
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('is not stalled when every step failed within the last two days', async () => {
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) =>
+        reminderRow(step, {
+          status: 'failed',
+          publishedAt: null,
+          scheduledFor: new Date(NOW.getTime() - DAY_MS),
+        })
+      )
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('ignores a wait left over from an older anchor', async () => {
+    const oldAnchor = new Date('2026-08-10T00:00:00.000Z');
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) =>
+        reminderRow(step, {
+          dedupeKey: reminderSequenceKey({
+            sequenceId: 'proposal_review',
+            entityId: REQUEST_ID,
+            stepKey: step,
+            userId: USER_ID,
+            anchorIso: oldAnchor.toISOString(),
+          }),
+        })
+      )
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings).toEqual([]);
+  });
+
+  it('falls back to neutral names when the joins find nobody', async () => {
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) => reminderRow(step, { recipient: null, entity: null }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings[0]?.detail.title).toBe('Proposals are still waiting on the client');
+    expect(outcome.findings[0]?.detail.facts).toContainEqual(['Waiting on', 'The client']);
+  });
+
+  it('slices to the limit and reports the batch as filled', async () => {
+    const ids = ['a', 'b', 'c'].map((c) => `${c.repeat(8)}-1111-4111-8111-111111111111`);
+    mockListReviewCandidates.mockResolvedValue(
+      ids.map((id) => candidate({ projectRequestId: id }))
+    );
+    mockListReminderWaitRows.mockResolvedValue(
+      ids.flatMap((id) =>
+        STEPS.map((step) =>
+          reminderRow(step, {
+            id: `${id}-${step}`,
+            dedupeKey: reminderSequenceKey({
+              sequenceId: 'proposal_review',
+              entityId: id,
+              stepKey: step,
+              userId: USER_ID,
+              anchorIso: ANCHOR.toISOString(),
+            }),
+          })
+        )
+      )
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({ now: NOW, limit: 2 });
+
+    expect(outcome.findings).toHaveLength(2);
+    expect(outcome.batchFilled).toBe(true);
+  });
+
+  it('reports the batch as filled when the row read hits its bound', async () => {
+    mockListReminderWaitRows.mockResolvedValue(
+      Array.from({ length: 2000 }, (_, i) => reminderRow('day_2', { id: `row-${i}` }))
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.batchFilled).toBe(true);
   });
 });

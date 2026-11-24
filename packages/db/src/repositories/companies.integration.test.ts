@@ -147,6 +147,26 @@ describe('companiesRepository.findOwnerUserIdByCompanyId', () => {
       companiesRepository.findOwnerUserIdByCompanyId(companyId)
     ).resolves.toBeUndefined();
   });
+
+  it('returns undefined when the only owner is a soft-deleted user', async () => {
+    const companyId = await seedCompany();
+    const owner = await userFactory({ deletedAt: new Date() });
+    await companyMemberFactory({ companyId, userId: owner.id, role: 'owner' });
+
+    await expect(
+      companiesRepository.findOwnerUserIdByCompanyId(companyId)
+    ).resolves.toBeUndefined();
+  });
+
+  it('skips a soft-deleted owner user and returns the next live owner', async () => {
+    const companyId = await seedCompany();
+    const gone = await userFactory({ deletedAt: new Date() });
+    const live = await userFactory();
+    await companyMemberFactory({ companyId, userId: gone.id, role: 'owner' });
+    await companyMemberFactory({ companyId, userId: live.id, role: 'owner' });
+
+    await expect(companiesRepository.findOwnerUserIdByCompanyId(companyId)).resolves.toBe(live.id);
+  });
 });
 
 // ── companiesRepository.findByUserId (BAL-345 multi-membership) ──────────

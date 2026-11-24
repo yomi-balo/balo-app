@@ -4,9 +4,13 @@ import userEvent from '@testing-library/user-event';
 import type { LookupSelection } from '../_lib/lookup-view';
 import { LookupDrillIn } from './lookup-drill-in';
 
-const { mockAction, mockTimelineAction } = vi.hoisted(() => ({
+const { mockAction, mockTimelineAction, mockFollowUpsAction } = vi.hoisted(() => ({
   mockAction: vi.fn(),
   mockTimelineAction: vi.fn(),
+  mockFollowUpsAction: vi.fn(),
+}));
+vi.mock('../_actions/fetch-lookup-follow-ups', () => ({
+  fetchLookupFollowUpsAction: mockFollowUpsAction,
 }));
 vi.mock('../_actions/fetch-lookup-money-block', () => ({
   fetchLookupMoneyBlockAction: mockAction,
@@ -18,6 +22,8 @@ vi.mock('../_actions/fetch-lookup-timeline', () => ({
 beforeEach(() => {
   mockAction.mockClear();
   mockTimelineAction.mockClear();
+  mockFollowUpsAction.mockReset();
+  mockFollowUpsAction.mockReturnValue(new Promise(() => {}));
   // Never resolves by default — most tests here assert on the header/Open-link matrix, not the
   // Timeline section's own fetch lifecycle (covered by lookup-timeline-section.test.tsx), so a
   // pending promise avoids an unrelated post-test state update warning.
@@ -340,22 +346,76 @@ describe('LookupDrillIn — the tab shell (C2)', () => {
     expect(mockTimelineAction).toHaveBeenCalledTimes(2);
   });
 
-  it('every non-credit_session type renders no tablist and the Timeline section directly', async () => {
-    for (const type of [
-      'user',
-      'expert',
-      'company',
-      'agency',
-      'project_request',
-      'engagement',
-    ] as const) {
-      const { unmount } = render(
-        <LookupDrillIn selection={selection({ type, id: 'z1' })} onTabSelect={vi.fn()} />
-      );
+  it.each(['company', 'agency'] as const)(
+    '%s renders no tablist and the Timeline section directly',
+    async (type) => {
+      render(<LookupDrillIn selection={selection({ type, id: 'z1' })} onTabSelect={vi.fn()} />);
       expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
       await waitFor(() => expect(mockTimelineAction).toHaveBeenCalled());
-      unmount();
-      mockTimelineAction.mockClear();
+      expect(mockFollowUpsAction).not.toHaveBeenCalled();
     }
+  );
+
+  it.each(['user', 'expert', 'project_request', 'engagement'] as const)(
+    'BAL-666 — %s renders exactly a Timeline tab and a Follow-ups tab',
+    (type) => {
+      render(<LookupDrillIn selection={selection({ type, id: 'z1' })} onTabSelect={vi.fn()} />);
+      expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+        'Timeline',
+        'Follow-ups',
+      ]);
+      expect(screen.queryByRole('tab', { name: 'Money' })).not.toBeInTheDocument();
+    }
+  );
+
+  it('BAL-666 — a credit session still has Timeline and Money, never Follow-ups', () => {
+    render(
+      <LookupDrillIn
+        selection={selection({ type: 'credit_session', id: 's1' })}
+        onTabSelect={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('tab', { name: 'Follow-ups' })).not.toBeInTheDocument();
+  });
+
+  it('BAL-666 — the Follow-ups panel mounts only once visited, then stays mounted hidden', async () => {
+    const user = userEvent.setup();
+    const onTabSelect = vi.fn();
+    mockFollowUpsAction.mockResolvedValue({
+      ok: true,
+      view: {
+        lens: 'person',
+        subjectFirstName: 'Dana',
+        origin: null,
+        engagementWithoutRequest: false,
+        limit: null,
+        now: [],
+        earlier: [],
+      },
+    });
+    render(
+      <LookupDrillIn selection={selection({ type: 'user', id: 'u1' })} onTabSelect={onTabSelect} />
+    );
+    expect(mockFollowUpsAction).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'Follow-ups' }));
+    expect(onTabSelect).toHaveBeenCalledWith('follow_ups');
+    expect(mockFollowUpsAction).toHaveBeenCalledWith({ type: 'user', id: 'u1' });
+    expect(await screen.findByText('Nothing is waiting on Dana')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }));
+    expect(screen.getByText('Nothing is waiting on Dana', { exact: false })).not.toBeVisible();
+    expect(mockFollowUpsAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('BAL-666 — a Follow-ups fetch failure renders through the shared retry notice', async () => {
+    const user = userEvent.setup();
+    mockFollowUpsAction.mockResolvedValue({ ok: false, reason: 'unavailable' });
+    render(
+      <LookupDrillIn selection={selection({ type: 'expert', id: 'x1' })} onTabSelect={vi.fn()} />
+    );
+    await user.click(screen.getByRole('tab', { name: 'Follow-ups' }));
+    expect(await screen.findByText('Follow-ups could not be loaded')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

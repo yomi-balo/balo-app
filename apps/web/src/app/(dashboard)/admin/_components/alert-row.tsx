@@ -33,6 +33,8 @@ import {
   Activity,
   Briefcase,
   Hourglass,
+  Mail,
+  MailX,
   ReceiptText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -79,6 +81,10 @@ const KIND_ICONS: Readonly<Record<string, LucideIcon>> = {
   // BAL-586 — a presence session overrunning its estimate or never settled.
   'session.presence_stuck': Gauge,
   'sweep.failed': AlertOctagon,
+  // BAL-666 — a scheduled follow-up abandoned after its last attempt.
+  'scheduled_notification.failed': MailX,
+  // BAL-666 — every follow-up has gone and the proposals are still unreviewed.
+  'project.proposal_review_stalled': Hourglass,
 };
 
 const ENTITY_ICONS: Readonly<Record<string, LucideIcon>> = {
@@ -92,6 +98,8 @@ const ENTITY_ICONS: Readonly<Record<string, LucideIcon>> = {
   calendar: CalendarClock,
   engagement: Briefcase,
   sweep: Activity,
+  scheduled_notification: Mail,
+  project_request: Briefcase,
 };
 
 const GROUP_TONE: Readonly<

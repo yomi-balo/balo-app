@@ -1,7 +1,7 @@
 import { eq, and, asc, inArray, isNull } from 'drizzle-orm';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { db } from '../client';
-import { companies, companyMembers, industries, type Company, type User } from '../schema';
+import { companies, companyMembers, industries, users, type Company, type User } from '../schema';
 import { auditEventsRepository } from './audit-events';
 import { partyDomainsRepository } from './party-domains';
 import { partyMembershipsRepository } from './party-memberships';
@@ -411,23 +411,28 @@ export const companiesRepository = {
 
   /**
    * The owner user id of a company, or `undefined` when the company has no live owner
-   * (retainer / owner-miss) — the non-throwing variant of `findOwnerByCompanyId` for callers
+   * (retainer / owner-miss), or its only owners are soft-deleted users — the non-throwing variant of `findOwnerByCompanyId` for callers
    * where a missing owner is an expected, non-fatal case (e.g. resolving a notification
    * recipient). A transient DB error still THROWS (so the caller can retry) — a genuine
    * no-owner is never conflated with a failure.
    */
   findOwnerUserIdByCompanyId: async (companyId: string): Promise<string | undefined> => {
-    const membership = await db.query.companyMembers.findFirst({
-      where: and(
-        eq(companyMembers.companyId, companyId),
-        eq(companyMembers.role, 'owner'),
-        isNull(companyMembers.deletedAt)
-      ),
-      orderBy: (members, { asc }) => [asc(members.joinedAt), asc(members.id)],
-      // Project only the id — avoid hydrating the full user row (PII/secret-leak footgun).
-      with: { user: { columns: { id: true } } },
-    });
-    return membership?.user?.id;
+    // Project only the id — avoid hydrating the full user row (PII/secret-leak footgun).
+    const [owner] = await db
+      .select({ id: users.id })
+      .from(companyMembers)
+      .innerJoin(users, eq(users.id, companyMembers.userId))
+      .where(
+        and(
+          eq(companyMembers.companyId, companyId),
+          eq(companyMembers.role, 'owner'),
+          isNull(companyMembers.deletedAt),
+          isNull(users.deletedAt)
+        )
+      )
+      .orderBy(asc(companyMembers.joinedAt), asc(companyMembers.id))
+      .limit(1);
+    return owner?.id;
   },
 
   /**

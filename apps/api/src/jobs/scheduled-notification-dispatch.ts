@@ -16,6 +16,7 @@ import {
 import type { EventPayloadMap, NotificationEvent } from '../notifications/events.js';
 import { reportReminderOutcome } from '../notifications/sequences/analytics.js';
 import { mapWithConcurrency } from '../lib/map-with-concurrency.js';
+import { failScheduledNotification } from '../notifications/scheduling/fail-scheduled-notification.js';
 
 /**
  * BAL-420 (ADR-1047 Decision 3) — THE TICKER. Postgres is the clock; BullMQ only asks it
@@ -125,18 +126,7 @@ async function publishStoredEvent(
  */
 async function abandonExhausted(row: ScheduledNotification): Promise<RowOutcome> {
   const reason = `Dispatch abandoned after ${row.attempts} attempts`;
-  await scheduledNotificationsRepository.markFailed(row.id, reason);
-  logger.error(
-    {
-      id: row.id,
-      key: row.dedupeKey,
-      event: row.event,
-      attempts: row.attempts,
-      lastError: reason,
-    },
-    'Scheduled notification abandoned — attempts exhausted'
-  );
-  return 'failed';
+  return failScheduledNotification(row, 'attempts_exhausted', reason, { lastError: reason });
 }
 
 /**
@@ -173,12 +163,9 @@ async function dispatchRow(candidate: ScheduledNotification): Promise<RowOutcome
       // DEPLOY SKEW: a row scheduled by an older build whose guard was renamed or removed.
       // Failing closed on an unknown guard is the only safe reading — never a silent
       // publish, never a silent skip.
-      await scheduledNotificationsRepository.markFailed(row.id, error.message);
-      logger.error(
-        { id: row.id, key: row.dedupeKey, event: row.event, recheck: error.recheck },
-        'Scheduled notification recheck is not registered — failing closed'
-      );
-      return 'failed';
+      return failScheduledNotification(row, 'unknown_recheck', error.message, {
+        recheck: error.recheck,
+      });
     }
     // Anything else is presumed TRANSIENT (a DB blip must not consume the notification):
     // rethrow, leaving the row `claimed` so the TTL reconcile retries it next window.
@@ -221,12 +208,9 @@ async function dispatchRow(candidate: ScheduledNotification): Promise<RowOutcome
     const reason =
       `Recheck '${row.recheck ?? 'none'}' returned a payload with no usable correlationId ` +
       `— refusing to publish (it would collapse this event's BullMQ jobId)`;
-    await scheduledNotificationsRepository.markFailed(row.id, reason);
-    logger.error(
-      { id: row.id, key: row.dedupeKey, event: row.event, recheck: row.recheck },
-      'Scheduled notification payload has no correlationId — failing closed'
-    );
-    return 'failed';
+    return failScheduledNotification(row, 'missing_correlation_id', reason, {
+      recheck: row.recheck,
+    });
   }
 
   // The payload the RECHECK returned — the stored one is only the default answer.

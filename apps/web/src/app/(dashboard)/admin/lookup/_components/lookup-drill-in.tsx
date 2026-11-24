@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Building2, ExternalLink, FileText, Globe } from 'lucide-react';
+import type { LookupEntityType } from '@balo/shared/lookup';
+import { hasFollowUpsTab } from '../_lib/follow-ups-view';
 import type { LookupSelection } from '../_lib/lookup-view';
 import {
   LOOKUP_TYPE_LABEL,
@@ -11,6 +13,7 @@ import {
   resolveDomainsTarget,
   resolveOpenTarget,
 } from '../_lib/lookup-view';
+import { LookupFollowUpsSection } from './lookup-follow-ups-section';
 import { LookupMoneySection } from './lookup-money-section';
 import { LookupTimelineSection } from './lookup-timeline-section';
 import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './lookup-drill-in-tabs';
@@ -41,7 +44,27 @@ import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './look
  *
  * BAL-630 — a company also carries a Company details link (`/admin/companies/{id}`), plain
  * navigation again: industry and review-name changes happen on that page, never in the drill-in.
+ *
+ * BAL-666 — users, experts, project requests and engagements carry a second Follow-ups tab
+ * (`DRILL_IN_TABS`, one row per type). It mounts only once visited and then stays mounted, like
+ * Money. Companies and agencies keep the single labelled Timeline section.
  */
+
+type DrillInTabSpec = { readonly key: LookupDrillInTab; readonly label: string };
+
+const TIMELINE_TAB: DrillInTabSpec = { key: 'timeline', label: 'Timeline' };
+const MONEY_TAB: DrillInTabSpec = { key: 'money', label: 'Money' };
+const FOLLOW_UPS_TAB: DrillInTabSpec = { key: 'follow_ups', label: 'Follow-ups' };
+
+const DRILL_IN_TABS: Readonly<Record<LookupEntityType, readonly DrillInTabSpec[]>> = {
+  user: [TIMELINE_TAB, FOLLOW_UPS_TAB],
+  expert: [TIMELINE_TAB, FOLLOW_UPS_TAB],
+  project_request: [TIMELINE_TAB, FOLLOW_UPS_TAB],
+  engagement: [TIMELINE_TAB, FOLLOW_UPS_TAB],
+  credit_session: [TIMELINE_TAB, MONEY_TAB],
+  company: [TIMELINE_TAB],
+  agency: [TIMELINE_TAB],
+};
 
 function noDestinationCopy(selection: LookupSelection): string {
   if (selection.type === 'expert' && selection.via === 'recent') {
@@ -94,13 +117,8 @@ export function LookupDrillIn({
     () => new Set<LookupDrillInTab>(['timeline'])
   );
 
-  const tabs: readonly { readonly key: LookupDrillInTab; readonly label: string }[] =
-    selection.type === 'credit_session'
-      ? [
-          { key: 'timeline', label: 'Timeline' },
-          { key: 'money', label: 'Money' },
-        ]
-      : [{ key: 'timeline', label: 'Timeline' }];
+  const tabs = DRILL_IN_TABS[selection.type];
+  const followUpType = hasFollowUpsTab(selection.type) ? selection.type : null;
 
   function selectTab(next: LookupDrillInTab): void {
     setTab(next);
@@ -195,6 +213,17 @@ export function LookupDrillIn({
                   className="mt-3"
                 >
                   <LookupMoneySection sessionId={selection.id} labelled={false} />
+                </div>
+              )}
+              {followUpType !== null && visitedTabs.has('follow_ups') && (
+                <div
+                  role="tabpanel"
+                  id={panelId('follow_ups')}
+                  aria-labelledby={tabId('follow_ups')}
+                  hidden={tab !== 'follow_ups'}
+                  className="mt-3"
+                >
+                  <LookupFollowUpsSection entityType={followUpType} entityId={selection.id} />
                 </div>
               )}
             </>

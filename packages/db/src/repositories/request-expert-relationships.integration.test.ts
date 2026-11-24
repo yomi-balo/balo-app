@@ -878,6 +878,33 @@ describe('requestExpertRelationshipsRepository.listInvitationReminderCandidates'
     expect(rows.map((r) => r.onDirectLeg)).toEqual([false]);
   });
 
+  it('narrows to the given relationship ids', async () => {
+    const a = await requestExpertRelationshipFactory();
+    const b = await requestExpertRelationshipFactory();
+    await requestExpertRelationshipFactory();
+
+    expect((await ids({ relationshipIds: [a.relationship.id, b.relationship.id] })).sort()).toEqual(
+      [a.relationship.id, b.relationship.id].sort()
+    );
+    expect(await ids({ relationshipIds: [a.relationship.id] })).toEqual([a.relationship.id]);
+  });
+
+  it('still applies the candidate filters inside the given ids', async () => {
+    const declined = await requestExpertRelationshipFactory({ values: { status: 'declined' } });
+    const live = await requestExpertRelationshipFactory();
+
+    expect(
+      await ids({ relationshipIds: [declined.relationship.id, live.relationship.id] })
+    ).toEqual([live.relationship.id]);
+  });
+
+  it('returns nothing for empty or non-uuid relationship ids', async () => {
+    await requestExpertRelationshipFactory();
+
+    expect(await ids({ relationshipIds: [] })).toEqual([]);
+    expect(await ids({ relationshipIds: ['not-a-uuid'] })).toEqual([]);
+  });
+
   it('excludes declined, proposal_requested and soft-deleted relationships', async () => {
     const declined = await requestExpertRelationshipFactory({ values: { status: 'declined' } });
     const advanced = await requestExpertRelationshipFactory({
