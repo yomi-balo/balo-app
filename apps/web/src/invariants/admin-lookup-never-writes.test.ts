@@ -123,6 +123,7 @@ const ALLOWED_DB_IMPORTS: Readonly<Record<string, readonly string[]>> = {
     'expertsRepository',
     'proposalsRepository',
     'reminderWaitsRepository',
+    'REQUEST_RELATIONSHIP_IDS_LIMIT',
     'requestExpertRelationshipsRepository',
     'usersRepository',
   ],
