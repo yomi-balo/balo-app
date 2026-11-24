@@ -13,6 +13,7 @@ import {
   channelLabel,
   isFollowUpReasonKey,
   sequenceChannelLabel,
+  truncationNotices,
   type FollowUpReasonKey,
 } from './follow-ups-view';
 
@@ -27,9 +28,9 @@ describe('follow-ups wording', () => {
     expect(Object.keys(REASON_CODE).sort()).toEqual([...keys].sort());
   });
 
-  it('says "today", never "24 hours", for the daily limit (decision 2)', () => {
+  it('says "that day", never "24 hours", for the daily limit (decisions 2, 23)', () => {
     expect(REASON_SENTENCE.over_daily_limit('Dana', 0)).toBe(
-      'Dana had already had two follow-up emails today.'
+      'Dana had already had two follow-up emails that day.'
     );
     for (const key of Object.keys(REASON_SENTENCE) as FollowUpReasonKey[]) {
       expect(REASON_SENTENCE[key]('Dana', 3)).not.toMatch(/24 hours/i);
@@ -37,9 +38,9 @@ describe('follow-ups wording', () => {
   });
 
   it.each([
-    [1, 'Dana had already had one follow-up email today.'],
-    [3, 'Dana had already had three follow-up emails today.'],
-    [9, 'Dana had already had 9 follow-up emails today.'],
+    [1, 'Dana had already had one follow-up email that day.'],
+    [3, 'Dana had already had three follow-up emails that day.'],
+    [9, 'Dana had already had 9 follow-up emails that day.'],
   ])('derives the daily-limit wording from a limit of %i', async (limit, sentence) => {
     vi.resetModules();
     vi.doMock('@balo/shared/notifications', async (importOriginal) => ({
@@ -132,5 +133,27 @@ describe('per-sequence wording', () => {
     expect(LIMIT_EXEMPT_TAIL).toBe('Deadline warnings do not count.');
     expect(`${EXEMPT_NOTE}${LIMIT_EXEMPT_TAIL}`).not.toMatch(/24 hours/i);
     expect(ANY_SEQUENCE_EXEMPT).toBe(true);
+  });
+});
+
+describe('truncationNotices', () => {
+  it('is empty when no cap was hit', () => {
+    expect(truncationNotices({ rows: null, relationships: null })).toEqual([]);
+  });
+
+  it('names the row cap', () => {
+    expect(truncationNotices({ rows: 500, relationships: null })).toEqual([
+      'Showing the most recent 500 follow-up emails. Older ones are not listed.',
+    ]);
+  });
+
+  it('names the relationship cap', () => {
+    expect(truncationNotices({ rows: null, relationships: 200 })).toEqual([
+      'Showing follow-ups for the first 200 invitations on this request. Later invitations are not listed.',
+    ]);
+  });
+
+  it('names both when both were hit', () => {
+    expect(truncationNotices({ rows: 500, relationships: 200 })).toHaveLength(2);
   });
 });

@@ -96,6 +96,7 @@ const ALLOWED_REPOSITORY_CALLS: readonly { readonly object: string; readonly mem
   { object: 'reminderWaitsRepository', member: 'findEngagementRequestId' },
   { object: 'reminderWaitsRepository', member: 'listRequestRelationshipIds' },
   { object: 'reminderWaitsRepository', member: 'listDeliveryReviewStates' },
+  { object: 'reminderWaitsRepository', member: 'listDeliveryOutcomes' },
   { object: 'requestExpertRelationshipsRepository', member: 'listInvitationReminderCandidates' },
   { object: 'conversationsRepository', member: 'relationshipsWithExpertMessage' },
   { object: 'expertsRepository', member: 'findUserIdByProfileId' },
@@ -166,6 +167,7 @@ describe('invariant: the Lookup page and its drill-in perform no writes (BAL-551
       'findEngagementRequestId',
       'listRequestRelationshipIds',
       'listDeliveryReviewStates',
+      'listDeliveryOutcomes',
     ]) {
       expect(calls).toContainEqual({ object: 'reminderWaitsRepository', member });
     }

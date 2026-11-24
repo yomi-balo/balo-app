@@ -12,6 +12,7 @@ const {
   mockListDeliveryReviewStates,
   mockListInvitationCandidates,
   mockRelationshipsWithExpertMessage,
+  mockListDeliveryOutcomes,
 } = vi.hoisted(() => ({
   mockListRows: vi.fn(),
   mockFindEngagementRequestId: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockListDeliveryReviewStates: vi.fn(),
   mockListInvitationCandidates: vi.fn(),
   mockRelationshipsWithExpertMessage: vi.fn(),
+  mockListDeliveryOutcomes: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -31,6 +33,7 @@ vi.mock('@balo/db', () => ({
     findEngagementRequestId: mockFindEngagementRequestId,
     listRequestRelationshipIds: mockListRequestRelationshipIds,
     listDeliveryReviewStates: mockListDeliveryReviewStates,
+    listDeliveryOutcomes: mockListDeliveryOutcomes,
   },
   requestExpertRelationshipsRepository: {
     listInvitationReminderCandidates: mockListInvitationCandidates,
@@ -86,6 +89,7 @@ function dbRow(stepKey: string, status = 'published') {
     createdAt: new Date(ANCHOR_ISO),
     updatedAt: new Date('2026-11-19T22:00:00.000Z'),
     payload: { entityId: REQUEST_ID, recipientUserId: USER_ID, awaitingCount: 2 },
+    correlationId: `corr-${stepKey}` as string | null,
     recipient: { firstName: 'Dana', lastName: 'Whitfield', timezone: 'Australia/Melbourne' },
     entity: {
       title: 'Salesforce CPQ rollout',
@@ -134,6 +138,7 @@ beforeEach(() => {
   mockListDeliveryReviewStates.mockResolvedValue([]);
   mockListInvitationCandidates.mockResolvedValue([]);
   mockRelationshipsWithExpertMessage.mockResolvedValue(new Set());
+  mockListDeliveryOutcomes.mockResolvedValue([]);
 });
 
 describe('loadLookupFollowUps — the authorization proof (AC1)', () => {
@@ -152,6 +157,7 @@ describe('loadLookupFollowUps — the authorization proof (AC1)', () => {
     expect(mockListRequestRelationshipIds).not.toHaveBeenCalled();
     expect(mockListDeliveryReviewStates).not.toHaveBeenCalled();
     expect(mockListInvitationCandidates).not.toHaveBeenCalled();
+    expect(mockListDeliveryOutcomes).not.toHaveBeenCalled();
   });
 });
 
@@ -533,5 +539,61 @@ describe('loadLookupFollowUps — an engagement (decision 1)', () => {
     const result = await loadLookupFollowUps(viewer(), { type: 'engagement', id: 'nope' }, NOW);
     expect(result).toEqual({ ok: false, reason: 'not_found' });
     expect(mockListRows).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadLookupFollowUps — delivery outcomes and truncation (BAL-666)', () => {
+  it('reads the delivery outcomes in ONE batched call, for published rows with a correlation id only', async () => {
+    mockListRows.mockResolvedValue([
+      dbRow('day_2'),
+      dbRow('day_5', 'pending'),
+      { ...dbRow('day_9'), correlationId: null },
+    ]);
+    await loadLookupFollowUps(viewer(), { type: 'user', id: USER_ID }, NOW);
+    expect(mockListDeliveryOutcomes).toHaveBeenCalledTimes(1);
+    expect(mockListDeliveryOutcomes).toHaveBeenCalledWith({ correlationIds: ['corr-day_2'] });
+  });
+
+  it('carries a logged outcome onto the step as a delivery line', async () => {
+    mockListRows.mockResolvedValue([dbRow('day_2')]);
+    mockListDeliveryOutcomes.mockResolvedValue([
+      { correlationId: 'corr-day_2', channel: 'email', status: 'sent', error: null },
+    ]);
+    const result = await loadLookupFollowUps(viewer(), { type: 'user', id: USER_ID }, NOW);
+    const step = result.ok ? result.view.now[0]?.steps[0] : undefined;
+    expect(step?.delivery.map((line) => line.text)).toEqual(['Email sent']);
+  });
+
+  it('flags the row cap in the view when it is hit, and not below it', async () => {
+    mockListRows.mockResolvedValue(
+      Array.from({ length: LOOKUP_FOLLOW_UPS_ROW_LIMIT }, () => dbRow('day_2'))
+    );
+    const hit = await loadLookupFollowUps(viewer(), { type: 'user', id: USER_ID }, NOW);
+    expect(hit.ok && hit.view.truncated).toEqual({
+      rows: LOOKUP_FOLLOW_UPS_ROW_LIMIT,
+      relationships: null,
+    });
+
+    mockListRows.mockResolvedValue([dbRow('day_2')]);
+    const below = await loadLookupFollowUps(viewer(), { type: 'user', id: USER_ID }, NOW);
+    expect(below.ok && below.view.truncated).toEqual({ rows: null, relationships: null });
+  });
+
+  it('flags the relationship cap on a request lens when it is hit, and not below it', async () => {
+    mockListRequestRelationshipIds.mockResolvedValue(['a', 'b', 'c']);
+    const hit = await loadLookupFollowUps(
+      viewer(),
+      { type: 'project_request', id: REQUEST_ID },
+      NOW
+    );
+    expect(hit.ok && hit.view.truncated).toEqual({ rows: null, relationships: 3 });
+
+    mockListRequestRelationshipIds.mockResolvedValue(['a', 'b']);
+    const below = await loadLookupFollowUps(
+      viewer(),
+      { type: 'project_request', id: REQUEST_ID },
+      NOW
+    );
+    expect(below.ok && below.view.truncated).toEqual({ rows: null, relationships: null });
   });
 });

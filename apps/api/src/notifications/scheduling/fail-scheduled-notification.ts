@@ -1,6 +1,7 @@
 import { scheduledNotificationsRepository, type ScheduledNotification } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import type { AdminAlertDetail } from '@balo/shared/admin-alerts';
+import { formatDateTimeShortUtc, type AdminAlertDetail } from '@balo/shared/admin-alerts';
+import { reminderSequenceStepLabel } from '@balo/shared/notifications';
 import { raiseAdminAlert } from '../../services/admin-alerts/raise.js';
 
 /**
@@ -29,14 +30,15 @@ const FAILURE_LOG_MESSAGE: Readonly<Record<ScheduledNotificationFailureCause, st
 
 /** The admin alert's content. It carries no money. */
 function failureDetail(row: ScheduledNotification, reason: string): AdminAlertDetail {
-  const due = row.scheduledFor.toISOString();
+  const due = formatDateTimeShortUtc(row.scheduledFor);
+  const label = reminderSequenceStepLabel(row.dedupeKey) ?? row.event;
   return {
     title: 'A scheduled notification could not be sent',
-    entityLabel: row.event,
+    entityLabel: label,
     evidence: `It was due ${due} and was abandoned after ${String(row.attempts)} attempt(s).`,
     facts: [
       ['Event', row.event],
-      ['Due', due],
+      ['Due (UTC)', row.scheduledFor.toISOString()],
       ['Attempts', String(row.attempts)],
       ['Reason', reason],
       ['Key', row.dedupeKey],

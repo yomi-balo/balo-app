@@ -13,13 +13,22 @@ vi.mock('../_actions/fetch-lookup-follow-ups', () => ({
   fetchLookupFollowUpsAction: mockAction,
 }));
 
+const STATE_WORD: Readonly<Record<FollowUpStepView['state'], string>> = {
+  sent: 'Sent',
+  due: 'Due',
+  not_sent: 'Not sent',
+  failed: 'Failed',
+};
+
 function step(over: Partial<FollowUpStepView> = {}): FollowUpStepView {
   return {
     key: 'day_2',
     ordinal: '1st',
     offsetLabel: '2 days after',
     state: 'sent',
+    label: STATE_WORD[over.state ?? 'sent'],
     channel: 'Email',
+    delivery: [],
     sentence: null,
     code: null,
     detail: null,
@@ -55,7 +64,7 @@ function wait(id: string, over: Partial<FollowUpWaitView> = {}): FollowUpWaitVie
         offsetLabel: '9 days after',
         state: 'not_sent',
         channel: null,
-        sentence: 'Dana had already had two follow-up emails today.',
+        sentence: 'Dana had already had two follow-up emails that day.',
         code: 'over_daily_limit',
         whenLabel: 'Was due Mon 30 Nov, 9:00 am',
       }),
@@ -70,6 +79,7 @@ function view(over: Partial<LookupFollowUpsView> = {}): LookupFollowUpsView {
     subjectFirstName: 'Dana',
     origin: null,
     limit: null,
+    truncated: { rows: null, relationships: null },
     now: [wait('a'), wait('b')],
     earlier: [],
     ...over,
@@ -248,7 +258,7 @@ describe('LookupFollowUpsSection — blocks (AC6)', () => {
     expect(panel).not.toBeNull();
     expect(within(panel as HTMLElement).getByText('1st follow-up')).toBeInTheDocument();
     expect(
-      screen.getByText('Dana had already had two follow-up emails today.')
+      screen.getByText('Dana had already had two follow-up emails that day.')
     ).toBeInTheDocument();
     expect(screen.getByText('over_daily_limit')).toBeInTheDocument();
 
@@ -558,5 +568,82 @@ describe('LookupFollowUpsSection — origin note and daily limit', () => {
     renderSection({ entityType: 'project_request' });
     await screen.findByText('Waiting now · 2');
     expect(screen.queryByText(/follow-up emails today/)).not.toBeInTheDocument();
+  });
+});
+
+describe('LookupFollowUpsSection — delivery and truncation (BAL-666)', () => {
+  it('shows the delivery lines and the Not delivered word on an opened wait', async () => {
+    mockAction.mockResolvedValue({
+      ok: true,
+      view: view({
+        now: [
+          wait('a', {
+            hasFailed: true,
+            steps: [
+              step({
+                state: 'sent',
+                delivery: [
+                  { key: 'email-0', text: 'Email sent' },
+                  { key: 'in_app-1', text: 'In-app failed: Muted' },
+                ],
+              }),
+              step({
+                key: 'day_5',
+                state: 'failed',
+                label: 'Not delivered',
+                channel: null,
+                delivery: [{ key: 'email-0', text: 'Email failed: Bounced' }],
+              }),
+              step({
+                key: 'day_9',
+                state: 'sent',
+                delivery: [{ key: 'not-recorded', text: 'Delivery not recorded yet' }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    });
+    renderSection();
+
+    expect(await screen.findByText('Email sent')).toBeInTheDocument();
+    expect(screen.getByText('In-app failed: Muted')).toBeInTheDocument();
+    expect(screen.getByText('Not delivered')).toBeInTheDocument();
+    expect(screen.getByText('Email failed: Bounced')).toBeInTheDocument();
+    expect(screen.getByText('Delivery not recorded yet')).toBeInTheDocument();
+  });
+
+  it('shows the row-limit notice as text when the row cap was hit', async () => {
+    mockAction.mockResolvedValue({
+      ok: true,
+      view: view({ truncated: { rows: 500, relationships: null } }),
+    });
+    renderSection();
+    expect(
+      await screen.findByText(
+        'Showing the most recent 500 follow-up emails. Older ones are not listed.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows the relationship-limit notice when that cap was hit', async () => {
+    mockAction.mockResolvedValue({
+      ok: true,
+      view: view({ lens: 'entity', truncated: { rows: null, relationships: 200 } }),
+    });
+    renderSection({ entityType: 'project_request' });
+    expect(
+      await screen.findByText(
+        'Showing follow-ups for the first 200 invitations on this request. Later invitations are not listed.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows no notice when nothing was cut short', async () => {
+    mockAction.mockResolvedValue({ ok: true, view: view() });
+    renderSection();
+    await screen.findByText('Waiting now · 2');
+    expect(screen.queryByText(/Older ones are not listed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Later invitations are not listed/)).not.toBeInTheDocument();
   });
 });

@@ -15,17 +15,23 @@ import {
 } from '@balo/shared/notifications';
 import { autoAcceptAt } from '@balo/shared/engagements';
 import {
+  DELIVERY_ERROR_MAX_CHARS,
+  DELIVERY_NOT_RECORDED,
   EXEMPT_NOTE,
+  NOT_DELIVERED_LABEL,
   REASON_CODE,
   REASON_SENTENCE,
   SEQUENCE_META,
+  STEP_LABEL,
   isFollowUpReasonKey,
   sequenceChannelLabel,
+  type FollowUpDeliveryLine,
   type FollowUpLens,
   type FollowUpReasonKey,
   type FollowUpStepState,
   type FollowUpStepView,
   type FollowUpWaitState,
+  type FollowUpTruncation,
   type FollowUpWaitView,
   type LookupFollowUpsView,
 } from './follow-ups-view';
@@ -52,6 +58,8 @@ export interface FollowUpSourceRow {
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly payload: Readonly<Record<string, unknown>>;
+  /** The key the row's delivery is logged under; `null` when its payload carries none. */
+  readonly correlationId: string | null;
   readonly recipient: {
     readonly firstName: string | null;
     readonly lastName: string | null;
@@ -63,6 +71,14 @@ export interface FollowUpSourceRow {
     readonly companyName: string | null;
     readonly agencyName: string | null;
   } | null;
+}
+
+/** One channel's delivery result from the send log. */
+export interface FollowUpDeliveryOutcome {
+  readonly correlationId: string;
+  readonly channel: string;
+  readonly status: string;
+  readonly error: string | null;
 }
 
 /** What the live source says about one entity's wait right now. */
@@ -86,6 +102,9 @@ export interface BuildFollowUpsInput {
   /** The person's first name and saved zone on a person lens. */
   readonly subject: { readonly firstName: string | null; readonly timezone: string | null } | null;
   readonly origin: { readonly requestTitle: string } | null;
+  /** The send log's rows for the published steps' correlation ids. */
+  readonly outcomes: readonly FollowUpDeliveryOutcome[];
+  readonly truncated: FollowUpTruncation;
   readonly now: Date;
 }
 
@@ -242,6 +261,8 @@ function heldNote(step: ReminderStep, dueAt: Date, sendAt: Date, zone: string): 
 
 interface StepFacts {
   readonly state: FollowUpStepState;
+  readonly label?: string;
+  readonly delivery?: readonly FollowUpDeliveryLine[];
   readonly channel: string | null;
   readonly reasonKey: FollowUpReasonKey | null;
   readonly unknownSkipCode: string | null;
@@ -249,16 +270,74 @@ interface StepFacts {
   readonly whenLabel: string;
 }
 
-function factsForRow(row: FollowUpSourceRow, zone: string, channel: string): StepFacts {
-  if (row.status === 'published') {
+const CHANNEL_NAMES: Readonly<Record<string, string>> = {
+  email: 'Email',
+  'in-app': 'In-app',
+  sms: 'SMS',
+};
+
+function outcomeChannelName(channel: string): string {
+  return CHANNEL_NAMES[channel] ?? `${channel.charAt(0).toUpperCase()}${channel.slice(1)}`;
+}
+
+function truncateError(error: string): string {
+  return error.length > DELIVERY_ERROR_MAX_CHARS
+    ? `${error.slice(0, DELIVERY_ERROR_MAX_CHARS)}…`
+    : error;
+}
+
+/**
+ * `Email sent`, `Email failed: {error}` or `Email skipped: {error}`. `sent` is the log's word for
+ * a message the provider accepted, so the line never claims it arrived.
+ */
+function deliveryLine(outcome: FollowUpDeliveryOutcome, index: number): FollowUpDeliveryLine {
+  const name = outcomeChannelName(outcome.channel);
+  const key = `${outcome.channel}-${index}`;
+  if (outcome.status === 'sent') return { key, text: `${name} sent` };
+  const error =
+    outcome.error === null || outcome.error === '' ? '' : `: ${truncateError(outcome.error)}`;
+  return { key, text: `${name} ${outcome.status}${error}` };
+}
+
+function factsForPublished(
+  row: FollowUpSourceRow,
+  zone: string,
+  channel: string,
+  outcomes: readonly FollowUpDeliveryOutcome[]
+): StepFacts {
+  const whenLabel = formatDayTime(row.publishedAt ?? row.scheduledFor, zone);
+  if (outcomes.length === 0) {
     return {
       state: 'sent',
       channel,
+      delivery: [{ key: 'not-recorded', text: DELIVERY_NOT_RECORDED }],
       reasonKey: null,
       unknownSkipCode: null,
       detail: null,
-      whenLabel: formatDayTime(row.publishedAt ?? row.scheduledFor, zone),
+      whenLabel,
     };
+  }
+  const undelivered = outcomes.every((o) => o.status === 'failed' || o.status === 'skipped');
+  return {
+    state: undelivered ? 'failed' : 'sent',
+    label: undelivered ? NOT_DELIVERED_LABEL : undefined,
+    channel: undelivered ? null : channel,
+    delivery: outcomes.map(deliveryLine),
+    reasonKey: null,
+    unknownSkipCode: null,
+    detail: null,
+    whenLabel,
+  };
+}
+
+function factsForRow(
+  row: FollowUpSourceRow,
+  zone: string,
+  channel: string,
+  outcomes: readonly FollowUpDeliveryOutcome[]
+): StepFacts {
+  if (row.status === 'published') {
+    return factsForPublished(row, zone, channel, outcomes);
   }
   if (row.status === 'failed') {
     const cause = row.lastError === null ? '' : `${row.lastError.slice(0, 200)} `;
@@ -340,6 +419,8 @@ interface StepContext {
   readonly includeMissing: boolean;
   /** When each step of this wait is sent, as the planner places it. */
   readonly sendTimes: ReadonlyMap<string, Date>;
+  /** The send log's outcomes by correlation id. */
+  readonly outcomes: ReadonlyMap<string, readonly FollowUpDeliveryOutcome[]>;
 }
 
 function buildStep(step: ReminderStep, index: number, ctx: StepContext): FollowUpStepView | null {
@@ -349,17 +430,21 @@ function buildStep(step: ReminderStep, index: number, ctx: StepContext): FollowU
   const dueAt = new Date(anchor.getTime() + step.offsetMinutes * MS_PER_MINUTE);
   const sendAt = ctx.sendTimes.get(step.key) ?? dueAt;
   const channel = sequenceChannelLabel(wait.sequenceId);
+  const correlationId = row?.correlationId ?? null;
+  const outcomes = correlationId === null ? [] : (ctx.outcomes.get(correlationId) ?? []);
   const facts =
     row === undefined
       ? factsForMissingStep(sendAt, reminderStepMissed(wait, step, now, zone), zone)
-      : factsForRow(row, zone, channel);
+      : factsForRow(row, zone, channel, outcomes);
   const { sentence, code } = sentenceFor(facts, first, row?.attempts ?? 0);
   return {
     key: step.key,
     ordinal: ordinalOf(index),
     offsetLabel: offsetLabel(step),
     state: facts.state,
+    label: facts.label ?? STEP_LABEL[facts.state],
     channel: facts.channel,
+    delivery: facts.delivery ?? [],
     sentence,
     code,
     detail: facts.detail,
@@ -430,7 +515,8 @@ function buildWait(
   wait: ReminderWait<FollowUpSourceRow>,
   lens: FollowUpLens,
   live: LiveWait | undefined,
-  now: Date
+  now: Date,
+  outcomes: ReadonlyMap<string, readonly FollowUpDeliveryOutcome[]>
 ): { view: FollowUpWaitView; state: FollowUpWaitState; anchor: Date; updatedAt: number } | null {
   const newest = newestRow(wait);
   if (newest === undefined) return null;
@@ -447,6 +533,7 @@ function buildWait(
     now,
     includeMissing: state !== 'stopped',
     sendTimes,
+    outcomes,
   };
   const sequenceSteps = REMINDER_SEQUENCE_STEPS[wait.sequenceId];
   const steps = sequenceSteps
@@ -494,11 +581,18 @@ function buildWait(
 
 /** Everything the Follow-ups tab shows, from the rows already read. */
 export function buildLookupFollowUps(input: BuildFollowUpsInput): LookupFollowUpsView {
-  const { lens, rows, live, subject, origin, now } = input;
+  const { lens, rows, live, subject, origin, outcomes, truncated, now } = input;
+  const outcomesByCorrelation = groupOutcomes(outcomes);
   const waits = groupReminderWaits(rows);
   const built = waits
     .map((wait) =>
-      buildWait(wait, lens, live.get(liveWaitKey(wait.sequenceId, wait.entityId)), now)
+      buildWait(
+        wait,
+        lens,
+        live.get(liveWaitKey(wait.sequenceId, wait.entityId)),
+        now,
+        outcomesByCorrelation
+      )
     )
     .filter((b): b is NonNullable<typeof b> => b !== null);
 
@@ -516,9 +610,22 @@ export function buildLookupFollowUps(input: BuildFollowUpsInput): LookupFollowUp
     subjectFirstName: firstName,
     origin,
     limit: lens === 'person' ? limitFor(rows, subject?.timezone ?? null, now) : null,
+    truncated,
     now: current.map((b) => b.view),
     earlier: earlier.map((b) => b.view),
   };
+}
+
+function groupOutcomes(
+  outcomes: readonly FollowUpDeliveryOutcome[]
+): ReadonlyMap<string, readonly FollowUpDeliveryOutcome[]> {
+  const grouped = new Map<string, FollowUpDeliveryOutcome[]>();
+  for (const outcome of outcomes) {
+    const group = grouped.get(outcome.correlationId);
+    if (group === undefined) grouped.set(outcome.correlationId, [outcome]);
+    else group.push(outcome);
+  }
+  return grouped;
 }
 
 function limitFor(

@@ -7,6 +7,7 @@ import {
   FOOTNOTE,
   LIMIT_EXEMPT_TAIL,
   SEQUENCE_META,
+  truncationNotices,
   type FollowUpLimitView,
   type FollowUpWaitView,
   type LookupFollowUpType,
@@ -229,6 +230,11 @@ function LoadedFollowUps({
   return (
     <div className="animate-in fade-in duration-300 motion-reduce:animate-none">
       <OriginNote view={view} className="text-muted-foreground mb-3 text-xs leading-relaxed" />
+      {truncationNotices(view.truncated).map((notice) => (
+        <p key={notice} className="text-muted-foreground mb-3 text-xs leading-relaxed">
+          {notice}
+        </p>
+      ))}
       {view.limit !== null && <LimitStrip limit={view.limit} firstName={view.subjectFirstName} />}
       <SectionLabel right={expandControl}>Waiting now · {view.now.length}</SectionLabel>
       <WaitList waits={view.now} lens={view.lens} open={open} onToggle={toggle} />

@@ -12,7 +12,8 @@ import {
   reminderStepMissed,
   reminderWaitFollowUpsFinished,
   reminderWaitSendTimes,
-  reminderWaitsLastWent,
+  reminderSequenceStepLabel,
+  reminderWaitsLastStep,
   reminderWaitsStalled,
   type ReminderWaitRowFacts,
 } from './reminder-waits';
@@ -46,6 +47,7 @@ function row(over: Partial<ReminderWaitRowFacts> & { step?: string }): ReminderW
     status: 'pending',
     createdAt: new Date('2026-11-04T00:00:00.000Z'),
     publishedAt: null,
+    scheduledFor: new Date('2026-11-04T00:00:00.000Z'),
     skipReason: null,
     ...over,
   };
@@ -292,13 +294,46 @@ describe('reminderStepMissed with the same-morning bump', () => {
   });
 });
 
-describe('reminderWaitsLastWent', () => {
-  it('is null with no waits or nothing published', () => {
-    expect(reminderWaitsLastWent([])).toBeNull();
-    expect(reminderWaitsLastWent([waitOf([row({ step: 'day_2', status: 'failed' })])])).toBeNull();
+describe('reminderWaitsLastStep', () => {
+  it('is null with no waits', () => {
+    expect(reminderWaitsLastStep([], NOW, zoneOf)).toBeNull();
   });
 
-  it('returns the newest published row across every wait', () => {
+  it('uses scheduledFor for an unpublished row and counts sent against every step', () => {
+    const wait = waitOf([
+      published('day_2', '2026-11-04T22:00:00Z'),
+      row({
+        step: 'day_5',
+        status: 'skipped',
+        skipReason: 'over_daily_limit',
+        scheduledFor: new Date('2026-11-08T00:00:00Z'),
+      }),
+      row({
+        step: 'day_9',
+        status: 'skipped',
+        skipReason: 'anchor_moved',
+        scheduledFor: new Date('2026-11-10T00:00:00Z'),
+      }),
+    ]);
+    const last = reminderWaitsLastStep([wait], NOW, zoneOf);
+    expect(last?.at.toISOString()).toBe('2026-11-10T00:00:00.000Z');
+    expect(last?.sent).toBe(1);
+    expect(last?.total).toBe(3);
+  });
+
+  it('uses the planner send time for a missed step with no row', () => {
+    const wait = waitOf([
+      published('day_2', '2026-11-04T22:00:00Z'),
+      published('day_5', '2026-11-07T22:00:00Z'),
+    ]);
+    const last = reminderWaitsLastStep([wait], NOW, zoneOf);
+    expect(last?.row).toBeNull();
+    expect(last?.at).toEqual(reminderWaitSendTimes(wait, ZONE).get('day_9'));
+    expect(last?.sent).toBe(2);
+    expect(last?.total).toBe(3);
+  });
+
+  it('returns the newest step across every wait', () => {
     const early = waitOf([published('day_2', '2026-11-04T22:00:00Z')]);
     const late = waitOf([
       row({
@@ -307,7 +342,9 @@ describe('reminderWaitsLastWent', () => {
         publishedAt: new Date('2026-11-12T00:00:00Z'),
       }),
     ]);
-    expect(reminderWaitsLastWent([early, late])?.at.toISOString()).toBe('2026-11-12T00:00:00.000Z');
+    expect(reminderWaitsLastStep([early, late], NOW, zoneOf)?.at.toISOString()).toBe(
+      '2026-11-12T00:00:00.000Z'
+    );
   });
 });
 
@@ -369,9 +406,52 @@ describe('reminderWaitsStalled', () => {
     ).toBe(false);
   });
 
-  it('is false when nothing was ever published', () => {
-    const wait = waitOf(ALL_STEPS.map((step) => row({ step, status: 'failed' })));
-    expect(reminderWaitFollowUpsFinished(wait, NOW, ZONE)).toBe(true);
+  const allSkippedAt = (scheduledFor: Date): ReminderWaitRowFacts[] =>
+    ALL_STEPS.map((step) =>
+      row({ step, status: 'skipped', skipReason: 'over_daily_limit', scheduledFor })
+    );
+
+  it('is true when every step was skipped and the last was due more than the window ago', () => {
+    const wait = waitOf(
+      allSkippedAt(new Date(NOW.getTime() - PROPOSAL_REVIEW_STALLED_AFTER_MS - 1))
+    );
+    expect(reminderWaitsStalled([wait], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)).toBe(true);
+  });
+
+  it('is false for an all-skipped wait whose last step was due exactly the window ago', () => {
+    const wait = waitOf(allSkippedAt(new Date(NOW.getTime() - PROPOSAL_REVIEW_STALLED_AFTER_MS)));
+    expect(reminderWaitsStalled([wait], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)).toBe(false);
+  });
+
+  it('measures from the latest step time when sent and skipped steps are mixed', () => {
+    const recent = new Date(NOW.getTime() - 60_000);
+    const wait = waitOf([
+      published('day_2', '2026-11-04T22:00:00Z'),
+      row({ step: 'day_5', status: 'skipped', skipReason: 'anchor_moved', scheduledFor: recent }),
+      row({
+        step: 'day_9',
+        status: 'skipped',
+        skipReason: 'over_daily_limit',
+        scheduledFor: new Date('2026-11-09T00:00:00Z'),
+      }),
+    ]);
+    expect(reminderWaitsStalled([wait], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)).toBe(false);
+  });
+
+  it('is false for a failed-only wait whose last step was due moments ago', () => {
+    const wait = waitOf(
+      ALL_STEPS.map((step) =>
+        row({ step, status: 'failed', scheduledFor: new Date(NOW.getTime() - 60_000) })
+      )
+    );
+    expect(reminderWaitsStalled([wait], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)).toBe(false);
+  });
+
+  it('is false while a step is still pending, however old', () => {
+    const wait = waitOf([
+      ...allSkippedAt(new Date('2026-11-01T00:00:00Z')).slice(0, 2),
+      row({ step: 'day_9', status: 'pending', scheduledFor: new Date('2026-11-01T00:00:00Z') }),
+    ]);
     expect(reminderWaitsStalled([wait], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)).toBe(false);
   });
 
@@ -386,6 +466,17 @@ describe('reminderWaitsStalled', () => {
     expect(
       reminderWaitsStalled([stale, recent], NOW, PROPOSAL_REVIEW_STALLED_AFTER_MS, zoneOf)
     ).toBe(false);
+  });
+});
+
+describe('reminderSequenceStepLabel', () => {
+  it('reads the sequence name and the 1-based step', () => {
+    expect(reminderSequenceStepLabel(keyFor('day_2'))).toBe('Proposal review follow-up, step 1');
+    expect(reminderSequenceStepLabel(keyFor('day_9'))).toBe('Proposal review follow-up, step 3');
+  });
+
+  it('is null for a key that is not a sequence key', () => {
+    expect(reminderSequenceStepLabel('meeting_expert_absent:abc')).toBeNull();
   });
 });
 

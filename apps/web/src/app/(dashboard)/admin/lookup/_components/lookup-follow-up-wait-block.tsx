@@ -6,7 +6,6 @@ import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   FINISHED_NOTE,
-  STEP_LABEL,
   WAIT_LABEL,
   type FollowUpLens,
   type FollowUpStepState,
@@ -120,11 +119,16 @@ function StepRow({
       </div>
       <div className="col-start-2 min-w-0 sm:col-start-auto">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('text-[13px] font-bold', tone.label)}>{STEP_LABEL[step.state]}</span>
+          <span className={cn('text-[13px] font-bold', tone.label)}>{step.label}</span>
           {step.channel !== null && (
             <span className="text-muted-foreground text-xs">{step.channel}</span>
           )}
         </div>
+        {step.delivery.map((line) => (
+          <p key={line.key} className="text-muted-foreground mt-0.5 text-[12.5px] leading-snug">
+            {line.text}
+          </p>
+        ))}
         {step.sentence !== null && (
           <p className="text-muted-foreground mt-0.5 text-[12.5px] leading-snug">
             {step.sentence}

@@ -32,7 +32,7 @@ export const REMINDER_FOLLOW_UP_GONE_SKIP_REASONS: readonly string[] = [
   'anchor_moved',
 ];
 
-/** A request is stalled once its last follow-up went out more than this long ago. */
+/** A request is stalled once its last follow-up step was due more than this long ago. */
 export const PROPOSAL_REVIEW_STALLED_AFTER_MS = 2 * 86_400_000;
 
 const KEY_SEPARATOR = ':';
@@ -95,6 +95,7 @@ export interface ReminderWaitRowFacts {
   readonly status: string;
   readonly createdAt: Date;
   readonly publishedAt: Date | null;
+  readonly scheduledFor: Date;
   readonly skipReason: string | null;
 }
 
@@ -222,29 +223,63 @@ export function reminderWaitFollowUpsFinished(
   );
 }
 
-/**
- * The newest published row across `waits` with its publish time ("when the last follow-up went"),
- * or null when nothing was published.
- */
-export function reminderWaitsLastWent<R extends ReminderWaitRowFacts>(
-  waits: readonly ReminderWait<R>[]
-): { readonly row: R; readonly at: Date } | null {
-  let latest: { row: R; at: Date } | null = null;
-  for (const wait of waits) {
-    for (const row of wait.steps.values()) {
-      if (row.publishedAt !== null && (latest === null || row.publishedAt > latest.at)) {
-        latest = { row, at: row.publishedAt };
-      }
-    }
-  }
-  return latest;
+/** What the finder reports about a request's follow-ups once they have all gone. */
+export interface ReminderWaitsLastStep<R extends ReminderWaitRowFacts = ReminderWaitRowFacts> {
+  /** The latest step time across the waits (see `reminderWaitsLastStep`). */
+  readonly at: Date;
+  /** The row whose time is `at`; null when that step is a missed one with no row. */
+  readonly row: R | null;
+  /** Steps that were published. */
+  readonly sent: number;
+  /** Every step of every wait's sequence, whatever became of it. */
+  readonly total: number;
 }
 
 /**
- * True when there is at least one wait, every wait is finished, and the latest publish across
- * them is more than `afterMs` before `now`. Exactly `afterMs` is not stalled, and nothing ever
- * published is never stalled: failures are reported separately. `zoneOf` gives a wait's
- * recipient zone, which places the steps that never got a row.
+ * The latest step time across `waits`: `publishedAt` for a published row, else the row's
+ * `scheduledFor`, and for a missed step with no row the planner send time (`reminderWaitSendTimes`,
+ * the same helper `reminderStepMissed` reads). A step still inside its window with no row has no
+ * time and is skipped. Also counts the steps sent against every step of each wait's sequence.
+ * Null when no step has a time. `zoneOf` gives a wait's recipient zone.
+ */
+export function reminderWaitsLastStep<R extends ReminderWaitRowFacts>(
+  waits: readonly ReminderWait<R>[],
+  now: Date,
+  zoneOf: (wait: ReminderWait<R>) => string
+): ReminderWaitsLastStep<R> | null {
+  let latest: { row: R | null; at: Date } | null = null;
+  let sent = 0;
+  let total = 0;
+  const consider = (row: R | null, at: Date): void => {
+    if (latest === null || at > latest.at) latest = { row, at };
+  };
+  for (const wait of waits) {
+    const zone = zoneOf(wait);
+    const sendTimes = reminderWaitSendTimes(wait, zone);
+    for (const step of REMINDER_SEQUENCE_STEPS[wait.sequenceId]) {
+      total += 1;
+      const row = wait.steps.get(step.key);
+      if (row === undefined) {
+        const sendAt = sendTimes.get(step.key);
+        if (sendAt !== undefined && reminderStepMissed(wait, step, now, zone)) {
+          consider(null, sendAt);
+        }
+        continue;
+      }
+      if (row.status === 'published') sent += 1;
+      consider(row, row.publishedAt ?? row.scheduledFor);
+    }
+  }
+  const found = latest as { row: R | null; at: Date } | null;
+  return found === null ? null : { ...found, sent, total };
+}
+
+/**
+ * True when there is at least one wait, every wait is finished, and the latest step time across
+ * them (`reminderWaitsLastStep`) is more than `afterMs` before `now`. Exactly `afterMs` is not
+ * stalled. A request whose follow-ups were all skipped or missed stalls too: nothing more is
+ * coming, whether or not anything went. A step still pending never stalls it. `zoneOf` gives a
+ * wait's recipient zone, which places the steps that never got a row.
  */
 export function reminderWaitsStalled<R extends ReminderWaitRowFacts>(
   waits: readonly ReminderWait<R>[],
@@ -254,8 +289,26 @@ export function reminderWaitsStalled<R extends ReminderWaitRowFacts>(
 ): boolean {
   if (waits.length === 0) return false;
   if (!waits.every((wait) => reminderWaitFollowUpsFinished(wait, now, zoneOf(wait)))) return false;
-  const last = reminderWaitsLastWent(waits);
+  const last = reminderWaitsLastStep(waits, now, zoneOf);
   return last !== null && now.getTime() - last.at.getTime() > afterMs;
+}
+
+/** Plain-language name of each sequence, for admin copy. */
+export const REMINDER_SEQUENCE_LABELS: Readonly<Record<ReminderSequenceId, string>> = {
+  proposal_review: 'Proposal review follow-up',
+  delivery_review: 'Delivery review follow-up',
+  invitation: 'Invitation follow-up',
+};
+
+/**
+ * `Proposal review follow-up, step 2` for a reminder-sequence key (`parseReminderSequenceKey`),
+ * the step counted from 1 in the sequence's order. Null for any other key.
+ */
+export function reminderSequenceStepLabel(key: string): string | null {
+  const parts = parseReminderSequenceKey(key);
+  if (parts === null) return null;
+  const index = REMINDER_SEQUENCE_STEPS[parts.sequenceId].findIndex((s) => s.key === parts.stepKey);
+  return `${REMINDER_SEQUENCE_LABELS[parts.sequenceId]}, step ${String(index + 1)}`;
 }
 
 /**

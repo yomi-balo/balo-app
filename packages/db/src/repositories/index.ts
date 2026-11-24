@@ -149,6 +149,8 @@ export {
 export {
   reminderWaitsRepository,
   REQUEST_RELATIONSHIP_IDS_LIMIT,
+  DELIVERY_OUTCOMES_LIMIT,
+  type DeliveryOutcome,
   type ReminderWaitRow,
   type ListReminderWaitRowsInput,
 } from './reminder-waits';

@@ -1093,18 +1093,74 @@ describe('projectProposalReviewStalled', () => {
           title: 'Proposals are still waiting on Northwind',
           entityLabel: 'CRM rollout · Northwind',
           evidence:
-            'Every follow-up has gone to Dana Lee @ Northwind; the last went on 5 Sept 2026.',
+            'No more follow-ups will go to Dana Lee @ Northwind. 3 of 3 were sent; the last was due 5 Sept 2026.',
           facts: [
             ['Client', 'Northwind'],
             ['Waiting on', 'Dana Lee @ Northwind'],
             ['Proposals awaiting', '1'],
             ['Waiting since', '24 Aug 2026'],
-            ['Last follow-up', '5 Sept 2026'],
+            ['Last follow-up due', '5 Sept 2026'],
           ],
         },
       },
     ]);
     expect(outcome.findings[0]?.detail).not.toHaveProperty('money');
+  });
+
+  it('raises the finding when every follow-up was skipped and none was sent', async () => {
+    const dueAt = new Date(NOW.getTime() - 3 * DAY_MS);
+    mockListReminderWaitRows.mockResolvedValue(
+      STEPS.map((step) =>
+        reminderRow(step, {
+          status: 'skipped',
+          skipReason: 'over_daily_limit',
+          publishedAt: null,
+          scheduledFor: dueAt,
+        })
+      )
+    );
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings[0]?.detail.evidence).toBe(
+      'No more follow-ups will go to Dana Lee @ Northwind. 0 of 3 were sent; the last was due 5 Sept 2026.'
+    );
+    expect(outcome.findings[0]?.detail.facts).toContainEqual([
+      'Waiting on',
+      'Dana Lee @ Northwind',
+    ]);
+    expect(outcome.findings[0]?.detail.facts).toContainEqual(['Last follow-up due', '5 Sept 2026']);
+  });
+
+  it('counts a mix of sent and skipped steps against every step', async () => {
+    const dueAt = new Date(NOW.getTime() - 3 * DAY_MS);
+    mockListReminderWaitRows.mockResolvedValue([
+      reminderRow('day_2', { publishedAt: new Date(NOW.getTime() - 9 * DAY_MS) }),
+      reminderRow('day_5', {
+        status: 'skipped',
+        skipReason: 'anchor_moved',
+        publishedAt: null,
+        scheduledFor: dueAt,
+      }),
+      reminderRow('day_9', {
+        status: 'skipped',
+        skipReason: 'over_daily_limit',
+        publishedAt: null,
+        scheduledFor: dueAt,
+      }),
+    ]);
+
+    const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({
+      now: NOW,
+      limit: LIMIT,
+    });
+
+    expect(outcome.findings[0]?.detail.evidence).toBe(
+      'No more follow-ups will go to Dana Lee @ Northwind. 1 of 3 were sent; the last was due 5 Sept 2026.'
+    );
   });
 
   it('reads one key prefix per request, back to the earliest anchor', async () => {
@@ -1199,9 +1255,15 @@ describe('projectProposalReviewStalled', () => {
     expect(outcome.findings).toEqual([]);
   });
 
-  it('is not stalled when nothing was ever published', async () => {
+  it('is not stalled when every step failed within the last two days', async () => {
     mockListReminderWaitRows.mockResolvedValue(
-      STEPS.map((step) => reminderRow(step, { status: 'failed', publishedAt: null }))
+      STEPS.map((step) =>
+        reminderRow(step, {
+          status: 'failed',
+          publishedAt: null,
+          scheduledFor: new Date(NOW.getTime() - DAY_MS),
+        })
+      )
     );
 
     const outcome = await ADMIN_ALERT_FINDERS.projectProposalReviewStalled({

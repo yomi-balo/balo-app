@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ScheduledNotification } from '@balo/db';
+import { reminderSequenceKey } from '@balo/shared/notifications';
 
 const { mockMarkFailed, mockRaiseAdminAlert, mockLogger } = vi.hoisted(() => ({
   mockMarkFailed: vi.fn(),
@@ -69,13 +70,43 @@ describe('failScheduledNotification', () => {
       detail: {
         title: 'A scheduled notification could not be sent',
         entityLabel: 'project.proposal_review_reminder',
-        evidence: `It was due ${DUE.toISOString()} and was abandoned after 3 attempt(s).`,
+        evidence: 'It was due 5 Aug 2026, 11:59 UTC and was abandoned after 3 attempt(s).',
         facts: [
           ['Event', 'project.proposal_review_reminder'],
-          ['Due', DUE.toISOString()],
+          ['Due (UTC)', '2026-08-05T11:59:00.000Z'],
           ['Attempts', '3'],
           ['Reason', 'Spent'],
           ['Key', 'seq:proposal_review:r-1'],
+        ],
+      },
+    });
+  });
+
+  it('names a reminder-sequence row by its sequence and step, keeping the raw key in the facts', async () => {
+    const key = reminderSequenceKey({
+      sequenceId: 'proposal_review',
+      entityId: '11111111-1111-4111-8111-111111111111',
+      stepKey: 'day_5',
+      userId: '22222222-2222-4222-8222-222222222222',
+      anchorIso: '2026-08-01T00:00:00.000Z',
+    });
+
+    await failScheduledNotification(row({ dedupeKey: key }), 'attempts_exhausted', 'Spent');
+
+    expect(mockRaiseAdminAlert).toHaveBeenCalledWith({
+      kind: 'scheduled_notification.failed',
+      entityType: 'scheduled_notification',
+      entityId: 'row-1',
+      detail: {
+        title: 'A scheduled notification could not be sent',
+        entityLabel: 'Proposal review follow-up, step 2',
+        evidence: 'It was due 5 Aug 2026, 11:59 UTC and was abandoned after 3 attempt(s).',
+        facts: [
+          ['Event', 'project.proposal_review_reminder'],
+          ['Due (UTC)', '2026-08-05T11:59:00.000Z'],
+          ['Attempts', '3'],
+          ['Reason', 'Spent'],
+          ['Key', key],
         ],
       },
     });

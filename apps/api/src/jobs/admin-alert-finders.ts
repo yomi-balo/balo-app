@@ -16,6 +16,7 @@ import {
   type ReminderWaitRow,
 } from '@balo/db';
 import {
+  formatDateTimeShortUtc,
   TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS,
   type AdminAlertDetail,
 } from '@balo/shared/admin-alerts';
@@ -25,7 +26,7 @@ import {
   PROPOSAL_REVIEW_STALLED_AFTER_MS,
   reminderRecipientZone,
   reminderSequenceKeyPrefix,
-  reminderWaitsLastWent,
+  reminderWaitsLastStep,
   reminderWaitsStalled,
   type ReminderWait,
 } from '@balo/shared/notifications';
@@ -78,25 +79,6 @@ function formatDateShort(date: Date): string {
     year: 'numeric',
     timeZone: 'UTC',
   });
-}
-
-/**
- * BAL-581 — `en-GB`, UTC — e.g. `12 Jul 2027, 14:30 UTC`. `formatDateShort`'s DATE-only
- * precision loses the start TIME, which matters for a same-day meeting (`meeting.unprovisioned`
- * can fire minutes before a same-day start).
- */
-function formatDateTimeShortUtc(date: Date): string {
-  return (
-    date.toLocaleString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'UTC',
-      hour12: false,
-    }) + ' UTC'
-  );
 }
 
 function personName(
@@ -824,12 +806,12 @@ function waitRecipientZone(wait: ReminderWait<ReminderWaitRow>): string {
 }
 
 /**
- * Requests still waiting on the client's review whose follow-ups have all gone and whose last one
- * went more than two days ago. The candidate requests come from the sequence's own
+ * Requests still waiting on the client's review whose follow-ups have all gone (sent, skipped or
+ * missed) and whose last step was due more than two days ago. The candidate requests come from the sequence's own
  * `proposalReviewEntities`, so a request whose only proposals await changes is never a candidate,
  * and the stalled rule is the shared `reminderWaitsStalled`. Only waits at the request's current
- * anchor count: an older anchor's follow-ups say nothing about this wait. A request that is never
- * sent anything is left to `scheduled_notification.failed`.
+ * anchor count: an older anchor's follow-ups say nothing about this wait. A failed send is
+ * also reported by `scheduled_notification.failed`.
  */
 async function projectProposalReviewStalled(
   ctx: AdminAlertFinderContext
@@ -863,22 +845,25 @@ async function projectProposalReviewStalled(
     const current = (waitsByRequest.get(entity.entityId) ?? []).filter(
       (wait) => wait.anchorIso === anchorIso
     );
-    const last = reminderWaitsLastWent(current);
+    const last = reminderWaitsLastStep(current, ctx.now, waitRecipientZone);
     if (
       last === null ||
       !reminderWaitsStalled(current, ctx.now, PROPOSAL_REVIEW_STALLED_AFTER_MS, waitRecipientZone)
     ) {
       continue;
     }
+    const [firstWait] = current;
+    const [firstRow] = firstWait?.steps.values() ?? [];
+    const namedRow = last.row ?? firstRow;
     const requestTitle =
       typeof entity.fresh.title === 'string' ? entity.fresh.title : 'Project request';
     const awaiting =
       typeof entity.fresh.awaitingCount === 'number' ? entity.fresh.awaitingCount : 0;
-    const companyName = last.row.entity?.companyName ?? null;
+    const companyName = namedRow?.entity?.companyName ?? null;
     const company = companyName ?? 'the client';
     const person = personName(
-      last.row.recipient?.firstName ?? null,
-      last.row.recipient?.lastName ?? null,
+      namedRow?.recipient?.firstName ?? null,
+      namedRow?.recipient?.lastName ?? null,
       'The client'
     );
     const waitingOn = companyName === null ? person : `${person} @ ${companyName}`;
@@ -888,13 +873,13 @@ async function projectProposalReviewStalled(
       detail: {
         title: `Proposals are still waiting on ${company}`,
         entityLabel: `${requestTitle} · ${company}`,
-        evidence: `Every follow-up has gone to ${waitingOn}; the last went on ${formatDateShort(last.at)}.`,
+        evidence: `No more follow-ups will go to ${waitingOn}. ${String(last.sent)} of ${String(last.total)} were sent; the last was due ${formatDateShort(last.at)}.`,
         facts: [
           ['Client', company],
           ['Waiting on', waitingOn],
           ['Proposals awaiting', String(awaiting)],
           ['Waiting since', formatDateShort(entity.anchor)],
-          ['Last follow-up', formatDateShort(last.at)],
+          ['Last follow-up due', formatDateShort(last.at)],
         ],
       },
     });

@@ -31,12 +31,22 @@ export type FollowUpWaitState = 'waiting' | 'finished' | 'stopped';
 /** A person lens lists what waits on them; an entity lens lists who a thing waits on. */
 export type FollowUpLens = 'person' | 'entity';
 
+/** One channel's recorded delivery result for a sent step, as a line of words. */
+export interface FollowUpDeliveryLine {
+  readonly key: string;
+  readonly text: string;
+}
+
 export interface FollowUpStepView {
   readonly key: string;
   readonly ordinal: string;
   readonly offsetLabel: string;
   readonly state: FollowUpStepState;
+  /** The state's word. Usually `STEP_LABEL[state]`; `Not delivered` for a step whose every logged channel failed. */
+  readonly label: string;
   readonly channel: string | null;
+  /** What `notification_log` recorded per channel; empty unless the step was published. */
+  readonly delivery: readonly FollowUpDeliveryLine[];
   /** The reason as a sentence; `null` for a plain Sent or Due step. */
   readonly sentence: string | null;
   /** The stored code, shown as small print beside the sentence. */
@@ -65,6 +75,12 @@ export interface FollowUpLimitView {
   readonly full: boolean;
 }
 
+/** Which read caps cut the tab short; each holds the cap that was hit, or `null` when it was not. */
+export interface FollowUpTruncation {
+  readonly rows: number | null;
+  readonly relationships: number | null;
+}
+
 export interface LookupFollowUpsView {
   readonly lens: FollowUpLens;
   /** The person's first name on a person lens; `null` on an entity lens or when unknown. */
@@ -72,6 +88,7 @@ export interface LookupFollowUpsView {
   /** Set only for an engagement: the request whose waits are shown. */
   readonly origin: { readonly requestTitle: string } | null;
   readonly limit: FollowUpLimitView | null;
+  readonly truncated: FollowUpTruncation;
   readonly now: readonly FollowUpWaitView[];
   readonly earlier: readonly FollowUpWaitView[];
 }
@@ -86,6 +103,31 @@ export const STEP_LABEL: Readonly<Record<FollowUpStepState, string>> = {
   not_sent: 'Not sent',
   failed: 'Failed',
 };
+
+/** The step word when every logged channel of a published step failed or was skipped. */
+export const NOT_DELIVERED_LABEL = 'Not delivered';
+
+/** The delivery line of a published step that has no `notification_log` row yet. */
+export const DELIVERY_NOT_RECORDED = 'Delivery not recorded yet';
+
+/** The most characters of a delivery error the tab shows. */
+export const DELIVERY_ERROR_MAX_CHARS = 160;
+
+/** One notice per read cap that cut the list short; empty when none did. */
+export function truncationNotices(truncated: FollowUpTruncation): readonly string[] {
+  const notices: string[] = [];
+  if (truncated.rows !== null) {
+    notices.push(
+      `Showing the most recent ${truncated.rows} follow-up emails. Older ones are not listed.`
+    );
+  }
+  if (truncated.relationships !== null) {
+    notices.push(
+      `Showing follow-ups for the first ${truncated.relationships} invitations on this request. Later invitations are not listed.`
+    );
+  }
+  return notices;
+}
 
 export const WAIT_LABEL: Readonly<Record<FollowUpWaitState, string>> = {
   waiting: 'Waiting',
@@ -179,7 +221,7 @@ export const REASON_SENTENCE: Readonly<
   Record<FollowUpReasonKey, (first: string, attempts: number) => string>
 > = {
   no_longer_waiting: () => 'It was no longer waiting by then.',
-  over_daily_limit: (first) => `${first} had already had ${dailyLimitPhrase()} today.`,
+  over_daily_limit: (first) => `${first} had already had ${dailyLimitPhrase()} that day.`,
   recipient_gone: (first) => `${first} was no longer the person this was waiting on.`,
   anchor_moved: () => 'The wait started again, so a new series began.',
   malformed_payload: () => 'Its stored details could not be read, so it was not sent.',

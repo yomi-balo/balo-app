@@ -5,6 +5,7 @@ import { db } from '../client';
 import {
   engagements,
   expertProfiles,
+  notificationLog,
   projectEngagements,
   projectRequests,
   requestExpertRelationships,
@@ -22,7 +23,11 @@ import {
   scheduledNotificationFactory,
   userFactory,
 } from '../test/factories';
-import { REQUEST_RELATIONSHIP_IDS_LIMIT, reminderWaitsRepository } from './reminder-waits';
+import {
+  DELIVERY_OUTCOMES_LIMIT,
+  REQUEST_RELATIONSHIP_IDS_LIMIT,
+  reminderWaitsRepository,
+} from './reminder-waits';
 
 const DAY_MS = 86_400_000;
 const LONG_AGO = new Date('2020-01-01T00:00:00.000Z');
@@ -638,12 +643,146 @@ describe('reminderWaitsRepository.listDeliveryReviewStates', () => {
 });
 
 describe('reminderWaitsRepository surface', () => {
-  it('is read-only: its keys are exactly the four reads', () => {
+  it('is read-only: its keys are exactly the five reads', () => {
     expect(Object.keys(reminderWaitsRepository).sort()).toEqual([
       'findEngagementRequestId',
+      'listDeliveryOutcomes',
       'listDeliveryReviewStates',
       'listRequestRelationshipIds',
       'listRows',
     ]);
+  });
+});
+
+describe('reminderWaitsRepository.listRows correlationId', () => {
+  it('exposes the stored payload correlationId, and null when it is missing or blank', async () => {
+    const user = await userFactory();
+    const entityId = randomUUID();
+    const withId = await seed({
+      entityId,
+      userId: user.id,
+      step: 'day_2',
+      values: {
+        payload: { entityId, recipientUserId: user.id, correlationId: 'corr-1' },
+      },
+    });
+    const blank = await seed({
+      entityId,
+      userId: user.id,
+      step: 'day_5',
+      values: { payload: { entityId, recipientUserId: user.id, correlationId: '' } },
+    });
+    const missing = await seed({ entityId, userId: user.id, step: 'day_7' });
+
+    const rows = await reminderWaitsRepository.listRows({
+      keyPrefixes: [`seq:proposal_review:${entityId}:`],
+      createdSince: LONG_AGO,
+      limit: 10,
+    });
+    const byId = new Map(rows.map((r) => [r.id, r.correlationId]));
+    expect(byId.get(withId.id)).toBe('corr-1');
+    expect(byId.get(blank.id)).toBeNull();
+    expect(byId.get(missing.id)).toBeNull();
+  });
+});
+
+describe('reminderWaitsRepository.listDeliveryOutcomes', () => {
+  async function log(
+    recipientId: string,
+    correlationId: string,
+    values: {
+      channel?: string;
+      status?: string;
+      error?: string | null;
+      createdAt?: Date;
+      deletedAt?: Date | null;
+    } = {}
+  ): Promise<void> {
+    await db.insert(notificationLog).values({
+      event: 'project.proposal_review_reminder',
+      correlationId,
+      recipientId,
+      channel: values.channel ?? 'email',
+      template: 'proposal-review-reminder',
+      status: values.status ?? 'sent',
+      error: values.error ?? null,
+      ...(values.createdAt === undefined ? {} : { createdAt: values.createdAt }),
+      ...(values.deletedAt === undefined ? {} : { deletedAt: values.deletedAt }),
+    });
+  }
+
+  it('returns each channel outcome of the given correlation ids, newest first', async () => {
+    const user = await userFactory();
+    const a = randomUUID();
+    const b = randomUUID();
+    const other = randomUUID();
+    await log(user.id, a, {
+      channel: 'in-app',
+      status: 'sent',
+      createdAt: new Date('2026-11-02T02:00:00.000Z'),
+    });
+    await log(user.id, a, {
+      channel: 'email',
+      status: 'failed',
+      error: 'Mailbox full',
+      createdAt: new Date('2026-11-02T01:00:00.000Z'),
+    });
+    await log(user.id, b, { channel: 'email', status: 'skipped', error: 'Unsubscribed' });
+    await log(user.id, other);
+
+    const outcomes = await reminderWaitsRepository.listDeliveryOutcomes({
+      correlationIds: [a, b, a, ''],
+    });
+    expect(outcomes.map((o) => [o.correlationId, o.channel, o.status, o.error])).toEqual([
+      [b, 'email', 'skipped', 'Unsubscribed'],
+      [a, 'in-app', 'sent', null],
+      [a, 'email', 'failed', 'Mailbox full'],
+    ]);
+    expect(outcomes[1]?.createdAt).toEqual(new Date('2026-11-02T02:00:00.000Z'));
+  });
+
+  it('excludes soft-deleted log rows', async () => {
+    const user = await userFactory();
+    const id = randomUUID();
+    await log(user.id, id, { deletedAt: new Date() });
+    expect(await reminderWaitsRepository.listDeliveryOutcomes({ correlationIds: [id] })).toEqual(
+      []
+    );
+  });
+
+  it('has no row for a correlation id that was never logged', async () => {
+    expect(
+      await reminderWaitsRepository.listDeliveryOutcomes({ correlationIds: [randomUUID()] })
+    ).toEqual([]);
+  });
+
+  it('applies the cap and drops the oldest outcomes first', async () => {
+    const user = await userFactory();
+    const id = randomUUID();
+    const base = new Date('2026-01-01T00:00:00.000Z').getTime();
+    const total = DELIVERY_OUTCOMES_LIMIT + 1;
+    await db.insert(notificationLog).values(
+      Array.from({ length: total }, (_, index) => ({
+        event: 'project.proposal_review_reminder',
+        correlationId: id,
+        recipientId: user.id,
+        channel: 'email',
+        template: 'proposal-review-reminder',
+        status: 'sent',
+        createdAt: new Date(base + index * 1000),
+      }))
+    );
+
+    const outcomes = await reminderWaitsRepository.listDeliveryOutcomes({ correlationIds: [id] });
+    expect(outcomes).toHaveLength(DELIVERY_OUTCOMES_LIMIT);
+    expect(outcomes[0]?.createdAt).toEqual(new Date(base + DELIVERY_OUTCOMES_LIMIT * 1000));
+    expect(outcomes.at(-1)?.createdAt).toEqual(new Date(base + 1000));
+  });
+
+  it('makes no query for empty or blank ids', async () => {
+    expect(await reminderWaitsRepository.listDeliveryOutcomes({ correlationIds: [] })).toEqual([]);
+    expect(await reminderWaitsRepository.listDeliveryOutcomes({ correlationIds: [''] })).toEqual(
+      []
+    );
   });
 });

@@ -60,6 +60,7 @@ type Subject =
       readonly scopes: readonly SequenceScope[];
       /** The title of the request an engagement came from, when it has a live one. */
       readonly originTitle: string | null;
+      readonly relationshipsTruncated: boolean;
     };
 
 type LiveLoader = (entityIds: readonly string[]) => Promise<ReadonlyMap<string, LiveWait>>;
@@ -173,7 +174,8 @@ async function resolveSubject(input: {
   if (input.type === 'user') return { lens: 'person', userId: input.id };
   if (input.type === 'project_request') {
     const relationshipIds = await reminderWaitsRepository.listRequestRelationshipIds(input.id);
-    if (relationshipIds.length === REQUEST_RELATIONSHIP_IDS_LIMIT) {
+    const relationshipsTruncated = relationshipIds.length === REQUEST_RELATIONSHIP_IDS_LIMIT;
+    if (relationshipsTruncated) {
       log.warn('Admin lookup follow-ups hit the relationship limit', {
         entityType: input.type,
         entityId: input.id,
@@ -187,6 +189,7 @@ async function resolveSubject(input: {
         { sequenceId: 'invitation', entityIds: relationshipIds },
       ],
       originTitle: null,
+      relationshipsTruncated,
     };
   }
   if (input.type === 'expert') {
@@ -199,7 +202,12 @@ async function resolveSubject(input: {
   if (engagement.projectRequestId !== null) {
     scopes.push({ sequenceId: 'proposal_review', entityIds: [engagement.projectRequestId] });
   }
-  return { lens: 'entity', scopes, originTitle: engagement.requestTitle };
+  return {
+    lens: 'entity',
+    scopes,
+    originTitle: engagement.requestTitle,
+    relationshipsTruncated: false,
+  };
 }
 
 /** The entity ids each sequence's rows name, from the parsed dedupe keys. */
@@ -253,7 +261,8 @@ export async function loadLookupFollowUps(
           limit: LOOKUP_FOLLOW_UPS_ROW_LIMIT,
         });
 
-  if (rows.length >= LOOKUP_FOLLOW_UPS_ROW_LIMIT) {
+  const rowsTruncated = rows.length >= LOOKUP_FOLLOW_UPS_ROW_LIMIT;
+  if (rowsTruncated) {
     log.warn('Admin lookup follow-ups hit the row limit', {
       userId: user.id,
       entityType: input.type,
@@ -267,9 +276,14 @@ export async function loadLookupFollowUps(
       ? new Map(subject.scopes.map((scope) => [scope.sequenceId, scope.entityIds]))
       : entityIdsBySequence(rows);
 
-  const [live, person] = await Promise.all([
+  const correlationIds = rows.flatMap((row) =>
+    row.status === 'published' && row.correlationId !== null ? [row.correlationId] : []
+  );
+
+  const [live, person, outcomes] = await Promise.all([
     loadLiveWaits(idsBySequence),
     subject.lens === 'person' ? usersRepository.findById(subject.userId) : Promise.resolve(null),
+    reminderWaitsRepository.listDeliveryOutcomes({ correlationIds }),
   ]);
 
   if (subject.lens === 'person' && person === undefined) {
@@ -290,6 +304,14 @@ export async function loadLookupFollowUps(
         subject.lens === 'entity' && subject.originTitle !== null
           ? { requestTitle: subject.originTitle }
           : null,
+      outcomes,
+      truncated: {
+        rows: rowsTruncated ? LOOKUP_FOLLOW_UPS_ROW_LIMIT : null,
+        relationships:
+          subject.lens === 'entity' && subject.relationshipsTruncated
+            ? REQUEST_RELATIONSHIP_IDS_LIMIT
+            : null,
+      },
       now,
     }),
   };

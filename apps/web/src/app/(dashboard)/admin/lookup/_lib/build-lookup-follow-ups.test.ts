@@ -53,6 +53,7 @@ function row(
     createdAt: ANCHOR,
     updatedAt: new Date('2026-11-22T00:00:00.000Z'),
     payload: { entityId: REQUEST_ID, awaitingCount: 2, title: 'Stored title' },
+    correlationId: null,
     recipient: MELBOURNE,
     entity: {
       title: 'Salesforce CPQ rollout',
@@ -88,6 +89,8 @@ function build(over: Partial<BuildFollowUpsInput>): ReturnType<typeof buildLooku
     live: live(),
     subject: { firstName: 'Dana', timezone: 'Australia/Melbourne' },
     origin: null,
+    outcomes: [],
+    truncated: { rows: null, relationships: null },
     now: NOW,
     ...over,
   });
@@ -288,7 +291,7 @@ describe('buildLookupFollowUps — steps', () => {
     });
     expect(view.now[0]?.steps[0]).toMatchObject({
       state: 'not_sent',
-      sentence: 'Dana had already had two follow-up emails today.',
+      sentence: 'Dana had already had two follow-up emails that day.',
       code: 'over_daily_limit',
       whenLabel: 'Was due Mon 23 Nov, 9:00 am',
       channel: null,
@@ -833,5 +836,123 @@ describe('follow-up wording tables', () => {
   it('joins channels into a label', () => {
     expect(channelLabel(['email'])).toBe('Email');
     expect(channelLabel(['email', 'in_app'])).toBe('Email and in-app');
+  });
+});
+
+describe('buildLookupFollowUps — delivery result on a sent step (decision 19)', () => {
+  const SENT_AT = '2026-11-19T22:00:00.000Z';
+
+  function sentStep(outcomes: BuildFollowUpsInput['outcomes']) {
+    const view = build({
+      rows: [published('day_2', SENT_AT, { correlationId: 'corr-1' })],
+      outcomes,
+    });
+    const step = view.now[0]?.steps[0];
+    if (step === undefined) throw new Error('no step');
+    return { view, step };
+  }
+
+  it('reads Email sent and keeps the Sent state', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'sent', error: null },
+    ]);
+    expect(step.state).toBe('sent');
+    expect(step.label).toBe('Sent');
+    expect(step.delivery.map((l) => l.text)).toEqual(['Email sent']);
+  });
+
+  it('reads Email failed with its error, but another channel sent keeps Sent', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'failed', error: 'Mailbox full' },
+      { correlationId: 'corr-1', channel: 'in-app', status: 'sent', error: null },
+    ]);
+    expect(step.state).toBe('sent');
+    expect(step.label).toBe('Sent');
+    expect(step.delivery.map((l) => l.text)).toEqual(['Email failed: Mailbox full', 'In-app sent']);
+  });
+
+  it('reads an sms outcome as SMS sent', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'sms', status: 'sent', error: null },
+    ]);
+    expect(step.delivery.map((l) => l.text)).toEqual(['SMS sent']);
+  });
+
+  it('reads Email skipped with its error', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'skipped', error: 'Unsubscribed' },
+      { correlationId: 'corr-1', channel: 'in-app', status: 'sent', error: null },
+    ]);
+    expect(step.delivery.map((l) => l.text)).toEqual([
+      'Email skipped: Unsubscribed',
+      'In-app sent',
+    ]);
+  });
+
+  it('says Delivery not recorded yet when the log has no row, and stays Sent', () => {
+    const { step } = sentStep([
+      { correlationId: 'other', channel: 'email', status: 'sent', error: null },
+    ]);
+    expect(step.state).toBe('sent');
+    expect(step.delivery.map((l) => l.text)).toEqual(['Delivery not recorded yet']);
+  });
+
+  it('says Delivery not recorded yet for a row with no correlation id', () => {
+    const view = build({ rows: [published('day_2', SENT_AT)] });
+    expect(view.now[0]?.steps[0]?.delivery.map((l) => l.text)).toEqual([
+      'Delivery not recorded yet',
+    ]);
+  });
+
+  it('becomes failed and reads Not delivered when every logged channel failed or was skipped', () => {
+    const { view, step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'failed', error: 'Bounced' },
+      { correlationId: 'corr-1', channel: 'in-app', status: 'skipped', error: 'Muted' },
+    ]);
+    expect(step.state).toBe('failed');
+    expect(step.label).toBe('Not delivered');
+    expect(step.channel).toBeNull();
+    expect(view.now[0]?.hasFailed).toBe(true);
+    expect(view.now[0]?.summary.startsWith('0 of 3 sent · 1 failed')).toBe(true);
+  });
+
+  it('keeps an error of exactly 160 characters whole', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'failed', error: 'x'.repeat(160) },
+    ]);
+    expect(step.delivery[0]?.text).toBe(`Email failed: ${'x'.repeat(160)}`);
+  });
+
+  it('cuts an error of 161 characters to 160 plus an ellipsis', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'failed', error: 'x'.repeat(161) },
+    ]);
+    expect(step.delivery[0]?.text).toBe(`Email failed: ${'x'.repeat(160)}…`);
+  });
+
+  it('truncates a long error to 160 characters', () => {
+    const { step } = sentStep([
+      { correlationId: 'corr-1', channel: 'email', status: 'failed', error: 'x'.repeat(400) },
+    ]);
+    expect(step.delivery[0]?.text).toBe(`Email failed: ${'x'.repeat(160)}…`);
+  });
+
+  it('shows no delivery line on a step that was not published', () => {
+    const view = build({
+      rows: [row('day_2', { correlationId: 'corr-1' })],
+      outcomes: [{ correlationId: 'corr-1', channel: 'email', status: 'sent', error: null }],
+    });
+    expect(view.now[0]?.steps[0]?.delivery).toEqual([]);
+    expect(view.now[0]?.steps[0]?.label).toBe('Due');
+  });
+});
+
+describe('buildLookupFollowUps — truncation', () => {
+  it('passes the truncation through to the view', () => {
+    expect(build({ truncated: { rows: 500, relationships: 200 } }).truncated).toEqual({
+      rows: 500,
+      relationships: 200,
+    });
+    expect(build({}).truncated).toEqual({ rows: null, relationships: null });
   });
 });

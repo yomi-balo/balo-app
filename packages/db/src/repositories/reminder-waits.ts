@@ -8,6 +8,7 @@ import {
   companies,
   engagements,
   expertProfiles,
+  notificationLog,
   projectEngagements,
   projectRequests,
   requestExpertRelationships,
@@ -19,6 +20,9 @@ import {
 
 /** The most relationship ids {@link reminderWaitsRepository.listRequestRelationshipIds} returns. */
 export const REQUEST_RELATIONSHIP_IDS_LIMIT = 200;
+
+/** The most delivery outcomes {@link reminderWaitsRepository.listDeliveryOutcomes} returns. */
+export const DELIVERY_OUTCOMES_LIMIT = 2000;
 
 /**
  * One reminder row with the display facts its readers need, joined in so a reader makes one
@@ -38,6 +42,11 @@ export interface ReminderWaitRow {
   createdAt: Date;
   updatedAt: Date;
   payload: ScheduledNotificationPayload;
+  /**
+   * The stored payload's `correlationId`, the key its delivery is logged under; `null` when the
+   * payload carries none usable.
+   */
+  correlationId: string | null;
   /** `null` when the recipient is gone or soft-deleted. */
   recipient: {
     firstName: string | null;
@@ -61,6 +70,15 @@ export interface DeliveryReviewState {
   engagementId: string;
   status: string;
   completionRequestedAt: Date | null;
+}
+
+/** One channel's recorded delivery result for a published reminder. */
+export interface DeliveryOutcome {
+  correlationId: string;
+  channel: string;
+  status: string;
+  error: string | null;
+  createdAt: Date;
 }
 
 export interface ListReminderWaitRowsInput {
@@ -99,6 +117,12 @@ const UUID_SHAPE = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 function payloadUuid(text: SQL): SQL {
   return sql`CASE WHEN ${text} ~* ${UUID_SHAPE} THEN (${text})::uuid END`;
+}
+
+/** The payload's `correlationId` when it is a non-empty string. */
+function storedCorrelationId(payload: ScheduledNotificationPayload): string | null {
+  const value = payload['correlationId'];
+  return typeof value === 'string' && value !== '' ? value : null;
 }
 
 /**
@@ -232,6 +256,7 @@ export const reminderWaitsRepository = {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       payload: row.payload,
+      correlationId: storedCorrelationId(row.payload),
       recipient:
         row.recipientId === null
           ? null
@@ -333,5 +358,32 @@ export const reminderWaitsRepository = {
       )
       .where(and(inArray(engagements.id, ids), isNull(engagements.deletedAt)));
     return rows;
+  },
+
+  /**
+   * What `notification_log` recorded for each of `correlationIds`, one row per channel, newest
+   * first, so a hit cap drops the oldest outcomes. Soft-deleted log rows are excluded. A status of
+   * `sent` means the provider accepted the message, not that it arrived. A correlation id with no row has not been
+   * delivered or logged yet. Empty ids make no query; capped at {@link DELIVERY_OUTCOMES_LIMIT}.
+   */
+  async listDeliveryOutcomes(input: {
+    correlationIds: readonly string[];
+  }): Promise<DeliveryOutcome[]> {
+    const ids = [...new Set(input.correlationIds.filter((id) => id !== ''))];
+    if (ids.length === 0) {
+      return [];
+    }
+    return db
+      .select({
+        correlationId: notificationLog.correlationId,
+        channel: notificationLog.channel,
+        status: notificationLog.status,
+        error: notificationLog.error,
+        createdAt: notificationLog.createdAt,
+      })
+      .from(notificationLog)
+      .where(and(inArray(notificationLog.correlationId, ids), isNull(notificationLog.deletedAt)))
+      .orderBy(desc(notificationLog.createdAt), desc(notificationLog.id))
+      .limit(DELIVERY_OUTCOMES_LIMIT);
   },
 };
