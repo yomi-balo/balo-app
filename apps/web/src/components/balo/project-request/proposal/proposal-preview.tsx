@@ -95,7 +95,7 @@ export function ProposalPreview({
         <h1 className="text-foreground mb-6 text-2xl font-semibold tracking-tight">
           {requestTitle}
         </h1>
-        <ProposalDoc doc={doc} />
+        <ProposalDoc doc={doc} termsViewer={{ surface: 'proposal', lens: 'expert' }} />
       </article>
     </div>
   );

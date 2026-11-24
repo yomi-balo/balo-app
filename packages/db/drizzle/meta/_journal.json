@@ -911,6 +911,13 @@
       "when": 1795367607805,
       "tag": "0129_bal667_drop_proposals_exclusions",
       "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1795400807138,
+      "tag": "0130_bal662_proposal_accepted_terms_version",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ function agreedTerms(overrides: Partial<AgreedTermsView> = {}): AgreedTermsView 
     clientCompanyName: 'Northwind Industrial',
     expertName: 'Priya Sharma',
     acceptedLine: 'Accepted by Dana @ Northwind Industrial on 24 November 2026.',
+    acceptedTermsVersion: null,
     changedSinceStart: false,
     ...overrides,
   };
@@ -77,6 +78,27 @@ describe('AgreedTermsCard', () => {
 
     expect(screen.getByRole('button', TRIGGER)).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByText('Sandbox access is provided.')).not.toBeVisible();
+  });
+
+  it('opens to the page link when no terms version was recorded', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', TRIGGER));
+    expect(screen.getByRole('link', { name: /Read the Project T&Cs/ })).toHaveAttribute(
+      'href',
+      '/legal/project-terms'
+    );
+    expect(screen.queryByRole('link', { name: /Agreement dated/ })).not.toBeInTheDocument();
+  });
+
+  it('opens to the PDF of the recorded terms version', async () => {
+    const user = userEvent.setup();
+    renderCard(agreedTerms({ acceptedTermsVersion: '2025-07-23' }));
+    await user.click(screen.getByRole('button', TRIGGER));
+    expect(
+      screen.getByRole('link', { name: /Agreement dated 23 July 2025 \(PDF\)/ })
+    ).toHaveAttribute('href', '/legal/balo-projects-msa-2025-07-23.pdf');
+    expect(screen.queryByRole('link', { name: /Read the Project T&Cs/ })).not.toBeInTheDocument();
   });
 
   it('tracks the first open once, not on later toggles', async () => {

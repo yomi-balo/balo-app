@@ -135,7 +135,23 @@ export const PROJECT_EVENTS = {
   // on review without passing the manual step's gate — so this measures how often a generated
   // draft arrives unsubmittable (e.g. a description over the 4,000-character cap).
   PROJECT_REVIEW_BLOCKED: 'project_review_blocked',
+  // BAL-662 — the Balo Projects MSA. OPENED fires when a viewer opens the public terms page from
+  // a terms block; PDF_DOWNLOADED when they open or download a frozen PDF of a published version.
+  PROJECT_TERMS_OPENED: 'project_terms_opened',
+  PROJECT_TERMS_PDF_DOWNLOADED: 'project_terms_pdf_downloaded',
 } as const;
+
+/** Viewer lens on a terms link. `anonymous` is a signed-out viewer (shared page, public page). */
+export type ProjectTermsLens = 'client' | 'expert' | 'admin' | 'anonymous';
+/** Where the terms page was opened from. */
+export type ProjectTermsOpenSurface =
+  | 'composer'
+  | 'proposal'
+  | 'accept_dialog'
+  | 'delivery'
+  | 'shared';
+/** Where a terms PDF was opened or downloaded from. */
+export type ProjectTermsPdfSurface = 'page' | 'proposal' | 'shared' | 'delivery';
 
 /**
  * BAL-541 — MIRRORS `@balo/db`'s `internal_note_entity_type` pgEnum, which
@@ -163,6 +179,15 @@ export type ProjectRequestArchetype = 'participant' | 'observer';
 export type ProjectRequestPhase = 'phase1' | 'phase2' | 'closed';
 
 export interface ProjectEventMap {
+  [PROJECT_EVENTS.PROJECT_TERMS_OPENED]: {
+    surface: ProjectTermsOpenSurface;
+    lens: ProjectTermsLens;
+  };
+  [PROJECT_EVENTS.PROJECT_TERMS_PDF_DOWNLOADED]: {
+    /** The `PROJECT_TERMS_VERSION` date of the PDF, e.g. `2025-07-23`. */
+    version: string;
+    surface: ProjectTermsPdfSurface;
+  };
   // BAL-582 (D2): expert_id widened to optional and entry_point added on all four events below,
   // so they fire for context-free mounts (no expert bound) too, not just the profile mount.
   [PROJECT_EVENTS.PROJECT_DRAWER_OPENED]: {
@@ -610,6 +635,8 @@ export interface ProjectServerEventMap {
     client_price_cents: number;
     /** How many additional terms the client agreed to by accepting. */
     additional_term_count: number;
+    /** BAL-662: the Projects MSA version recorded on the proposal at accept (an ISO date). */
+    terms_version: string;
     distinct_id: string;
   };
   // BAL-358: emitted server-side from the admin fee-override action, ONLY on a real

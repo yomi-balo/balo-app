@@ -104,7 +104,9 @@ export function AgreedTermsCard({
             <BaloTermsBlock
               pricingMethod={view.pricingMethod}
               companyName={view.clientCompanyName}
-              where="accept"
+              where="delivery"
+              lens={lens}
+              acceptance={{ termsVersion: view.acceptedTermsVersion }}
             />
           </div>
         </div>

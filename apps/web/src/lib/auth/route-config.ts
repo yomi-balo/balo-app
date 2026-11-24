@@ -12,6 +12,8 @@ export const PUBLIC_PATHS = new Set([
   '/signup',
   '/reset-password',
   '/experts',
+  // The public Projects MSA page. Exact path only: other `/legal/*` paths stay protected.
+  '/legal/project-terms',
   '/help',
   '/about',
   '/pricing',
@@ -69,6 +71,9 @@ export const PUBLIC_PREFIXES: readonly string[] = [
   '/experts/',
   '/help/',
   '/blog/',
+  // The frozen Projects MSA PDFs (`public/legal/balo-projects-msa-<version>.pdf`). A PDF link opened
+  // signed out must not bounce to /login. The page itself is the exact path `/legal/project-terms`.
+  '/legal/balo-projects-msa-',
   // BAL-386 — public, no-auth, email-bound magic-link proposal view.
   '/shared/proposals/',
   // The calendar invite email's "Add to calendar" page — reached from an email by members and

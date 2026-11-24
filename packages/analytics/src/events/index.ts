@@ -105,6 +105,9 @@ export {
   type ProjectRequestAccessDenialReason,
   PROJECT_TRACK_PASS_SURFACES,
   type ProjectTrackPassSurface,
+  type ProjectTermsLens,
+  type ProjectTermsOpenSurface,
+  type ProjectTermsPdfSurface,
 } from './project';
 export {
   CONVERSATION_EVENTS,

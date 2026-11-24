@@ -29,6 +29,7 @@ export function draftToReviewDoc(
     relationshipId: ctx.relationshipId,
     version: ctx.version,
     status: 'draft',
+    acceptedTermsVersion: null,
     pricingMethod: payload.pricingMethod,
     overviewHtml: payload.overview,
     ...groupClauseBodies(payload.clauses ?? []),

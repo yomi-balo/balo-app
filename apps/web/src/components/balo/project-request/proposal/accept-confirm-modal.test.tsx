@@ -38,6 +38,7 @@ function fixedDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc
     version: 1,
     status: 'submitted',
     pricingMethod: 'fixed',
+    acceptedTermsVersion: null,
     overviewHtml: '<p>Overview</p>',
     assumptions: [],
     exclusions: [],
@@ -126,6 +127,10 @@ describe('AcceptConfirmModal', () => {
       renderModal(fixedDoc());
       expect(screen.getByRole('heading', { name: 'What you’re agreeing to' })).toBeInTheDocument();
       expect(screen.getByText('Balo Project T&Cs')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Read the Project T&Cs/ })).toHaveAttribute(
+        'href',
+        '/legal/project-terms'
+      );
       expect(
         screen.getByText(
           'This is a fixed-price project. Any increase in cost is only charged if Northwind approves it.'

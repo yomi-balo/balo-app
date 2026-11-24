@@ -9,13 +9,16 @@ import { engagementClausesRepository, snapshotClausesFromProposalTx } from './en
 import { insertClausesTx } from './proposal-clauses';
 
 const ACCEPTED_AT = new Date('2026-10-01T03:00:00.000Z');
+/** A Balo Projects MSA version; a local literal, never imported from apps/web. */
+const TERMS_VERSION = '2025-07-23';
 
 /** An accepted proposal and a project engagement sourced from it. */
 async function seedEngagementFromProposal(
-  acceptedByUserId: string | null
+  acceptedByUserId: string | null,
+  acceptedTermsVersion: string | null = null
 ): Promise<{ engagementId: string; source: ProposalFactoryResult }> {
   const source = await proposalFactory({
-    values: { status: 'accepted', acceptedAt: ACCEPTED_AT, acceptedByUserId },
+    values: { status: 'accepted', acceptedAt: ACCEPTED_AT, acceptedByUserId, acceptedTermsVersion },
   });
   const { engagement } = await engagementFactory({
     projectValues: {
@@ -136,6 +139,25 @@ describe('engagementClausesRepository.findAgreedTerms', () => {
     expect(terms.proposalAcceptedBy).toBeNull();
   });
 
+  it('returns the terms version the source proposal was accepted under', async () => {
+    const client = await userFactory();
+    const { engagementId } = await seedEngagementFromProposal(client.id, TERMS_VERSION);
+
+    const terms = await engagementClausesRepository.findAgreedTerms(engagementId);
+
+    expect(terms.proposalAcceptedTermsVersion).toBe(TERMS_VERSION);
+  });
+
+  it('a proposal accepted before terms versions were recorded has no terms version', async () => {
+    const client = await userFactory();
+    const { engagementId } = await seedEngagementFromProposal(client.id);
+
+    const terms = await engagementClausesRepository.findAgreedTerms(engagementId);
+
+    expect(terms.proposalAcceptedAt).toEqual(ACCEPTED_AT);
+    expect(terms.proposalAcceptedTermsVersion).toBeNull();
+  });
+
   it('keeps an accepter with no name on file as two nulls, not as no accepter', async () => {
     const client = await userFactory({ firstName: null, lastName: null });
     const { engagementId } = await seedEngagementFromProposal(client.id);
@@ -152,6 +174,7 @@ describe('engagementClausesRepository.findAgreedTerms', () => {
       clauses: [],
       proposalAcceptedAt: null,
       proposalAcceptedBy: null,
+      proposalAcceptedTermsVersion: null,
     });
   });
 
@@ -160,6 +183,7 @@ describe('engagementClausesRepository.findAgreedTerms', () => {
       clauses: [],
       proposalAcceptedAt: null,
       proposalAcceptedBy: null,
+      proposalAcceptedTermsVersion: null,
     });
   });
 });

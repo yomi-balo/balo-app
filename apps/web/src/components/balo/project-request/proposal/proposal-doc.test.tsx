@@ -10,6 +10,8 @@ import {
 } from './proposal-standard-terms';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
+const VIEWER = { surface: 'proposal', lens: 'client' } as const;
+
 // The real viewer is a ssr:false dynamic Tiptap render — swap for a div that
 // echoes its HTML. `isDescriptionEmpty` treats empty / whitespace HTML as empty
 // so the milestone description block can hide.
@@ -25,6 +27,7 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
     version: 1,
     status: 'submitted',
     pricingMethod: 'fixed',
+    acceptedTermsVersion: null,
     overviewHtml: '<p>We will deliver CPQ.</p>',
     assumptions: [],
     exclusions: [],
@@ -72,7 +75,7 @@ function baseDoc(overrides: Partial<ProposalReviewDoc> = {}): ProposalReviewDoc 
 
 describe('ProposalDoc — Fixed pricing', () => {
   it('renders the fixed price, per-milestone values, and the installment bar', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
 
     // 'Fixed price' appears twice: the method pill (header) + the banner label.
     expect(screen.getAllByText('Fixed price')).toHaveLength(2);
@@ -90,7 +93,7 @@ describe('ProposalDoc — Fixed pricing', () => {
   });
 
   it('shows the acceptance "Done when" line only when criteria is present', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.getByText(/Signed-off design doc/)).toBeInTheDocument();
     // The second milestone has no acceptance criteria — only one "Done when" line.
     expect(screen.getAllByText(/Done when:/)).toHaveLength(1);
@@ -112,7 +115,7 @@ describe('ProposalDoc — milestone amounts are optional', () => {
   }
 
   it('renders no amount for a null milestone value', () => {
-    render(<ProposalDoc doc={withValues(null, null)} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={withValues(null, null)} />);
     expect(screen.getByText('Discovery')).toBeInTheDocument();
     expect(screen.queryByText('A$3,000')).not.toBeInTheDocument();
     expect(screen.queryByText('A$7,000')).not.toBeInTheDocument();
@@ -120,13 +123,13 @@ describe('ProposalDoc — milestone amounts are optional', () => {
   });
 
   it('renders no amount for a zero milestone value', () => {
-    render(<ProposalDoc doc={withValues(0, 0)} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={withValues(0, 0)} />);
     expect(screen.queryByText('A$0')).not.toBeInTheDocument();
     expect(screen.queryByText('—')).not.toBeInTheDocument();
   });
 
   it('still renders a positive amount beside a hidden one', () => {
-    render(<ProposalDoc doc={withValues(null, 700_000)} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={withValues(null, 700_000)} />);
     expect(screen.getByText('A$7,000')).toBeInTheDocument();
     expect(screen.queryByText('A$0')).not.toBeInTheDocument();
   });
@@ -144,7 +147,7 @@ describe('ProposalDoc — Time & materials', () => {
   }
 
   it('renders deposit / rate / cadence and the estimate label, not per-milestone values', () => {
-    render(<ProposalDoc doc={tmDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={tmDoc()} />);
 
     // Estimated-total banner with the est. suffix.
     expect(screen.getByText('Estimated total')).toBeInTheDocument();
@@ -164,6 +167,7 @@ describe('ProposalDoc — Time & materials', () => {
   it('guards null T&M fields without crashing', () => {
     render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({ pricingMethod: 'tm', depositCents: null, rateCents: null, cadence: null })}
       />
     );
@@ -174,15 +178,15 @@ describe('ProposalDoc — Time & materials', () => {
 
 describe('ProposalDoc — header + revision', () => {
   it('shows the revised pill only when version > 1', () => {
-    const { rerender } = render(<ProposalDoc doc={baseDoc({ version: 1 })} />);
+    const { rerender } = render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ version: 1 })} />);
     expect(screen.queryByText(/revised/)).not.toBeInTheDocument();
 
-    rerender(<ProposalDoc doc={baseDoc({ version: 3 })} />);
+    rerender(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ version: 3 })} />);
     expect(screen.getByText(/v3 · revised/)).toBeInTheDocument();
   });
 
   it('renders expert identity (name, company, rating, headline)', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.getByText(/Cloudwerx/)).toBeInTheDocument();
     // ⚠ EXACT, NOT `/4\.9/`. The rating now also carries an `sr-only` sentence containing
@@ -199,7 +203,7 @@ describe('ProposalDoc — header + revision', () => {
    * on a single engagement.
    */
   it('renders the review count alongside the rating', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.getByText('(12)')).toBeInTheDocument();
   });
 
@@ -210,7 +214,7 @@ describe('ProposalDoc — header + revision', () => {
    * nodes are `aria-hidden` so it is not read twice.
    */
   it('gives the rating an accessible name that says engagements', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.getByText('Rated 4.9 out of 5 across 12 engagements')).toBeInTheDocument();
   });
 
@@ -218,7 +222,10 @@ describe('ProposalDoc — header + revision', () => {
   it('formats the rating to one decimal place', () => {
     const base = baseDoc();
     render(
-      <ProposalDoc doc={{ ...base, expert: { ...base.expert, rating: 5, ratingCount: 1 } }} />
+      <ProposalDoc
+        termsViewer={VIEWER}
+        doc={{ ...base, expert: { ...base.expert, rating: 5, ratingCount: 1 } }}
+      />
     );
     expect(screen.getByText('5.0')).toBeInTheDocument();
     // …and the accessible name singularises with it.
@@ -229,7 +236,10 @@ describe('ProposalDoc — header + revision', () => {
   it('renders neither the rating nor its count when the expert is unrated', () => {
     const base = baseDoc();
     const { container } = render(
-      <ProposalDoc doc={{ ...base, expert: { ...base.expert, rating: null, ratingCount: 0 } }} />
+      <ProposalDoc
+        termsViewer={VIEWER}
+        doc={{ ...base, expert: { ...base.expert, rating: null, ratingCount: 0 } }}
+      />
     );
     expect(container.textContent ?? '').not.toContain('0.0');
     expect(screen.queryByText('(0)')).not.toBeInTheDocument();
@@ -241,6 +251,7 @@ describe('ProposalDoc — expert profile link', () => {
     const base = baseDoc();
     const { container } = render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
       />
     );
@@ -263,6 +274,7 @@ describe('ProposalDoc — expert profile link', () => {
     const base = baseDoc();
     render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
       />
     );
@@ -276,6 +288,7 @@ describe('ProposalDoc — expert profile link', () => {
     const base = baseDoc();
     const { container } = render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={{ ...base, expert: { ...base.expert, profileHref: '/experts/priya-sharma' } }}
       />
     );
@@ -283,7 +296,7 @@ describe('ProposalDoc — expert profile link', () => {
   });
 
   it('renders the avatar and name plain when profileHref is null (expert, admin, preview, share page)', () => {
-    const { container } = render(<ProposalDoc doc={baseDoc()} />);
+    const { container } = render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Priya Sharma/ })).not.toBeInTheDocument();
     expect(container.querySelector('a[href^="/experts/"]')).toBeNull();
@@ -292,7 +305,9 @@ describe('ProposalDoc — expert profile link', () => {
 
 describe('ProposalDoc — assumptions and exclusions', () => {
   it('omits the section when both lists are empty', () => {
-    const { container } = render(<ProposalDoc doc={baseDoc()} sectionIdPrefix="sec-" />);
+    const { container } = render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc()} sectionIdPrefix="sec-" />
+    );
     expect(screen.queryByText('Assumptions and exclusions')).not.toBeInTheDocument();
     expect(screen.queryByText('Not included')).not.toBeInTheDocument();
     expect(container.querySelector('#sec-scope')).toBeNull();
@@ -301,6 +316,7 @@ describe('ProposalDoc — assumptions and exclusions', () => {
   it('renders numbered assumptions with the expert first-name lead', () => {
     const { container } = render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({ assumptions: ['Sandbox access by kickoff', 'Price list is final'] })}
         sectionIdPrefix="sec-"
       />
@@ -319,7 +335,7 @@ describe('ProposalDoc — assumptions and exclusions', () => {
   });
 
   it('renders the exclusions list with "Not included" and its lead on its own', () => {
-    render(<ProposalDoc doc={baseDoc({ exclusions: ['Data migration'] })} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ exclusions: ['Data migration'] })} />);
     expect(screen.getByRole('heading', { name: 'Not included' })).toBeInTheDocument();
     expect(screen.getByText('Outside this proposal.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Assumptions' })).not.toBeInTheDocument();
@@ -329,6 +345,7 @@ describe('ProposalDoc — assumptions and exclusions', () => {
   it('renders markup in a body literally, never as HTML or rich text', () => {
     const { container } = render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({
           assumptions: ['<b>x</b>'],
           additionalTerms: ['<i>y</i>'],
@@ -342,13 +359,14 @@ describe('ProposalDoc — assumptions and exclusions', () => {
   });
 
   it('keeps a repeated body as separate list items', () => {
-    render(<ProposalDoc doc={baseDoc({ exclusions: ['Same', 'Same'] })} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ exclusions: ['Same', 'Same'] })} />);
     expect(screen.getAllByText('Same')).toHaveLength(2);
   });
 
   it('orders the sections: milestones, scope, payment, terms, attachments', () => {
     const { container } = render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({
           assumptions: ['A'],
           attachments: [{ id: 'a-1', fileName: 'spec.pdf', sizeBytes: 1000 }],
@@ -370,7 +388,7 @@ describe('ProposalDoc — assumptions and exclusions', () => {
 
 describe('ProposalDoc — terms', () => {
   it('shows the Balo block with the client company in the pricing rule', () => {
-    render(<ProposalDoc doc={baseDoc({ clientCompanyName: 'Globex' })} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ clientCompanyName: 'Globex' })} />);
     expect(screen.getByText('Balo Project T&Cs apply')).toBeInTheDocument();
     expect(screen.getByText('The same terms for every project on Balo.')).toBeInTheDocument();
     expect(
@@ -382,13 +400,18 @@ describe('ProposalDoc — terms', () => {
   });
 
   it('omits the additional-terms heading when the expert added none', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(screen.queryByText(/additional terms/)).not.toBeInTheDocument();
     expect(screen.queryByText(BALO_TERMS_ADDITIVE_SENTENCE)).not.toBeInTheDocument();
   });
 
   it('lists the additional terms under the expert’s name with the additive lead', () => {
-    render(<ProposalDoc doc={baseDoc({ additionalTerms: ['One revision round', 'Net 14'] })} />);
+    render(
+      <ProposalDoc
+        termsViewer={VIEWER}
+        doc={baseDoc({ additionalTerms: ['One revision round', 'Net 14'] })}
+      />
+    );
     expect(
       screen.getByRole('heading', { name: 'Priya Sharma’s additional terms' })
     ).toBeInTheDocument();
@@ -400,6 +423,7 @@ describe('ProposalDoc — terms', () => {
   it('renders no supplement tile for an attachment, whatever the file is', () => {
     render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({ attachments: [{ id: 'a-1', fileName: 'msa.pdf', sizeBytes: 120_000 }] })}
       />
     );
@@ -416,7 +440,7 @@ describe('ProposalDoc — attachments', () => {
   ];
 
   it('renders each attachment as a plain row when no download handler is given', () => {
-    render(<ProposalDoc doc={baseDoc({ attachments })} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ attachments })} />);
     expect(screen.getByText('architecture.pdf')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
   });
@@ -424,7 +448,9 @@ describe('ProposalDoc — attachments', () => {
   it('renders each attachment as a Download button that calls onDownload', async () => {
     const user = userEvent.setup();
     const onDownload = vi.fn();
-    render(<ProposalDoc doc={baseDoc({ attachments })} onDownload={onDownload} />);
+    render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc({ attachments })} onDownload={onDownload} />
+    );
 
     await user.click(screen.getByRole('button', { name: 'Download architecture.pdf' }));
     expect(onDownload).toHaveBeenCalledTimes(1);
@@ -433,15 +459,26 @@ describe('ProposalDoc — attachments', () => {
   });
 
   it('disables only the row that is downloading', () => {
-    render(<ProposalDoc doc={baseDoc({ attachments })} onDownload={vi.fn()} downloadingId="a-2" />);
+    render(
+      <ProposalDoc
+        termsViewer={VIEWER}
+        doc={baseDoc({ attachments })}
+        onDownload={vi.fn()}
+        downloadingId="a-2"
+      />
+    );
     expect(screen.getByRole('button', { name: 'Download architecture.pdf' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Download terms.pdf' })).toBeEnabled();
   });
 
   it('keeps the 44px target on both row kinds', () => {
-    const { rerender } = render(<ProposalDoc doc={baseDoc({ attachments })} />);
+    const { rerender } = render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc({ attachments })} />
+    );
     expect(screen.getByText('architecture.pdf').closest('div.min-h-11')).not.toBeNull();
-    rerender(<ProposalDoc doc={baseDoc({ attachments })} onDownload={vi.fn()} />);
+    rerender(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc({ attachments })} onDownload={vi.fn()} />
+    );
     expect(screen.getByRole('button', { name: 'Download architecture.pdf' })).toHaveClass(
       'min-h-11'
     );
@@ -469,7 +506,7 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
   }
 
   it('renders the four cells, with the same labels and derivations as the PDF', () => {
-    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} showSummaryCells />);
 
     const cells = grid();
     for (const label of ['Pricing', 'Est. timeline', 'Payment', 'Deliverables']) {
@@ -486,7 +523,7 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
 
   /** The two-item banner is REPLACED, not supplemented — and its label retires with it. */
   it('swaps the total label to "Total amount" and drops the timeframe item', () => {
-    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} showSummaryCells />);
 
     expect(screen.getByText('Total amount')).toBeInTheDocument();
     expect(screen.getByText('A$10,000')).toBeInTheDocument();
@@ -499,14 +536,16 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
    * matching the default path is not a coincidence.
    */
   it('renders "Fixed price" in the header pill and the PRICING cell, nowhere else', () => {
-    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} showSummaryCells />);
 
     expect(screen.getAllByText('Fixed price')).toHaveLength(2);
     expect(within(grid()).getAllByText('Fixed price')).toHaveLength(1);
   });
 
   it('falls back to an em dash in the timeline cell when no timeframe was given', () => {
-    render(<ProposalDoc doc={baseDoc({ timeframeWeeks: null })} showSummaryCells />);
+    render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc({ timeframeWeeks: null })} showSummaryCells />
+    );
     expect(cellValue('Est. timeline')).toBe('—');
     // …and the dash belongs to THAT cell: pinning a neighbour too is what makes a
     // swapped pair of values fail here instead of passing silently.
@@ -516,6 +555,7 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
   it('keeps the T&M total treatment and derives the T&M payment cell', () => {
     render(
       <ProposalDoc
+        termsViewer={VIEWER}
         doc={baseDoc({
           pricingMethod: 'tm',
           depositCents: 600_000,
@@ -544,7 +584,9 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
    * would pass either way.
    */
   it('spells the header pill with the canonical lower-case "Time & materials"', () => {
-    render(<ProposalDoc doc={baseDoc({ pricingMethod: 'tm' })} showSummaryCells />);
+    render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc({ pricingMethod: 'tm' })} showSummaryCells />
+    );
 
     const matches = screen.getAllByText('Time & materials');
     expect(matches).toHaveLength(2); // the pill + the PRICING cell
@@ -558,7 +600,7 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
    * `submitted-view.tsx`. Default OFF must stay today's two-item banner.
    */
   it('renders the shipped two-item banner and no grid by default', () => {
-    render(<ProposalDoc doc={baseDoc()} />);
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
 
     expect(screen.queryByTestId('proposal-summary-cells')).not.toBeInTheDocument();
     expect(screen.getByText('Est. timeframe')).toBeInTheDocument();
@@ -568,7 +610,9 @@ describe('ProposalDoc — client summary cells (BAL-392)', () => {
 
 describe('ProposalDoc — section anchoring', () => {
   it('anchors sections with ids + scroll margin when sectionIdPrefix is given', () => {
-    const { container } = render(<ProposalDoc doc={baseDoc()} sectionIdPrefix="sec-" />);
+    const { container } = render(
+      <ProposalDoc termsViewer={VIEWER} doc={baseDoc()} sectionIdPrefix="sec-" />
+    );
     const overview = container.querySelector('#sec-overview');
     expect(overview).not.toBeNull();
     expect(overview?.className).toContain('scroll-mt-20');
@@ -578,10 +622,40 @@ describe('ProposalDoc — section anchoring', () => {
   });
 
   it('renders the same content without ids when no prefix is given', () => {
-    const { container } = render(<ProposalDoc doc={baseDoc()} />);
+    const { container } = render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc()} />);
     expect(container.querySelector('#sec-overview')).toBeNull();
     // Content still renders.
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(screen.getByText(/Milestones/)).toBeInTheDocument();
+  });
+});
+
+describe('ProposalDoc — Project T&Cs link', () => {
+  it('links the public terms page while the proposal is open', () => {
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ status: 'submitted' })} />);
+    expect(screen.getByRole('link', { name: /Read the Project T&Cs/ })).toHaveAttribute(
+      'href',
+      '/legal/project-terms'
+    );
+    expect(screen.queryByRole('link', { name: /Agreement dated/ })).not.toBeInTheDocument();
+  });
+
+  it('links the PDF of the accepted version once the proposal is accepted', () => {
+    render(
+      <ProposalDoc
+        termsViewer={VIEWER}
+        doc={baseDoc({ status: 'accepted', acceptedTermsVersion: '2025-07-23' })}
+      />
+    );
+    expect(
+      screen.getByRole('link', { name: /Agreement dated 23 July 2025 \(PDF\)/ })
+    ).toHaveAttribute('href', '/legal/balo-projects-msa-2025-07-23.pdf');
+    expect(screen.queryByRole('link', { name: /Read the Project T&Cs/ })).not.toBeInTheDocument();
+  });
+
+  it('falls back to the page link when an accepted proposal has no recorded version', () => {
+    render(<ProposalDoc termsViewer={VIEWER} doc={baseDoc({ status: 'accepted' })} />);
+    expect(screen.getByRole('link', { name: /Read the Project T&Cs/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Agreement dated/ })).not.toBeInTheDocument();
   });
 });

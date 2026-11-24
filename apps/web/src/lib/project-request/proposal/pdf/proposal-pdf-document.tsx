@@ -1,4 +1,4 @@
-import { Document, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
+import { Document, Link, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import {
   BALO_TERMS_ADDITIVE_SENTENCE,
@@ -41,6 +41,8 @@ export interface ProposalPdfDocumentProps {
   preparedByOrgName: string | null;
   /** ISO timestamp stamped into the every-page footer. */
   generatedAtIso: string;
+  /** Absolute URL of the public Projects MSA page, printed in the terms box. */
+  projectTermsUrl: string;
 }
 
 const styles = StyleSheet.create({
@@ -173,8 +175,22 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   clauseGroupGap: { marginTop: 10 },
-  additionalTerms: { marginTop: 10 },
-  termText: { flex: 1, fontSize: PDF_TYPE.small, color: PDF_COLORS.muted, lineHeight: 1.5 },
+  // The two parts of a Terms box with additional terms: one border, split where the parts meet.
+  termsBoxTop: {
+    borderBottomWidth: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingBottom: 0,
+  },
+  termsBoxRest: {
+    borderTopWidth: 0,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    paddingTop: 10,
+  },
+  termText: { fontSize: PDF_TYPE.small, color: PDF_COLORS.muted, lineHeight: 1.5 },
+  // Only beside a number or marker in a row: in a column, flex 1 collapses the text to no height.
+  termRowText: { flex: 1 },
   paymentBox: {
     borderWidth: 1,
     borderColor: PDF_COLORS.border,
@@ -368,23 +384,32 @@ function PaymentTerms({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.
 
 /**
  * A numbered list of plain-text clauses, printed exactly as typed (no rich-text conversion).
- * A repeated body is legal, so each key carries the body plus its occurrence count.
+ * A repeated body is legal, so each key carries the body plus its occurrence count. `lead` (the
+ * headings above the list) moves to a new page together with the first row, never alone.
  */
-function NumberedRows({ items }: Readonly<{ items: readonly string[] }>): React.JSX.Element {
+function NumberedRows({
+  items,
+  lead,
+}: Readonly<{ items: readonly string[]; lead?: React.ReactNode }>): React.JSX.Element {
   const seen = new Map<string, number>();
-  const keyed = items.map((item, position) => {
+  const rows = items.map((item, position) => {
     const occurrence = (seen.get(item) ?? 0) + 1;
     seen.set(item, occurrence);
-    return { key: `${item}::${occurrence}`, item, number: position + 1 };
+    return (
+      <View key={`${item}::${occurrence}`} style={styles.termRow} wrap={false}>
+        <Text style={styles.clauseNumber}>{position + 1}.</Text>
+        <Text style={[styles.termText, styles.termRowText]}>{item}</Text>
+      </View>
+    );
   });
+  const [first, ...rest] = rows;
   return (
     <View>
-      {keyed.map(({ key, item, number }) => (
-        <View key={key} style={styles.termRow} wrap={false}>
-          <Text style={styles.clauseNumber}>{number}.</Text>
-          <Text style={styles.termText}>{item}</Text>
-        </View>
-      ))}
+      <View wrap={false}>
+        {lead}
+        {first}
+      </View>
+      {rest}
     </View>
   );
 }
@@ -392,54 +417,91 @@ function NumberedRows({ items }: Readonly<{ items: readonly string[] }>): React.
 function AssumptionsAndExclusions({
   doc,
 }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
+  const sectionLabel = <SectionLabel>ASSUMPTIONS AND EXCLUSIONS</SectionLabel>;
+  const hasAssumptions = doc.assumptions.length > 0;
   return (
     <View style={styles.section}>
-      <SectionLabel>ASSUMPTIONS AND EXCLUSIONS</SectionLabel>
-      {doc.assumptions.length > 0 ? (
-        <View>
-          <Text style={styles.clauseHeading}>ASSUMPTIONS</Text>
-          <NumberedRows items={doc.assumptions} />
-        </View>
+      {hasAssumptions ? (
+        <NumberedRows
+          items={doc.assumptions}
+          lead={
+            <>
+              {sectionLabel}
+              <Text style={styles.clauseHeading}>ASSUMPTIONS</Text>
+            </>
+          }
+        />
       ) : null}
       {doc.exclusions.length > 0 ? (
-        <View style={doc.assumptions.length > 0 ? styles.clauseGroupGap : undefined}>
-          <Text style={styles.clauseHeading}>NOT INCLUDED</Text>
-          <NumberedRows items={doc.exclusions} />
+        <View style={hasAssumptions ? styles.clauseGroupGap : undefined}>
+          <NumberedRows
+            items={doc.exclusions}
+            lead={
+              <>
+                {hasAssumptions ? null : sectionLabel}
+                <Text style={styles.clauseHeading}>NOT INCLUDED</Text>
+              </>
+            }
+          />
         </View>
       ) : null}
     </View>
   );
 }
 
+/**
+ * The TERMS section. Balo's standard terms are short and move as one block with the section
+ * label. The expert's additional terms (up to 20) continue in a second part of the same box,
+ * which may run onto the next page.
+ */
 function StandardTerms({
   pricingMethod,
   clientCompanyName,
   expertName,
   additionalTerms,
+  projectTermsUrl,
 }: Readonly<{
   pricingMethod: 'fixed' | 'tm';
   clientCompanyName: string;
   expertName: string;
   additionalTerms: readonly string[];
+  projectTermsUrl: string;
 }>): React.JSX.Element {
+  const hasAdditional = additionalTerms.length > 0;
   return (
-    <View style={styles.termsBox}>
-      <Text style={styles.termsHeading}>Balo Project T&amp;Cs apply</Text>
-      <Text style={styles.termText}>The same terms for every project on Balo.</Text>
-      <Text style={[styles.termText, { marginTop: 4, marginBottom: 4 }]}>
-        {pricingMethodRule(pricingMethod, clientCompanyName)}
-      </Text>
-      {STANDARD_TERMS.map((term) => (
-        <View key={term} style={styles.termRow}>
-          <Text style={styles.termMarker}>•</Text>
-          <Text style={styles.termText}>{term}</Text>
+    <View style={styles.section}>
+      <View wrap={false}>
+        <SectionLabel>TERMS</SectionLabel>
+        <View style={hasAdditional ? [styles.termsBox, styles.termsBoxTop] : styles.termsBox}>
+          <Text style={styles.termsHeading}>Balo Project T&amp;Cs apply</Text>
+          <Text style={styles.termText}>The same terms for every project on Balo.</Text>
+          <Text style={[styles.termText, { marginTop: 4, marginBottom: 4 }]}>
+            {pricingMethodRule(pricingMethod, clientCompanyName)}
+          </Text>
+          {STANDARD_TERMS.map((term) => (
+            <View key={term} style={styles.termRow}>
+              <Text style={styles.termMarker}>•</Text>
+              <Text style={[styles.termText, styles.termRowText]}>{term}</Text>
+            </View>
+          ))}
+          <Text style={[styles.termText, { marginTop: 4 }]}>
+            Read the Project T&amp;Cs at <Link src={projectTermsUrl}>{projectTermsUrl}</Link>
+          </Text>
         </View>
-      ))}
-      {additionalTerms.length > 0 ? (
-        <View style={styles.additionalTerms}>
-          <Text style={styles.termsHeading}>{expertName}’s additional terms</Text>
-          <Text style={[styles.termText, { marginBottom: 4 }]}>{BALO_TERMS_ADDITIVE_SENTENCE}</Text>
-          <NumberedRows items={additionalTerms} />
+      </View>
+      {hasAdditional ? (
+        <View style={[styles.termsBox, styles.termsBoxRest]}>
+          <NumberedRows
+            items={additionalTerms}
+            lead={
+              <>
+                <Text style={styles.termsHeading}>{expertName}’s additional terms</Text>
+                <Text style={[styles.termText, { marginBottom: 4 }]}>
+                  {BALO_TERMS_ADDITIVE_SENTENCE}
+                </Text>
+              </>
+            }
+          />
         </View>
       ) : null}
     </View>
@@ -452,6 +514,7 @@ export function ProposalPdfDocument({
   clientCompanyName,
   preparedByOrgName,
   generatedAtIso,
+  projectTermsUrl,
 }: Readonly<ProposalPdfDocumentProps>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
   const preparedBy =
@@ -512,15 +575,13 @@ export function ProposalPdfDocument({
           <PaymentTerms doc={doc} />
         </View>
 
-        <View style={styles.section}>
-          <SectionLabel>TERMS</SectionLabel>
-          <StandardTerms
-            pricingMethod={doc.pricingMethod}
-            clientCompanyName={clientCompanyName}
-            expertName={doc.expert.name}
-            additionalTerms={doc.additionalTerms}
-          />
-        </View>
+        <StandardTerms
+          pricingMethod={doc.pricingMethod}
+          clientCompanyName={clientCompanyName}
+          expertName={doc.expert.name}
+          additionalTerms={doc.additionalTerms}
+          projectTermsUrl={projectTermsUrl}
+        />
 
         {doc.attachments.length > 0 ? (
           <View style={styles.section}>

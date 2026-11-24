@@ -17,6 +17,8 @@ import {
   proposalPdfKey,
   putProposalPdfToR2,
 } from '@/lib/storage/proposal-pdf';
+import { PROJECT_TERMS_PAGE_PATH } from '@/lib/legal/project-terms-versions';
+import { resolveSiteOrigin } from '@/lib/site-url';
 import { renderProposalPdfToBuffer } from '@/lib/project-request/proposal/pdf/proposal-pdf-document';
 
 type Relationship = ProjectRequestWithRelations['relationships'][number];
@@ -59,6 +61,7 @@ export async function generateClientProposalPdf(target: ClientPdfTarget): Promis
     clientCompanyName: request.company?.name ?? 'your company',
     preparedByOrgName: orgName,
     generatedAtIso: new Date().toISOString(),
+    projectTermsUrl: `${resolveSiteOrigin()}${PROJECT_TERMS_PAGE_PATH}`,
   });
 }
 

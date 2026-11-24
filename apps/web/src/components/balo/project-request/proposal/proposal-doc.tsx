@@ -13,6 +13,7 @@ import {
   Shield,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { ProjectTermsLens } from '@balo/analytics/events';
 import { cn } from '@/lib/utils';
 import { InlineRating } from '@/components/balo/rating-display';
 import {
@@ -40,6 +41,8 @@ import type {
 
 interface ProposalDocProps {
   doc: ProposalReviewDoc;
+  /** Where the doc is shown and who is reading, for the terms link's analytics. */
+  termsViewer: { surface: 'proposal' | 'shared'; lens: ProjectTermsLens };
   /**
    * When provided, each anchored section gets `id={sectionIdPrefix + key}` plus a
    * scroll-margin so the section-nav can jump and scroll-spy. Omit it for the
@@ -103,6 +106,7 @@ function FileTile(): React.JSX.Element {
 
 export function ProposalDoc({
   doc,
+  termsViewer,
   sectionIdPrefix,
   showSummaryCells = false,
   onDownload,
@@ -263,7 +267,11 @@ export function ProposalDoc({
         <SectionLabel icon={Shield}>Terms</SectionLabel>
         <div className="flex flex-col gap-4">
           <BaloTermsBlock
-            where="proposal"
+            where={termsViewer.surface}
+            lens={termsViewer.lens}
+            acceptance={
+              doc.status === 'accepted' ? { termsVersion: doc.acceptedTermsVersion } : undefined
+            }
             pricingMethod={doc.pricingMethod}
             companyName={doc.clientCompanyName}
           />

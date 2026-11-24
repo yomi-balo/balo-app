@@ -63,6 +63,15 @@ describe('generateClientProposalPdf', () => {
     );
     expect(mockRender).toHaveBeenCalledTimes(1);
   });
+
+  it('passes the absolute public Project T&Cs URL to the renderer', async () => {
+    await generateClientProposalPdf(TARGET);
+    expect(mockRender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectTermsUrl: expect.stringMatching(/^https?:\/\/[^/]+\/legal\/project-terms$/),
+      })
+    );
+  });
 });
 
 describe('ensureClientProposalPdf', () => {

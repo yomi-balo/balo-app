@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PROJECT_TERMS_VERSION } from '@/lib/legal/project-terms';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -307,12 +308,17 @@ describe('acceptProposalAction', () => {
       balo_fee_bps: 2500,
       client_price_cents: 625000, // applyBaloFee(500000, 2500)
       additional_term_count: 0,
+      terms_version: PROJECT_TERMS_VERSION,
       distinct_id: 'user-client',
     });
 
     // Commits the accept via the EXISTING repo method.
     // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
+    expect(mockAccept).toHaveBeenCalledWith({
+      id: PROPOSAL_ID,
+      actorUserId: USER.id,
+      termsVersion: PROJECT_TERMS_VERSION,
+    });
 
     // BAL-295: the action no longer issues a request transition — accept() derives
     // the request rollup. It re-reads the stored status to source `transitioned`.
@@ -331,7 +337,10 @@ describe('acceptProposalAction', () => {
       currency: 'aud',
     });
 
-    expect(log.info).toHaveBeenCalledWith('Proposal accepted', expect.any(Object));
+    expect(log.info).toHaveBeenCalledWith(
+      'Proposal accepted',
+      expect.objectContaining({ termsVersion: PROJECT_TERMS_VERSION })
+    );
 
     // Revalidates BOTH the request-detail page and the proposal surface the
     // client accepted from (defensive — avoids a stale "still acceptable" state
@@ -452,7 +461,11 @@ describe('acceptProposalAction', () => {
     if (result.success) expect(result.transitioned).toBe(false);
     // The accept committed before the best-effort re-read ran.
     // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
+    expect(mockAccept).toHaveBeenCalledWith({
+      id: PROPOSAL_ID,
+      actorUserId: USER.id,
+      termsVersion: PROJECT_TERMS_VERSION,
+    });
     expect(log.error).toHaveBeenCalledWith(
       'Request status re-read failed after accept commit',
       expect.any(Object)
@@ -465,7 +478,11 @@ describe('acceptProposalAction', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(true);
     // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
+    expect(mockAccept).toHaveBeenCalledWith({
+      id: PROPOSAL_ID,
+      actorUserId: USER.id,
+      termsVersion: PROJECT_TERMS_VERSION,
+    });
   });
 
   // ── BAL-343: the acceptance-time `client_billing` gate confirm ──────────────

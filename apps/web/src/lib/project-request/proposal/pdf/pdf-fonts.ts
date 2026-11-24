@@ -10,7 +10,9 @@ import { Font } from '@react-pdf/renderer';
  * react-pdf can only use fonts it EMBEDS via {@link Font.register} — it cannot read
  * the app's Geist web font. So the genuine brand type ships as repo assets: static
  * TrueType weights (400/500/600/700) instanced from the official variable Geist
- * (OFL, see ./fonts/OFL.txt) and registered from disk here.
+ * (OFL, see ./fonts/OFL.txt) and registered from disk here. Each file carries its own PostScript
+ * name (Geist-Regular, -Medium, -SemiBold, -Bold): the renderer caches embedded fonts by that
+ * name, so weights sharing one would all print in whichever loaded first.
  *
  * The .ttf files live at `<webAppRoot>/src/lib/project-request/proposal/pdf/fonts`,
  * but the process cwd differs by context, so we resolve against the first candidate

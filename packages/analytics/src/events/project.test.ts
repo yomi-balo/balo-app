@@ -260,3 +260,44 @@ describe('PROJECT_SERVER_EVENTS', () => {
     expect(PROJECT_SERVER_EVENTS.PROPOSAL_SHARE_REVOKED).toBe('project_proposal_share_revoked');
   });
 });
+
+describe('PROJECT_EVENTS terms events (BAL-662)', () => {
+  it('maps the two terms events to their exact names', () => {
+    expect(PROJECT_EVENTS.PROJECT_TERMS_OPENED).toBe('project_terms_opened');
+    expect(PROJECT_EVENTS.PROJECT_TERMS_PDF_DOWNLOADED).toBe('project_terms_pdf_downloaded');
+  });
+
+  it('keeps the terms event constants in the project_ snake_case convention', () => {
+    expect(PROJECT_EVENTS.PROJECT_TERMS_OPENED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.PROJECT_TERMS_PDF_DOWNLOADED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+
+  it('pins the terms event key set so a new constant is a deliberate change', () => {
+    expect(
+      Object.keys(PROJECT_EVENTS)
+        .filter((key) => key.startsWith('PROJECT_TERMS_'))
+        .sort((a, b) => a.localeCompare(b))
+    ).toEqual(['PROJECT_TERMS_OPENED', 'PROJECT_TERMS_PDF_DOWNLOADED']);
+  });
+
+  it('allows an anonymous lens for the signed-out viewer', () => {
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROJECT_TERMS_OPENED]['lens']
+    >().toEqualTypeOf<'client' | 'expert' | 'admin' | 'anonymous'>();
+  });
+
+  it('types the open and PDF surfaces', () => {
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROJECT_TERMS_OPENED]['surface']
+    >().toEqualTypeOf<'composer' | 'proposal' | 'accept_dialog' | 'delivery' | 'shared'>();
+    expectTypeOf<
+      ProjectEventMap[typeof PROJECT_EVENTS.PROJECT_TERMS_PDF_DOWNLOADED]['surface']
+    >().toEqualTypeOf<'page' | 'proposal' | 'shared' | 'delivery'>();
+  });
+
+  it('records the terms version on the server-side accept event', () => {
+    expectTypeOf<
+      ProjectServerEventMap[typeof PROJECT_SERVER_EVENTS.PROJECT_PROPOSAL_ACCEPTED]['terms_version']
+    >().toEqualTypeOf<string>();
+  });
+});

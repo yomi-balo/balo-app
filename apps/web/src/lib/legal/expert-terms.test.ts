@@ -7,12 +7,8 @@ import {
   EXPERT_TERMS_LAST_UPDATED,
   EXPERT_TERMS_LAST_UPDATED_LABEL,
   EXPERT_TERMS_PREAMBLE,
-  CLAUSE_TOKEN,
-  buildClauseIndex,
-  clauseLabel,
-  resolveClauseRefs,
-  type TermsNode,
 } from './expert-terms';
+import { CLAUSE_TOKEN, buildClauseIndex, resolveClauseRefs, type TermsNode } from './terms';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -84,14 +80,6 @@ describe('expert terms — clause references', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('throws on an unknown id', () => {
-    expect(() => resolveClauseRefs('{{clause:nope}}', INDEX)).toThrow('nope');
-  });
-
-  it('leaves text without tokens unchanged', () => {
-    expect(resolveClauseRefs('no tokens here', INDEX)).toBe('no tokens here');
-  });
-
   it('resolves the renumbered targets', () => {
     expect(INDEX.get('marketplace.off-platform')).toBe('3.15');
     expect(INDEX.get('recording')).toBe('12');
@@ -157,28 +145,6 @@ describe('expert terms — text hygiene', () => {
 
   it('opens the parenthesis in the GST Law definition', () => {
     expect(ALL_TEXT).toContain('A New Tax System (Goods and Services Tax) Act 1999');
-  });
-});
-
-describe('clauseLabel', () => {
-  it.each([
-    [[3], '3'],
-    [[3, 7], '3.7'],
-    [[3, 7, 1], '3.7.1'],
-    [[6, 3, 1, 1], '(a)'],
-    [[6, 3, 1, 3], '(c)'],
-    [[23, 2, 4, 1, 1], 'i.'],
-    [[23, 2, 4, 1, 2], 'ii.'],
-  ])('labels %j as %s', (position, label) => {
-    expect(clauseLabel(position)).toBe(label);
-  });
-
-  it('rejects an empty, too deep, or out-of-range path', () => {
-    expect(() => clauseLabel([])).toThrow(RangeError);
-    expect(() => clauseLabel([1, 1, 1, 1, 1, 1])).toThrow(RangeError);
-    expect(() => clauseLabel([1, 1, 1, 1, 99])).toThrow(RangeError);
-    expect(() => clauseLabel([1, 1, 1, 27])).toThrow(RangeError);
-    expect(() => clauseLabel([1, 1, 1, 0])).toThrow(RangeError);
   });
 });
 

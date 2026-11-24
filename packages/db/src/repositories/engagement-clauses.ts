@@ -22,6 +22,12 @@ export interface AgreedTermsSource {
   clauses: EngagementClause[];
   proposalAcceptedAt: Date | null;
   proposalAcceptedBy: { firstName: string | null; lastName: string | null } | null;
+  /**
+   * The Balo Projects MSA version the source proposal was accepted under
+   * (`proposals.accepted_terms_version`). Null when the version was not recorded (accepted
+   * before BAL-662) or the engagement has no source proposal.
+   */
+  proposalAcceptedTermsVersion: string | null;
 }
 
 /**
@@ -67,7 +73,8 @@ export const engagementClausesRepository = {
    * proposal's acceptance. Two reads: the live clauses, then the project child joined to its
    * source proposal and, by a LEFT join, the accepting user's names.
    *
-   * An unknown engagement, or one with no source proposal, gives no clauses and nulls. The
+   * An unknown engagement, or one with no source proposal, gives no clauses and nulls (the
+   * terms version included). The
    * accepting user is attributed even after they leave (no `users.deleted_at` filter), as
    * retrospective attribution is.
    */
@@ -88,6 +95,7 @@ export const engagementClausesRepository = {
       .select({
         acceptedAt: proposals.acceptedAt,
         acceptedByUserId: proposals.acceptedByUserId,
+        acceptedTermsVersion: proposals.acceptedTermsVersion,
         firstName: users.firstName,
         lastName: users.lastName,
       })
@@ -103,7 +111,12 @@ export const engagementClausesRepository = {
       .limit(1);
 
     if (acceptance === undefined) {
-      return { clauses, proposalAcceptedAt: null, proposalAcceptedBy: null };
+      return {
+        clauses,
+        proposalAcceptedAt: null,
+        proposalAcceptedBy: null,
+        proposalAcceptedTermsVersion: null,
+      };
     }
     return {
       clauses,
@@ -112,6 +125,7 @@ export const engagementClausesRepository = {
         acceptance.acceptedByUserId === null
           ? null
           : { firstName: acceptance.firstName, lastName: acceptance.lastName },
+      proposalAcceptedTermsVersion: acceptance.acceptedTermsVersion,
     };
   },
 };

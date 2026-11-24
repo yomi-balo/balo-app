@@ -88,6 +88,8 @@ export interface RecordProposalAcceptedInput {
   expertProfileId: string;
   /** The LOCKED row's `version` at acceptance — not the post-flip re-read. */
   proposalVersion: number;
+  /** BAL-662 — the Balo Projects MSA version accepted; equals `proposals.accepted_terms_version`. */
+  termsVersion: string;
 }
 
 /**
@@ -126,6 +128,7 @@ export async function recordProposalAccepted(
         projectRequestId: input.projectRequestId,
         expertProfileId: input.expertProfileId,
         proposalVersion: input.proposalVersion,
+        termsVersion: input.termsVersion,
       },
     },
     exec

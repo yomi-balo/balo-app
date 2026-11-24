@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { Text, View } from '@react-pdf/renderer';
 import type {
   Proposal,
   ProposalMilestone,
@@ -17,6 +18,7 @@ import { hydrateReviewDoc } from '@/lib/project-request/proposal-audience-view';
 import { ProposalPdfDocument, renderProposalPdfToBuffer } from './proposal-pdf-document';
 
 const NOW = new Date('2026-01-01T00:00:00.000Z');
+const PROJECT_TERMS_URL = 'https://balo.example/legal/project-terms';
 
 /** Expert quote 100_000 @ 2500 bps → client price 125_000 (marked-up). */
 function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
@@ -40,6 +42,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     submittedAt: NOW,
     acceptedAt: null,
     acceptedByUserId: null,
+    acceptedTermsVersion: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,
@@ -219,6 +222,7 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: 'CloudPeak',
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     ).toBeTruthy();
     expect(
@@ -228,6 +232,7 @@ describe('ProposalPdfDocument — money-safety at the mapping boundary (BAL-385)
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: null,
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     ).toBeTruthy();
   });
@@ -241,9 +246,17 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'Northwind Industrial',
       preparedByOrgName: 'CloudPeak',
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.byteLength).toBeGreaterThan(1000);
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    // Each weight carries its own PostScript name; a shared one makes the renderer reuse one face.
+    const fonts = new Set(
+      [...buffer.toString('latin1').matchAll(/\/BaseFont \/[A-Z]{6}\+(Geist-\w+)/g)].map(
+        (m) => m[1]
+      )
+    );
+    expect(fonts.size).toBeGreaterThan(1);
   });
 
   it('renders a T&M proposal with clauses and null timeframe without throwing', async () => {
@@ -269,6 +282,7 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'your company',
       preparedByOrgName: null,
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
@@ -288,6 +302,7 @@ describe('ProposalPdfDocument — render smoke', () => {
       clientCompanyName: 'Northwind Industrial',
       preparedByOrgName: 'CloudPeak',
       generatedAtIso: '2026-07-15T00:00:00.000Z',
+      projectTermsUrl: PROJECT_TERMS_URL,
     });
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
@@ -302,9 +317,28 @@ describe('ProposalPdfDocument — conditional branches', () => {
         clientCompanyName: 'Northwind Industrial',
         preparedByOrgName: 'CloudPeak',
         generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
       })
     );
   }
+
+  it('prints the full Project T&Cs URL under the standard terms', () => {
+    const text = renderTree(clientDoc());
+    expect(text).toContain('Read the Project T&Cs at');
+    expect(text).toContain(PROJECT_TERMS_URL);
+  });
+
+  it('renders an italic overview without throwing (no italic Geist face is registered)', async () => {
+    const buffer = await renderProposalPdfToBuffer({
+      doc: clientDoc({ overview: '<p>An <em>emphasised</em> word in the overview.</p>' }),
+      title: 'CRM Cleanup',
+      clientCompanyName: 'Northwind Industrial',
+      preparedByOrgName: 'CloudPeak',
+      generatedAtIso: NOW.toISOString(),
+      projectTermsUrl: PROJECT_TERMS_URL,
+    });
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  });
 
   it('shows the "revised" version note for version 2', () => {
     const text = renderTree(clientDoc({ version: 2 }));
@@ -553,5 +587,61 @@ describe('ProposalPdfDocument — conditional branches', () => {
     // Neither figure given → the same em dash the TIMELINE cell uses for "not specified".
     const neither = clientDoc({ pricingMethod: 'tm', depositCents: null, rateCents: null });
     expect(renderTree(neither)).toContain('Payment—');
+  });
+});
+
+type PdfStyle = Record<string, unknown>;
+
+function flattenStyle(style: unknown): PdfStyle {
+  if (Array.isArray(style)) return Object.assign({}, ...style.map(flattenStyle)) as PdfStyle;
+  return typeof style === 'object' && style !== null ? (style as PdfStyle) : {};
+}
+
+/** Every Text styled `flex: 1`, with the flexDirection of the View that lays it out. */
+function flexTexts(
+  node: React.ReactNode,
+  direction: unknown = 'column'
+): { text: string; direction: unknown }[] {
+  if (Array.isArray(node))
+    return node.flatMap((child: React.ReactNode) => flexTexts(child, direction));
+  if (typeof node !== 'object' || node === null || !('type' in node) || !('props' in node))
+    return [];
+  const el = node as { type: unknown; props: { children?: React.ReactNode; style?: unknown } };
+  if (typeof el.type === 'function') {
+    const renderComponent = el.type as (props: unknown) => React.ReactNode;
+    return flexTexts(renderComponent(el.props), direction);
+  }
+  const style = flattenStyle(el.props.style);
+  if (el.type === Text) {
+    return style.flex === 1 ? [{ text: collectText(el.props.children), direction }] : [];
+  }
+  const childDirection = el.type === View ? (style.flexDirection ?? 'column') : direction;
+  return flexTexts(el.props.children, childDirection);
+}
+
+describe('ProposalPdfDocument — layout', () => {
+  it('stretches text with flex 1 only inside a row, where it cannot collapse to no height', () => {
+    const doc = clientDoc(
+      {},
+      {
+        clauses: [
+          makeClause('assumption', 'Sandbox access by kickoff', 0),
+          makeClause('exclusion', 'Data migration is out of scope.', 0),
+          makeClause('additional_term', 'One revision round per milestone', 0),
+        ],
+      }
+    );
+    const texts = flexTexts(
+      ProposalPdfDocument({
+        doc,
+        title: 'CRM Cleanup',
+        clientCompanyName: 'Northwind Industrial',
+        preparedByOrgName: 'CloudPeak',
+        generatedAtIso: NOW.toISOString(),
+        projectTermsUrl: PROJECT_TERMS_URL,
+      })
+    );
+    expect(texts.map((t) => t.text)).toContain('One revision round per milestone');
+    expect(texts.filter((t) => t.direction !== 'row')).toEqual([]);
   });
 });
